@@ -49,12 +49,3 @@ backend/app/
   utils/      → Domain validation, hashing, rate limiting
 ```
 
-## Build Phases
-
-- [x] Phase 1: Foundation (config, models, DB, storage)
-- [x] Phase 2: Collectors (DNS, HTTP, TLS, WHOIS, ASN, signals)
-- [x] Phase 3: Task pipeline (Celery orchestration)
-- [x] Phase 4: Claude analyst (prompt, parser, orchestrator)
-- [x] Phase 5: API endpoints (REST + SSE)
-- [ ] Phase 6: Frontend (React UI)
-- [ ] Phase 7: Production (Docker, CI/CD, monitoring)
