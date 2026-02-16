@@ -1,0 +1,154 @@
+{
+  "benign": {
+    "domain": "docs.github.com",
+    "investigation_id": "test-benign-001",
+    "dns": {
+      "meta": {"collector": "dns", "status": "completed", "duration_ms": 120},
+      "a": ["185.199.108.154", "185.199.109.154"],
+      "cname": ["github.github.io"],
+      "mx": [],
+      "ns": ["dns1.p08.nsone.net", "dns2.p08.nsone.net"],
+      "txt": ["v=spf1 include:_netblocks.google.com ~all"],
+      "dmarc": "v=DMARC1; p=reject; rua=mailto:dmarc@github.com"
+    },
+    "whois": {
+      "meta": {"collector": "whois", "status": "completed", "duration_ms": 800},
+      "registrar": "MarkMonitor Inc.",
+      "created_date": "2007-10-09T00:00:00Z",
+      "domain_age_days": 6700,
+      "privacy_protected": false,
+      "registrant_org": "GitHub, Inc."
+    },
+    "http": {
+      "meta": {"collector": "http", "status": "completed", "duration_ms": 450},
+      "reachable": true,
+      "final_url": "https://docs.github.com/en",
+      "final_status_code": 200,
+      "server": "GitHub.com",
+      "title": "GitHub Docs",
+      "has_login_form": false,
+      "security_headers": {
+        "Strict-Transport-Security": "max-age=31536000",
+        "Content-Security-Policy": "default-src 'self'",
+        "X-Frame-Options": "DENY"
+      }
+    },
+    "tls": {
+      "meta": {"collector": "tls", "status": "completed", "duration_ms": 200},
+      "present": true,
+      "issuer_org": "DigiCert Inc",
+      "sans": ["github.com", "*.github.com", "*.github.io"],
+      "valid_days_remaining": 280,
+      "is_self_signed": false,
+      "is_wildcard": true
+    },
+    "hosting": {
+      "meta": {"collector": "asn", "status": "completed", "duration_ms": 150},
+      "ip": "185.199.108.154",
+      "asn": 36459,
+      "asn_org": "GitHub, Inc.",
+      "country": "United States",
+      "is_cdn": true,
+      "is_cloud": false
+    },
+    "signals": [],
+    "data_gaps": []
+  },
+
+  "suspicious": {
+    "domain": "secure-login-verify.net",
+    "investigation_id": "test-suspicious-001",
+    "dns": {
+      "meta": {"collector": "dns", "status": "completed", "duration_ms": 342},
+      "a": ["185.234.72.11"],
+      "mx": ["mail.secure-login-verify.net"],
+      "ns": ["ns1.registrar-servers.com"],
+      "txt": ["v=spf1 include:_spf.google.com ~all"],
+      "dmarc": null
+    },
+    "whois": {
+      "meta": {"collector": "whois", "status": "completed", "duration_ms": 1200},
+      "registrar": "NameCheap Inc.",
+      "created_date": "2026-01-28T00:00:00Z",
+      "domain_age_days": 14,
+      "privacy_protected": true
+    },
+    "http": {
+      "meta": {"collector": "http", "status": "completed", "duration_ms": 2800},
+      "reachable": true,
+      "final_url": "https://secure-login-verify.net/account/signin",
+      "redirect_chain": [
+        {"url": "https://secure-login-verify.net/", "status_code": 302}
+      ],
+      "title": "Account Security Verification",
+      "has_login_form": true,
+      "security_headers": {"X-Frame-Options": "DENY"}
+    },
+    "tls": {
+      "meta": {"collector": "tls", "status": "completed", "duration_ms": 500},
+      "present": true,
+      "issuer_org": "Let's Encrypt",
+      "sans": ["secure-login-verify.net", "www.secure-login-verify.net"],
+      "valid_days_remaining": 76,
+      "is_self_signed": false
+    },
+    "hosting": {
+      "meta": {"collector": "asn", "status": "completed", "duration_ms": 230},
+      "ip": "185.234.72.11",
+      "asn": 60781,
+      "asn_org": "LeaseWeb Netherlands B.V.",
+      "country": "Netherlands",
+      "is_cdn": false,
+      "is_hosting": true
+    },
+    "signals": [
+      {"id": "sig_young_domain", "category": "infrastructure_age", "description": "Domain is 14 days old", "severity": "medium"},
+      {"id": "sig_whois_privacy", "category": "registration", "description": "WHOIS uses privacy protection", "severity": "info"},
+      {"id": "sig_login_form", "category": "content", "description": "Page contains login form", "severity": "info"}
+    ],
+    "data_gaps": []
+  },
+
+  "incomplete": {
+    "domain": "mystery-domain.xyz",
+    "investigation_id": "test-incomplete-001",
+    "dns": {
+      "meta": {"collector": "dns", "status": "completed", "duration_ms": 150},
+      "a": ["104.21.55.200"],
+      "cname": [],
+      "mx": [],
+      "ns": ["brad.ns.cloudflare.com"],
+      "txt": []
+    },
+    "whois": {
+      "meta": {"collector": "whois", "status": "failed", "error": "WHOIS query timed out"},
+      "registrar": null,
+      "created_date": null
+    },
+    "http": {
+      "meta": {"collector": "http", "status": "failed", "error": "Connection timed out"},
+      "reachable": false
+    },
+    "tls": {
+      "meta": {"collector": "tls", "status": "completed", "duration_ms": 300},
+      "present": true,
+      "issuer_org": "Cloudflare, Inc.",
+      "sans": ["*.mystery-domain.xyz", "mystery-domain.xyz"],
+      "is_self_signed": false,
+      "is_wildcard": true
+    },
+    "hosting": {
+      "meta": {"collector": "asn", "status": "completed", "duration_ms": 180},
+      "ip": "104.21.55.200",
+      "asn": 13335,
+      "asn_org": "Cloudflare, Inc.",
+      "country": "United States",
+      "is_cdn": true
+    },
+    "signals": [],
+    "data_gaps": [
+      {"id": "gap_whois", "description": "WHOIS query failed", "collector": "whois", "reason": "timeout", "impact": "Cannot assess domain age or registration"},
+      {"id": "gap_http", "description": "HTTP unreachable", "collector": "http", "reason": "timeout", "impact": "Cannot assess web content"}
+    ]
+  }
+}

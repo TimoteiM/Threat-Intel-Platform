@@ -1,0 +1,32 @@
+# ─── Core ───
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# ─── Database ───
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+alembic>=1.14.0
+
+# ─── Task Queue ───
+celery[redis]>=5.4.0
+redis>=5.2.0
+
+# ─── Collectors ───
+dnspython>=2.7.0
+requests>=2.32.0
+cryptography>=44.0.0
+python-whois>=0.9.4
+
+# ─── Claude API ───
+anthropic>=0.42.0
+
+# ─── Export ───
+weasyprint>=63.0
+
+# ─── Dev / Test ───
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
+python-dotenv>=1.0.0
