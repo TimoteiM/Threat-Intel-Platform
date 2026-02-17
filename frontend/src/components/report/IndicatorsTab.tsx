@@ -15,11 +15,12 @@ export default function IndicatorsTab({ report }: Props) {
   return (
     <div>
       <div style={{
-        fontSize: 11, fontWeight: 700, color: "var(--accent)",
-        letterSpacing: "0.08em", marginBottom: 14,
+        fontSize: 13, fontWeight: 600, color: "var(--accent)",
+        letterSpacing: "0.01em", marginBottom: 14,
         paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        fontFamily: "var(--font-sans)",
       }}>
-        INDICATORS OF COMPROMISE
+        Indicators of Compromise
       </div>
 
       {iocs.length === 0 ? (

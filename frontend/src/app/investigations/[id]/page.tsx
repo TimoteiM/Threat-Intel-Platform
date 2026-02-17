@@ -17,12 +17,12 @@ import SignalsTab from "@/components/report/SignalsTab";
 import * as api from "@/lib/api";
 
 const TABS = [
-  { id: "summary", label: "EXECUTIVE SUMMARY" },
-  { id: "evidence", label: "TECHNICAL EVIDENCE" },
-  { id: "findings", label: "FINDINGS" },
-  { id: "indicators", label: "INDICATORS & PIVOTS" },
-  { id: "signals", label: "SIGNALS & GAPS" },
-  { id: "raw", label: "RAW JSON" },
+  { id: "summary", label: "Executive Summary" },
+  { id: "evidence", label: "Technical Evidence" },
+  { id: "findings", label: "Findings" },
+  { id: "indicators", label: "Indicators & Pivots" },
+  { id: "signals", label: "Signals & Gaps" },
+  { id: "raw", label: "Raw JSON" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -96,10 +96,10 @@ export default function InvestigationPage() {
   if (!report && detail?.state !== "concluded" && detail?.state !== "failed") {
     return (
       <div style={{ paddingTop: 24 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
           {detail?.domain || investigationId}
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20, fontFamily: "var(--font-sans)" }}>
           State: {detail?.state || "loading..."}
         </div>
         <Spinner message={`Investigation in progress — ${detail?.state || "gathering"}...`} />
@@ -107,12 +107,14 @@ export default function InvestigationPage() {
           <button
             onClick={fetchData}
             style={{
-              padding: "8px 20px", background: "var(--bg-elevated)", border: "none",
+              padding: "8px 20px", background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
               borderRadius: "var(--radius-sm)", color: "var(--text-secondary)",
-              fontSize: 11, cursor: "pointer", fontFamily: "var(--font-mono)",
+              fontSize: 12, cursor: "pointer", fontFamily: "var(--font-sans)",
+              fontWeight: 500,
             }}
           >
-            REFRESH
+            Refresh
           </button>
         </div>
       </div>
@@ -181,27 +183,30 @@ export default function InvestigationPage() {
       }}>
         <div>
           <div style={{
-            fontSize: 22, fontWeight: 800, color: "var(--text)",
-            letterSpacing: "0.02em", fontFamily: "var(--font-mono)",
+            fontSize: 24, fontWeight: 700, color: "var(--text)",
+            letterSpacing: "-0.01em", fontFamily: "var(--font-sans)",
           }}>
             {detail?.domain || evidence?.domain || investigationId}
           </div>
-          <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 4 }}>
+          <div style={{
+            fontSize: 12, color: "var(--text-muted)", marginTop: 4,
+            fontFamily: "var(--font-sans)",
+          }}>
             Investigation {String(investigationId).slice(0, 8)}...
             {detail?.concluded_at && ` · Completed ${new Date(detail.concluded_at).toLocaleString()}`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <HeaderButton onClick={() => router.push("/")}>NEW INVESTIGATION</HeaderButton>
+          <HeaderButton onClick={() => router.push("/")}>New Investigation</HeaderButton>
           <HeaderButton onClick={() => {
             window.open(`/api/investigations/${investigationId}/export/pdf`, "_blank");
           }}>
-            EXPORT PDF
+            Export PDF
           </HeaderButton>
           <HeaderButton onClick={() => {
             window.open(`/api/investigations/${investigationId}/export/markdown`, "_blank");
           }}>
-            EXPORT MD
+            Export MD
           </HeaderButton>
           <HeaderButton onClick={() => {
             const blob = new Blob(
@@ -215,9 +220,9 @@ export default function InvestigationPage() {
             a.click();
             URL.revokeObjectURL(url);
           }}>
-            EXPORT JSON
+            Export JSON
           </HeaderButton>
-          <HeaderButton onClick={fetchData}>REFRESH</HeaderButton>
+          <HeaderButton onClick={fetchData}>Refresh</HeaderButton>
         </div>
       </div>
 
@@ -259,10 +264,21 @@ function HeaderButton({ onClick, children }: { onClick: () => void; children: Re
     <button
       onClick={onClick}
       style={{
-        padding: "8px 16px", background: "var(--bg-elevated)", border: "none",
+        padding: "7px 14px", background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
         borderRadius: "var(--radius-sm)", color: "var(--text-secondary)",
-        fontSize: 10, fontWeight: 600, cursor: "pointer",
-        fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
+        fontSize: 12, fontWeight: 500, cursor: "pointer",
+        fontFamily: "var(--font-sans)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--accent-glow)";
+        e.currentTarget.style.borderColor = "var(--accent)";
+        e.currentTarget.style.color = "var(--accent)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "var(--bg-elevated)";
+        e.currentTarget.style.borderColor = "var(--border)";
+        e.currentTarget.style.color = "var(--text-secondary)";
       }}
     >
       {children}
@@ -295,11 +311,12 @@ function RawJsonView({ evidence, report, detail }: { evidence: any; report: any;
             style={{
               padding: "6px 14px",
               background: view === v ? "var(--accent)" : "var(--bg-elevated)",
-              border: "none", borderRadius: "var(--radius-sm)",
+              border: view === v ? "1px solid var(--accent)" : "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
               color: view === v ? "#fff" : "var(--text-dim)",
-              fontSize: 10, fontWeight: 600, cursor: "pointer",
-              fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
-              textTransform: "uppercase",
+              fontSize: 11, fontWeight: 500, cursor: "pointer",
+              fontFamily: "var(--font-sans)",
+              textTransform: "capitalize",
             }}
           >
             {v}

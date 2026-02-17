@@ -21,7 +21,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
   return (
     <div>
       {/* DNS */}
-      <Section title="DNS RECORDS">
+      <Section title="DNS Records">
         {(() => {
           const hasLiveDns = arr(dns.a).length > 0 || arr(dns.aaaa).length > 0;
           const vtDns = arr(vt.vt_dns_records);
@@ -109,7 +109,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* TLS */}
-      <Section title="TLS CERTIFICATE">
+      <Section title="TLS Certificate">
         {tls.present === false ? (
           <EmptyNote>No TLS certificate present</EmptyNote>
         ) : (
@@ -132,7 +132,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* HTTP */}
-      <Section title="HTTP RESPONSE">
+      <Section title="HTTP Response">
         {http.reachable === false && !http.final_url ? (
           <EmptyNote>Domain not reachable over HTTP/HTTPS</EmptyNote>
         ) : (
@@ -157,7 +157,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
                 data={arr(http.redirect_chain).map((r: any, i: number) => ({
                   step: `${i + 1}`,
                   url: r?.url || r?.location || "—",
-                  status: r?.status_code ?? "—",
+                  status: r?.status_code === 0 ? "JS/Meta" : (r?.status_code ?? "—"),
                 }))}
                 columns={[{ key: "step" }, { key: "url", wrap: true }, { key: "status" }]}
               />
@@ -189,7 +189,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* WHOIS */}
-      <Section title="WHOIS REGISTRATION">
+      <Section title="WHOIS Registration">
         {whois.meta?.status === "failed" ? (
           <EmptyNote>WHOIS lookup failed: {whois.meta?.error || "unknown error"}</EmptyNote>
         ) : (
@@ -213,7 +213,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* Hosting */}
-      <Section title="HOSTING / ASN">
+      <Section title="Hosting / ASN">
         {hosting.meta?.status === "failed" ? (
           <EmptyNote>ASN lookup failed: {hosting.meta?.error || "unknown error"}</EmptyNote>
         ) : (
@@ -237,13 +237,13 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
 
       {/* VISUAL COMPARISON (only shown when client_domain was provided) */}
       {evidence?.visual_comparison && (
-        <Section title="VISUAL COMPARISON">
+        <Section title="Visual Comparison">
           <VisualComparisonSection visual={evidence.visual_comparison} />
         </Section>
       )}
 
       {/* VIRUSTOTAL */}
-      <Section title="VIRUSTOTAL REPUTATION">
+      <Section title="VirusTotal Reputation">
         {vt.meta?.status === "failed" ? (
           <EmptyNote>VirusTotal lookup failed: {vt.meta?.error || "unknown error"}</EmptyNote>
         ) : !vt.found && vt.meta?.status !== "completed" ? (
@@ -258,31 +258,31 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
               marginBottom: 16,
             }}>
               <VTStatBox
-                label="MALICIOUS"
+                label="Malicious"
                 count={vt.malicious_count || 0}
                 total={vt.total_vendors || 0}
-                color="#ef4444"
+                color="var(--red)"
                 highlight={vt.malicious_count > 0}
               />
               <VTStatBox
-                label="SUSPICIOUS"
+                label="Suspicious"
                 count={vt.suspicious_count || 0}
                 total={vt.total_vendors || 0}
-                color="#f59e0b"
+                color="var(--yellow)"
                 highlight={vt.suspicious_count > 0}
               />
               <VTStatBox
-                label="HARMLESS"
+                label="Harmless"
                 count={vt.harmless_count || 0}
                 total={vt.total_vendors || 0}
-                color="#10b981"
+                color="var(--green)"
                 highlight={false}
               />
               <VTStatBox
-                label="UNDETECTED"
+                label="Undetected"
                 count={vt.undetected_count || 0}
                 total={vt.total_vendors || 0}
-                color="#64748b"
+                color="var(--text-dim)"
                 highlight={false}
               />
             </div>
@@ -291,18 +291,19 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
             {arr(vt.flagged_malicious_by).length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{
-                  fontSize: 10, fontWeight: 700, color: "#ef4444",
-                  letterSpacing: "0.08em", marginBottom: 6,
+                  fontSize: 12, fontWeight: 600, color: "var(--red)",
+                  letterSpacing: "0.01em", marginBottom: 8,
                   padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                  fontFamily: "var(--font-sans)",
                 }}>
-                  ⚠ FLAGGED MALICIOUS BY ({arr(vt.flagged_malicious_by).length} vendors)
+                  Flagged Malicious ({arr(vt.flagged_malicious_by).length} vendors)
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {arr(vt.flagged_malicious_by).map((vendor: string, i: number) => (
                     <span key={i} style={{
-                      padding: "4px 10px", fontSize: 10, fontWeight: 600,
-                      background: "rgba(239,68,68,0.08)", color: "#ef4444",
-                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(239,68,68,0.2)",
+                      padding: "4px 10px", fontSize: 11, fontWeight: 500,
+                      background: "rgba(248,113,113,0.10)", color: "var(--red)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(248,113,113,0.2)",
                       fontFamily: "var(--font-mono)",
                     }}>
                       {vendor}
@@ -315,17 +316,18 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
             {arr(vt.flagged_suspicious_by).length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{
-                  fontSize: 10, fontWeight: 700, color: "#f59e0b",
-                  letterSpacing: "0.08em", marginBottom: 6,
+                  fontSize: 12, fontWeight: 600, color: "var(--yellow)",
+                  letterSpacing: "0.01em", marginBottom: 8,
+                  fontFamily: "var(--font-sans)",
                 }}>
-                  ⚡ FLAGGED SUSPICIOUS BY ({arr(vt.flagged_suspicious_by).length} vendors)
+                  Flagged Suspicious ({arr(vt.flagged_suspicious_by).length} vendors)
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {arr(vt.flagged_suspicious_by).map((vendor: string, i: number) => (
                     <span key={i} style={{
-                      padding: "4px 10px", fontSize: 10, fontWeight: 600,
-                      background: "rgba(245,158,11,0.08)", color: "#f59e0b",
-                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(245,158,11,0.2)",
+                      padding: "4px 10px", fontSize: 11, fontWeight: 500,
+                      background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
                       fontFamily: "var(--font-mono)",
                     }}>
                       {vendor}
@@ -389,7 +391,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* INTEL / REPUTATION */}
-      <Section title="THREAT INTELLIGENCE">
+      <Section title="Threat Intelligence">
         {intel.meta?.status === "failed" ? (
           <EmptyNote>Intel lookup failed: {intel.meta?.error || "unknown error"}</EmptyNote>
         ) : (
@@ -397,34 +399,35 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
             {arr(intel.blocklist_hits).length > 0 ? (
               <div style={{ marginBottom: 16 }}>
                 <div style={{
-                  fontSize: 10, fontWeight: 700, color: "#ef4444",
-                  letterSpacing: "0.08em", marginBottom: 6,
+                  fontSize: 12, fontWeight: 600, color: "var(--red)",
+                  letterSpacing: "0.01em", marginBottom: 8,
                   padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                  fontFamily: "var(--font-sans)",
                 }}>
-                  ⚠ BLOCKLIST HITS ({arr(intel.blocklist_hits).length})
+                  Blocklist Hits ({arr(intel.blocklist_hits).length})
                 </div>
                 {arr(intel.blocklist_hits).map((hit: any, i: number) => (
                   <div key={i} style={{
                     padding: "8px 12px",
-                    background: "rgba(239,68,68,0.04)",
-                    borderLeft: "3px solid #ef4444",
+                    background: "rgba(248,113,113,0.06)",
+                    borderLeft: "3px solid var(--red)",
                     borderRadius: "var(--radius-sm)",
                     marginBottom: 4,
                     fontSize: 12,
                   }}>
-                    <span style={{ color: "#ef4444", fontWeight: 600 }}>{hit?.source || "Unknown"}</span>
-                    <span style={{ color: "var(--text-dim)", margin: "0 8px" }}>—</span>
+                    <span style={{ color: "var(--red)", fontWeight: 600 }}>{hit?.source || "Unknown"}</span>
+                    <span style={{ color: "var(--text-dim)", margin: "0 8px" }}>-</span>
                     <span style={{ color: "var(--text-secondary)" }}>{hit?.details || hit?.category || ""}</span>
                   </div>
                 ))}
               </div>
             ) : (
               <div style={{
-                padding: "8px 12px", fontSize: 12, color: "var(--green)",
-                background: "rgba(16,185,129,0.04)", borderRadius: "var(--radius-sm)",
+                padding: "10px 14px", fontSize: 12, color: "var(--green)",
+                background: "rgba(52,211,153,0.06)", borderRadius: "var(--radius-sm)",
                 borderLeft: "3px solid var(--green)", marginBottom: 16,
               }}>
-                ✓ No blocklist hits detected
+                No blocklist hits detected
               </div>
             )}
 
@@ -458,7 +461,7 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       </Section>
 
       {/* Collector Metadata */}
-      <Section title="COLLECTOR METADATA">
+      <Section title="Collector Metadata">
         <EvidenceTable
           data={[
             metaRow("DNS", dns.meta),
@@ -518,9 +521,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
-        fontSize: 11, fontWeight: 700, color: "var(--accent)",
-        letterSpacing: "0.08em", marginBottom: 14,
+        fontSize: 13, fontWeight: 600, color: "var(--accent)",
+        letterSpacing: "0.01em", marginBottom: 14,
         paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        fontFamily: "var(--font-sans)",
       }}>
         {title}
       </div>
@@ -559,8 +563,9 @@ function VTStatBox({ label, count, total, color, highlight }: {
         {count}
       </div>
       <div style={{
-        fontSize: 9, fontWeight: 700, color: highlight ? color : "var(--text-muted)",
-        letterSpacing: "0.1em", marginTop: 4,
+        fontSize: 11, fontWeight: 600, color: highlight ? color : "var(--text-muted)",
+        letterSpacing: "0.01em", marginTop: 4,
+        fontFamily: "var(--font-sans)",
       }}>
         {label}
       </div>

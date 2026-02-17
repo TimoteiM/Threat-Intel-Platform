@@ -39,6 +39,37 @@ TECH_PATTERNS = {
 }
 
 
+def _detect_js_redirect(body: str) -> str | None:
+    """
+    Detect client-side redirects (meta-refresh and JavaScript) that the
+    requests library cannot follow.  Returns the target URL or None.
+    """
+    # Meta refresh: <meta http-equiv="refresh" content="0;url=https://...">
+    meta = re.search(
+        r'<meta[^>]+http-equiv\s*=\s*["\']?refresh["\']?[^>]+content\s*=\s*["\']?\d+\s*;\s*url\s*=\s*([^\s"\'>;]+)',
+        body, re.I,
+    )
+    if meta:
+        return meta.group(1).strip()
+
+    # JS redirects: window.location, location.href, location.replace(...)
+    js = re.search(
+        r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+)["\']',
+        body, re.I,
+    )
+    if js:
+        return js.group(1).strip()
+
+    js_replace = re.search(
+        r'(?:window\.)?location\.replace\s*\(\s*["\']([^"\']+)["\']\s*\)',
+        body, re.I,
+    )
+    if js_replace:
+        return js_replace.group(1).strip()
+
+    return None
+
+
 class HTTPCollector(BaseCollector):
     name = "http"
 
@@ -102,6 +133,15 @@ class HTTPCollector(BaseCollector):
         title_match = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
         if title_match:
             evidence.title = title_match.group(1).strip()[:200]
+
+        # Detect JavaScript / meta-refresh redirects (invisible to requests library)
+        js_redirect_url = _detect_js_redirect(body)
+        if js_redirect_url:
+            evidence.redirect_chain.append(HTTPRedirect(
+                url=js_redirect_url,
+                status_code=0,  # 0 = client-side redirect (JS/meta)
+                headers={"X-Redirect-Type": "client-side (JavaScript/meta-refresh)"},
+            ))
 
         # Login form detection
         evidence.has_login_form = bool(re.search(

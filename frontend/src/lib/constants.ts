@@ -11,10 +11,10 @@ export const CLASSIFICATION_CONFIG: Record<Classification, {
   bg: string;
   label: string;
 }> = {
-  benign:       { color: "#10b981", bg: "rgba(16,185,129,0.08)",  label: "BENIGN" },
-  suspicious:   { color: "#f59e0b", bg: "rgba(245,158,11,0.08)", label: "SUSPICIOUS" },
-  malicious:    { color: "#ef4444", bg: "rgba(239,68,68,0.08)",  label: "MALICIOUS" },
-  inconclusive: { color: "#64748b", bg: "rgba(100,116,139,0.08)", label: "INCONCLUSIVE" },
+  benign:       { color: "#34d399", bg: "rgba(52,211,153,0.10)",  label: "BENIGN" },
+  suspicious:   { color: "#fbbf24", bg: "rgba(251,191,36,0.10)", label: "SUSPICIOUS" },
+  malicious:    { color: "#f87171", bg: "rgba(248,113,113,0.10)",  label: "MALICIOUS" },
+  inconclusive: { color: "#94a3b8", bg: "rgba(148,163,184,0.10)", label: "INCONCLUSIVE" },
 };
 
 // ─── SOC Action display ───
@@ -23,20 +23,20 @@ export const ACTION_CONFIG: Record<SOCAction, {
   color: string;
   icon: string;
 }> = {
-  monitor:     { color: "#10b981", icon: "◉" },
-  investigate: { color: "#f59e0b", icon: "⬡" },
-  block:       { color: "#ef4444", icon: "⊘" },
-  hunt:        { color: "#f97316", icon: "◎" },
+  monitor:     { color: "#34d399", icon: "◉" },
+  investigate: { color: "#fbbf24", icon: "⬡" },
+  block:       { color: "#f87171", icon: "⊘" },
+  hunt:        { color: "#fb923c", icon: "◎" },
 };
 
 // ─── Severity display ───
 
 export const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#ef4444",
-  high:     "#ef4444",
-  medium:   "#f59e0b",
-  low:      "#3b82f6",
-  info:     "#64748b",
+  critical: "#f87171",
+  high:     "#f87171",
+  medium:   "#fbbf24",
+  low:      "#60a5fa",
+  info:     "#94a3b8",
 };
 
 // ─── Collector status display ───
@@ -45,21 +45,21 @@ export const COLLECTOR_STATUS_CONFIG: Record<CollectorStatus, {
   symbol: string;
   color: string;
 }> = {
-  completed: { symbol: "✓", color: "#10b981" },
-  running:   { symbol: "◌", color: "#3b82f6" },
-  failed:    { symbol: "✗", color: "#ef4444" },
-  pending:   { symbol: "○", color: "#475569" },
-  skipped:   { symbol: "–", color: "#475569" },
+  completed: { symbol: "✓", color: "#34d399" },
+  running:   { symbol: "◌", color: "#60a5fa" },
+  failed:    { symbol: "✗", color: "#f87171" },
+  pending:   { symbol: "○", color: "#64748b" },
+  skipped:   { symbol: "–", color: "#64748b" },
 };
 
 // ─── IOC type display ───
 
 export const IOC_TYPE_COLORS: Record<string, string> = {
-  ip:     "#3b82f6",
-  domain: "#8b5cf6",
-  url:    "#f59e0b",
-  hash:   "#64748b",
-  email:  "#10b981",
+  ip:     "#60a5fa",
+  domain: "#a78bfa",
+  url:    "#fbbf24",
+  hash:   "#94a3b8",
+  email:  "#34d399",
 };
 
 // ─── Collector display names ───
@@ -77,11 +77,11 @@ export const COLLECTOR_NAMES: Record<string, string> = {
 // ─── Tabs ───
 
 export const REPORT_TABS = [
-  { id: "summary",    label: "EXECUTIVE SUMMARY" },
-  { id: "evidence",   label: "TECHNICAL EVIDENCE" },
-  { id: "findings",   label: "FINDINGS" },
-  { id: "indicators", label: "INDICATORS & PIVOTS" },
-  { id: "signals",    label: "SIGNALS & GAPS" },
+  { id: "summary",    label: "Executive Summary" },
+  { id: "evidence",   label: "Technical Evidence" },
+  { id: "findings",   label: "Findings" },
+  { id: "indicators", label: "Indicators & Pivots" },
+  { id: "signals",    label: "Signals & Gaps" },
 ] as const;
 
 export type TabId = typeof REPORT_TABS[number]["id"];

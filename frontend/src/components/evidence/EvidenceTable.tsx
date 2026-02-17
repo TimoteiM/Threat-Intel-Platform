@@ -25,13 +25,14 @@ export default function EvidenceTable({ title, data, columns }: Props) {
       {title && (
         <div
           style={{
-            fontSize: 10,
-            fontWeight: 700,
+            fontSize: 11,
+            fontWeight: 600,
             color: "var(--text-dim)",
-            letterSpacing: "0.08em",
+            letterSpacing: "0.01em",
             marginBottom: 6,
             padding: "6px 0",
             borderBottom: "1px solid var(--border-dim)",
+            fontFamily: "var(--font-sans)",
           }}
         >
           {title}
@@ -62,7 +63,7 @@ export default function EvidenceTable({ title, data, columns }: Props) {
                       fontWeight: j === 0 ? 600 : 400,
                       width: j === 0 ? "30%" : "auto",
                       background:
-                        i % 2 === 0 ? "transparent" : "rgba(6,10,17,0.3)",
+                        i % 2 === 0 ? "transparent" : "rgba(15,23,42,0.4)",
                       whiteSpace: col.wrap ? "normal" : "nowrap",
                       wordBreak: col.wrap ? "break-all" : "normal",
                       fontFamily: "var(--font-mono)",

@@ -16,7 +16,7 @@ export default function FindingsTab({ report }: Props) {
 
   return (
     <div>
-      <Section title="ANALYST FINDINGS">
+      <Section title="Analyst Findings">
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {findings.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--text-dim)", padding: 20 }}>
@@ -57,12 +57,12 @@ export default function FindingsTab({ report }: Props) {
         </div>
       </Section>
 
-      <Section title="KEY EVIDENCE">
+      <Section title="Key Evidence">
         <RefList items={keyEvidence} color="var(--green)" />
       </Section>
 
       {contradicting.length > 0 && (
-        <Section title="CONTRADICTING EVIDENCE">
+        <Section title="Contradicting Evidence">
           <RefList items={contradicting} color="var(--yellow)" />
         </Section>
       )}
@@ -74,9 +74,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
-        fontSize: 11, fontWeight: 700, color: "var(--accent)",
-        letterSpacing: "0.08em", marginBottom: 14,
+        fontSize: 13, fontWeight: 600, color: "var(--accent)",
+        letterSpacing: "0.01em", marginBottom: 14,
         paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        fontFamily: "var(--font-sans)",
       }}>
         {title}
       </div>

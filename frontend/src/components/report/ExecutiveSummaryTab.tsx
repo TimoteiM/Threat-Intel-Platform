@@ -22,13 +22,13 @@ export default function ExecutiveSummaryTab({ report }: Props) {
         riskScore={report?.risk_score}
       />
 
-      <Section title="PRIMARY REASONING">
+      <Section title="Primary Reasoning">
         <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.8 }}>
           {report?.primary_reasoning || "No reasoning provided."}
         </p>
       </Section>
 
-      <Section title="RECOMMENDED ACTION">
+      <Section title="Recommended Action">
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 10,
           padding: "12px 20px",
@@ -58,7 +58,7 @@ export default function ExecutiveSummaryTab({ report }: Props) {
       </Section>
 
       {(report?.legitimate_explanation || report?.malicious_explanation) && (
-        <Section title="HYPOTHESIS COMPARISON">
+        <Section title="Hypothesis Comparison">
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <HypothesisCard
               type="legitimate"
@@ -75,7 +75,7 @@ export default function ExecutiveSummaryTab({ report }: Props) {
       )}
 
       {report?.risk_rationale && (
-        <Section title="RISK RATIONALE">
+        <Section title="Risk Rationale">
           <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
             {report.risk_rationale}
           </p>
@@ -89,9 +89,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
-        fontSize: 11, fontWeight: 700, color: "var(--accent)",
-        letterSpacing: "0.08em", marginBottom: 14,
+        fontSize: 13, fontWeight: 600, color: "var(--accent)",
+        letterSpacing: "0.01em", marginBottom: 14,
         paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        fontFamily: "var(--font-sans)",
       }}>
         {title}
       </div>
@@ -104,14 +105,17 @@ function HypothesisCard({ type, color, text }: { type: "legitimate" | "malicious
   return (
     <div style={{
       padding: 20,
-      background: `${color}06`,
-      border: `1px solid ${color}18`,
+      background: `${color}08`,
+      border: `1px solid ${color}20`,
       borderRadius: "var(--radius)",
     }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color, letterSpacing: "0.08em", marginBottom: 10 }}>
-        {type === "legitimate" ? "✓ LEGITIMATE HYPOTHESIS" : "✗ MALICIOUS HYPOTHESIS"}
+      <div style={{
+        fontSize: 11, fontWeight: 600, color, marginBottom: 10,
+        fontFamily: "var(--font-sans)",
+      }}>
+        {type === "legitimate" ? "Legitimate Hypothesis" : "Malicious Hypothesis"}
       </div>
-      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>{text}</div>
+      <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7 }}>{text}</div>
     </div>
   );
 }

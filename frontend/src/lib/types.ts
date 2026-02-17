@@ -215,6 +215,8 @@ export interface VisualComparisonEvidence {
   investigated_screenshot_artifact_id?: string;
   client_screenshot_artifact_id?: string;
   reference_image_used: boolean;
+  investigated_final_url?: string;
+  client_final_url?: string;
   phash_similarity?: number;
   histogram_similarity?: number;
   overall_visual_similarity?: number;

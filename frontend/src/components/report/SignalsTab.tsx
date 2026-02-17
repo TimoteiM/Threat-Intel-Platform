@@ -14,7 +14,7 @@ export default function SignalsTab({ evidence }: Props) {
 
   return (
     <div>
-      <Section title="SIGNALS (investigative clues — not conclusions)">
+      <Section title="Signals (investigative clues, not conclusions)">
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {signals.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--text-dim)", padding: 20 }}>
@@ -37,9 +37,10 @@ export default function SignalsTab({ evidence }: Props) {
                   }}
                 >
                   <span style={{
-                    fontSize: 9, fontWeight: 700, color,
-                    letterSpacing: "0.1em", minWidth: 50,
+                    fontSize: 10, fontWeight: 600, color,
+                    letterSpacing: "0.02em", minWidth: 50,
                     textTransform: "uppercase",
+                    fontFamily: "var(--font-sans)",
                   }}>
                     {sig?.severity || "info"}
                   </span>
@@ -60,7 +61,7 @@ export default function SignalsTab({ evidence }: Props) {
       </Section>
 
       {dataGaps.length > 0 && (
-        <Section title="DATA GAPS">
+        <Section title="Data Gaps">
           {dataGaps.map((gap: any, i: number) => (
             <div
               key={gap?.id || i}
@@ -90,9 +91,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
-        fontSize: 11, fontWeight: 700, color: "var(--accent)",
-        letterSpacing: "0.08em", marginBottom: 14,
+        fontSize: 13, fontWeight: 600, color: "var(--accent)",
+        letterSpacing: "0.01em", marginBottom: 14,
         paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        fontFamily: "var(--font-sans)",
       }}>
         {title}
       </div>

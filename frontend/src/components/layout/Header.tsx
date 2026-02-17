@@ -7,8 +7,12 @@ export default function Header() {
     <header
       style={{
         borderBottom: "1px solid var(--border)",
-        padding: "14px 0",
-        background: "linear-gradient(180deg, rgba(59,130,246,0.02) 0%, transparent 100%)",
+        background: "rgba(15, 23, 42, 0.85)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
       }}
     >
       <div style={{
@@ -18,63 +22,81 @@ export default function Header() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
+        height: 56,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <a
+          href="/"
+          style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}
+        >
           <div
             style={{
-              width: 30,
-              height: 30,
-              borderRadius: 6,
-              background: "linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)",
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: "linear-gradient(135deg, #60a5fa 0%, #818cf8 100%)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 14,
+              fontSize: 15,
               fontWeight: 700,
               color: "#fff",
+              boxShadow: "0 2px 8px rgba(96, 165, 250, 0.3)",
             }}
           >
             ⬡
           </div>
           <div>
             <div style={{
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 700,
-              letterSpacing: "0.08em",
+              letterSpacing: "0.02em",
               color: "var(--text)",
-              fontFamily: "var(--font-mono)",
+              fontFamily: "var(--font-sans)",
             }}>
-              THREAT INVESTIGATOR
+              Threat Investigator
             </div>
             <div style={{
-              fontSize: 9,
+              fontSize: 10,
               color: "var(--text-muted)",
-              letterSpacing: "0.12em",
-              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.01em",
+              fontFamily: "var(--font-sans)",
+              fontWeight: 500,
             }}>
-              DOMAIN ANALYSIS PLATFORM
+              Domain Analysis Platform
             </div>
           </div>
-        </div>
+        </a>
         <div style={{
-          fontSize: 10,
-          color: "var(--text-muted)",
-          fontFamily: "var(--font-mono)",
           display: "flex",
           alignItems: "center",
           gap: 16,
         }}>
           <a href="/investigations" style={{
             color: "var(--text-dim)", textDecoration: "none",
-            fontSize: 10, letterSpacing: "0.08em", fontWeight: 600,
-            transition: "color 0.15s",
+            fontSize: 13, fontWeight: 500,
+            fontFamily: "var(--font-sans)",
+            padding: "6px 12px",
+            borderRadius: "var(--radius-sm)",
           }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-dim)")}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--accent)";
+              e.currentTarget.style.background = "var(--accent-glow)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--text-dim)";
+              e.currentTarget.style.background = "transparent";
+            }}
           >
-            ALL CASES
+            All Cases
           </a>
-          <span>v1.0.0</span>
+          <span style={{
+            fontSize: 11,
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+            padding: "2px 8px",
+            background: "var(--bg-elevated)",
+            borderRadius: "var(--radius-sm)",
+          }}>v1.0</span>
         </div>
       </div>
     </header>

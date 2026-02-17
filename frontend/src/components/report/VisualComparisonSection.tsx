@@ -15,16 +15,16 @@ export default function VisualComparisonSection({ visual }: Props) {
 
   // Color based on similarity level
   const scoreColor = visual.is_visual_clone
-    ? "#ef4444"
+    ? "var(--red)"
     : visual.is_partial_clone
-    ? "#f59e0b"
-    : "#10b981";
+    ? "var(--yellow)"
+    : "var(--green)";
 
   const scoreLabel = visual.is_visual_clone
-    ? "VISUAL CLONE"
+    ? "Visual Clone"
     : visual.is_partial_clone
-    ? "PARTIAL MATCH"
-    : "DISTINCT";
+    ? "Partial Match"
+    : "Distinct";
 
   return (
     <div>
@@ -70,11 +70,12 @@ export default function VisualComparisonSection({ visual }: Props) {
           <div style={{ flex: 1 }}>
             <div
               style={{
-                fontSize: 10,
-                fontWeight: 700,
+                fontSize: 12,
+                fontWeight: 600,
                 color: scoreColor,
-                letterSpacing: "0.1em",
+                letterSpacing: "0.01em",
                 marginBottom: 4,
+                fontFamily: "var(--font-sans)",
               }}
             >
               {scoreLabel}
@@ -109,18 +110,18 @@ export default function VisualComparisonSection({ visual }: Props) {
           }}
         >
           <MetricBox
-            label="OVERALL"
+            label="Overall"
             value={overall}
             color={scoreColor}
             highlight
           />
           <MetricBox
-            label="PERCEPTUAL"
+            label="Perceptual"
             value={visual.phash_similarity}
             color="var(--text-dim)"
           />
           <MetricBox
-            label="HISTOGRAM"
+            label="Histogram"
             value={visual.histogram_similarity}
             color="var(--text-dim)"
           />
@@ -141,6 +142,8 @@ export default function VisualComparisonSection({ visual }: Props) {
             label={`Investigated: ${visual.investigated_domain}`}
             artifactId={visual.investigated_screenshot_artifact_id}
             error={visual.investigated_capture_error}
+            finalUrl={visual.investigated_final_url}
+            domain={visual.investigated_domain}
           />
           <ScreenshotPanel
             label={`Client: ${visual.client_domain}${
@@ -148,6 +151,8 @@ export default function VisualComparisonSection({ visual }: Props) {
             }`}
             artifactId={visual.client_screenshot_artifact_id}
             error={visual.client_capture_error}
+            finalUrl={visual.client_final_url}
+            domain={visual.client_domain}
           />
         </div>
       )}
@@ -214,11 +219,12 @@ function MetricBox({
       </div>
       <div
         style={{
-          fontSize: 9,
-          fontWeight: 700,
+          fontSize: 11,
+          fontWeight: 600,
           color: highlight ? color : "var(--text-muted)",
-          letterSpacing: "0.1em",
+          letterSpacing: "0.01em",
           marginTop: 4,
+          fontFamily: "var(--font-sans)",
         }}
       >
         {label}
@@ -227,15 +233,31 @@ function MetricBox({
   );
 }
 
+function _isRedirect(finalUrl?: string, domain?: string): boolean {
+  if (!finalUrl || !domain) return false;
+  try {
+    const urlHost = new URL(finalUrl).hostname.toLowerCase();
+    return !urlHost.includes(domain.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function ScreenshotPanel({
   label,
   artifactId,
   error,
+  finalUrl,
+  domain,
 }: {
   label: string;
   artifactId?: string;
   error?: string;
+  finalUrl?: string;
+  domain?: string;
 }) {
+  const redirected = _isRedirect(finalUrl, domain);
+
   return (
     <div
       style={{
@@ -246,16 +268,31 @@ function ScreenshotPanel({
     >
       <div
         style={{
-          fontSize: 10,
-          fontWeight: 700,
+          fontSize: 11,
+          fontWeight: 600,
           color: "var(--text-dim)",
-          letterSpacing: "0.06em",
+          letterSpacing: "0.01em",
           padding: "8px 12px",
           borderBottom: "1px solid var(--border)",
           background: "var(--bg-elevated)",
+          fontFamily: "var(--font-sans)",
         }}
       >
         {label}
+        {redirected && (
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 500,
+              color: "var(--yellow)",
+              marginTop: 4,
+              fontFamily: "var(--font-mono)",
+              wordBreak: "break-all",
+            }}
+          >
+            Redirected to: {finalUrl}
+          </div>
+        )}
       </div>
       {artifactId ? (
         <img

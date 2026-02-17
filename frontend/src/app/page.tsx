@@ -48,20 +48,29 @@ export default function HomePage() {
       <InvestigationInput onSubmit={handleSubmit} loading={loading} />
 
       {recent.length > 0 && (
-        <div style={{ marginTop: 40 }}>
+        <div style={{ marginTop: 48 }}>
           <div
             style={{
-              fontSize: 11,
-              fontWeight: 700,
+              fontSize: 13,
+              fontWeight: 600,
               color: "var(--text-dim)",
-              letterSpacing: "0.08em",
+              letterSpacing: "0.01em",
               marginBottom: 16,
+              fontFamily: "var(--font-sans)",
             }}
           >
-            RECENT INVESTIGATIONS
+            Recent Investigations
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {recent.map((inv) => {
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-lg)",
+            overflow: "hidden",
+            boxShadow: "var(--shadow-sm)",
+          }}>
+            {recent.map((inv, index) => {
               const classConfig =
                 CLASSIFICATION_CONFIG[inv.classification as keyof typeof CLASSIFICATION_CONFIG];
               return (
@@ -72,45 +81,57 @@ export default function HomePage() {
                     display: "flex",
                     alignItems: "center",
                     gap: 16,
-                    padding: "12px 16px",
-                    background: "var(--bg-card)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius)",
+                    padding: "14px 20px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: index < recent.length - 1 ? "1px solid var(--border-dim)" : "none",
+                    borderRadius: 0,
                     cursor: "pointer",
                     textAlign: "left",
-                    fontFamily: "var(--font-mono)",
                     color: "var(--text)",
                     width: "100%",
                     transition: "background 0.15s",
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-card-hover)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg-card)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
-                  <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>
+                  <span style={{
+                    fontSize: 13, fontWeight: 600, flex: 1,
+                    fontFamily: "var(--font-mono)",
+                  }}>
                     {inv.domain}
                   </span>
                   {classConfig && (
                     <span
                       style={{
-                        fontSize: 9,
-                        fontWeight: 700,
-                        padding: "2px 8px",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        padding: "3px 10px",
                         background: classConfig.bg,
                         color: classConfig.color,
                         borderRadius: "var(--radius-sm)",
-                        letterSpacing: "0.1em",
+                        fontFamily: "var(--font-sans)",
                       }}
                     >
                       {classConfig.label}
                     </span>
                   )}
                   {inv.risk_score != null && (
-                    <span style={{ fontSize: 11, color: "var(--text-dim)", minWidth: 30 }}>
+                    <span style={{
+                      fontSize: 12, color: "var(--text-dim)", minWidth: 30,
+                      fontFamily: "var(--font-mono)", fontWeight: 600,
+                    }}>
                       {inv.risk_score}
                     </span>
                   )}
-                  <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{inv.state}</span>
-                  <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                  <span style={{
+                    fontSize: 11, color: "var(--text-muted)",
+                    fontFamily: "var(--font-sans)", fontWeight: 500,
+                  }}>{inv.state}</span>
+                  <span style={{
+                    fontSize: 11, color: "var(--text-muted)",
+                    fontFamily: "var(--font-sans)",
+                  }}>
                     {new Date(inv.created_at).toLocaleDateString()}
                   </span>
                 </button>

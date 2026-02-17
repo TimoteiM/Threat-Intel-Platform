@@ -147,7 +147,7 @@ def _is_full_url(target: str) -> bool:
     return target.startswith("http://") or target.startswith("https://")
 
 
-def capture_screenshot(target: str, timeout: int = 60) -> bytes:
+def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
     """
     Capture a viewport screenshot using headless Chromium.
 
@@ -157,7 +157,8 @@ def capture_screenshot(target: str, timeout: int = 60) -> bytes:
                 tries HTTPS first, then falls back to HTTP.
         timeout: Total timeout in seconds.
 
-    Returns raw PNG bytes. Raises on failure.
+    Returns (raw PNG bytes, final URL after all redirects including JS).
+    Raises on failure.
     """
     from playwright.sync_api import sync_playwright
 
@@ -172,6 +173,8 @@ def capture_screenshot(target: str, timeout: int = 60) -> bytes:
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=VizDisplayCompositor",
                 "--window-size=1280,720",
+                # Allow insecure HTTP content without interstitial
+                "--allow-running-insecure-content",
             ],
         )
         try:
@@ -217,10 +220,16 @@ def capture_screenshot(target: str, timeout: int = 60) -> bytes:
 
             loaded = False
 
+            def _on_chrome_error(url: str) -> bool:
+                """Check if browser ended up on an error page."""
+                return url.startswith("chrome-error://") or url.startswith("chrome://")
+
             if _is_full_url(target):
                 # User provided a full URL — use it directly
                 try:
                     page.goto(target, wait_until="domcontentloaded", timeout=timeout * 1000)
+                    if _on_chrome_error(page.url):
+                        raise RuntimeError(f"Browser error page for {target}")
                     loaded = True
                 except Exception as e:
                     raise RuntimeError(f"Failed to load {target}: {e}")
@@ -229,13 +238,29 @@ def capture_screenshot(target: str, timeout: int = 60) -> bytes:
                 https_timeout_ms = int(timeout * 0.4 * 1000)
                 http_timeout_ms = int(timeout * 0.6 * 1000)
 
+                https_ok = False
                 try:
                     page.goto(f"https://{target}", wait_until="domcontentloaded", timeout=https_timeout_ms)
-                    loaded = True
+                    if not _on_chrome_error(page.url):
+                        https_ok = True
+                        loaded = True
                 except Exception as e:
                     logger.debug(f"HTTPS failed for {target}: {e}")
+
+                if not https_ok:
+                    # Close the broken page (stuck on chrome-error://) and open
+                    # a fresh one so the HTTP navigation isn't interrupted.
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+                    page = context.new_page()
                     try:
                         page.goto(f"http://{target}", wait_until="domcontentloaded", timeout=http_timeout_ms)
+                        if _on_chrome_error(page.url):
+                            raise RuntimeError(
+                                f"HTTP loaded but browser shows error page for {target}"
+                            )
                         loaded = True
                     except Exception as e2:
                         raise RuntimeError(
@@ -244,20 +269,35 @@ def capture_screenshot(target: str, timeout: int = 60) -> bytes:
                         )
 
             if loaded:
-                # Wait for Cloudflare challenge / JS rendering to complete
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass  # Best-effort — page is already loaded enough
-                # Extra pause for late-rendering JS content / challenge resolution
-                page.wait_for_timeout(3000)
+                # Wait for JS redirect chains to fully resolve.
+                # Some sites chain multiple JS redirects (bouncer → tracker → final).
+                # We poll page.url and wait until it stabilises.
+                prev_url = page.url
+                for _ in range(10):  # up to ~15s total (10 × 1.5s)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1500)
+                    curr_url = page.url
+                    if curr_url == prev_url:
+                        break  # URL stopped changing — redirect chain is done
+                    logger.debug(f"URL changed: {prev_url} -> {curr_url}")
+                    prev_url = curr_url
+
+            # Final check — JS redirect may have landed on error page
+            final_url = page.url
+            if _on_chrome_error(final_url):
+                raise RuntimeError(
+                    f"Page ended up on browser error page after navigation for {target}"
+                )
 
             # Capture screenshot
             screenshot_bytes = page.screenshot(
                 full_page=False,  # Viewport only (consistent size)
                 type="png",
             )
-            return screenshot_bytes
+            return screenshot_bytes, final_url
         finally:
             browser.close()
 
@@ -289,6 +329,8 @@ def compare_websites(
         "investigated_domain": investigated_domain,
         "client_domain": client_domain,
         "reference_image_used": client_reference_image is not None,
+        "investigated_final_url": None,
+        "client_final_url": None,
         "phash_similarity": None,
         "histogram_similarity": None,
         "overall_visual_similarity": None,
@@ -305,9 +347,10 @@ def compare_websites(
     # ── Capture investigated domain ──
     investigated_bytes = None
     try:
-        investigated_bytes = capture_screenshot(investigated_domain, timeout)
+        investigated_bytes, final_url = capture_screenshot(investigated_domain, timeout)
         result["_investigated_screenshot_bytes"] = investigated_bytes
-        logger.info(f"Captured screenshot of {investigated_domain} ({len(investigated_bytes)} bytes)")
+        result["investigated_final_url"] = final_url
+        logger.info(f"Captured screenshot of {investigated_domain} -> {final_url} ({len(investigated_bytes)} bytes)")
     except Exception as e:
         result["investigated_capture_error"] = str(e)
         logger.warning(f"Failed to capture screenshot of {investigated_domain}: {e}")
@@ -320,9 +363,10 @@ def compare_websites(
         logger.info(f"Using uploaded reference image for {client_domain}")
     else:
         try:
-            client_bytes = capture_screenshot(client_domain, timeout)
+            client_bytes, final_url = capture_screenshot(client_domain, timeout)
             result["_client_screenshot_bytes"] = client_bytes
-            logger.info(f"Captured screenshot of {client_domain} ({len(client_bytes)} bytes)")
+            result["client_final_url"] = final_url
+            logger.info(f"Captured screenshot of {client_domain} -> {final_url} ({len(client_bytes)} bytes)")
         except Exception as e:
             result["client_capture_error"] = str(e)
             logger.warning(f"Failed to capture screenshot of {client_domain}: {e}")

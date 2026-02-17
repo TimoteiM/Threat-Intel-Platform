@@ -1,44 +1,49 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  /* ── Surface ── */
-  --bg-root: #060a11;
-  --bg-surface: #0c1220;
-  --bg-card: #111827;
-  --bg-card-hover: #1a2235;
-  --bg-input: #0a0f1a;
-  --bg-elevated: #1e293b;
+  /* ── Surface (lifted from near-black to comfortable dark slate) ── */
+  --bg-root: #0f172a;
+  --bg-surface: #1e293b;
+  --bg-card: #1e293b;
+  --bg-card-hover: #293548;
+  --bg-input: #162032;
+  --bg-elevated: #334155;
 
   /* ── Border ── */
-  --border: #1e293b;
-  --border-focus: #3b82f6;
-  --border-dim: #141c2b;
+  --border: #2d3d53;
+  --border-focus: #60a5fa;
+  --border-dim: #1e293b;
 
   /* ── Text ── */
-  --text: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-dim: #64748b;
-  --text-muted: #475569;
+  --text: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-dim: #94a3b8;
+  --text-muted: #64748b;
 
   /* ── Accent ── */
-  --accent: #3b82f6;
-  --accent-glow: rgba(59, 130, 246, 0.12);
+  --accent: #60a5fa;
+  --accent-glow: rgba(96, 165, 250, 0.15);
 
   /* ── Status ── */
-  --green: #10b981;
-  --yellow: #f59e0b;
-  --red: #ef4444;
-  --orange: #f97316;
-  --purple: #8b5cf6;
+  --green: #34d399;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --orange: #fb923c;
+  --purple: #a78bfa;
 
   /* ── Typography ── */
   --font-mono: 'IBM Plex Mono', 'Fira Code', 'SF Mono', monospace;
-  --font-sans: 'DM Sans', -apple-system, sans-serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 
   /* ── Spacing ── */
   --radius: 8px;
-  --radius-sm: 4px;
+  --radius-sm: 6px;
   --radius-lg: 12px;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
 * {
@@ -48,12 +53,21 @@
 }
 
 html, body {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   background: var(--bg-root);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.6;
+}
+
+code, pre, .mono {
+  font-family: var(--font-mono);
+}
+
+/* ── Smooth transitions for all interactive elements ── */
+button, a, input, textarea, select {
+  transition: all 0.15s ease;
 }
 
 /* ── Scrollbar ── */
@@ -74,7 +88,7 @@ html, body {
 
 /* ── Selection ── */
 ::selection {
-  background: rgba(59, 130, 246, 0.3);
+  background: rgba(96, 165, 250, 0.35);
   color: #fff;
 }
 

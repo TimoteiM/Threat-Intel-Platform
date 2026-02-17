@@ -26,15 +26,14 @@ export default function EnrichmentPanel({ onSubmit }: Props) {
           background: "none",
           border: "none",
           color: "var(--purple)",
-          fontSize: 11,
-          fontWeight: 600,
+          fontSize: 12,
+          fontWeight: 500,
           cursor: "pointer",
-          fontFamily: "var(--font-mono)",
+          fontFamily: "var(--font-sans)",
           padding: 0,
-          letterSpacing: "0.06em",
         }}
       >
-        {open ? "▾" : "▸"} ADD EXTERNAL INTELLIGENCE
+        {open ? "▾" : "▸"} Add External Intelligence
       </button>
 
       {open && (
@@ -73,14 +72,13 @@ export default function EnrichmentPanel({ onSubmit }: Props) {
               border: "none",
               borderRadius: "var(--radius-sm)",
               color: "#fff",
-              fontSize: 10,
-              fontWeight: 700,
+              fontSize: 12,
+              fontWeight: 600,
               cursor: text ? "pointer" : "default",
-              fontFamily: "var(--font-mono)",
-              letterSpacing: "0.06em",
+              fontFamily: "var(--font-sans)",
             }}
           >
-            CORRELATE WITH EVIDENCE
+            Correlate with Evidence
           </button>
         </div>
       )}

@@ -19,3 +19,4 @@ artifacts/
 .mypy_cache/
 .coverage
 htmlcov/
+nul

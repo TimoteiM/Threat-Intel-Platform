@@ -49,16 +49,19 @@ export default function ClassificationBadge({ classification, confidence, riskSc
         <div
           style={{
             fontSize: 18,
-            fontWeight: 800,
+            fontWeight: 700,
             color: config.color,
-            letterSpacing: "0.1em",
-            fontFamily: "var(--font-mono)",
+            letterSpacing: "0.02em",
+            fontFamily: "var(--font-sans)",
           }}
         >
           {config.label}
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
-          Confidence: <span style={{ color: "var(--text)" }}>{confidence}</span>
+        <div style={{
+          fontSize: 12, color: "var(--text-dim)", marginTop: 2,
+          fontFamily: "var(--font-sans)",
+        }}>
+          Confidence: <span style={{ color: "var(--text)", fontWeight: 500 }}>{confidence}</span>
           {riskScore != null && <> · Risk Score: {riskScore}/100</>}
         </div>
       </div>

@@ -55,7 +55,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
 
   const inputBase: React.CSSProperties = {
     width: "100%",
-    padding: "14px 16px",
+    padding: "12px 16px",
     background: "var(--bg-input)",
     border: "1px solid var(--border)",
     borderRadius: "var(--radius)",
@@ -63,19 +63,19 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     fontSize: 14,
     fontFamily: "var(--font-mono)",
     outline: "none",
-    transition: "border-color 0.2s",
+    transition: "border-color 0.2s, box-shadow 0.2s",
   };
 
   const toggleStyle: React.CSSProperties = {
     background: "none",
     border: "none",
     color: "var(--text-dim)",
-    fontSize: 10,
+    fontSize: 11,
     cursor: "pointer",
-    marginTop: 12,
-    fontFamily: "var(--font-mono)",
-    padding: 0,
-    letterSpacing: "0.06em",
+    marginTop: 14,
+    fontFamily: "var(--font-sans)",
+    padding: "4px 0",
+    fontWeight: 500,
   };
 
   return (
@@ -86,17 +86,19 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
         borderRadius: "var(--radius-lg)",
         padding: 32,
         marginTop: 32,
+        boxShadow: "var(--shadow-md)",
       }}
       className="animate-in"
     >
       <div style={{
-        fontSize: 11,
+        fontSize: 13,
         color: "var(--text-dim)",
-        letterSpacing: "0.08em",
+        letterSpacing: "0.02em",
         marginBottom: 16,
         fontWeight: 600,
+        fontFamily: "var(--font-sans)",
       }}>
-        NEW INVESTIGATION
+        New Investigation
       </div>
 
       <div style={{ display: "flex", gap: 12 }}>
@@ -116,22 +118,22 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           onClick={handleSubmit}
           disabled={!canSubmit}
           style={{
-            padding: "14px 28px",
+            padding: "12px 28px",
             background: canSubmit
-              ? "linear-gradient(135deg, #3b82f6, #2563eb)"
+              ? "linear-gradient(135deg, #60a5fa, #818cf8)"
               : "var(--bg-elevated)",
             border: "none",
             borderRadius: "var(--radius)",
             color: canSubmit ? "#fff" : "var(--text-muted)",
-            fontSize: 12,
-            fontWeight: 700,
-            fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            fontWeight: 600,
+            fontFamily: "var(--font-sans)",
             cursor: canSubmit ? "pointer" : "not-allowed",
-            letterSpacing: "0.06em",
             transition: "all 0.2s",
+            boxShadow: canSubmit ? "0 2px 8px rgba(96, 165, 250, 0.3)" : "none",
           }}
         >
-          {uploadingRef ? "UPLOADING..." : loading ? "INVESTIGATING..." : "INVESTIGATE"}
+          {uploadingRef ? "Uploading..." : loading ? "Investigating..." : "Investigate"}
         </button>
       </div>
 
@@ -176,13 +178,14 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       {showClientDomain && (
         <div style={{ marginTop: 12 }}>
           <div style={{
-            fontSize: 10,
+            fontSize: 12,
             color: "var(--text-dim)",
-            letterSpacing: "0.06em",
+            letterSpacing: "0.01em",
             marginBottom: 6,
             fontWeight: 600,
+            fontFamily: "var(--font-sans)",
           }}>
-            CLIENT DOMAIN
+            Client Domain
           </div>
           <input
             type="text"
@@ -244,13 +247,14 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
             border: "1px dashed var(--border)",
           }}>
             <div style={{
-              fontSize: 10,
+              fontSize: 12,
               color: "var(--text-dim)",
-              letterSpacing: "0.06em",
+              letterSpacing: "0.01em",
               marginBottom: 8,
               fontWeight: 600,
+              fontFamily: "var(--font-sans)",
             }}>
-              REFERENCE SCREENSHOT (OPTIONAL)
+              Reference Screenshot (Optional)
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button

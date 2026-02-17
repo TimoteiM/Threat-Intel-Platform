@@ -250,6 +250,8 @@ class VisualComparisonEvidence(BaseModel):
     investigated_screenshot_artifact_id: Optional[str] = None
     client_screenshot_artifact_id: Optional[str] = None
     reference_image_used: bool = False
+    investigated_final_url: Optional[str] = None
+    client_final_url: Optional[str] = None
 
     # Similarity metrics (0.0–1.0, higher = more similar)
     phash_similarity: Optional[float] = None
