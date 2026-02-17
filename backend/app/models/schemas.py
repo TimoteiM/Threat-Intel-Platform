@@ -208,6 +208,65 @@ class VTEvidence(BaseModel):
 
     
 
+# ─── Domain Similarity (typosquatting / visual lookalike) ───
+
+class TyposquattingTechnique(BaseModel):
+    """A specific typosquatting technique detected between two domains."""
+    technique: str
+    description: str
+    original_segment: str
+    modified_segment: str
+
+
+class HomoglyphMatch(BaseModel):
+    """A visually confusable character substitution."""
+    position: int
+    original_char: str
+    replaced_with: str
+    description: str
+
+
+class DomainSimilarityEvidence(BaseModel):
+    """Result of comparing investigated domain against a client domain."""
+    client_domain: str
+    investigated_domain: str
+    levenshtein_distance: int
+    normalized_distance: float
+    visual_similarity_score: float
+    overall_similarity_score: int
+    typosquatting_techniques: list[TyposquattingTechnique] = []
+    homoglyph_matches: list[HomoglyphMatch] = []
+    is_potential_typosquat: bool
+    is_visual_lookalike: bool
+    summary: str
+
+
+# ─── Visual Comparison ───
+
+class VisualComparisonEvidence(BaseModel):
+    """Screenshot-based visual comparison between investigated and client domains."""
+    investigated_domain: str
+    client_domain: str
+    investigated_screenshot_artifact_id: Optional[str] = None
+    client_screenshot_artifact_id: Optional[str] = None
+    reference_image_used: bool = False
+
+    # Similarity metrics (0.0–1.0, higher = more similar)
+    phash_similarity: Optional[float] = None
+    histogram_similarity: Optional[float] = None
+    overall_visual_similarity: Optional[float] = None
+
+    # Classification
+    is_visual_clone: bool = False       # overall >= 0.80
+    is_partial_clone: bool = False      # overall 0.50–0.79
+
+    summary: str = ""
+
+    # Error details
+    investigated_capture_error: Optional[str] = None
+    client_capture_error: Optional[str] = None
+
+
 # ─── Signals & Gaps ───
 
 class Signal(BaseModel):
@@ -260,6 +319,12 @@ class CollectedEvidence(BaseModel):
     # Observations
     signals: list[Signal] = []
     data_gaps: list[DataGap] = []
+
+    # Domain similarity (when comparing against a client domain)
+    domain_similarity: Optional[DomainSimilarityEvidence] = None
+
+    # Visual comparison (screenshot-based, when client_domain provided)
+    visual_comparison: Optional[VisualComparisonEvidence] = None
 
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None
@@ -331,6 +396,9 @@ class InvestigationCreate(BaseModel):
     """POST /investigations request body."""
     domain: str
     context: Optional[str] = None
+    client_domain: Optional[str] = None
+    investigated_url: Optional[str] = None   # Specific URL to screenshot (visual comparison)
+    client_url: Optional[str] = None          # Client URL to compare against
     external_context: Optional[ExternalContext] = None
     requested_collectors: Optional[list[str]] = None
 

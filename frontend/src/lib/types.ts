@@ -177,6 +177,54 @@ export interface VTEvidence {
   notes: string[];
 }
 
+// ─── Domain Similarity ───
+
+export interface TyposquattingTechnique {
+  technique: string;
+  description: string;
+  original_segment: string;
+  modified_segment: string;
+}
+
+export interface HomoglyphMatch {
+  position: number;
+  original_char: string;
+  replaced_with: string;
+  description: string;
+}
+
+export interface DomainSimilarityEvidence {
+  client_domain: string;
+  investigated_domain: string;
+  levenshtein_distance: number;
+  normalized_distance: number;
+  visual_similarity_score: number;
+  overall_similarity_score: number;
+  typosquatting_techniques: TyposquattingTechnique[];
+  homoglyph_matches: HomoglyphMatch[];
+  is_potential_typosquat: boolean;
+  is_visual_lookalike: boolean;
+  summary: string;
+}
+
+// ─── Visual Comparison ───
+
+export interface VisualComparisonEvidence {
+  investigated_domain: string;
+  client_domain: string;
+  investigated_screenshot_artifact_id?: string;
+  client_screenshot_artifact_id?: string;
+  reference_image_used: boolean;
+  phash_similarity?: number;
+  histogram_similarity?: number;
+  overall_visual_similarity?: number;
+  is_visual_clone: boolean;
+  is_partial_clone: boolean;
+  summary: string;
+  investigated_capture_error?: string;
+  client_capture_error?: string;
+}
+
 // ─── Signals & Gaps ───
 
 export interface Signal {
@@ -208,6 +256,8 @@ export interface CollectedEvidence {
   hosting: ASNEvidence;
   intel: IntelEvidence;
   vt: VTEvidence;
+  domain_similarity?: DomainSimilarityEvidence;
+  visual_comparison?: VisualComparisonEvidence;
   signals: Signal[];
   data_gaps: DataGap[];
   artifact_hashes: Record<string, string>;

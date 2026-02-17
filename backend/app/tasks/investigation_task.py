@@ -41,6 +41,9 @@ def run_investigation(
     investigation_id: str,
     domain: str,
     context: str | None = None,
+    client_domain: str | None = None,
+    investigated_url: str | None = None,
+    client_url: str | None = None,
     external_context: dict | None = None,
     requested_collectors: list[str] | None = None,
 ) -> str:
@@ -53,6 +56,9 @@ def run_investigation(
         investigation_id: UUID of the investigation (already created in DB)
         domain: Target domain to investigate
         context: User-provided notes/ticket reference
+        client_domain: Optional client domain for similarity comparison
+        investigated_url: Specific URL to screenshot for visual comparison
+        client_url: Specific client URL to compare against
         external_context: CTI enrichment data
         requested_collectors: Which collectors to run (default: all)
 
@@ -95,6 +101,9 @@ def run_investigation(
         domain=domain,
         investigation_id=investigation_id,
         context=context,
+        client_domain=client_domain,
+        investigated_url=investigated_url,
+        client_url=client_url,
         external_context=external_context,
         max_iterations=settings.max_analyst_iterations,
     )

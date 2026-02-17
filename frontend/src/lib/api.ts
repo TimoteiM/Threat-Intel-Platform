@@ -33,6 +33,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export function createInvestigation(data: {
   domain: string;
   context?: string;
+  client_domain?: string;
+  investigated_url?: string;
+  client_url?: string;
   requested_collectors?: string[];
 }) {
   return request<{
@@ -72,6 +75,40 @@ export function enrichInvestigation(id: string, data: any) {
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+// ─── Artifact helpers ───
+
+export function getArtifactUrl(artifactId: string): string {
+  return `${BASE}/artifacts/${artifactId}`;
+}
+
+export async function uploadReferenceImage(domain: string, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${BASE}/reference-images/${encodeURIComponent(domain)}`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+
+  return res.json();
+}
+
+export async function checkReferenceImage(domain: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/reference-images/${encodeURIComponent(domain)}`, {
+      method: "HEAD",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // ─── SSE helper ───

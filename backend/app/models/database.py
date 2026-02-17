@@ -40,6 +40,7 @@ class Investigation(Base):
         String(50), nullable=False, default="created"
     )
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

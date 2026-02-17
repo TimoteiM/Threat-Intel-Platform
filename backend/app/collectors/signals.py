@@ -241,6 +241,147 @@ def generate_signals(evidence: dict) -> list[Signal]:
             evidence_refs=["vt.reputation_score"],
         ))
 
+    # ── Domain similarity signals ──
+    similarity = evidence.get("domain_similarity")
+    if similarity:
+        signals.extend(generate_similarity_signals(similarity))
+
+    # ── Visual comparison signals ──
+    visual = evidence.get("visual_comparison")
+    if visual:
+        signals.extend(generate_visual_comparison_signals(visual))
+
+    # ── Combined visual + domain impersonation ──
+    if similarity and visual:
+        is_typosquat = similarity.get("is_potential_typosquat", False)
+        is_visual_clone = visual.get("is_visual_clone", False)
+        if is_typosquat and is_visual_clone:
+            client = similarity.get("client_domain", "unknown")
+            signals.append(Signal(
+                id="sig_combined_visual_domain_impersonation",
+                category="impersonation",
+                description=(
+                    f"Domain is BOTH a typosquat AND a visual clone of client '{client}' — "
+                    f"strong phishing/impersonation evidence"
+                ),
+                severity="critical",
+                evidence_refs=[
+                    "domain_similarity.is_potential_typosquat",
+                    "visual_comparison.is_visual_clone",
+                ],
+            ))
+
+    return signals
+
+
+def generate_similarity_signals(similarity: dict) -> list[Signal]:
+    """Generate signals from domain similarity analysis against a client domain."""
+    signals: list[Signal] = []
+
+    score = similarity.get("overall_similarity_score", 0)
+    client = similarity.get("client_domain", "unknown")
+    techniques = similarity.get("typosquatting_techniques", [])
+    homoglyphs = similarity.get("homoglyph_matches", [])
+
+    if score >= 80:
+        signals.append(Signal(
+            id="sig_high_domain_similarity",
+            category="domain_similarity",
+            description=f"High similarity score ({score}/100) with client domain '{client}'",
+            severity="high",
+            evidence_refs=["domain_similarity.overall_similarity_score"],
+        ))
+    elif score >= 50:
+        signals.append(Signal(
+            id="sig_moderate_domain_similarity",
+            category="domain_similarity",
+            description=f"Moderate similarity score ({score}/100) with client domain '{client}'",
+            severity="medium",
+            evidence_refs=["domain_similarity.overall_similarity_score"],
+        ))
+
+    if techniques:
+        tech_names = [t.get("technique", "unknown") for t in techniques]
+        signals.append(Signal(
+            id="sig_typosquatting_detected",
+            category="domain_similarity",
+            description=(
+                f"Typosquatting techniques detected vs client '{client}': "
+                f"{', '.join(t.replace('_', ' ') for t in tech_names)}"
+            ),
+            severity="high",
+            evidence_refs=["domain_similarity.typosquatting_techniques"],
+        ))
+
+    if homoglyphs:
+        signals.append(Signal(
+            id="sig_homoglyph_detected",
+            category="domain_similarity",
+            description=(
+                f"{len(homoglyphs)} homoglyph substitution(s) detected vs client '{client}' — "
+                f"visually confusable characters"
+            ),
+            severity="high",
+            evidence_refs=["domain_similarity.homoglyph_matches"],
+        ))
+
+    if similarity.get("is_potential_typosquat") and similarity.get("is_visual_lookalike"):
+        signals.append(Signal(
+            id="sig_combined_impersonation",
+            category="domain_similarity",
+            description=(
+                f"Domain is both a typosquat AND visual lookalike of client '{client}' — "
+                f"strong impersonation indicators"
+            ),
+            severity="critical",
+            evidence_refs=[
+                "domain_similarity.is_potential_typosquat",
+                "domain_similarity.is_visual_lookalike",
+            ],
+        ))
+
+    return signals
+
+
+def generate_visual_comparison_signals(visual: dict) -> list[Signal]:
+    """Generate signals from screenshot-based visual comparison."""
+    signals: list[Signal] = []
+
+    overall = visual.get("overall_visual_similarity")
+    if overall is None:
+        return signals
+
+    client = visual.get("client_domain", "unknown")
+
+    if visual.get("is_visual_clone"):
+        signals.append(Signal(
+            id="sig_visual_clone",
+            category="visual_comparison",
+            description=(
+                f"Website is a visual clone of client '{client}' — "
+                f"{overall:.0%} screenshot similarity"
+            ),
+            severity="critical",
+            evidence_refs=[
+                "visual_comparison.overall_visual_similarity",
+                "visual_comparison.is_visual_clone",
+            ],
+        ))
+    elif visual.get("is_partial_clone"):
+        signals.append(Signal(
+            id="sig_partial_visual_clone",
+            category="visual_comparison",
+            description=(
+                f"Website partially resembles client '{client}' — "
+                f"{overall:.0%} screenshot similarity"
+            ),
+            severity="high",
+            evidence_refs=[
+                "visual_comparison.overall_visual_similarity",
+                "visual_comparison.is_partial_clone",
+            ],
+        ))
+
     return signals
 
 

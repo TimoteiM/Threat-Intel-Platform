@@ -51,6 +51,28 @@ DATA GAPS (missing information):
 - What couldn't be collected and why
 - Impact on analysis certainty
 
+DOMAIN SIMILARITY (if provided — optional client domain comparison):
+- domain_similarity: Algorithmic comparison between investigated domain and a client domain
+- Includes: Levenshtein edit distance, visual similarity score, overall similarity score (0-100)
+- Detected typosquatting techniques: character omission, insertion, transposition, replacement,
+  TLD swap, hyphenation, subdomain impersonation, combosquatting
+- Detected homoglyph matches: visually confusable character substitutions (0↔o, 1↔l, rn↔m, Cyrillic↔Latin)
+- IMPORTANT: Unlike general domain name appearance, domain_similarity is COMPUTED EVIDENCE
+  from algorithmic analysis. It IS valid evidence for classification when combined with other indicators.
+- A high similarity score alone does not prove maliciousness — but combined with other signals
+  (young domain, login forms, missing security headers), it strongly supports impersonation hypotheses.
+
+VISUAL COMPARISON (if provided — optional screenshot-based comparison):
+- visual_comparison: Automated screenshot capture and image similarity analysis
+- Captures screenshots of both investigated domain and client domain (or uploaded reference)
+- Metrics: phash_similarity (perceptual hash), histogram_similarity (color distribution),
+  overall_visual_similarity (weighted composite, 0.0–1.0)
+- is_visual_clone (>= 80% similarity), is_partial_clone (50–79% similarity)
+- IMPORTANT: visual_comparison is COMPUTED EVIDENCE from automated screenshot analysis.
+  High visual similarity combined with domain similarity is strong evidence of phishing/impersonation.
+- A cloned page appearance alone is insufficient for "malicious" — combine with domain similarity,
+  login form presence, young domain age, or other indicators.
+
 EXTERNAL CONTEXT (if provided):
 - OpenCTI observables, Flare findings, SOC ticket notes
 - Contextual validation ONLY — cannot determine classification alone
@@ -99,9 +121,16 @@ SPECIAL CASES:
 - Login forms: NOT phishing unless impersonation + collection + no legitimate backend.
 - CDN hosting: Neutral. Require behavior-based evidence.
 - Valid TLS: Neutral signal. Free CAs are used equally by legitimate and malicious sites.
-- Domain naming: IGNORE for classification. Names are not evidence.
+- Domain naming: IGNORE for classification when no domain_similarity data exists.
+  However, if domain_similarity is present, use its computed metrics as valid evidence.
 - Privacy WHOIS: Neutral. Widely used by legitimate registrants.
 - Young domains: Signal, not conclusion. Many legitimate domains are new.
+- Domain similarity: When domain_similarity evidence is present, evaluate typosquatting and
+  visual similarity findings as COMPUTED EVIDENCE. High similarity + login form + young domain
+  is a strong impersonation pattern. High similarity alone is insufficient for "malicious."
+- Visual clone: When visual_comparison evidence shows is_visual_clone=true, this is strong
+  computed evidence of page cloning. Combined with domain similarity (typosquatting) and
+  credential harvesting indicators, this is a high-confidence phishing pattern.
 </classification_rules>
 
 <external_intelligence_policy>

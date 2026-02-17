@@ -23,6 +23,11 @@ from app.models.enums import InvestigationState
 
 logger = logging.getLogger(__name__)
 
+# Map collector names to evidence field names when they differ
+COLLECTOR_FIELD_MAP = {
+    "asn": "hosting",
+}
+
 
 @celery_app.task(
     bind=True,
@@ -36,6 +41,9 @@ def run_analysis(
     domain: str,
     investigation_id: str,
     context: str | None = None,
+    client_domain: str | None = None,
+    investigated_url: str | None = None,
+    client_url: str | None = None,
     external_context: dict | None = None,
     max_iterations: int = 3,
 ) -> dict:
@@ -47,6 +55,7 @@ def run_analysis(
         domain: Target domain
         investigation_id: UUID string
         context: User-provided context/notes
+        client_domain: Optional client domain for similarity comparison
         external_context: CTI enrichment data
         max_iterations: Max analyst follow-up rounds
 
@@ -69,8 +78,9 @@ def run_analysis(
 
     for result in collector_results:
         name = result["collector"]
+        field_name = COLLECTOR_FIELD_MAP.get(name, name)
         collector_statuses[name] = result["status"]
-        evidence_data[name] = result["evidence"]
+        evidence_data[field_name] = result["evidence"]
         # Track artifact hashes
         for artifact_name, hex_data in result.get("artifacts", {}).items():
             import hashlib
@@ -80,7 +90,71 @@ def run_analysis(
 
     evidence_data["artifact_hashes"] = all_artifact_hashes
 
-    # ── 2. Generate signals and detect gaps ──
+    # ── 2. Domain similarity analysis (if client_domain provided) ──
+    if client_domain:
+        try:
+            from app.collectors.domain_similarity import analyze_similarity
+            similarity_result = analyze_similarity(domain, client_domain)
+            evidence_data["domain_similarity"] = similarity_result.model_dump()
+            logger.info(
+                f"[{investigation_id}] Domain similarity: {similarity_result.overall_similarity_score}/100 "
+                f"vs client '{client_domain}'"
+            )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Domain similarity analysis failed: {e}")
+
+        # ── 2b. Visual comparison (screenshot-based) ──
+        try:
+            from app.collectors.visual_comparison import compare_websites
+
+            # Check for uploaded reference image
+            reference_image = _load_reference_image_sync(client_domain)
+
+            # Use specific URLs if provided, otherwise fall back to domains
+            inv_target = investigated_url or domain
+            cli_target = client_url or client_domain
+
+            logger.info(f"[{investigation_id}] Starting visual comparison: {inv_target} vs {cli_target}")
+            visual_result = compare_websites(
+                inv_target, cli_target,
+                client_reference_image=reference_image,
+                timeout=45,
+            )
+
+            # Persist screenshots as artifacts and get their IDs
+            inv_screenshot_bytes = visual_result.pop("_investigated_screenshot_bytes", None)
+            cli_screenshot_bytes = visual_result.pop("_client_screenshot_bytes", None)
+
+            if inv_screenshot_bytes:
+                art_id = _save_artifact_sync(
+                    investigation_id, "visual_comparison",
+                    "screenshot_investigated.png",
+                    inv_screenshot_bytes, "image/png",
+                )
+                if art_id:
+                    visual_result["investigated_screenshot_artifact_id"] = art_id
+
+            if cli_screenshot_bytes:
+                art_id = _save_artifact_sync(
+                    investigation_id, "visual_comparison",
+                    "screenshot_client.png",
+                    cli_screenshot_bytes, "image/png",
+                )
+                if art_id:
+                    visual_result["client_screenshot_artifact_id"] = art_id
+
+            evidence_data["visual_comparison"] = visual_result
+
+            overall = visual_result.get("overall_visual_similarity")
+            if overall is not None:
+                logger.info(
+                    f"[{investigation_id}] Visual similarity: {overall:.0%} "
+                    f"(clone={visual_result.get('is_visual_clone')})"
+                )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Visual comparison failed: {e}")
+
+    # ── 3. Generate signals and detect gaps ──
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)
 
@@ -208,7 +282,8 @@ def _persist_results(
 
             # Save collector results
             for name, status in collector_statuses.items():
-                col_evidence = evidence_data.get(name, {})
+                field_name = COLLECTOR_FIELD_MAP.get(name, name)
+                col_evidence = evidence_data.get(field_name, {})
                 cr = CollectorResult(
                     investigation_id=inv_id,
                     collector_name=name,
@@ -222,6 +297,85 @@ def _persist_results(
 
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to persist results: {e}")
+
+
+def _load_reference_image_sync(client_domain: str) -> bytes | None:
+    """Load an uploaded reference image for a client domain, if one exists."""
+    import re
+    from pathlib import Path
+    from app.config import get_settings
+
+    settings = get_settings()
+    safe_domain = re.sub(r"[^a-zA-Z0-9.\-]", "_", client_domain.lower().strip())
+
+    if settings.artifact_storage == "local":
+        path = Path(settings.artifact_local_path) / "reference" / f"{safe_domain}.png"
+        if path.exists():
+            return path.read_bytes()
+    return None
+
+
+def _save_artifact_sync(
+    investigation_id: str,
+    collector_name: str,
+    artifact_name: str,
+    data: bytes,
+    content_type: str,
+) -> str | None:
+    """
+    Persist an artifact to storage and record it in the database.
+    Returns the artifact UUID string, or None on failure.
+    """
+    try:
+        import hashlib
+        import uuid as uuid_mod
+        from pathlib import Path
+        from sqlalchemy.orm import Session
+        from app.db.session import sync_engine
+        from app.models.database import Artifact
+        from app.config import get_settings
+
+        settings = get_settings()
+        sha256 = hashlib.sha256(data).hexdigest()
+
+        # Save to local storage (sync)
+        if settings.artifact_storage == "local":
+            base = Path(settings.artifact_local_path)
+            dest = base / investigation_id / artifact_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            storage_path = str(dest)
+        else:
+            # For S3, we'd need async — for now store locally as fallback
+            base = Path(settings.artifact_local_path)
+            dest = base / investigation_id / artifact_name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            storage_path = str(dest)
+
+        # Record in database
+        inv_id = uuid_mod.UUID(investigation_id)
+        art_id = uuid_mod.uuid4()
+
+        with Session(sync_engine) as session:
+            artifact = Artifact(
+                id=art_id,
+                investigation_id=inv_id,
+                collector_name=collector_name,
+                artifact_name=artifact_name,
+                sha256_hash=sha256,
+                content_type=content_type,
+                size_bytes=len(data),
+                storage_path=storage_path,
+            )
+            session.add(artifact)
+            session.commit()
+
+        return str(art_id)
+
+    except Exception as e:
+        logger.warning(f"[{investigation_id}] Failed to save artifact {artifact_name}: {e}")
+        return None
 
 
 def _publish_progress(

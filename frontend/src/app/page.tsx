@@ -18,10 +18,22 @@ export default function HomePage() {
   }, []);
 
   const handleSubmit = useCallback(
-    async (domain: string, context?: string) => {
+    async (
+      domain: string,
+      context?: string,
+      clientDomain?: string,
+      investigatedUrl?: string,
+      clientUrl?: string,
+    ) => {
       setLoading(true);
       try {
-        const result = await createInvestigation({ domain, context });
+        const result = await createInvestigation({
+          domain,
+          context,
+          client_domain: clientDomain,
+          investigated_url: investigatedUrl,
+          client_url: clientUrl,
+        });
         router.push(`/investigations/${result.investigation_id}`);
       } catch (e: any) {
         alert(`Failed: ${e.message}`);

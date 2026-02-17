@@ -61,8 +61,19 @@ def extract_tld(domain: str) -> str:
 def extract_registered_domain(domain: str) -> str:
     """
     Extract the registered domain (eTLD+1).
-    Simple version — for production, use the publicsuffix2 library.
+
+    Handles multi-part TLDs correctly:
+      sub.example.co.uk → example.co.uk
+      revantage.drojifri.solutions → drojifri.solutions
     """
+    try:
+        import tldextract
+        ext = tldextract.extract(domain)
+        if ext.domain and ext.suffix:
+            return f"{ext.domain}.{ext.suffix}"
+    except Exception:
+        pass
+    # Fallback: take last two parts
     parts = domain.split(".")
     if len(parts) >= 2:
         return ".".join(parts[-2:])

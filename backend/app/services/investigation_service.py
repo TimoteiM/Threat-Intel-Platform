@@ -46,10 +46,18 @@ class InvestigationService:
         if not validate_domain(domain):
             raise ValueError(f"Invalid domain: {request.domain}")
 
+        # Validate client_domain if provided
+        client_domain = None
+        if request.client_domain:
+            client_domain = normalize_domain(request.client_domain)
+            if not validate_domain(client_domain):
+                raise ValueError(f"Invalid client domain: {request.client_domain}")
+
         # Create DB record
         inv = await self.repo.create(
             domain=domain,
             context=request.context,
+            client_domain=client_domain,
             max_iterations=settings.max_analyst_iterations,
         )
         await self.session.flush()
@@ -61,6 +69,9 @@ class InvestigationService:
             investigation_id=investigation_id,
             domain=domain,
             context=request.context,
+            client_domain=client_domain,
+            investigated_url=request.investigated_url,
+            client_url=request.client_url,
             external_context=(
                 request.external_context.model_dump()
                 if request.external_context else None

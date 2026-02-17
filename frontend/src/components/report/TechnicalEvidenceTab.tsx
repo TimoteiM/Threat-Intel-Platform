@@ -3,6 +3,7 @@
 import React from "react";
 import { CollectedEvidence } from "@/lib/types";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
+import VisualComparisonSection from "@/components/report/VisualComparisonSection";
 
 interface Props {
   evidence: CollectedEvidence;
@@ -233,6 +234,13 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
           />
         )}
       </Section>
+
+      {/* VISUAL COMPARISON (only shown when client_domain was provided) */}
+      {evidence?.visual_comparison && (
+        <Section title="VISUAL COMPARISON">
+          <VisualComparisonSection visual={evidence.visual_comparison} />
+        </Section>
+      )}
 
       {/* VIRUSTOTAL */}
       <Section title="VIRUSTOTAL REPUTATION">

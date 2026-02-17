@@ -36,11 +36,13 @@ class InvestigationRepository:
         self,
         domain: str,
         context: Optional[str] = None,
+        client_domain: Optional[str] = None,
         max_iterations: int = 3,
     ) -> Investigation:
         inv = Investigation(
             domain=domain,
             context=context,
+            client_domain=client_domain,
             state="created",
             max_analyst_iterations=max_iterations,
         )

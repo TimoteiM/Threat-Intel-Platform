@@ -14,6 +14,7 @@ import whois as python_whois
 
 from app.collectors.base import BaseCollector
 from app.models.schemas import CollectorMeta, WHOISEvidence
+from app.utils.domain_utils import extract_registered_domain
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,13 @@ class WHOISCollector(BaseCollector):
     def _collect(self) -> WHOISEvidence:
         evidence = WHOISEvidence()
 
-        w = python_whois.whois(self.domain)
+        # WHOIS only works at the registered domain level (eTLD+1),
+        # not on subdomains. e.g. revantage.drojifri.solutions → drojifri.solutions
+        query_domain = extract_registered_domain(self.domain)
+        if query_domain != self.domain:
+            logger.info(f"WHOIS: querying registered domain '{query_domain}' (input was '{self.domain}')")
+
+        w = python_whois.whois(query_domain)
 
         # ── Registrar ──
         evidence.registrar = w.registrar
