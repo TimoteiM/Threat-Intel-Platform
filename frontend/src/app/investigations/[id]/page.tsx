@@ -13,6 +13,7 @@ import TechnicalEvidenceTab from "@/components/report/TechnicalEvidenceTab";
 import FindingsTab from "@/components/report/FindingsTab";
 import IndicatorsTab from "@/components/report/IndicatorsTab";
 import SignalsTab from "@/components/report/SignalsTab";
+import InfrastructureTab from "@/components/report/InfrastructureTab";
 
 import * as api from "@/lib/api";
 
@@ -22,6 +23,7 @@ const TABS = [
   { id: "findings", label: "Findings" },
   { id: "indicators", label: "Indicators & Pivots" },
   { id: "signals", label: "Signals & Gaps" },
+  { id: "infrastructure", label: "Infrastructure" },
   { id: "raw", label: "Raw JSON" },
 ] as const;
 
@@ -135,6 +137,8 @@ export default function InvestigationPage() {
           return report ? <IndicatorsTab report={report} /> : <NoData label="report" />;
         case "signals":
           return evidence ? <SignalsTab evidence={evidence} /> : <NoData label="evidence" />;
+        case "infrastructure":
+          return <InfrastructureTab investigationId={investigationId} />;
         case "raw":
           return <RawJsonView evidence={evidence} report={report} detail={detail} />;
         default:

@@ -2,6 +2,7 @@
 
 import React from "react";
 import { CollectedEvidence } from "@/lib/types";
+import { getArtifactUrl } from "@/lib/api";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
 import VisualComparisonSection from "@/components/report/VisualComparisonSection";
 
@@ -188,6 +189,108 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
         )}
       </Section>
 
+      {/* CONTENT ANALYSIS */}
+      {(arr(http.phishing_indicators).length > 0 ||
+        arr(http.brand_indicators).length > 0 ||
+        arr(http.external_resources).length > 0 ||
+        http.favicon_hash) && (
+        <Section title="Content Analysis">
+          {/* Phishing indicators */}
+          {arr(http.phishing_indicators).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "var(--red)",
+                letterSpacing: "0.01em", marginBottom: 8,
+                padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                fontFamily: "var(--font-sans)",
+              }}>
+                Phishing Kit Indicators ({arr(http.phishing_indicators).length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {arr(http.phishing_indicators).map((indicator: string, i: number) => (
+                  <div key={i} style={{
+                    padding: "8px 12px",
+                    background: "rgba(248,113,113,0.06)",
+                    borderLeft: "3px solid var(--red)",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: 12, color: "var(--text-secondary)",
+                    fontFamily: "var(--font-mono)",
+                  }}>
+                    {indicator}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Brand impersonation */}
+          {arr(http.brand_indicators).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "var(--yellow)",
+                letterSpacing: "0.01em", marginBottom: 8,
+                padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                fontFamily: "var(--font-sans)",
+              }}>
+                Brand Impersonation Phrases ({arr(http.brand_indicators).length})
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {arr(http.brand_indicators).map((phrase: string, i: number) => (
+                  <span key={i} style={{
+                    padding: "4px 10px", fontSize: 11, fontWeight: 500,
+                    background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
+                    fontFamily: "var(--font-mono)",
+                  }}>
+                    {phrase}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Favicon hash */}
+          {http.favicon_hash && (
+            <div style={{ marginBottom: 16 }}>
+              <EvidenceTable
+                title="Favicon"
+                data={[
+                  { field: "Favicon Hash", value: http.favicon_hash },
+                  { field: "Compatibility", value: "Shodan (MurmurHash3)" },
+                ]}
+                columns={[{ key: "field" }, { key: "value", wrap: true }]}
+              />
+            </div>
+          )}
+
+          {/* External resources */}
+          {arr(http.external_resources).length > 0 && (
+            <div>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "var(--text-secondary)",
+                letterSpacing: "0.01em", marginBottom: 8,
+                padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                fontFamily: "var(--font-sans)",
+              }}>
+                External Resource Domains ({arr(http.external_resources).length})
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {arr(http.external_resources).map((domain: string, i: number) => (
+                  <span key={i} style={{
+                    padding: "4px 10px", fontSize: 11, fontWeight: 500,
+                    background: "var(--bg-input)", color: "var(--text-dim)",
+                    borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
+                    fontFamily: "var(--font-mono)",
+                  }}>
+                    {domain}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
       {/* WHOIS */}
       <Section title="WHOIS Registration">
         {whois.meta?.status === "failed" ? (
@@ -239,6 +342,154 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
       {evidence?.visual_comparison && (
         <Section title="Visual Comparison">
           <VisualComparisonSection visual={evidence.visual_comparison} />
+        </Section>
+      )}
+
+      {/* DOMAIN SCREENSHOT (always captured) */}
+      {evidence?.screenshot && (
+        <Section title="Domain Screenshot">
+          {evidence.screenshot.capture_error ? (
+            <EmptyNote>Screenshot capture failed: {evidence.screenshot.capture_error}</EmptyNote>
+          ) : evidence.screenshot.artifact_id ? (
+            <div>
+              <div style={{
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                overflow: "hidden",
+                marginBottom: 8,
+              }}>
+                <img
+                  src={getArtifactUrl(evidence.screenshot.artifact_id)}
+                  alt={`Screenshot of ${evidence.domain}`}
+                  style={{
+                    width: "100%",
+                    height: "auto",
+                    display: "block",
+                  }}
+                />
+              </div>
+              {evidence.screenshot.final_url && (
+                <div style={{
+                  fontSize: 11, color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono)",
+                }}>
+                  Final URL: {evidence.screenshot.final_url}
+                </div>
+              )}
+            </div>
+          ) : (
+            <EmptyNote>No screenshot available</EmptyNote>
+          )}
+        </Section>
+      )}
+
+      {/* SUBDOMAIN ENUMERATION */}
+      {evidence?.subdomains && evidence.subdomains.discovered_count > 0 && (
+        <Section title="Subdomain Enumeration">
+          {/* Stats row */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8,
+            marginBottom: 16,
+          }}>
+            <SubStatBox label="Discovered" value={evidence.subdomains.discovered_count} color="var(--accent)" />
+            <SubStatBox label="Resolved" value={evidence.subdomains.resolved.length} color="var(--green)" />
+            <SubStatBox label="Unresolved" value={evidence.subdomains.unresolved.length} color="var(--text-muted)" />
+            <SubStatBox label="Interesting" value={evidence.subdomains.interesting_subdomains.length} color="var(--yellow)" />
+          </div>
+
+          {/* Interesting subdomains */}
+          {evidence.subdomains.interesting_subdomains.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "var(--yellow)",
+                letterSpacing: "0.01em", marginBottom: 8,
+                padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                fontFamily: "var(--font-sans)",
+              }}>
+                Interesting Subdomains ({evidence.subdomains.interesting_subdomains.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {evidence.subdomains.interesting_subdomains.map((entry, i) => (
+                  <div key={i} style={{
+                    padding: "8px 12px",
+                    background: "rgba(251,191,36,0.06)",
+                    borderLeft: "3px solid var(--yellow)",
+                    borderRadius: "var(--radius-sm)",
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                  }}>
+                    <span style={{
+                      fontSize: 12, fontWeight: 600, color: "var(--text)",
+                      fontFamily: "var(--font-mono)",
+                    }}>
+                      {entry.subdomain}
+                    </span>
+                    <span style={{
+                      fontSize: 10, color: "var(--text-dim)",
+                      fontFamily: "var(--font-mono)",
+                    }}>
+                      {entry.ips.join(", ")}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* IP groups */}
+          {Object.keys(evidence.subdomains.ip_groups).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: "var(--text-secondary)",
+                letterSpacing: "0.01em", marginBottom: 8,
+                padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                fontFamily: "var(--font-sans)",
+              }}>
+                IP Groupings ({Object.keys(evidence.subdomains.ip_groups).length} IPs)
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {Object.entries(evidence.subdomains.ip_groups).slice(0, 20).map(([ip, subs]) => (
+                  <div key={ip} style={{
+                    padding: "6px 12px",
+                    background: "var(--bg-input)",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: 11,
+                    display: "flex", gap: 8, alignItems: "baseline",
+                  }}>
+                    <span style={{
+                      fontWeight: 700, color: "var(--text)",
+                      fontFamily: "var(--font-mono)", minWidth: 110,
+                    }}>
+                      {ip}
+                    </span>
+                    <span style={{ color: "var(--accent)", fontWeight: 600, minWidth: 20 }}>
+                      {(subs as string[]).length}
+                    </span>
+                    <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
+                      {(subs as string[]).slice(0, 3).join(", ")}
+                      {(subs as string[]).length > 3 ? ` +${(subs as string[]).length - 3} more` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Resolved list */}
+          {evidence.subdomains.resolved.length > 0 && (
+            <EvidenceTable
+              title={`All Resolved (${evidence.subdomains.resolved.length})`}
+              data={evidence.subdomains.resolved.slice(0, 50).map((entry) => ({
+                subdomain: entry.subdomain,
+                ips: entry.ips.join(", "),
+                flag: entry.is_interesting ? "★" : "",
+              }))}
+              columns={[
+                { key: "subdomain", wrap: true },
+                { key: "ips", wrap: true },
+                { key: "flag" },
+              ]}
+            />
+          )}
         </Section>
       )}
 
@@ -541,6 +792,34 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
       borderLeft: "3px solid var(--text-muted)",
     }}>
       {children}
+    </div>
+  );
+}
+
+function SubStatBox({ label, value, color }: {
+  label: string; value: number; color: string;
+}) {
+  return (
+    <div style={{
+      padding: "14px 16px",
+      background: value > 0 ? `${color}0a` : "var(--bg-input)",
+      border: `1px solid ${value > 0 ? `${color}33` : "var(--border)"}`,
+      borderRadius: "var(--radius)",
+      textAlign: "center",
+    }}>
+      <div style={{
+        fontSize: 24, fontWeight: 800, color: value > 0 ? color : "var(--text-dim)",
+        fontFamily: "var(--font-mono)",
+      }}>
+        {value}
+      </div>
+      <div style={{
+        fontSize: 11, fontWeight: 600, color: value > 0 ? color : "var(--text-muted)",
+        letterSpacing: "0.01em", marginTop: 4,
+        fontFamily: "var(--font-sans)",
+      }}>
+        {label}
+      </div>
     </div>
   );
 }

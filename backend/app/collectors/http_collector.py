@@ -2,7 +2,8 @@
 HTTP Collector — probes the domain over HTTPS (fallback HTTP).
 
 Captures: reachability, redirect chain, response headers, page title,
-login form detection, security headers, server fingerprint.
+login form detection, security headers, server fingerprint,
+favicon hash, brand impersonation, phishing kit patterns, external resources.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from urllib.parse import urlparse
 
 import requests
 
@@ -27,6 +29,32 @@ SECURITY_HEADERS = [
     "X-XSS-Protection",
     "Referrer-Policy",
     "Permissions-Policy",
+]
+
+# Brand impersonation phrases (case-insensitive)
+BRAND_PHRASES = [
+    "verify your account",
+    "update your payment",
+    "confirm your identity",
+    "account suspended",
+    "unusual activity",
+    "log in to your account",
+    "your account has been",
+    "security alert",
+    "verify your email",
+    "action required",
+    "confirm your payment",
+    "unauthorized access",
+]
+
+# Phishing kit indicators (regex patterns)
+PHISHING_PATTERNS = [
+    (re.compile(r'\beval\s*\(', re.I), "eval() call — potential JS obfuscation"),
+    (re.compile(r'\batob\s*\(', re.I), "atob() call — Base64 decoding"),
+    (re.compile(r'String\.fromCharCode', re.I), "String.fromCharCode — character encoding"),
+    (re.compile(r'\bunescape\s*\(', re.I), "unescape() — URL decoding obfuscation"),
+    (re.compile(r'document\.write\s*\(', re.I), "document.write — dynamic content injection"),
+    (re.compile(r'api\.telegram\.org/bot', re.I), "Telegram Bot API — credential exfiltration"),
 ]
 
 # Simple technology detection patterns
@@ -160,6 +188,58 @@ class HTTPCollector(BaseCollector):
         for tech_name, pattern in TECH_PATTERNS.items():
             if pattern.search(server_str):
                 evidence.technologies_detected.append(tech_name)
+
+        # ── Content analysis: brand impersonation ──
+        for phrase in BRAND_PHRASES:
+            if phrase in body_lower:
+                evidence.brand_indicators.append(phrase)
+
+        # ── Content analysis: phishing kit patterns ──
+        for pattern, desc in PHISHING_PATTERNS:
+            if pattern.search(body):
+                evidence.phishing_indicators.append(desc)
+
+        # Check for form actions posting to external domains
+        form_actions = re.findall(
+            r'<form[^>]+action\s*=\s*["\']?(https?://[^"\'\s>]+)',
+            body, re.I,
+        )
+        for action_url in form_actions:
+            try:
+                action_domain = urlparse(action_url).hostname
+                if action_domain and action_domain != self.domain:
+                    evidence.phishing_indicators.append(
+                        f"Form posts to external domain: {action_domain}"
+                    )
+            except Exception:
+                pass
+
+        # ── Content analysis: external resources ──
+        resource_domains: set[str] = set()
+        resource_patterns = [
+            re.compile(r'<script[^>]+src\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+            re.compile(r'<link[^>]+href\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+            re.compile(r'<img[^>]+src\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+        ]
+        for rp in resource_patterns:
+            for match in rp.findall(body):
+                try:
+                    rd = urlparse(match).hostname
+                    if rd and rd != self.domain:
+                        resource_domains.add(rd)
+                except Exception:
+                    pass
+        evidence.external_resources = sorted(resource_domains)[:20]
+
+        # ── Favicon hash (Shodan-compatible) ──
+        try:
+            fav_url = f"{response.url.rstrip('/')}/favicon.ico"
+            fav_resp = session.get(fav_url, timeout=5, verify=False)
+            if fav_resp.status_code == 200 and len(fav_resp.content) > 0:
+                from app.utils.hashing import favicon_hash
+                evidence.favicon_hash = favicon_hash(fav_resp.content)
+        except Exception:
+            pass  # Favicon not available — not critical
 
         # ── Store artifacts ──
         self._store_artifact(

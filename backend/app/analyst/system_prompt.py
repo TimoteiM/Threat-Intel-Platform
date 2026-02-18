@@ -178,7 +178,20 @@ SECTION 1 — JSON:
       "description": "Detail with evidence references",
       "severity": "info | low | medium | high | critical",
       "evidence_refs": ["evidence.field"],
-      "ttp": "T1234 or null"
+      "ttp": "MITRE ATT&CK technique ID or null. Map each finding to the most relevant technique:
+        T1583.001 (Acquire Infrastructure: Domains) - adversary registers domains
+        T1584.001 (Compromise Infrastructure: Domains) - adversary hijacks existing domains
+        T1566.002 (Phishing: Spearphishing Link) - phishing via malicious links
+        T1598 (Phishing for Information) - credential harvesting via phishing
+        T1036.005 (Masquerading: Match Legitimate Name) - typosquatting/impersonation
+        T1608.005 (Stage Capabilities: Link Target) - staging phishing pages
+        T1588.004 (Obtain Capabilities: Digital Certificates) - obtaining TLS certs
+        T1071.001 (Application Layer Protocol: Web) - HTTP/S for C2
+        T1204.001 (User Execution: Malicious Link) - user clicks malicious link
+        T1056.003 (Input Capture: Web Portal Capture) - credential capture via cloned portals
+        T1189 (Drive-by Compromise) - malware via website visit
+        T1557 (Adversary-in-the-Middle) - traffic interception
+        T1090.004 (Proxy: Domain Fronting) - CDN-based C2 hiding"
     }}
   ],
   "iocs": [

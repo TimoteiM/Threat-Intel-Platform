@@ -150,6 +150,45 @@ def generate_signals(evidence: dict) -> list[Signal]:
                 evidence_refs=["http.security_headers"],
             ))
 
+    # ── Content / phishing signals ──
+    phishing_indicators = http.get("phishing_indicators", [])
+    if phishing_indicators:
+        signals.append(Signal(
+            id="sig_phishing_indicators",
+            category="content",
+            description=(
+                f"Phishing kit patterns detected: "
+                f"{', '.join(phishing_indicators[:3])}"
+                f"{'...' if len(phishing_indicators) > 3 else ''}"
+            ),
+            severity="high",
+            evidence_refs=["http.phishing_indicators"],
+        ))
+
+    brand_indicators = http.get("brand_indicators", [])
+    if brand_indicators:
+        signals.append(Signal(
+            id="sig_brand_impersonation",
+            category="content",
+            description=(
+                f"Brand impersonation phrases detected: "
+                f"{', '.join(brand_indicators[:3])}"
+                f"{'...' if len(brand_indicators) > 3 else ''}"
+            ),
+            severity="medium",
+            evidence_refs=["http.brand_indicators"],
+        ))
+
+    external_resources = http.get("external_resources", [])
+    if len(external_resources) > 5:
+        signals.append(Signal(
+            id="sig_many_external_resources",
+            category="content",
+            description=f"Page loads resources from {len(external_resources)} external domains",
+            severity="info",
+            evidence_refs=["http.external_resources"],
+        ))
+
     # ── DNS signals ──
     dns_data = evidence.get("dns", {})
     if not dns_data.get("dmarc"):
@@ -240,6 +279,34 @@ def generate_signals(evidence: dict) -> list[Signal]:
             severity="medium",
             evidence_refs=["vt.reputation_score"],
         ))
+
+    # ── Subdomain enumeration signals ──
+    subdomains = evidence.get("subdomains")
+    if subdomains:
+        resolved_count = len(subdomains.get("resolved", []))
+        interesting = subdomains.get("interesting_subdomains", [])
+
+        if resolved_count > 20:
+            signals.append(Signal(
+                id="sig_many_live_subdomains",
+                category="infrastructure",
+                description=f"{resolved_count} live subdomains resolved — large infrastructure footprint",
+                severity="info",
+                evidence_refs=["subdomains.resolved"],
+            ))
+
+        if interesting:
+            names = [s.get("subdomain", "") for s in interesting[:5]]
+            signals.append(Signal(
+                id="sig_interesting_subdomains",
+                category="infrastructure",
+                description=(
+                    f"{len(interesting)} interesting subdomain(s) found: "
+                    f"{', '.join(names)}{'...' if len(interesting) > 5 else ''}"
+                ),
+                severity="medium",
+                evidence_refs=["subdomains.interesting_subdomains"],
+            ))
 
     # ── Domain similarity signals ──
     similarity = evidence.get("domain_similarity")

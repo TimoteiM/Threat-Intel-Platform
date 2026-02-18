@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     Artifact,
     Base,
+    Batch,
     CollectorResult,
     Evidence,
     Investigation,
@@ -38,6 +39,7 @@ class InvestigationRepository:
         context: Optional[str] = None,
         client_domain: Optional[str] = None,
         max_iterations: int = 3,
+        batch_id: Optional[uuid.UUID] = None,
     ) -> Investigation:
         inv = Investigation(
             domain=domain,
@@ -45,6 +47,7 @@ class InvestigationRepository:
             client_domain=client_domain,
             state="created",
             max_analyst_iterations=max_iterations,
+            batch_id=batch_id,
         )
         self.session.add(inv)
         await self.session.flush()
@@ -281,6 +284,73 @@ class ArtifactRepository:
         self.session.add(a)
         await self.session.flush()
         return a
+
+
+class BatchRepository:
+    """Database operations for batch investigations."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(
+        self,
+        name: Optional[str] = None,
+        total_domains: int = 0,
+    ) -> Batch:
+        batch = Batch(
+            name=name,
+            total_domains=total_domains,
+            status="created",
+        )
+        self.session.add(batch)
+        await self.session.flush()
+        return batch
+
+    async def get(self, batch_id: uuid.UUID) -> Optional[Batch]:
+        result = await self.session.execute(
+            select(Batch).where(Batch.id == batch_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Batch]:
+        query = (
+            select(Batch)
+            .order_by(Batch.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def update_progress(
+        self,
+        batch_id: uuid.UUID,
+        completed_count: int,
+        status: Optional[str] = None,
+    ) -> None:
+        values: dict[str, Any] = {"completed_count": completed_count}
+        if status:
+            values["status"] = status
+            if status == "completed":
+                values["completed_at"] = datetime.now(timezone.utc)
+        await self.session.execute(
+            update(Batch).where(Batch.id == batch_id).values(**values)
+        )
+
+    async def get_investigations(
+        self,
+        batch_id: uuid.UUID,
+    ) -> Sequence[Investigation]:
+        result = await self.session.execute(
+            select(Investigation)
+            .where(Investigation.batch_id == batch_id)
+            .order_by(Investigation.created_at)
+        )
+        return result.scalars().all()
 
 
 class CacheRepository:

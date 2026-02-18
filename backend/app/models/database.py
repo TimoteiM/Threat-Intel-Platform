@@ -29,6 +29,35 @@ class Base(DeclarativeBase):
     pass
 
 
+class Batch(Base):
+    __tablename__ = "batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    total_domains: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="created")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    investigations: Mapped[list[Investigation]] = relationship(
+        back_populates="batch"
+    )
+
+    __table_args__ = (
+        Index("idx_batches_created", "created_at"),
+        Index("idx_batches_status", "status"),
+    )
+
+
 class Investigation(Base):
     __tablename__ = "investigations"
 
@@ -41,6 +70,13 @@ class Investigation(Base):
     )
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
     client_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Batch reference
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("batches.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -64,6 +100,7 @@ class Investigation(Base):
     max_analyst_iterations: Mapped[int] = mapped_column(Integer, default=3)
 
     # Relationships
+    batch: Mapped[Batch | None] = relationship(back_populates="investigations")
     collector_results: Mapped[list[CollectorResult]] = relationship(
         back_populates="investigation", cascade="all, delete-orphan"
     )
@@ -85,6 +122,7 @@ class Investigation(Base):
         Index("idx_investigations_state", "state"),
         Index("idx_investigations_created", "created_at"),
         Index("idx_investigations_classification", "classification"),
+        Index("idx_investigations_batch", "batch_id"),
     )
 
 

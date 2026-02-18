@@ -90,6 +90,46 @@ def run_analysis(
 
     evidence_data["artifact_hashes"] = all_artifact_hashes
 
+    # ── 1b. Subdomain enumeration (post-processing on intel results) ──
+    intel_subdomains = evidence_data.get("intel", {}).get("related_subdomains", [])
+    if intel_subdomains:
+        try:
+            from app.collectors.subdomain_collector import enumerate_subdomains
+            subdomain_result = enumerate_subdomains(domain, intel_subdomains)
+            evidence_data["subdomains"] = subdomain_result
+            logger.info(
+                f"[{investigation_id}] Subdomain enumeration: "
+                f"{len(subdomain_result['resolved'])} resolved, "
+                f"{len(subdomain_result['interesting_subdomains'])} interesting"
+            )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Subdomain enumeration failed: {e}")
+
+    # ── 1c. Standalone screenshot (always captured) ──
+    try:
+        from app.collectors.visual_comparison import capture_screenshot
+
+        screenshot_target = investigated_url or domain
+        logger.info(f"[{investigation_id}] Capturing screenshot of {screenshot_target}")
+        ss_bytes, ss_final_url = capture_screenshot(screenshot_target, timeout=45)
+
+        ss_art_id = _save_artifact_sync(
+            investigation_id, "screenshot",
+            "screenshot_domain.png",
+            ss_bytes, "image/png",
+        )
+        evidence_data["screenshot"] = {
+            "artifact_id": ss_art_id,
+            "final_url": ss_final_url,
+        }
+        logger.info(
+            f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, "
+            f"final_url={ss_final_url}"
+        )
+    except Exception as e:
+        evidence_data["screenshot"] = {"capture_error": str(e)}
+        logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
+
     # ── 2. Domain similarity analysis (if client_domain provided) ──
     if client_domain:
         try:
@@ -225,7 +265,17 @@ def _run_analyst_sync(evidence_data: dict, max_iterations: int) -> dict:
         report = loop.run_until_complete(
             run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations)
         )
-        return report.model_dump(mode="json")
+        report_dict = report.model_dump(mode="json")
+
+        # Enrich findings with MITRE ATT&CK metadata
+        try:
+            from app.analyst.attack_mapping import enrich_findings_with_attack
+            if report_dict.get("findings"):
+                report_dict["findings"] = enrich_findings_with_attack(report_dict["findings"])
+        except Exception:
+            pass  # ATT&CK enrichment is non-critical
+
+        return report_dict
     finally:
         loop.close()
 
@@ -295,8 +345,27 @@ def _persist_results(
 
             session.commit()
 
+            # Update batch progress if this investigation belongs to a batch
+            if inv and inv.batch_id:
+                _update_batch_progress(session, inv.batch_id)
+
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to persist results: {e}")
+
+
+def _update_batch_progress(session, batch_id) -> None:
+    """Increment batch completed_count and mark complete if all done."""
+    try:
+        from app.models.database import Batch
+        batch = session.get(Batch, batch_id)
+        if batch:
+            batch.completed_count += 1
+            if batch.completed_count >= batch.total_domains:
+                batch.status = "completed"
+                batch.completed_at = datetime.now(timezone.utc)
+            session.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update batch progress: {e}")
 
 
 def _load_reference_image_sync(client_domain: str) -> bytes | None:

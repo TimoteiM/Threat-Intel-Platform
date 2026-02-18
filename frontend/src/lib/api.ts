@@ -111,6 +111,65 @@ export async function checkReferenceImage(domain: string): Promise<boolean> {
   }
 }
 
+// ─── MITRE ATT&CK ───
+
+export function getAttackTechniques() {
+  return request<any[]>("/attack/techniques");
+}
+
+// ─── Infrastructure Pivot ───
+
+export function getPivots(investigationId: string) {
+  return request<any>(`/investigations/${investigationId}/pivots`);
+}
+
+// ─── Batch Investigation ───
+
+export async function uploadBatch(
+  file: File,
+  metadata: { name?: string; context?: string; client_domain?: string },
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (metadata.name) formData.append("name", metadata.name);
+  if (metadata.context) formData.append("context", metadata.context);
+  if (metadata.client_domain) formData.append("client_domain", metadata.client_domain);
+
+  const res = await fetch(`${BASE}/batches`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+
+  return res.json();
+}
+
+export function listBatches(params?: { limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return request<any[]>(`/batches${query ? `?${query}` : ""}`);
+}
+
+export function getBatch(id: string) {
+  return request<any>(`/batches/${id}`);
+}
+
+export function getBatchCampaigns(id: string) {
+  return request<any>(`/batches/${id}/campaigns`);
+}
+
+// ─── Dashboard ───
+
+export function getDashboardStats() {
+  return request<any>("/dashboard/stats");
+}
+
 // ─── SSE helper ───
 
 export function subscribeToProgress(

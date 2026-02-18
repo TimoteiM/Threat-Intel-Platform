@@ -71,24 +71,9 @@ export default function Header() {
           alignItems: "center",
           gap: 16,
         }}>
-          <a href="/investigations" style={{
-            color: "var(--text-dim)", textDecoration: "none",
-            fontSize: 13, fontWeight: 500,
-            fontFamily: "var(--font-sans)",
-            padding: "6px 12px",
-            borderRadius: "var(--radius-sm)",
-          }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--accent)";
-              e.currentTarget.style.background = "var(--accent-glow)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--text-dim)";
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            All Cases
-          </a>
+          <NavLink href="/dashboard">Dashboard</NavLink>
+          <NavLink href="/investigations">All Cases</NavLink>
+          <NavLink href="/batches">Bulk Analysis</NavLink>
           <span style={{
             fontSize: 11,
             color: "var(--text-muted)",
@@ -100,5 +85,30 @@ export default function Header() {
         </div>
       </div>
     </header>
+  );
+}
+
+function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      style={{
+        color: "var(--text-dim)", textDecoration: "none",
+        fontSize: 13, fontWeight: 500,
+        fontFamily: "var(--font-sans)",
+        padding: "6px 12px",
+        borderRadius: "var(--radius-sm)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = "var(--accent)";
+        e.currentTarget.style.background = "var(--accent-glow)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = "var(--text-dim)";
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {children}
+    </a>
   );
 }

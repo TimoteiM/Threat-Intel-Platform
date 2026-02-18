@@ -44,4 +44,5 @@ celery_app.autodiscover_tasks([
     "app.tasks.collector_task",
     "app.tasks.investigation_task",
     "app.tasks.analysis_task",
+    "app.tasks.batch_task",
 ])

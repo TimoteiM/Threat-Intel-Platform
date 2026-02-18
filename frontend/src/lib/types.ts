@@ -89,6 +89,9 @@ export interface HTTPEvidence {
   has_input_fields?: boolean;
   technologies_detected: string[];
   security_headers: Record<string, string>;
+  brand_indicators: string[];
+  phishing_indicators: string[];
+  external_resources: string[];
 }
 
 export interface TLSEvidence {
@@ -227,6 +230,30 @@ export interface VisualComparisonEvidence {
   client_capture_error?: string;
 }
 
+// ─── Domain Screenshot ───
+
+export interface ScreenshotEvidence {
+  artifact_id?: string;
+  final_url?: string;
+  capture_error?: string;
+}
+
+// ─── Subdomain Enumeration ───
+
+export interface SubdomainEntry {
+  subdomain: string;
+  ips: string[];
+  is_interesting: boolean;
+}
+
+export interface SubdomainEvidence {
+  discovered_count: number;
+  resolved: SubdomainEntry[];
+  unresolved: string[];
+  interesting_subdomains: SubdomainEntry[];
+  ip_groups: Record<string, string[]>;
+}
+
 // ─── Signals & Gaps ───
 
 export interface Signal {
@@ -260,6 +287,8 @@ export interface CollectedEvidence {
   vt: VTEvidence;
   domain_similarity?: DomainSimilarityEvidence;
   visual_comparison?: VisualComparisonEvidence;
+  screenshot?: ScreenshotEvidence;
+  subdomains?: SubdomainEvidence;
   signals: Signal[];
   data_gaps: DataGap[];
   artifact_hashes: Record<string, string>;
@@ -271,6 +300,36 @@ export interface CollectedEvidence {
   };
 }
 
+// ─── Infrastructure Pivot ───
+
+export interface SharedInfrastructure {
+  type: string;
+  value: string;
+}
+
+export interface RelatedInvestigation {
+  id: string;
+  domain: string;
+  classification?: Classification;
+  risk_score?: number;
+  state: InvestigationState;
+  created_at?: string;
+  shared_infrastructure: SharedInfrastructure[];
+}
+
+export interface PivotPoints {
+  ips: string[];
+  cert_sha256?: string;
+  asn?: number;
+  registrar?: string;
+  name_servers: string[];
+}
+
+export interface PivotResponse {
+  pivot_points: PivotPoints;
+  related_investigations: RelatedInvestigation[];
+}
+
 // ─── Analyst Report ───
 
 export interface AnalystFinding {
@@ -280,6 +339,9 @@ export interface AnalystFinding {
   severity: string;
   evidence_refs: string[];
   ttp?: string;
+  ttp_name?: string;
+  ttp_tactic?: string;
+  ttp_url?: string;
 }
 
 export interface IOC {
@@ -342,4 +404,91 @@ export interface ProgressEvent {
   message?: string;
   percent_complete?: number;
   done?: boolean;
+}
+
+// ─── Batch Investigation ───
+
+export interface BatchListItem {
+  id: string;
+  name?: string;
+  total_domains: number;
+  completed_count: number;
+  status: string;
+  created_at?: string;
+  completed_at?: string;
+}
+
+export interface BatchInvestigation {
+  id: string;
+  domain: string;
+  state: InvestigationState;
+  classification?: Classification;
+  confidence?: Confidence;
+  risk_score?: number;
+  recommended_action?: SOCAction;
+  created_at?: string;
+  concluded_at?: string;
+}
+
+export interface BatchDetail extends BatchListItem {
+  investigations: BatchInvestigation[];
+}
+
+export interface CampaignDomain {
+  id: string;
+  domain: string;
+  classification?: Classification;
+  risk_score?: number;
+}
+
+export interface CampaignSharedInfra {
+  type: string;
+  values: string[];
+}
+
+export interface CampaignGroup {
+  domains: CampaignDomain[];
+  shared_infrastructure: CampaignSharedInfra[];
+  size: number;
+}
+
+export interface CampaignResponse {
+  campaigns: CampaignGroup[];
+  unclustered: CampaignDomain[];
+}
+
+// ─── Dashboard ───
+
+export interface RiskBucket {
+  bucket: string;
+  count: number;
+}
+
+export interface TimelineEntry {
+  date: string;
+  classification: string;
+  count: number;
+}
+
+export interface TopEntry {
+  name: string;
+  count: number;
+}
+
+export interface RecentMalicious {
+  id: string;
+  domain: string;
+  risk_score?: number;
+  classification?: string;
+  created_at?: string;
+}
+
+export interface DashboardStats {
+  total_investigations: number;
+  classification_breakdown: Record<string, number>;
+  risk_distribution: RiskBucket[];
+  timeline: TimelineEntry[];
+  top_registrars: TopEntry[];
+  top_hosting_providers: TopEntry[];
+  recent_malicious: RecentMalicious[];
 }

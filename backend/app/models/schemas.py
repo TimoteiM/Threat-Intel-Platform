@@ -105,6 +105,11 @@ class HTTPEvidence(BaseModel):
     technologies_detected: list[str] = []
     security_headers: dict[str, str] = {}
 
+    # Content / phishing analysis
+    brand_indicators: list[str] = []
+    phishing_indicators: list[str] = []
+    external_resources: list[str] = []
+
 
 # ─── TLS ───
 
@@ -269,6 +274,33 @@ class VisualComparisonEvidence(BaseModel):
     client_capture_error: Optional[str] = None
 
 
+# ─── Domain Screenshot ───
+
+class ScreenshotEvidence(BaseModel):
+    """Standalone screenshot of the investigated domain."""
+    artifact_id: Optional[str] = None
+    final_url: Optional[str] = None
+    capture_error: Optional[str] = None
+
+
+# ─── Subdomain Enumeration ───
+
+class SubdomainEntry(BaseModel):
+    """A resolved subdomain with its IPs."""
+    subdomain: str
+    ips: list[str]
+    is_interesting: bool
+
+
+class SubdomainEvidence(BaseModel):
+    """Active DNS resolution of discovered subdomains."""
+    discovered_count: int = 0
+    resolved: list[SubdomainEntry] = []
+    unresolved: list[str] = []
+    interesting_subdomains: list[SubdomainEntry] = []
+    ip_groups: dict[str, list[str]] = {}  # IP -> [subdomains]
+
+
 # ─── Signals & Gaps ───
 
 class Signal(BaseModel):
@@ -328,6 +360,12 @@ class CollectedEvidence(BaseModel):
     # Visual comparison (screenshot-based, when client_domain provided)
     visual_comparison: Optional[VisualComparisonEvidence] = None
 
+    # Domain screenshot (always captured)
+    screenshot: Optional[ScreenshotEvidence] = None
+
+    # Subdomain enumeration (active resolution of crt.sh discoveries)
+    subdomains: Optional[SubdomainEvidence] = None
+
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None
 
@@ -346,6 +384,9 @@ class AnalystFinding(BaseModel):
     severity: str = "info"
     evidence_refs: list[str] = []
     ttp: Optional[str] = None
+    ttp_name: Optional[str] = None
+    ttp_tactic: Optional[str] = None
+    ttp_url: Optional[str] = None
 
 
 class IOC(BaseModel):
