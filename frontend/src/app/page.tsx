@@ -13,7 +13,7 @@ export default function HomePage() {
 
   useEffect(() => {
     listInvestigations({ limit: 10 })
-      .then(setRecent)
+      .then((data) => setRecent(data.items))
       .catch(() => {}); // silently fail if API not available
   }, []);
 

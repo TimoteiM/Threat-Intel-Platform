@@ -17,6 +17,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
@@ -32,8 +34,8 @@ COLLECTOR_FIELD_MAP = {
 @celery_app.task(
     bind=True,
     name="tasks.run_analysis",
-    time_limit=180,       # Analysis can take longer (Claude API call)
-    soft_time_limit=150,
+    time_limit=300,       # Hard kill after 5 min (Playwright steps can be slow)
+    soft_time_limit=270,  # Soft limit at 4.5 min — gives time to persist partial results
 )
 def run_analysis(
     self,
@@ -105,7 +107,38 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Subdomain enumeration failed: {e}")
 
-    # ── 1c. Standalone screenshot (always captured) ──
+    # ── 1c. Email security analysis (post-processing on DNS results) ──
+    dns_data = evidence_data.get("dns", {})
+    if dns_data.get("meta", {}).get("status") == "completed":
+        try:
+            from app.collectors.email_security import analyze_email_security
+            email_result = analyze_email_security(domain, dns_data)
+            evidence_data["email_security"] = email_result
+            logger.info(
+                f"[{investigation_id}] Email security: score={email_result.get('email_security_score')}, "
+                f"spoofability={email_result.get('spoofability_score')}, "
+                f"DKIM selectors={len(email_result.get('dkim_selectors_found', []))}"
+            )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Email security analysis failed: {e}")
+
+    # ── 1d. Redirect chain analysis (multi-UA cloaking detection) ──
+    http_data = evidence_data.get("http", {})
+    if http_data.get("reachable"):
+        try:
+            from app.collectors.redirect_analysis import analyze_redirects
+            redirect_result = analyze_redirects(domain, timeout=15)
+            evidence_data["redirect_analysis"] = redirect_result
+            logger.info(
+                f"[{investigation_id}] Redirect analysis: "
+                f"cloaking={redirect_result.get('cloaking_detected')}, "
+                f"max_chain={redirect_result.get('max_chain_length')}, "
+                f"evasion={len(redirect_result.get('evasion_techniques', []))}"
+            )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Redirect analysis failed: {e}")
+
+    # ── 1e. Standalone screenshot (always captured) ──
     try:
         from app.collectors.visual_comparison import capture_screenshot
 
@@ -118,17 +151,53 @@ def run_analysis(
             "screenshot_domain.png",
             ss_bytes, "image/png",
         )
-        evidence_data["screenshot"] = {
-            "artifact_id": ss_art_id,
-            "final_url": ss_final_url,
-        }
+        if ss_art_id:
+            evidence_data["screenshot"] = {
+                "artifact_id": ss_art_id,
+                "final_url": ss_final_url,
+            }
+        else:
+            evidence_data["screenshot"] = {
+                "capture_error": "Screenshot captured but failed to save artifact",
+                "final_url": ss_final_url,
+            }
         logger.info(
             f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, "
             f"final_url={ss_final_url}"
         )
+    except SoftTimeLimitExceeded:
+        evidence_data["screenshot"] = {"capture_error": "Task time limit reached during screenshot"}
+        logger.warning(f"[{investigation_id}] Screenshot aborted: task soft time limit reached")
+        # Don't re-raise — let the task continue to persist partial results
     except Exception as e:
         evidence_data["screenshot"] = {"capture_error": str(e)}
         logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
+
+    # ── 1f. JavaScript behavior analysis (Playwright sandbox) ──
+    if evidence_data.get("http", {}).get("reachable"):
+        try:
+            from app.collectors.js_analysis import analyze_js_behavior
+            js_target = investigated_url or domain
+            logger.info(f"[{investigation_id}] Starting JS behavior analysis of {js_target}")
+            js_result = analyze_js_behavior(
+                js_target,
+                investigation_id,
+                save_artifact_fn=_save_artifact_sync,
+                timeout=45,
+            )
+            evidence_data["js_analysis"] = js_result
+            logger.info(
+                f"[{investigation_id}] JS analysis: "
+                f"requests={js_result.get('total_requests')}, "
+                f"external={js_result.get('external_requests')}, "
+                f"POST endpoints={len(js_result.get('post_endpoints', []))}, "
+                f"fingerprinting={len(js_result.get('fingerprinting_apis', []))}"
+            )
+        except SoftTimeLimitExceeded:
+            logger.warning(f"[{investigation_id}] JS analysis aborted: task soft time limit reached")
+            # Don't re-raise — continue to persist partial results
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] JS behavior analysis failed: {e}")
 
     # ── 2. Domain similarity analysis (if client_domain provided) ──
     if client_domain:
@@ -191,6 +260,9 @@ def run_analysis(
                     f"[{investigation_id}] Visual similarity: {overall:.0%} "
                     f"(clone={visual_result.get('is_visual_clone')})"
                 )
+        except SoftTimeLimitExceeded:
+            logger.warning(f"[{investigation_id}] Visual comparison aborted: task soft time limit reached")
+            # Don't re-raise — continue to persist partial results
         except Exception as e:
             logger.warning(f"[{investigation_id}] Visual comparison failed: {e}")
 
@@ -366,6 +438,24 @@ def _update_batch_progress(session, batch_id) -> None:
             session.commit()
     except Exception as e:
         logger.warning(f"Failed to update batch progress: {e}")
+
+
+def _mark_failed(investigation_id: str, reason: str) -> None:
+    """Mark investigation as failed in the database."""
+    try:
+        import uuid
+        from sqlalchemy.orm import Session
+        from app.db.session import sync_engine
+        from app.models.database import Investigation
+
+        inv_id = uuid.UUID(investigation_id)
+        with Session(sync_engine) as session:
+            inv = session.get(Investigation, inv_id)
+            if inv:
+                inv.state = "failed"
+                session.commit()
+    except Exception as e:
+        logger.error(f"[{investigation_id}] Failed to mark investigation as failed: {e}")
 
 
 def _load_reference_image_sync(client_domain: str) -> bytes | None:

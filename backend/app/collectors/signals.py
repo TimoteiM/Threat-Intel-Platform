@@ -209,6 +209,221 @@ def generate_signals(evidence: dict) -> list[Signal]:
             evidence_refs=["dns.mx"],
         ))
 
+    # ── Email security signals (from email_security post-processing) ──
+    email_sec = evidence.get("email_security")
+    if email_sec:
+        dmarc_policy = email_sec.get("dmarc_policy")
+        spf_all = email_sec.get("spf_all_qualifier")
+        spoofability = email_sec.get("spoofability_score")
+
+        if dmarc_policy == "none":
+            signals.append(Signal(
+                id="sig_dmarc_none",
+                category="email_security",
+                description="DMARC policy is 'none' — monitoring only, no enforcement",
+                severity="medium",
+                evidence_refs=["email_security.dmarc_policy"],
+            ))
+
+        if spf_all == "~all":
+            signals.append(Signal(
+                id="sig_spf_softfail",
+                category="email_security",
+                description="SPF uses softfail (~all) — spoofed mail may still be delivered",
+                severity="medium",
+                evidence_refs=["email_security.spf_all_qualifier"],
+            ))
+
+        if spf_all == "+all":
+            signals.append(Signal(
+                id="sig_spf_permissive",
+                category="email_security",
+                description="SPF uses +all — any server can send as this domain",
+                severity="high",
+                evidence_refs=["email_security.spf_all_qualifier"],
+            ))
+
+        if not email_sec.get("spf_record"):
+            signals.append(Signal(
+                id="sig_no_spf",
+                category="email_security",
+                description="No SPF record — no sender validation for this domain",
+                severity="medium",
+                evidence_refs=["email_security.spf_record"],
+            ))
+
+        if not email_sec.get("dkim_selectors_found"):
+            signals.append(Signal(
+                id="sig_no_dkim",
+                category="email_security",
+                description="No DKIM selectors found across 10 common selector names",
+                severity="low",
+                evidence_refs=["email_security.dkim_selectors_found"],
+            ))
+
+        # MX blocklist hits
+        mx_records = email_sec.get("mx_records", [])
+        all_bl_hits = []
+        for mx in mx_records:
+            all_bl_hits.extend(mx.get("blocklist_hits", []))
+        if all_bl_hits:
+            signals.append(Signal(
+                id="sig_mx_blocklisted",
+                category="email_security",
+                description=f"MX server(s) found on blocklist: {', '.join(all_bl_hits[:3])}",
+                severity="high",
+                evidence_refs=["email_security.mx_records"],
+            ))
+
+        if spoofability == "high":
+            signals.append(Signal(
+                id="sig_high_spoofability",
+                category="email_security",
+                description=(
+                    f"Domain is highly spoofable: "
+                    f"{'; '.join(email_sec.get('spoofability_reasons', []))}"
+                ),
+                severity="high",
+                evidence_refs=["email_security.spoofability_score"],
+            ))
+
+        sec_score = email_sec.get("email_security_score")
+        if sec_score is not None and sec_score >= 85:
+            signals.append(Signal(
+                id="sig_email_security_strong",
+                category="email_security",
+                description=f"Strong email security posture (score: {sec_score}/100)",
+                severity="info",
+                evidence_refs=["email_security.email_security_score"],
+            ))
+
+    # ── Redirect analysis signals ──
+    # NOTE: Most redirect/cloaking signals are INFORMATIONAL for legitimate sites.
+    # Only flag as high/critical when combined with other malicious indicators.
+    redirect = evidence.get("redirect_analysis")
+    if redirect:
+        if redirect.get("cloaking_detected"):
+            cloaking_details = redirect.get("cloaking_details", [])
+            signals.append(Signal(
+                id="sig_cloaking_detected",
+                category="evasion",
+                description=(
+                    f"UA-based cloaking detected (different URLs/status codes): "
+                    f"{'; '.join(cloaking_details[:2])}"
+                ),
+                severity="medium",
+                evidence_refs=["redirect_analysis.cloaking_detected", "redirect_analysis.cloaking_details"],
+            ))
+
+        # Bot blocking
+        evasion = redirect.get("evasion_techniques", [])
+        if any("bot blocking" in t.lower() for t in evasion):
+            signals.append(Signal(
+                id="sig_bot_blocking",
+                category="evasion",
+                description="Bot User-Agent gets blocked while browser succeeds — common on legitimate sites with bot protection",
+                severity="low",
+                evidence_refs=["redirect_analysis.evasion_techniques"],
+            ))
+
+        # Excessive redirects
+        if redirect.get("max_chain_length", 0) > 5:
+            signals.append(Signal(
+                id="sig_excessive_redirects",
+                category="behavior",
+                description=f"Excessive redirect chain: {redirect['max_chain_length']} hops",
+                severity="medium",
+                evidence_refs=["redirect_analysis.max_chain_length"],
+            ))
+
+        # Tracker redirects
+        intermediate = redirect.get("intermediate_domains", [])
+        trackers = [d for d in intermediate if d.get("is_known_tracker")]
+        if trackers:
+            names = [d["domain"] for d in trackers[:3]]
+            signals.append(Signal(
+                id="sig_tracker_redirect",
+                category="behavior",
+                description=f"Redirect chain passes through known trackers: {', '.join(names)}",
+                severity="info",
+                evidence_refs=["redirect_analysis.intermediate_domains"],
+            ))
+
+        # Protocol downgrade
+        if any("protocol downgrade" in t.lower() for t in evasion):
+            signals.append(Signal(
+                id="sig_protocol_downgrade",
+                category="evasion",
+                description="HTTPS to HTTP protocol downgrade detected in redirect chain",
+                severity="medium",
+                evidence_refs=["redirect_analysis.evasion_techniques"],
+            ))
+
+    # ── JavaScript analysis signals ──
+    # NOTE: Fingerprinting, tracking pixels, and WebSocket connections are
+    # extremely common on legitimate sites. Only credential harvesting with
+    # external POSTs is a strong malicious indicator.
+    js = evidence.get("js_analysis")
+    if js:
+        # Credential harvesting (external POST to auth endpoints) — this IS significant
+        cred_posts = [p for p in js.get("post_endpoints", []) if p.get("is_credential_form")]
+        if cred_posts:
+            urls = [p["url"] for p in cred_posts[:3]]
+            signals.append(Signal(
+                id="sig_credential_harvesting",
+                category="content",
+                description=(
+                    f"External POST to credential endpoint(s): "
+                    f"{', '.join(urls)}"
+                ),
+                severity="high",
+                evidence_refs=["js_analysis.post_endpoints"],
+            ))
+
+        # Tracking pixels
+        pixels = js.get("tracking_pixels", [])
+        if len(pixels) > 3:
+            signals.append(Signal(
+                id="sig_tracking_pixels",
+                category="content",
+                description=f"Multiple tracking pixels detected from {len(pixels)} domains — common on legitimate sites",
+                severity="info",
+                evidence_refs=["js_analysis.tracking_pixels"],
+            ))
+
+        # Fingerprinting
+        fp_apis = js.get("fingerprinting_apis", [])
+        if fp_apis:
+            signals.append(Signal(
+                id="sig_fingerprinting",
+                category="content",
+                description=f"Browser fingerprinting APIs detected: {', '.join(fp_apis[:5])} — common for analytics/fraud prevention",
+                severity="info",
+                evidence_refs=["js_analysis.fingerprinting_apis"],
+            ))
+
+        # WebSocket connections
+        ws_connections = js.get("websocket_connections", [])
+        if ws_connections:
+            signals.append(Signal(
+                id="sig_websocket_exfil",
+                category="behavior",
+                description=f"WebSocket connections detected: {len(ws_connections)} endpoint(s) — used by chat, real-time features",
+                severity="info",
+                evidence_refs=["js_analysis.websocket_connections"],
+            ))
+
+        # Many external requests
+        ext_count = js.get("external_requests", 0)
+        if ext_count > 20:
+            signals.append(Signal(
+                id="sig_many_external_requests",
+                category="content",
+                description=f"Page makes {ext_count} external requests to third-party domains",
+                severity="info",
+                evidence_refs=["js_analysis.external_requests"],
+            ))
+
     # ── Hosting signals ──
     hosting = evidence.get("hosting", {})
     if hosting.get("is_hosting") and not hosting.get("is_cdn") and not hosting.get("is_cloud"):

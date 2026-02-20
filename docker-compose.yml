@@ -37,6 +37,12 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,7 +58,14 @@ services:
     build:
       context: ./backend
       dockerfile: ../docker/Dockerfile.worker
+    shm_size: '2gb'
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     depends_on:
       postgres:
         condition: service_healthy

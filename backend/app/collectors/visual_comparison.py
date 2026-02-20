@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import time
 from typing import Optional
 
 from PIL import Image
@@ -162,6 +163,8 @@ def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
     """
     from playwright.sync_api import sync_playwright
 
+    deadline = time.monotonic() + timeout  # Overall deadline for the entire function
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -272,13 +275,18 @@ def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
                 # Wait for JS redirect chains to fully resolve.
                 # Some sites chain multiple JS redirects (bouncer → tracker → final).
                 # We poll page.url and wait until it stabilises.
+                # Respect the overall deadline to avoid unbounded waits.
                 prev_url = page.url
-                for _ in range(10):  # up to ~15s total (10 × 1.5s)
+                for _ in range(5):  # max 5 iterations
+                    if time.monotonic() >= deadline - 3:
+                        logger.debug(f"Redirect stabilization stopped: approaching timeout deadline")
+                        break
+                    remaining_ms = max(1000, int((deadline - time.monotonic() - 3) * 1000))
                     try:
-                        page.wait_for_load_state("networkidle", timeout=5000)
+                        page.wait_for_load_state("networkidle", timeout=min(3000, remaining_ms))
                     except Exception:
                         pass
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(1000)
                     curr_url = page.url
                     if curr_url == prev_url:
                         break  # URL stopped changing — redirect chain is done

@@ -95,9 +95,18 @@ class InvestigationService:
         limit: int = 50,
         offset: int = 0,
         state: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> Sequence[Investigation]:
         """List investigations with optional filtering."""
-        return await self.repo.list_all(limit=limit, offset=offset, state=state)
+        return await self.repo.list_all(limit=limit, offset=offset, state=state, search=search)
+
+    async def count(
+        self,
+        state: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        """Count investigations matching filters."""
+        return await self.repo.count(state=state, search=search)
 
     async def get_evidence(self, investigation_id: str) -> Optional[dict]:
         """Get collected evidence for an investigation."""

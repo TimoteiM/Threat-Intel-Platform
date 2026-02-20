@@ -301,6 +301,127 @@ class SubdomainEvidence(BaseModel):
     ip_groups: dict[str, list[str]] = {}  # IP -> [subdomains]
 
 
+# ─── Email Security ───
+
+class DKIMRecord(BaseModel):
+    """A discovered DKIM selector and its key status."""
+    selector: str
+    public_key_present: bool
+    key_type: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MXRecord(BaseModel):
+    """A parsed MX record with resolved IPs and blocklist status."""
+    priority: int
+    hostname: str
+    ips: list[str] = []
+    blocklist_hits: list[str] = []
+
+
+class EmailSecurityEvidence(BaseModel):
+    """DMARC/SPF/DKIM policy analysis and MX reputation."""
+    # DMARC
+    dmarc_record: Optional[str] = None
+    dmarc_policy: Optional[str] = None
+    dmarc_subdomain_policy: Optional[str] = None
+    dmarc_pct: Optional[int] = None
+    dmarc_rua: list[str] = []
+    dmarc_ruf: list[str] = []
+    dmarc_alignment_dkim: Optional[str] = None
+    dmarc_alignment_spf: Optional[str] = None
+    # SPF
+    spf_record: Optional[str] = None
+    spf_mechanisms: list[str] = []
+    spf_all_qualifier: Optional[str] = None
+    spf_includes: list[str] = []
+    spf_ip_count: Optional[int] = None
+    # DKIM
+    dkim_selectors_found: list[str] = []
+    dkim_records: list[DKIMRecord] = []
+    # MX
+    mx_records: list[MXRecord] = []
+    # Assessment
+    spoofability_score: Optional[str] = None
+    spoofability_reasons: list[str] = []
+    email_security_score: Optional[int] = None
+
+
+# ─── Redirect Analysis ───
+
+class RedirectProbe(BaseModel):
+    """Result of probing a domain with a specific User-Agent."""
+    user_agent_type: str
+    user_agent: str
+    status_code: int
+    final_url: str
+    redirect_count: int = 0
+    title: Optional[str] = None
+    content_hash: str
+
+
+class IntermediateDomain(BaseModel):
+    """A domain encountered during redirect chain traversal."""
+    domain: str
+    hop_number: int
+    is_known_tracker: bool = False
+    is_known_redirector: bool = False
+
+
+class RedirectAnalysisEvidence(BaseModel):
+    """Multi-UA redirect probing results and cloaking detection."""
+    probes: list[RedirectProbe] = []
+    cloaking_detected: bool = False
+    cloaking_details: list[str] = []
+    intermediate_domains: list[IntermediateDomain] = []
+    evasion_techniques: list[str] = []
+    max_chain_length: int = 0
+    has_geo_block: Optional[bool] = None
+
+
+# ─── JavaScript Analysis ───
+
+class CapturedRequest(BaseModel):
+    """A single network request captured during JS analysis."""
+    url: str
+    method: str = "GET"
+    resource_type: str = "other"
+    domain: str = ""
+    is_external: bool = False
+
+
+class PostEndpoint(BaseModel):
+    """An HTTP POST endpoint captured during page load."""
+    url: str
+    content_type: Optional[str] = None
+    is_external: bool = False
+    is_credential_form: bool = False
+
+
+class SuspiciousScript(BaseModel):
+    """An external script loaded during page execution."""
+    url: str
+    domain: str
+    size_bytes: Optional[int] = None
+    reason: str
+
+
+class JSAnalysisEvidence(BaseModel):
+    """Playwright-based JavaScript behavior analysis."""
+    total_requests: int = 0
+    external_requests: int = 0
+    request_domains: list[str] = []
+    captured_requests: list[CapturedRequest] = []
+    post_endpoints: list[PostEndpoint] = []
+    tracking_pixels: list[str] = []
+    fingerprinting_apis: list[str] = []
+    suspicious_scripts: list[SuspiciousScript] = []
+    websocket_connections: list[str] = []
+    data_exfil_indicators: list[str] = []
+    console_errors: list[str] = []
+    har_artifact_id: Optional[str] = None
+
+
 # ─── Signals & Gaps ───
 
 class Signal(BaseModel):
@@ -365,6 +486,15 @@ class CollectedEvidence(BaseModel):
 
     # Subdomain enumeration (active resolution of crt.sh discoveries)
     subdomains: Optional[SubdomainEvidence] = None
+
+    # Email security analysis (DMARC/SPF/DKIM/MX reputation)
+    email_security: Optional[EmailSecurityEvidence] = None
+
+    # Redirect chain analysis (multi-UA cloaking detection)
+    redirect_analysis: Optional[RedirectAnalysisEvidence] = None
+
+    # JavaScript behavior analysis (Playwright sandbox)
+    js_analysis: Optional[JSAnalysisEvidence] = None
 
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None

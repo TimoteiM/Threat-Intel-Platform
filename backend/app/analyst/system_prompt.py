@@ -41,6 +41,15 @@ FACTS (objective measurements from collectors):
 - tls: Certificate chain, SANs, issuer, validity, self-signed status
 - hosting: ASN, org, country, CDN/cloud detection, reverse DNS
 - intel: Blocklist/allowlist hits, related certs, subdomains
+- email_security: DMARC/SPF/DKIM policy analysis, MX reputation, spoofability assessment
+  (parsed DMARC policy/pct/alignment, SPF mechanisms/all-qualifier, DKIM selectors found,
+   MX blocklist hits, computed spoofability score, email_security_score 0-100)
+- redirect_analysis: Multi-UA redirect probing (browser, Googlebot, mobile), cloaking detection,
+  intermediate domain analysis (known trackers/redirectors), evasion techniques
+  (UA cloaking, bot blocking, excessive redirects, protocol downgrade)
+- js_analysis: Playwright-based JavaScript behavior sandbox — network requests captured,
+  POST endpoint analysis (credential harvesting detection), tracking pixels, browser
+  fingerprinting API usage, WebSocket connections, data exfiltration indicators
 
 SIGNALS (investigative clues — NOT conclusions):
 - Pre-computed anomaly indicators with evidence_refs
@@ -124,6 +133,10 @@ SPECIAL CASES:
 - Domain naming: IGNORE for classification when no domain_similarity data exists.
   However, if domain_similarity is present, use its computed metrics as valid evidence.
 - Privacy WHOIS: Neutral. Widely used by legitimate registrants.
+- Weak email security: Missing DMARC/SPF/DKIM alone does NOT indicate maliciousness — many
+  legitimate domains have poor email security. However, combined with impersonation indicators
+  (typosquatting, login forms, brand indicators), weak email security strengthens a phishing
+  hypothesis because phishers benefit from spoofable sender domains.
 - Young domains: Signal, not conclusion. Many legitimate domains are new.
 - Domain similarity: When domain_similarity evidence is present, evaluate typosquatting and
   visual similarity findings as COMPUTED EVIDENCE. High similarity + login form + young domain
@@ -131,6 +144,27 @@ SPECIAL CASES:
 - Visual clone: When visual_comparison evidence shows is_visual_clone=true, this is strong
   computed evidence of page cloning. Combined with domain similarity (typosquatting) and
   credential harvesting indicators, this is a high-confidence phishing pattern.
+- Redirect analysis: Treat redirect_analysis results as MOSTLY INFORMATIONAL.
+  * Content hash differences across User-Agents are NORMAL — legitimate sites serve different
+    HTML to desktop browsers, Googlebot, and mobile devices (responsive design, dynamic ads,
+    bot-optimized rendering). This is NOT cloaking and MUST NOT increase risk scores.
+  * TRUE cloaking = different final URLs or different HTTP status codes per User-Agent
+    (e.g., browser gets 200 but bot gets 403, or browser goes to /login but bot goes to /home).
+    This is a moderate evasion indicator, but even this can be legitimate (WAF bot protection).
+  * Bot blocking (403 for bots) is extremely common on legitimate sites using Cloudflare,
+    Akamai, or other WAF/CDN providers. This MUST NOT contribute to risk scoring.
+  * Only treat redirect anomalies as meaningful when combined with OTHER malicious indicators
+    (credential harvesting, impersonation, young domain, phishing kit indicators).
+- JavaScript analysis: Treat js_analysis results as MOSTLY INFORMATIONAL.
+  * Fingerprinting APIs (canvas, WebGL, AudioContext) are extremely common on legitimate sites
+    for analytics, fraud prevention, and ad targeting. This is NOT evidence of malicious intent.
+  * Tracking pixels are standard on virtually all commercial websites. NOT suspicious.
+  * WebSocket connections are used by chat widgets, real-time features, push notifications.
+    NOT evidence of data exfiltration unless the domain is already suspected of impersonation.
+  * The ONLY strong malicious indicator from JS analysis is credential harvesting: external POST
+    requests to login/auth/password endpoints on a DIFFERENT domain than the investigated site,
+    especially when the site impersonates another brand.
+  * High external request counts are normal for sites with ads, analytics, and CDN resources.
 </classification_rules>
 
 <external_intelligence_policy>

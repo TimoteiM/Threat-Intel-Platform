@@ -79,13 +79,77 @@ Note this as a data gap in your analysis.
 </visual_comparison_context>
 """
 
+    # Build email security context if analysis was performed
+    email_sec_context = ""
+    if evidence.email_security:
+        es = evidence.email_security
+        email_sec_context = f"""
+<email_security_context>
+Email security analysis was performed for this domain.
+Spoofability: {es.spoofability_score or 'unknown'} | Email Security Score: {es.email_security_score}/100
+DMARC policy: {es.dmarc_policy or 'none'} | SPF: {es.spf_all_qualifier or 'none'} | DKIM selectors: {len(es.dkim_selectors_found)}
+MX records: {len(es.mx_records)}
+
+Include email security findings in your Technical Evidence Analysis section.
+Weak email security alone is NOT malicious — but combined with impersonation indicators
+it strengthens phishing hypotheses.
+</email_security_context>
+"""
+
+    # Build redirect analysis context if performed
+    redirect_context = ""
+    if evidence.redirect_analysis:
+        ra = evidence.redirect_analysis
+        redirect_context = f"""
+<redirect_analysis_context>
+Multi-UA redirect analysis was performed with 3 User-Agents (browser, Googlebot, mobile).
+Cloaking detected: {ra.cloaking_detected} | Max chain length: {ra.max_chain_length}
+Evasion techniques: {len(ra.evasion_techniques)} | Intermediate domains: {len(ra.intermediate_domains)}
+
+CRITICAL GUIDANCE FOR REDIRECT ANALYSIS:
+- Different content hashes across User-Agents are COMPLETELY NORMAL for legitimate sites.
+  Responsive design, dynamic ads, Googlebot-optimized rendering, and A/B testing all cause
+  content hash variations. This MUST NOT increase the risk score or be treated as cloaking.
+- TRUE cloaking means different final URLs or different HTTP status codes per User-Agent.
+  cloaking_detected={ra.cloaking_detected} reflects only URL/status code differences.
+- Bot blocking (403 for Googlebot) is standard WAF behavior (Cloudflare, Akamai, etc.).
+  This is NOT an evasion technique and MUST NOT increase risk scores.
+- Redirect analysis findings should NOT independently raise risk scores for established,
+  legitimate domains. Only flag these as significant when combined with credential harvesting,
+  impersonation indicators, or phishing kit detection.
+</redirect_analysis_context>
+"""
+
+    # Build JS analysis context if performed
+    js_context = ""
+    if evidence.js_analysis:
+        ja = evidence.js_analysis
+        cred_posts = [p for p in ja.post_endpoints if p.is_credential_form]
+        js_context = f"""
+<js_analysis_context>
+Playwright JavaScript sandbox analysis was performed.
+Total requests: {ja.total_requests} | External: {ja.external_requests} | POST endpoints: {len(ja.post_endpoints)}
+Credential harvesting POSTs: {len(cred_posts)} | Fingerprinting APIs: {len(ja.fingerprinting_apis)}
+Tracking pixels: {len(ja.tracking_pixels)} | WebSocket connections: {len(ja.websocket_connections)}
+
+CRITICAL GUIDANCE FOR JS ANALYSIS:
+- Fingerprinting APIs, tracking pixels, WebSocket connections, and high external request
+  counts are STANDARD on virtually all commercial/business websites. These are NOT indicators
+  of malicious intent and MUST NOT increase risk scores.
+- The ONLY strong malicious indicator is credential harvesting: {len(cred_posts)} external
+  POST(s) to auth endpoints found. This is significant ONLY when combined with impersonation.
+- Do NOT create findings about "tracking implementation" or "fingerprinting" for legitimate
+  sites — these are informational only and should not appear as findings.
+</js_analysis_context>
+"""
+
     user_message = f"""Analyze the following domain investigation evidence and produce your assessment.
 
 <investigation>
 <domain>{evidence.domain}</domain>
 <investigation_id>{evidence.investigation_id}</investigation_id>
 <iteration>{iteration} of {max_iterations}</iteration>
-{similarity_context}{visual_context}
+{similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}
 <evidence>
 {evidence_json}
 </evidence>

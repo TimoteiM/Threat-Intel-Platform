@@ -33,24 +33,33 @@ async def create_investigation(request: InvestigationCreate, session: DBSession)
 @router.get("")
 async def list_investigations(
     session: DBSession,
-    limit: int = 50,
+    limit: int = 10,
     offset: int = 0,
     state: str | None = None,
+    search: str | None = None,
 ):
-    """List all investigations."""
+    """List investigations with pagination and optional search/filter."""
     service = InvestigationService(session)
-    investigations = await service.list_all(limit=limit, offset=offset, state=state)
-    return [
-        {
-            "id": str(inv.id),
-            "domain": inv.domain,
-            "state": inv.state,
-            "classification": inv.classification,
-            "risk_score": inv.risk_score,
-            "created_at": inv.created_at.isoformat() if inv.created_at else None,
-        }
-        for inv in investigations
-    ]
+    investigations = await service.list_all(
+        limit=limit, offset=offset, state=state, search=search,
+    )
+    total = await service.count(state=state, search=search)
+    return {
+        "items": [
+            {
+                "id": str(inv.id),
+                "domain": inv.domain,
+                "state": inv.state,
+                "classification": inv.classification,
+                "risk_score": inv.risk_score,
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+            }
+            for inv in investigations
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{investigation_id}")

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(docker compose build:*)"
+      "Bash(docker compose build:*)",
+      "Bash(docker compose stop:*)"
     ]
   }
 }

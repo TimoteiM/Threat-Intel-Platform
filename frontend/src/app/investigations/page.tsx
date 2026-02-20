@@ -1,30 +1,60 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { listInvestigations } from "@/lib/api";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import Spinner from "@/components/shared/Spinner";
 import Badge from "@/components/shared/Badge";
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50];
+
 export default function InvestigationsListPage() {
   const router = useRouter();
   const [investigations, setInvestigations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce search input
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(value);
+      setPage(0);
+    }, 300);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
-    const params: any = { limit: 100 };
+    const params: any = { limit: pageSize, offset: page * pageSize };
     if (filter !== "all") params.state = filter;
+    if (debouncedSearch) params.search = debouncedSearch;
 
     listInvestigations(params)
       .then((data) => {
-        setInvestigations(data);
+        setInvestigations(data.items);
+        setTotal(data.total);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [filter]);
+  }, [filter, debouncedSearch, page, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const showingFrom = total === 0 ? 0 : page * pageSize + 1;
+  const showingTo = Math.min((page + 1) * pageSize, total);
 
   const filters = ["all", "created", "gathering", "evaluating", "concluded", "failed"];
 
@@ -42,7 +72,8 @@ export default function InvestigationsListPage() {
             ALL INVESTIGATIONS
           </div>
           <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
-            {investigations.length} investigation{investigations.length !== 1 ? "s" : ""}
+            {total} investigation{total !== 1 ? "s" : ""}
+            {debouncedSearch && ` matching "${debouncedSearch}"`}
           </div>
         </div>
         <button
@@ -60,12 +91,35 @@ export default function InvestigationsListPage() {
         </button>
       </div>
 
+      {/* Search bar */}
+      <div style={{ marginBottom: 16 }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Search by domain..."
+          style={{
+            width: "100%",
+            padding: "10px 16px",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            color: "var(--text)",
+            fontSize: 13,
+            fontFamily: "var(--font-mono)",
+            outline: "none",
+          }}
+          onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+          onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+        />
+      </div>
+
       {/* Filters */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
         {filters.map((f) => (
           <button
             key={f}
-            onClick={() => setFilter(f)}
+            onClick={() => { setFilter(f); setPage(0); }}
             style={{
               padding: "6px 14px",
               background: filter === f ? "var(--accent)" : "var(--bg-card)",
@@ -169,6 +223,143 @@ export default function InvestigationsListPage() {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* Pagination controls */}
+      {total > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginTop: 24, padding: "12px 0",
+          borderTop: "1px solid var(--border)",
+        }}>
+          {/* Left: showing info + page size selector */}
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              {showingFrom}–{showingTo} of {total}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}
+                style={{
+                  padding: "4px 8px",
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Right: page navigation */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+              style={{
+                padding: "6px 10px",
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: page === 0 ? "var(--text-dim)" : "var(--text)",
+                fontSize: 11, fontWeight: 600, cursor: page === 0 ? "default" : "pointer",
+                fontFamily: "var(--font-mono)",
+                opacity: page === 0 ? 0.4 : 1,
+              }}
+            >
+              &laquo;
+            </button>
+            <button
+              onClick={() => setPage(Math.max(0, page - 1))}
+              disabled={page === 0}
+              style={{
+                padding: "6px 12px",
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: page === 0 ? "var(--text-dim)" : "var(--text)",
+                fontSize: 11, fontWeight: 600, cursor: page === 0 ? "default" : "pointer",
+                fontFamily: "var(--font-mono)",
+                opacity: page === 0 ? 0.4 : 1,
+              }}
+            >
+              Prev
+            </button>
+
+            {/* Page numbers */}
+            {(() => {
+              const pages: number[] = [];
+              const maxVisible = 5;
+              let start = Math.max(0, page - Math.floor(maxVisible / 2));
+              let end = Math.min(totalPages, start + maxVisible);
+              if (end - start < maxVisible) {
+                start = Math.max(0, end - maxVisible);
+              }
+              for (let i = start; i < end; i++) pages.push(i);
+              return pages.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPage(p)}
+                  style={{
+                    padding: "6px 10px",
+                    background: p === page ? "var(--accent)" : "var(--bg-card)",
+                    border: `1px solid ${p === page ? "var(--accent)" : "var(--border)"}`,
+                    borderRadius: "var(--radius-sm)",
+                    color: p === page ? "#fff" : "var(--text-muted)",
+                    fontSize: 11, fontWeight: 600, cursor: "pointer",
+                    fontFamily: "var(--font-mono)",
+                    minWidth: 32,
+                  }}
+                >
+                  {p + 1}
+                </button>
+              ));
+            })()}
+
+            <button
+              onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
+              disabled={page >= totalPages - 1}
+              style={{
+                padding: "6px 12px",
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: page >= totalPages - 1 ? "var(--text-dim)" : "var(--text)",
+                fontSize: 11, fontWeight: 600, cursor: page >= totalPages - 1 ? "default" : "pointer",
+                fontFamily: "var(--font-mono)",
+                opacity: page >= totalPages - 1 ? 0.4 : 1,
+              }}
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setPage(totalPages - 1)}
+              disabled={page >= totalPages - 1}
+              style={{
+                padding: "6px 10px",
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: page >= totalPages - 1 ? "var(--text-dim)" : "var(--text)",
+                fontSize: 11, fontWeight: 600, cursor: page >= totalPages - 1 ? "default" : "pointer",
+                fontFamily: "var(--font-mono)",
+                opacity: page >= totalPages - 1 ? 0.4 : 1,
+              }}
+            >
+              &raquo;
+            </button>
+          </div>
         </div>
       )}
     </div>

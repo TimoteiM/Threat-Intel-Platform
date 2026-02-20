@@ -49,13 +49,23 @@ export function createInvestigation(data: {
   });
 }
 
-export function listInvestigations(params?: { limit?: number; offset?: number; state?: string }) {
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export function listInvestigations(params?: {
+  limit?: number; offset?: number; state?: string; search?: string;
+}) {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.offset) qs.set("offset", String(params.offset));
   if (params?.state) qs.set("state", params.state);
+  if (params?.search) qs.set("search", params.search);
   const query = qs.toString();
-  return request<any[]>(`/investigations${query ? `?${query}` : ""}`);
+  return request<PaginatedResponse<any>>(`/investigations${query ? `?${query}` : ""}`);
 }
 
 export function getInvestigation(id: string) {

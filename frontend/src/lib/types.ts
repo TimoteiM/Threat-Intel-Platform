@@ -254,6 +254,112 @@ export interface SubdomainEvidence {
   ip_groups: Record<string, string[]>;
 }
 
+// ─── Email Security ───
+
+export interface DKIMRecord {
+  selector: string;
+  public_key_present: boolean;
+  key_type?: string;
+  notes?: string;
+}
+
+export interface MXRecord {
+  priority: number;
+  hostname: string;
+  ips: string[];
+  blocklist_hits: string[];
+}
+
+export interface EmailSecurityEvidence {
+  dmarc_record?: string;
+  dmarc_policy?: string;
+  dmarc_subdomain_policy?: string;
+  dmarc_pct?: number;
+  dmarc_rua: string[];
+  dmarc_ruf: string[];
+  dmarc_alignment_dkim?: string;
+  dmarc_alignment_spf?: string;
+  spf_record?: string;
+  spf_mechanisms: string[];
+  spf_all_qualifier?: string;
+  spf_includes: string[];
+  spf_ip_count?: number;
+  dkim_selectors_found: string[];
+  dkim_records: DKIMRecord[];
+  mx_records: MXRecord[];
+  spoofability_score?: string;
+  spoofability_reasons: string[];
+  email_security_score?: number;
+}
+
+// ─── Redirect Analysis ───
+
+export interface RedirectProbe {
+  user_agent_type: string;
+  user_agent: string;
+  status_code: number;
+  final_url: string;
+  redirect_count: number;
+  title?: string;
+  content_hash: string;
+}
+
+export interface IntermediateDomain {
+  domain: string;
+  hop_number: number;
+  is_known_tracker: boolean;
+  is_known_redirector: boolean;
+}
+
+export interface RedirectAnalysisEvidence {
+  probes: RedirectProbe[];
+  cloaking_detected: boolean;
+  cloaking_details: string[];
+  intermediate_domains: IntermediateDomain[];
+  evasion_techniques: string[];
+  max_chain_length: number;
+  has_geo_block?: boolean;
+}
+
+// ─── JavaScript Analysis ───
+
+export interface CapturedRequest {
+  url: string;
+  method: string;
+  resource_type: string;
+  domain: string;
+  is_external: boolean;
+}
+
+export interface PostEndpoint {
+  url: string;
+  content_type?: string;
+  is_external: boolean;
+  is_credential_form: boolean;
+}
+
+export interface SuspiciousScript {
+  url: string;
+  domain: string;
+  size_bytes?: number;
+  reason: string;
+}
+
+export interface JSAnalysisEvidence {
+  total_requests: number;
+  external_requests: number;
+  request_domains: string[];
+  captured_requests: CapturedRequest[];
+  post_endpoints: PostEndpoint[];
+  tracking_pixels: string[];
+  fingerprinting_apis: string[];
+  suspicious_scripts: SuspiciousScript[];
+  websocket_connections: string[];
+  data_exfil_indicators: string[];
+  console_errors: string[];
+  har_artifact_id?: string;
+}
+
 // ─── Signals & Gaps ───
 
 export interface Signal {
@@ -289,6 +395,9 @@ export interface CollectedEvidence {
   visual_comparison?: VisualComparisonEvidence;
   screenshot?: ScreenshotEvidence;
   subdomains?: SubdomainEvidence;
+  email_security?: EmailSecurityEvidence;
+  redirect_analysis?: RedirectAnalysisEvidence;
+  js_analysis?: JSAnalysisEvidence;
   signals: Signal[];
   data_gaps: DataGap[];
   artifact_hashes: Record<string, string>;

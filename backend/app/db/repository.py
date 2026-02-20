@@ -64,13 +64,29 @@ class InvestigationRepository:
         limit: int = 50,
         offset: int = 0,
         state: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> Sequence[Investigation]:
         query = select(Investigation).order_by(Investigation.created_at.desc())
         if state:
             query = query.where(Investigation.state == state)
+        if search:
+            query = query.where(Investigation.domain.ilike(f"%{search}%"))
         query = query.limit(limit).offset(offset)
         result = await self.session.execute(query)
         return result.scalars().all()
+
+    async def count(
+        self,
+        state: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        query = select(func.count(Investigation.id))
+        if state:
+            query = query.where(Investigation.state == state)
+        if search:
+            query = query.where(Investigation.domain.ilike(f"%{search}%"))
+        result = await self.session.execute(query)
+        return result.scalar() or 0
 
     async def update_state(
         self,
