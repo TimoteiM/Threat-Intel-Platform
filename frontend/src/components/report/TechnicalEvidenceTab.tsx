@@ -5,12 +5,14 @@ import { CollectedEvidence } from "@/lib/types";
 import { getArtifactUrl } from "@/lib/api";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
 import VisualComparisonSection from "@/components/report/VisualComparisonSection";
+import WHOISHistorySection from "@/components/report/WHOISHistorySection";
 
 interface Props {
   evidence: CollectedEvidence;
+  domain?: string;
 }
 
-export default function TechnicalEvidenceTab({ evidence }: Props) {
+export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
   const dns = evidence?.dns || ({} as any);
   const tls = evidence?.tls || ({} as any);
   const http = evidence?.http || ({} as any);
@@ -1045,6 +1047,9 @@ export default function TechnicalEvidenceTab({ evidence }: Props) {
           />
         )}
       </Section>
+
+      {/* WHOIS History */}
+      {domain && <WHOISHistorySection domain={domain} />}
 
       {/* Hosting */}
       <Section title="Hosting / ASN">

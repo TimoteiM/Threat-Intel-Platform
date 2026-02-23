@@ -601,3 +601,49 @@ export interface DashboardStats {
   top_hosting_providers: TopEntry[];
   recent_malicious: RecentMalicious[];
 }
+
+// ─── Watchlist ───
+
+export type WatchlistStatus = "active" | "paused" | "removed";
+
+export interface WatchlistEntry {
+  id: string;
+  domain: string;
+  notes?: string;
+  added_by?: string;
+  status: WatchlistStatus;
+  created_at: string;
+  last_checked_at?: string;
+  alert_count: number;
+}
+
+export interface WatchlistAlert {
+  id: string;
+  alert_type: string;
+  details_json: Record<string, any>;
+  created_at: string;
+  acknowledged: boolean;
+}
+
+// ─── WHOIS History ───
+
+export interface WHOISHistorySnapshot {
+  id: string;
+  domain: string;
+  whois_json: Record<string, any>;
+  captured_at: string;
+  investigation_id?: string;
+  changes_from_previous?: Record<string, { old: any; new: any }>;
+}
+
+// ─── Geolocation ───
+
+export interface GeoPoint {
+  lat: number;
+  lon: number;
+  label: string;
+  type: "hosting" | "mx" | "redirect" | "subdomain";
+  country?: string;
+  city?: string;
+  ip: string;
+}

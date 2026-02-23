@@ -277,6 +277,84 @@ class IOCRecord(Base):
     )
 
 
+class WatchlistEntry(Base):
+    __tablename__ = "watchlist"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    alert_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    schedule_interval: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    next_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    alerts: Mapped[list[WatchlistAlert]] = relationship(
+        back_populates="watchlist_entry", cascade="all, delete-orphan"
+    )
+
+
+class WatchlistAlert(Base):
+    __tablename__ = "watchlist_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    watchlist_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("watchlist.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    details_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    watchlist_entry: Mapped[WatchlistEntry] = relationship(back_populates="alerts")
+
+    __table_args__ = (
+        Index("idx_watchlist_alerts_wl", "watchlist_id"),
+    )
+
+
+class WHOISHistory(Base):
+    __tablename__ = "whois_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    whois_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    changes_from_previous: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("idx_whois_history_domain", "domain"),
+        Index("idx_whois_history_captured", "captured_at"),
+    )
+
+
 class LookupCache(Base):
     """Cache for external lookups (ASN, RDAP, crt.sh) to reduce API calls."""
     __tablename__ = "lookup_cache"

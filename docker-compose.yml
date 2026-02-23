@@ -76,6 +76,27 @@ services:
       - artifacts:/app/artifacts
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
 
+  # ── Celery Beat (scheduler) ──
+  beat:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
   # ── Frontend ──
   frontend:
     build:

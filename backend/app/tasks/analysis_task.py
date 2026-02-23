@@ -363,9 +363,10 @@ def _persist_results(
     (Celery workers use sync DB access.)
     """
     try:
+        from sqlalchemy import select
         from sqlalchemy.orm import Session
         from app.db.session import sync_engine
-        from app.models.database import Investigation, Evidence, Report, CollectorResult
+        from app.models.database import Investigation, Evidence, Report, CollectorResult, IOCRecord, WHOISHistory
         import uuid
 
         inv_id = uuid.UUID(investigation_id)
@@ -414,6 +415,35 @@ def _persist_results(
                     duration_ms=col_evidence.get("meta", {}).get("duration_ms"),
                 )
                 session.merge(cr)
+
+            # Extract IOCs from report and persist to iocs table
+            for ioc in report_data.get("iocs", []):
+                session.add(IOCRecord(
+                    investigation_id=inv_id,
+                    type=ioc.get("type", "domain"),
+                    value=ioc.get("value", ""),
+                    context=ioc.get("context"),
+                    confidence=ioc.get("confidence"),
+                ))
+
+            # Save WHOIS history snapshot
+            domain = evidence_data.get("dns", {}).get("queried_domain") or (inv.domain if inv else None)
+            whois_data = evidence_data.get("whois", {})
+            if domain and whois_data and whois_data.get("meta", {}).get("status") == "completed":
+                from app.services.whois_history_service import compute_whois_diff
+                prev = session.execute(
+                    select(WHOISHistory)
+                    .where(WHOISHistory.domain == domain)
+                    .order_by(WHOISHistory.captured_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                changes = compute_whois_diff(prev.whois_json, whois_data) if prev else None
+                session.add(WHOISHistory(
+                    domain=domain,
+                    whois_json=whois_data,
+                    investigation_id=inv_id,
+                    changes_from_previous=changes,
+                ))
 
             session.commit()
 

@@ -8,6 +8,7 @@ Worker startup: celery -A app.tasks.celery_app worker --loglevel=info
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import get_settings
 
@@ -37,6 +38,15 @@ celery_app.conf.update(
 
     # Task routing (optional — all tasks go to default queue for now)
     task_default_queue="investigations",
+
+    # Celery Beat — periodic task schedule
+    beat_schedule={
+        "watchlist-scheduled-checks": {
+            "task": "tasks.watchlist_check",
+            "schedule": crontab(minute=0),  # Every hour, on the hour
+        },
+    },
+    timezone="UTC",
 )
 
 # Auto-discover tasks in these modules
@@ -45,4 +55,5 @@ celery_app.autodiscover_tasks([
     "app.tasks.investigation_task",
     "app.tasks.analysis_task",
     "app.tasks.batch_task",
+    "app.tasks.watchlist_task",
 ])

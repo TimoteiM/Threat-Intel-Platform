@@ -24,6 +24,8 @@ from app.models.database import (
     IOCRecord,
     LookupCache,
     Report,
+    WatchlistAlert,
+    WatchlistEntry,
 )
 
 
@@ -407,3 +409,91 @@ class CacheRepository:
                 source=source,
                 expires_at=expires_at,
             ))
+
+
+class WatchlistRepository:
+    """Database operations for the domain watchlist."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(
+        self,
+        domain: str,
+        notes: Optional[str] = None,
+        added_by: Optional[str] = None,
+    ) -> WatchlistEntry:
+        entry = WatchlistEntry(
+            domain=domain,
+            notes=notes,
+            added_by=added_by,
+            status="active",
+        )
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
+    async def get(self, watchlist_id: uuid.UUID) -> Optional[WatchlistEntry]:
+        result = await self.session.execute(
+            select(WatchlistEntry).where(WatchlistEntry.id == watchlist_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_all(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> Sequence[WatchlistEntry]:
+        query = select(WatchlistEntry).order_by(WatchlistEntry.created_at.desc())
+        if status:
+            query = query.where(WatchlistEntry.status == status)
+        if search:
+            query = query.where(WatchlistEntry.domain.ilike(f"%{search}%"))
+        query = query.limit(limit).offset(offset)
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def count(
+        self,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        query = select(func.count(WatchlistEntry.id))
+        if status:
+            query = query.where(WatchlistEntry.status == status)
+        if search:
+            query = query.where(WatchlistEntry.domain.ilike(f"%{search}%"))
+        result = await self.session.execute(query)
+        return result.scalar() or 0
+
+    async def update(
+        self, watchlist_id: uuid.UUID, **fields: Any
+    ) -> None:
+        await self.session.execute(
+            update(WatchlistEntry)
+            .where(WatchlistEntry.id == watchlist_id)
+            .values(**fields)
+        )
+
+    async def delete(self, watchlist_id: uuid.UUID) -> None:
+        await self.session.execute(
+            delete(WatchlistEntry).where(WatchlistEntry.id == watchlist_id)
+        )
+
+    async def get_alerts(
+        self,
+        watchlist_id: uuid.UUID,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[WatchlistAlert]:
+        query = (
+            select(WatchlistAlert)
+            .where(WatchlistAlert.watchlist_id == watchlist_id)
+            .order_by(WatchlistAlert.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()

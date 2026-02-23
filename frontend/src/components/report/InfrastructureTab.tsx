@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "@/lib/api";
 import { PivotResponse, RelatedInvestigation, SharedInfrastructure } from "@/lib/types";
+import GeoMap from "@/components/report/GeoMap";
 
 interface Props {
   investigationId: string;
@@ -152,6 +153,11 @@ export default function InfrastructureTab({ investigationId }: Props) {
             ))}
           </div>
         )}
+      </Section>
+
+      {/* Geolocation Map */}
+      <Section title="Geolocation">
+        <GeoMap investigationId={investigationId} />
       </Section>
     </div>
   );

@@ -87,6 +87,12 @@ export function enrichInvestigation(id: string, data: any) {
   });
 }
 
+// ─── IOC export ───
+
+export function getIOCExportUrl(investigationId: string, format: "csv" | "stix"): string {
+  return `${BASE}/investigations/${investigationId}/iocs/export?format=${format}`;
+}
+
 // ─── Artifact helpers ───
 
 export function getArtifactUrl(artifactId: string): string {
@@ -178,6 +184,56 @@ export function getBatchCampaigns(id: string) {
 
 export function getDashboardStats() {
   return request<any>("/dashboard/stats");
+}
+
+// ─── Watchlist ───
+
+export function createWatchlistEntry(data: { domain: string; notes?: string; added_by?: string; schedule_interval?: string }) {
+  return request<any>("/watchlist", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function listWatchlist(params?: { limit?: number; offset?: number; status?: string; search?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.status) qs.set("status", params.status);
+  if (params?.search) qs.set("search", params.search);
+  const query = qs.toString();
+  return request<PaginatedResponse<any>>(`/watchlist${query ? `?${query}` : ""}`);
+}
+
+export function updateWatchlistEntry(id: string, data: { status?: string; notes?: string; schedule_interval?: string | null }) {
+  return request<any>(`/watchlist/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteWatchlistEntry(id: string) {
+  return request<any>(`/watchlist/${id}`, { method: "DELETE" });
+}
+
+export function investigateWatchlistDomain(id: string) {
+  return request<any>(`/watchlist/${id}/investigate`, { method: "POST" });
+}
+
+export function getWatchlistAlerts(id: string) {
+  return request<any[]>(`/watchlist/${id}/alerts`);
+}
+
+// ─── WHOIS History ───
+
+export function getWhoisHistory(domain: string) {
+  return request<any[]>(`/whois-history/${encodeURIComponent(domain)}`);
+}
+
+// ─── Geolocation ───
+
+export function getGeoPoints(investigationId: string) {
+  return request<any[]>(`/investigations/${investigationId}/geo-points`);
 }
 
 // ─── SSE helper ───

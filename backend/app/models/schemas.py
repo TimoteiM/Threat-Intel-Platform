@@ -624,3 +624,18 @@ class EnrichRequest(BaseModel):
     flare_findings: list[dict[str, Any]] = []
     soc_ticket_notes: Optional[str] = None
     additional_context: Optional[str] = None
+
+
+class WatchlistCreate(BaseModel):
+    """POST /watchlist request body."""
+    domain: str
+    notes: Optional[str] = None
+    added_by: Optional[str] = None
+    schedule_interval: Optional[str] = None  # weekly, biweekly, monthly
+
+
+class WatchlistUpdate(BaseModel):
+    """PATCH /watchlist/{id} request body."""
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    schedule_interval: Optional[str] = None  # weekly, biweekly, monthly, or "none" to disable

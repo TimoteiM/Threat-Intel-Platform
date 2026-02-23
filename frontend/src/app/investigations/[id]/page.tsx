@@ -130,11 +130,11 @@ export default function InvestigationPage() {
         case "summary":
           return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} /> : <NoData label="evidence" />;
         case "findings":
           return report ? <FindingsTab report={report} /> : <NoData label="report" />;
         case "indicators":
-          return report ? <IndicatorsTab report={report} /> : <NoData label="report" />;
+          return report ? <IndicatorsTab report={report} investigationId={investigationId} /> : <NoData label="report" />;
         case "signals":
           return evidence ? <SignalsTab evidence={evidence} /> : <NoData label="evidence" />;
         case "infrastructure":
