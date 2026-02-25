@@ -183,7 +183,7 @@ export default function WatchlistPage() {
   const handleScheduleChange = async (id: string, interval: string) => {
     setScheduleDropdownId(null);
     await api.updateWatchlistEntry(id, {
-      schedule_interval: interval || null,
+      schedule_interval: interval || "none",
     });
     fetchData();
   };
@@ -196,11 +196,11 @@ export default function WatchlistPage() {
   ];
 
   return (
-    <div style={{ paddingTop: 24, paddingBottom: 80, maxWidth: 1100 }}>
+    <div style={{ paddingTop: 20, paddingBottom: 40, maxWidth: 1100 }}>
       {/* Header row */}
-      <div style={{
+      <div className="animate-in" style={{
         display: "flex", justifyContent: "space-between",
-        alignItems: "flex-start", marginBottom: 24,
+        alignItems: "flex-start", marginBottom: 16,
       }}>
         <div>
           <div style={{
@@ -232,10 +232,10 @@ export default function WatchlistPage() {
 
       {/* Add form (collapsible) */}
       {showAddForm && (
-        <form onSubmit={handleAdd} style={{
+        <form onSubmit={handleAdd} className="animate-slide-down" style={{
           padding: 20,
           background: "var(--bg-card)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius)", marginBottom: 20,
+          borderRadius: "var(--radius)", marginBottom: 16,
         }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", marginBottom: 12, letterSpacing: "0.08em" }}>
             ADD DOMAIN TO WATCHLIST
@@ -329,8 +329,8 @@ export default function WatchlistPage() {
       )}
 
       {/* Toolbar: search + filters */}
-      <div style={{
-        display: "flex", gap: 12, marginBottom: 20,
+      <div className="animate-in stagger-1" style={{
+        display: "flex", gap: 12, marginBottom: 16,
         alignItems: "center", flexWrap: "wrap",
       }}>
         <input
@@ -378,8 +378,8 @@ export default function WatchlistPage() {
       {loading ? (
         <Spinner message="Loading watchlist..." />
       ) : entries.length === 0 ? (
-        <div style={{
-          textAlign: "center", padding: "80px 40px",
+        <div className="animate-fade-up" style={{
+          textAlign: "center", padding: "60px 40px",
           color: "var(--text-dim)",
           background: "var(--bg-card)", border: "1px solid var(--border)",
           borderRadius: "var(--radius)",
@@ -409,7 +409,7 @@ export default function WatchlistPage() {
           )}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="animate-fade-up" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {entries.map((entry) => {
             const sc = STATUS_COLORS[entry.status] || STATUS_COLORS.active;
             const latest = entry.latest_investigation;
@@ -483,6 +483,7 @@ export default function WatchlistPage() {
                         {/* Schedule dropdown */}
                         {scheduleDropdownId === entry.id && (
                           <div
+                            className="dropdown-menu"
                             onClick={(e) => e.stopPropagation()}
                             style={{
                               position: "absolute", top: "100%", left: 0,

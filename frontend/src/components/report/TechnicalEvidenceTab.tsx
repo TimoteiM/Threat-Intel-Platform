@@ -6,6 +6,9 @@ import { getArtifactUrl } from "@/lib/api";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
 import VisualComparisonSection from "@/components/report/VisualComparisonSection";
 import WHOISHistorySection from "@/components/report/WHOISHistorySection";
+import ThreatFeedsSection from "@/components/report/ThreatFeedsSection";
+import FaviconIntelSection from "@/components/report/FaviconIntelSection";
+import CertTimelineSection from "@/components/report/CertTimelineSection";
 
 interface Props {
   evidence: CollectedEvidence;
@@ -1447,6 +1450,27 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
         )}
       </Section>
 
+      {/* THREAT FEEDS */}
+      {evidence?.threat_feeds && (
+        <Section title="Threat Feed Intelligence">
+          <ThreatFeedsSection threatFeeds={evidence.threat_feeds} />
+        </Section>
+      )}
+
+      {/* FAVICON HASH INTELLIGENCE */}
+      {evidence?.favicon_intel && (
+        <Section title="Favicon Hash Intelligence">
+          <FaviconIntelSection faviconIntel={evidence.favicon_intel} />
+        </Section>
+      )}
+
+      {/* CERTIFICATE TRANSPARENCY TIMELINE */}
+      {evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0 && (
+        <Section title="Certificate Transparency Timeline">
+          <CertTimelineSection certTimeline={evidence.cert_timeline} />
+        </Section>
+      )}
+
       {/* Collector Metadata */}
       <Section title="Collector Metadata">
         <EvidenceTable
@@ -1458,6 +1482,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
             metaRow("ASN", hosting.meta),
             metaRow("INTEL", intel.meta),
             metaRow("VT", vt.meta),
+            ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),
           ].filter(Boolean) as any[]}
           columns={[
             { key: "collector" },

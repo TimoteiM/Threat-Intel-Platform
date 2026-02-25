@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     anthropic_model: str = "claude-sonnet-4-20250514"
     virustotal_api_key: str = ""
+    abuseipdb_api_key: str = ""
+    phishtank_api_key: str = ""
+    shodan_api_key: str = ""
 
     # ─── Database ───
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"

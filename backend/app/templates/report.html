@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threat Investigation Report — {{ domain }}</title>
+  <style>
+    /* ─── Page Setup ─── */
+    @page {
+      size: A4;
+      margin: 20mm 18mm 20mm 18mm;
+      @bottom-right {
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 9px;
+        color: #94a3b8;
+        font-family: -apple-system, sans-serif;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #1e293b;
+      font-size: 12px;
+      line-height: 1.55;
+      background: #fff;
+    }
+
+    /* ─── Cover / Header ─── */
+    .cover-bar {
+      height: 8px;
+      background: {{ cls_color }};
+      margin-bottom: 20px;
+      border-radius: 2px;
+    }
+
+    .cover-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+
+    .cover-domain {
+      font-size: 15px;
+      font-family: "Courier New", monospace;
+      color: #3b82f6;
+      margin-bottom: 16px;
+    }
+
+    .cover-meta {
+      font-size: 11px;
+      color: #64748b;
+      margin-bottom: 24px;
+    }
+
+    /* ─── Meta Grid ─── */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .meta-card {
+      padding: 10px 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+
+    .meta-label {
+      font-size: 9px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 3px;
+    }
+
+    .meta-value {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+
+    .meta-value.cls { color: {{ cls_color }}; }
+
+    /* ─── Sections ─── */
+    .section {
+      margin-bottom: 20px;
+      page-break-inside: avoid;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #3b82f6;
+      border-bottom: 1.5px solid #e2e8f0;
+      padding-bottom: 5px;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ─── Hypothesis Grid ─── */
+    .hypothesis {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .hyp-card {
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .hyp-legit {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+    }
+
+    .hyp-malicious {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+    }
+
+    .hyp-label {
+      font-size: 10px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .hyp-legit .hyp-label { color: #16a34a; }
+    .hyp-malicious .hyp-label { color: #dc2626; }
+
+    /* ─── Finding Cards ─── */
+    .finding {
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      border-left: 3px solid #e2e8f0;
+      border-radius: 0 4px 4px 0;
+      background: #f8fafc;
+    }
+
+    .finding.critical { border-left-color: #7c3aed; background: #faf5ff; }
+    .finding.high     { border-left-color: #ef4444; background: #fef2f2; }
+    .finding.medium   { border-left-color: #f59e0b; background: #fffbeb; }
+    .finding.low      { border-left-color: #3b82f6; background: #eff6ff; }
+    .finding.info     { border-left-color: #64748b; background: #f8fafc; }
+
+    .finding-title {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+
+    .finding-desc { font-size: 11px; color: #475569; }
+
+    .finding-ttp {
+      font-size: 10px;
+      color: #7c3aed;
+      margin-top: 3px;
+      font-family: "Courier New", monospace;
+    }
+
+    .sev-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 3px;
+      margin-right: 6px;
+      letter-spacing: 0.05em;
+      vertical-align: middle;
+    }
+
+    .sev-critical { background: #ede9fe; color: #7c3aed; }
+    .sev-high     { background: #fee2e2; color: #dc2626; }
+    .sev-medium   { background: #fef3c7; color: #d97706; }
+    .sev-low      { background: #dbeafe; color: #2563eb; }
+    .sev-info     { background: #f1f5f9; color: #64748b; }
+
+    /* ─── Tables ─── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+      text-align: left;
+      padding: 5px 8px;
+      font-size: 10px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1.5px solid #e2e8f0;
+    }
+
+    td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #334155;
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    td.mono { font-family: "Courier New", monospace; font-size: 10px; word-break: break-all; }
+
+    /* ─── Evidence Row ─── */
+    .ev-row {
+      display: flex;
+      margin-bottom: 3px;
+      font-size: 11px;
+    }
+
+    .ev-label {
+      width: 140px;
+      flex-shrink: 0;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+
+    .ev-value { color: #334155; word-break: break-word; }
+
+    /* ─── Signals ─── */
+    .signal {
+      padding: 5px 10px;
+      margin-bottom: 4px;
+      border-radius: 4px;
+      font-size: 11px;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .signal.high     { background: #fef2f2; }
+    .signal.critical { background: #faf5ff; }
+    .signal.medium   { background: #fffbeb; }
+    .signal.info     { background: #f8fafc; }
+    .signal.low      { background: #eff6ff; }
+
+    /* ─── Chip tags ─── */
+    .chip {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 10px;
+      background: #f1f5f9;
+      color: #475569;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      margin: 2px 2px 2px 0;
+      font-family: "Courier New", monospace;
+    }
+
+    /* ─── Alert banner ─── */
+    .alert {
+      padding: 8px 14px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 11px;
+    }
+
+    .alert-danger  { background: #fef2f2; border-left: 3px solid #ef4444; color: #dc2626; }
+    .alert-warning { background: #fffbeb; border-left: 3px solid #f59e0b; color: #92400e; }
+    .alert-good    { background: #f0fdf4; border-left: 3px solid #22c55e; color: #166534; }
+    .alert-info    { background: #f8fafc; border-left: 3px solid #94a3b8; color: #475569; }
+
+    /* ─── Divider ─── */
+    hr {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 16px 0;
+    }
+
+    /* ─── Footer ─── */
+    .footer {
+      margin-top: 32px;
+      padding-top: 10px;
+      border-top: 1px solid #e2e8f0;
+      font-size: 9px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    p { margin-bottom: 6px; }
+
+    ol, ul { padding-left: 20px; }
+    li { margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+
+  <!-- Classification color bar -->
+  <div class="cover-bar"></div>
+
+  <!-- Header -->
+  <div class="cover-title">Threat Investigation Report</div>
+  <div class="cover-domain">{{ domain }}</div>
+  <div class="cover-meta">
+    Investigation ID: {{ investigation_id }} &nbsp;·&nbsp;
+    Generated: {{ generated_at[:19].replace("T", " ") }} UTC
+    {% if detail.created_at %} &nbsp;·&nbsp; Investigated: {{ detail.created_at[:10] }}{% endif %}
+  </div>
+
+  <!-- Meta Grid -->
+  <div class="meta-grid">
+    <div class="meta-card">
+      <div class="meta-label">Classification</div>
+      <div class="meta-value cls">{{ classification }}</div>
+    </div>
+    <div class="meta-card">
+      <div class="meta-label">Confidence</div>
+      <div class="meta-value">{{ report.get("confidence", "—")|upper }}</div>
+    </div>
+    <div class="meta-card">
+      <div class="meta-label">Risk Score</div>
+      <div class="meta-value">{{ report.get("risk_score", "—") }}{% if report.get("risk_score") is not none %}/100{% endif %}</div>
+    </div>
+    <div class="meta-card">
+      <div class="meta-label">Recommended Action</div>
+      <div class="meta-value">{{ (report.get("recommended_action") or "—")|upper }}</div>
+    </div>
+  </div>
+
+  <!-- Executive Summary -->
+  {% if report.get("executive_summary") %}
+  <div class="section">
+    <div class="section-title">Executive Summary</div>
+    <p>{{ report.executive_summary }}</p>
+  </div>
+  {% endif %}
+
+  <!-- Primary Reasoning -->
+  <div class="section">
+    <div class="section-title">Analyst Assessment</div>
+    <p>{{ report.get("primary_reasoning", "No reasoning provided.") }}</p>
+
+    {% if report.get("key_evidence") %}
+    <div style="margin-top: 8px;">
+      <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">Key Evidence</div>
+      <ul>
+        {% for item in report.key_evidence %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if report.get("contradicting_evidence") %}
+    <div style="margin-top: 8px;">
+      <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">Contradicting Evidence</div>
+      <ul>
+        {% for item in report.contradicting_evidence %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Hypothesis Comparison -->
+  <div class="section">
+    <div class="section-title">Hypothesis Comparison</div>
+    <div class="hypothesis">
+      <div class="hyp-card hyp-legit">
+        <div class="hyp-label">Legitimate Hypothesis</div>
+        {{ report.get("legitimate_explanation", "N/A") }}
+      </div>
+      <div class="hyp-card hyp-malicious">
+        <div class="hyp-label">Malicious Hypothesis</div>
+        {{ report.get("malicious_explanation", "N/A") }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Recommendations -->
+  {% if report.get("recommended_steps") %}
+  <div class="section">
+    <div class="section-title">Recommended Steps</div>
+    <ol>
+      {% for step in report.recommended_steps %}
+      <li>{{ step }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+
+  <!-- Findings -->
+  {% if report.get("findings") %}
+  <div class="section">
+    <div class="section-title">Findings ({{ report.findings|length }})</div>
+    {% for f in report.findings %}
+    <div class="finding {{ f.get('severity', 'info') }}">
+      <div class="finding-title">
+        <span class="sev-badge sev-{{ f.get('severity', 'info') }}">{{ f.get('severity', 'info')|upper }}</span>
+        {{ f.get("title", "Untitled") }}
+      </div>
+      <div class="finding-desc">{{ f.get("description", "") }}</div>
+      {% if f.get("ttp") %}
+      <div class="finding-ttp">{{ f.ttp }}{% if f.get("ttp_name") %} — {{ f.ttp_name }}{% endif %}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- IOCs -->
+  {% if report.get("iocs") %}
+  <div class="section">
+    <div class="section-title">Indicators of Compromise ({{ report.iocs|length }})</div>
+    <table>
+      <tr><th>Type</th><th>Value</th><th>Context</th><th>Confidence</th></tr>
+      {% for ioc in report.iocs %}
+      <tr>
+        <td>{{ ioc.get("type", "?") }}</td>
+        <td class="mono">{{ ioc.get("value", "?") }}</td>
+        <td>{{ ioc.get("context", "") }}</td>
+        <td>{{ ioc.get("confidence", "?") }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <hr>
+
+  <!-- Technical Evidence -->
+  <div class="section">
+    <div class="section-title">Technical Evidence</div>
+
+    <!-- DNS -->
+    {% set dns = evidence.get("dns", {}) %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">DNS</div>
+      {% if dns.get("a") %}<div class="ev-row"><span class="ev-label">A Records</span><span class="ev-value">{{ dns.a|join(", ") }}</span></div>{% endif %}
+      {% if dns.get("ns") %}<div class="ev-row"><span class="ev-label">Name Servers</span><span class="ev-value">{{ dns.ns|join(", ") }}</span></div>{% endif %}
+      {% if dns.get("mx") %}<div class="ev-row"><span class="ev-label">MX Records</span><span class="ev-value">{{ dns.mx|join(", ") }}</span></div>{% endif %}
+      {% if dns.get("dmarc") %}<div class="ev-row"><span class="ev-label">DMARC</span><span class="ev-value mono">{{ dns.dmarc }}</span></div>{% endif %}
+      {% if dns.get("spf") %}<div class="ev-row"><span class="ev-label">SPF</span><span class="ev-value mono">{{ dns.spf }}</span></div>{% endif %}
+    </div>
+
+    <!-- WHOIS -->
+    {% set whois = evidence.get("whois", {}) %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">WHOIS Registration</div>
+      {% if whois.get("registrar") %}<div class="ev-row"><span class="ev-label">Registrar</span><span class="ev-value">{{ whois.registrar }}</span></div>{% endif %}
+      {% if whois.get("created_date") %}<div class="ev-row"><span class="ev-label">Created</span><span class="ev-value">{{ whois.created_date[:10] }}</span></div>{% endif %}
+      {% if whois.get("domain_age_days") is not none %}<div class="ev-row"><span class="ev-label">Domain Age</span><span class="ev-value">{{ whois.domain_age_days }} days</span></div>{% endif %}
+      {% if whois.get("registrant_org") %}<div class="ev-row"><span class="ev-label">Registrant Org</span><span class="ev-value">{{ whois.registrant_org }}</span></div>{% endif %}
+      {% if whois.get("registrant_country") %}<div class="ev-row"><span class="ev-label">Country</span><span class="ev-value">{{ whois.registrant_country }}</span></div>{% endif %}
+      {% if whois.get("privacy_protected") %}<div class="ev-row"><span class="ev-label">WHOIS Privacy</span><span class="ev-value">Yes</span></div>{% endif %}
+    </div>
+
+    <!-- TLS -->
+    {% set tls = evidence.get("tls", {}) %}
+    {% if tls.get("present") %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">TLS Certificate</div>
+      {% if tls.get("issuer") %}<div class="ev-row"><span class="ev-label">Issuer</span><span class="ev-value">{{ tls.issuer }}</span></div>{% endif %}
+      {% if tls.get("subject") %}<div class="ev-row"><span class="ev-label">Subject</span><span class="ev-value mono">{{ tls.subject }}</span></div>{% endif %}
+      {% if tls.get("valid_from") %}<div class="ev-row"><span class="ev-label">Valid From</span><span class="ev-value">{{ tls.valid_from[:10] }}</span></div>{% endif %}
+      {% if tls.get("valid_to") %}<div class="ev-row"><span class="ev-label">Valid To</span><span class="ev-value">{{ tls.valid_to[:10] }}</span></div>{% endif %}
+      {% if tls.get("is_self_signed") %}<div class="ev-row"><span class="ev-label">Self-Signed</span><span class="ev-value" style="color:#ef4444;">Yes</span></div>{% endif %}
+      {% if tls.get("sans") %}<div class="ev-row"><span class="ev-label">SANs</span><span class="ev-value">{{ tls.sans|length }} entries</span></div>{% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Hosting -->
+    {% set hosting = evidence.get("hosting", {}) %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">Hosting / ASN</div>
+      {% if hosting.get("ip") %}<div class="ev-row"><span class="ev-label">IP</span><span class="ev-value mono">{{ hosting.ip }}</span></div>{% endif %}
+      {% if hosting.get("asn") %}<div class="ev-row"><span class="ev-label">ASN</span><span class="ev-value">AS{{ hosting.asn }} — {{ hosting.get("asn_org", "") }}</span></div>{% endif %}
+      {% if hosting.get("country") %}<div class="ev-row"><span class="ev-label">Country</span><span class="ev-value">{{ hosting.country }}{% if hosting.get("city") %}, {{ hosting.city }}{% endif %}</span></div>{% endif %}
+    </div>
+
+    <!-- Threat Feeds -->
+    {% set tf = evidence.get("threat_feeds", {}) %}
+    {% if tf %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">Threat Feed Results</div>
+      {% set abuseipdb = tf.get("abuseipdb", {}) %}
+      {% if abuseipdb %}
+        {% if abuseipdb.get("abuse_confidence_score", 0) >= 25 %}
+        <div class="alert alert-danger">AbuseIPDB: {{ abuseipdb.abuse_confidence_score }}% abuse confidence score ({{ abuseipdb.get("total_reports", 0) }} reports)</div>
+        {% else %}
+        <div class="alert alert-good">AbuseIPDB: Clean ({{ abuseipdb.get("abuse_confidence_score", 0) }}% score)</div>
+        {% endif %}
+      {% endif %}
+      {% set phishtank = tf.get("phishtank", {}) %}
+      {% if phishtank and phishtank.get("in_database") %}
+      <div class="alert alert-danger">PhishTank: {% if phishtank.get("verified") %}Verified phishing URL{% else %}Listed (unverified){% endif %}</div>
+      {% endif %}
+      {% if tf.get("threatfox_matches") %}
+      <div class="alert alert-danger">ThreatFox: {{ tf.threatfox_matches|length }} IOC match(es) — {% for m in tf.threatfox_matches[:2] %}{{ m.get("malware", m.get("threat_type", "unknown")) }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+      {% endif %}
+      {% if tf.get("openphish_listed") %}
+      <div class="alert alert-danger">OpenPhish: Domain found in active phishing feed</div>
+      {% endif %}
+      {% if not tf.get("abuseipdb") and not tf.get("phishtank") and not tf.get("threatfox_matches") and not tf.get("openphish_listed") %}
+      <div class="alert alert-good">No hits across {{ (tf.get("feeds_checked") or [])|length }} threat feed(s)</div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Cert Timeline -->
+    {% set ct = evidence.get("cert_timeline", {}) %}
+    {% if ct and ct.get("total_certs", 0) > 0 %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">Certificate Transparency ({{ ct.total_certs }} certs)</div>
+      {% if ct.get("cert_burst_detected") %}
+      <div class="alert alert-warning">Certificate burst detected in CT logs</div>
+      {% endif %}
+      {% if ct.get("short_lived_count", 0) > 0 %}
+      <div class="alert alert-warning">{{ ct.short_lived_count }} short-lived certificate(s) (&lt;30 days)</div>
+      {% endif %}
+      {% if ct.get("unique_issuers") %}
+      <div class="ev-row"><span class="ev-label">Issuers</span><span class="ev-value">{{ ct.unique_issuers|join(", ") }}</span></div>
+      {% endif %}
+      {% if ct.get("earliest_cert") %}
+      <div class="ev-row"><span class="ev-label">First Seen</span><span class="ev-value">{{ ct.earliest_cert[:10] }}</span></div>
+      {% endif %}
+      {% if ct.get("latest_cert") %}
+      <div class="ev-row"><span class="ev-label">Latest Cert</span><span class="ev-value">{{ ct.latest_cert[:10] }}</span></div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Infrastructure Pivot -->
+    {% set ip_pivot = evidence.get("infrastructure_pivot", {}) %}
+    {% if ip_pivot and ip_pivot.get("total_related_domains", 0) > 0 %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">Infrastructure Pivot ({{ ip_pivot.total_related_domains }} related domains)</div>
+      {% if ip_pivot.get("shared_hosting_detected") %}
+      <div class="alert alert-warning">Shared hosting environment detected</div>
+      {% endif %}
+      {% for rip in ip_pivot.get("reverse_ip", []) %}
+      {% if rip.get("total_domains", 0) > 1 %}
+      <div class="ev-row"><span class="ev-label">Co-hosted ({{ rip.ip }})</span><span class="ev-value">{{ rip.get("total_domains", 0) }} domains on same IP</span></div>
+      {% endif %}
+      {% endfor %}
+      {% for cluster in ip_pivot.get("ns_clusters", []) %}
+      {% if cluster.get("domains") %}
+      <div class="ev-row"><span class="ev-label">NS Cluster</span><span class="ev-value">{{ cluster.domains[:5]|join(", ") }}</span></div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- VirusTotal -->
+    {% set vt = evidence.get("vt", {}) %}
+    {% if vt.get("found") %}
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 6px;">VirusTotal</div>
+      <div class="ev-row">
+        <span class="ev-label">Detection</span>
+        <span class="ev-value" {% if vt.get("malicious_count", 0) > 0 %}style="color:#ef4444; font-weight:600;"{% endif %}>
+          {{ vt.get("malicious_count", 0) }} malicious / {{ vt.get("suspicious_count", 0) }} suspicious / {{ vt.get("total_vendors", 0) }} vendors
+        </span>
+      </div>
+      {% if vt.get("flagged_malicious_by") %}
+      <div class="ev-row"><span class="ev-label">Flagged By</span><span class="ev-value">{{ vt.flagged_malicious_by[:5]|join(", ") }}</span></div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Signals -->
+  {% set signals = evidence.get("signals", []) %}
+  {% if signals %}
+  <div class="section">
+    <div class="section-title">Investigation Signals ({{ signals|length }})</div>
+    {% for sig in signals %}
+    <div class="signal {{ sig.get('severity', 'info') }}">
+      <span class="sev-badge sev-{{ sig.get('severity', 'info') }}">{{ sig.get('severity', 'info')|upper }}</span>
+      <span>{{ sig.get("description", "") }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- Footer -->
+  <div class="footer">
+    <span>Threat Investigator v1.0.0</span>
+    <span>{{ domain }} · {{ generated_at[:19].replace("T", " ") }} UTC</span>
+    <span>CONFIDENTIAL — Internal Use Only</span>
+  </div>
+
+</body>
+</html>

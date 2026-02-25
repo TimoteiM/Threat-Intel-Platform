@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+@import 'leaflet/dist/leaflet.css';
 
 :root {
   /* ── Surface (lifted from near-black to comfortable dark slate) ── */
@@ -104,8 +105,55 @@ button, a, input, textarea, select {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); max-height: 0; }
+  to { opacity: 1; transform: translateY(0); max-height: 500px; }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(96, 165, 250, 0); }
+  50% { box-shadow: 0 0 12px rgba(96, 165, 250, 0.15); }
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes scrollLeft {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.collector-strip {
+  animation: scrollLeft 35s linear infinite;
+}
+.collector-strip:hover {
+  animation-play-state: paused;
 }
 
 @keyframes pulse {
@@ -117,6 +165,31 @@ button, a, input, textarea, select {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
+.animate-fade-up {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: fadeInScale 0.3s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.25s ease-out forwards;
+  overflow: hidden;
+}
+
+.animate-slide-right {
+  animation: slideInRight 0.3s ease-out forwards;
+}
+
+.animate-count {
+  animation: countUp 0.5s ease-out forwards;
+}
+
+.animate-glow {
+  animation: glowPulse 3s ease-in-out infinite;
+}
+
 .animate-spin {
   animation: spin 1s linear infinite;
 }
@@ -126,8 +199,46 @@ button, a, input, textarea, select {
 }
 
 /* ── Staggered entry ── */
-.stagger-1 { animation-delay: 0.05s; opacity: 0; }
-.stagger-2 { animation-delay: 0.1s; opacity: 0; }
-.stagger-3 { animation-delay: 0.15s; opacity: 0; }
-.stagger-4 { animation-delay: 0.2s; opacity: 0; }
-.stagger-5 { animation-delay: 0.25s; opacity: 0; }
+.stagger-1 { animation-delay: 0.03s; opacity: 0; }
+.stagger-2 { animation-delay: 0.06s; opacity: 0; }
+.stagger-3 { animation-delay: 0.09s; opacity: 0; }
+.stagger-4 { animation-delay: 0.12s; opacity: 0; }
+.stagger-5 { animation-delay: 0.15s; opacity: 0; }
+.stagger-6 { animation-delay: 0.18s; opacity: 0; }
+.stagger-7 { animation-delay: 0.21s; opacity: 0; }
+.stagger-8 { animation-delay: 0.24s; opacity: 0; }
+
+/* ── Card hover lift ── */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-focus);
+}
+
+/* ── Dropdown animation ── */
+.dropdown-menu {
+  animation: fadeInScale 0.15s ease-out forwards;
+  transform-origin: top left;
+}
+
+/* ── Stat counter animation ── */
+.stat-value {
+  animation: countUp 0.6s ease-out forwards;
+}
+
+/* ── Row hover highlight ── */
+.row-hover {
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.row-hover:hover {
+  background: var(--bg-card-hover) !important;
+}
+
+/* ── Badge shimmer for active items ── */
+.badge-active {
+  background-size: 200% 100%;
+  animation: shimmer 3s linear infinite;
+}

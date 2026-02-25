@@ -19,6 +19,7 @@ from app.collectors.whois_collector import WHOISCollector
 from app.collectors.asn_collector import ASNCollector
 from app.collectors.intel_collector import IntelCollector
 from app.collectors.vt_collector import VTCollector
+from app.collectors.threat_feeds_collector import ThreatFeedsCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
@@ -29,6 +30,7 @@ COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
     "asn": ASNCollector,
     "intel": IntelCollector,
     "vt": VTCollector,
+    "threat_feeds": ThreatFeedsCollector,
 }
 
 

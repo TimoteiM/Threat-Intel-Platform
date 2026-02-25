@@ -266,6 +266,43 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Visual comparison failed: {e}")
 
+    # ── Infrastructure Pivot ──
+    try:
+        from app.collectors.infrastructure_pivot import collect_infrastructure_pivot
+        pivot_result = collect_infrastructure_pivot(evidence_data, domain, investigation_id)
+        if pivot_result:
+            evidence_data["infrastructure_pivot"] = pivot_result
+            logger.info(
+                f"[{investigation_id}] Infrastructure pivot: {pivot_result.get('total_related_domains', 0)} related domains"
+            )
+    except Exception as e:
+        logger.warning(f"[{investigation_id}] Infrastructure pivot failed: {e}")
+
+    # ── Certificate Transparency Timeline ──
+    try:
+        from app.collectors.intel_collector import build_cert_timeline
+        cert_timeline = build_cert_timeline(evidence_data, domain)
+        if cert_timeline:
+            evidence_data["cert_timeline"] = cert_timeline
+            logger.info(
+                f"[{investigation_id}] Cert timeline: {cert_timeline.get('total_certs', 0)} certs, "
+                f"burst={cert_timeline.get('cert_burst_detected', False)}"
+            )
+    except Exception as e:
+        logger.warning(f"[{investigation_id}] Cert timeline failed: {e}")
+
+    # ── Favicon Hash Intelligence (Shodan pivot) ──
+    try:
+        from app.collectors.favicon_intel import collect_favicon_intel
+        favicon_result = collect_favicon_intel(evidence_data, domain, investigation_id)
+        if favicon_result:
+            evidence_data["favicon_intel"] = favicon_result
+            logger.info(
+                f"[{investigation_id}] Favicon intel: {favicon_result.get('total_hosts_sharing', 0)} hosts sharing hash"
+            )
+    except Exception as e:
+        logger.warning(f"[{investigation_id}] Favicon intel failed: {e}")
+
     # ── 3. Generate signals and detect gaps ──
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)

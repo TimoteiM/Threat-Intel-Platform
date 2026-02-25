@@ -34,14 +34,14 @@ export default function BatchesPage() {
   };
 
   return (
-    <div style={{ paddingBottom: 80 }}>
+    <div style={{ paddingBottom: 40 }}>
       <BatchUpload onUpload={handleUpload} loading={uploading} />
 
       {batches.length > 0 && (
-        <div style={{ marginTop: 40 }}>
+        <div className="animate-fade-up" style={{ marginTop: 24 }}>
           <div style={{
             fontSize: 13, fontWeight: 600, color: "var(--text-dim)",
-            letterSpacing: "0.01em", marginBottom: 16,
+            letterSpacing: "0.01em", marginBottom: 10,
             fontFamily: "var(--font-sans)",
           }}>
             Recent Batches
@@ -57,6 +57,7 @@ export default function BatchesPage() {
             {batches.map((batch, i) => (
               <button
                 key={batch.id}
+                className="row-hover"
                 onClick={() => router.push(`/batches/${batch.id}`)}
                 style={{
                   display: "flex", alignItems: "center", gap: 16,
@@ -65,10 +66,7 @@ export default function BatchesPage() {
                   borderBottom: i < batches.length - 1 ? "1px solid var(--border-dim)" : "none",
                   cursor: "pointer", textAlign: "left",
                   color: "var(--text)", width: "100%",
-                  transition: "background 0.15s",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-card-hover)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
                 <span style={{
                   fontSize: 13, fontWeight: 600, flex: 1,

@@ -84,8 +84,8 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
         background: "var(--bg-card)",
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)",
-        padding: 32,
-        marginTop: 32,
+        padding: 28,
+        marginTop: 20,
         boxShadow: "var(--shadow-md)",
       }}
       className="animate-in"

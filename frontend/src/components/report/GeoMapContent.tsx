@@ -2,7 +2,6 @@
 
 import React, { useEffect } from "react";
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
 
 interface GeoPoint {
   lat: number;

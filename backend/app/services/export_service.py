@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional
@@ -126,102 +127,60 @@ def export_pdf(evidence: dict, report: dict, detail: dict) -> bytes:
         return html.encode("utf-8")
 
 
+_CLASSIFICATION_COLORS = {
+    "BENIGN": "#10b981",
+    "SUSPICIOUS": "#f59e0b",
+    "MALICIOUS": "#ef4444",
+    "INCONCLUSIVE": "#64748b",
+}
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
+
+
 def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
-    """Build the HTML template for PDF rendering."""
+    """Build HTML for PDF rendering using Jinja2 template."""
     domain = detail.get("domain", "Unknown")
     classification = (report.get("classification") or "inconclusive").upper()
-    confidence = report.get("confidence", "?")
-    risk_score = report.get("risk_score", "?")
-    action = (report.get("recommended_action") or "monitor").upper()
-    date = detail.get("created_at", "N/A")
+    cls_color = _CLASSIFICATION_COLORS.get(classification, "#64748b")
+    investigation_id = detail.get("id", "")
+    generated_at = datetime.now(timezone.utc).isoformat()
 
-    # Classification colors
-    colors = {
-        "BENIGN": "#10b981",
-        "SUSPICIOUS": "#f59e0b",
-        "MALICIOUS": "#ef4444",
-        "INCONCLUSIVE": "#64748b",
-    }
-    cls_color = colors.get(classification, "#64748b")
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        env = Environment(
+            loader=FileSystemLoader(_TEMPLATES_DIR),
+            autoescape=select_autoescape(["html"]),
+        )
+        template = env.get_template("report.html")
+        return template.render(
+            domain=domain,
+            classification=classification,
+            cls_color=cls_color,
+            investigation_id=investigation_id,
+            generated_at=generated_at,
+            detail=detail,
+            evidence=evidence,
+            report=report,
+        )
+    except Exception as e:
+        logger.warning(f"Jinja2 template rendering failed ({e}), falling back to basic HTML")
+        return _build_fallback_html(domain, classification, cls_color, report, generated_at)
 
-    # Build findings HTML
-    findings_html = ""
-    for f in report.get("findings", []):
-        sev = f.get("severity", "info").upper()
-        findings_html += f"""
-        <div style="border-left: 3px solid {colors.get(sev, '#64748b')}; padding: 8px 12px; margin-bottom: 8px; background: #f8fafc;">
-            <strong>[{sev}]</strong> {f.get('title', '')}
-            <div style="color: #64748b; font-size: 12px; margin-top: 4px;">{f.get('description', '')}</div>
-        </div>"""
 
-    # Build IOCs table
-    iocs_html = ""
-    for ioc in report.get("iocs", []):
-        iocs_html += f"""
-        <tr>
-            <td style="padding: 4px 8px; font-size: 12px;">{ioc.get('type', '?')}</td>
-            <td style="padding: 4px 8px; font-family: monospace; font-size: 11px;">{ioc.get('value', '?')}</td>
-            <td style="padding: 4px 8px; font-size: 12px;">{ioc.get('context', '')}</td>
-        </tr>"""
-
-    # Steps
-    steps_html = ""
-    for i, step in enumerate(report.get("recommended_steps", []), 1):
-        steps_html += f"<li>{step}</li>"
-
+def _build_fallback_html(
+    domain: str, classification: str, cls_color: str, report: dict, generated_at: str
+) -> str:
+    """Minimal fallback HTML if Jinja2 template fails."""
+    steps = "".join(f"<li>{s}</li>" for s in report.get("recommended_steps", []))
     return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {{ font-family: -apple-system, sans-serif; color: #1e293b; margin: 40px; font-size: 13px; line-height: 1.6; }}
-        h1 {{ font-size: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 8px; }}
-        h2 {{ font-size: 15px; color: #3b82f6; margin-top: 24px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
-        .classification {{ display: inline-block; padding: 8px 20px; background: {cls_color}; color: white; font-weight: bold; font-size: 16px; border-radius: 6px; letter-spacing: 0.1em; }}
-        .meta {{ color: #64748b; font-size: 12px; }}
-        .meta-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin: 16px 0; }}
-        .meta-item {{ padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; }}
-        .meta-label {{ font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }}
-        .meta-value {{ font-size: 14px; font-weight: 600; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 8px 0; }}
-        th, td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }}
-        th {{ background: #f1f5f9; font-weight: 600; }}
-        .hypothesis {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-        .hypothesis > div {{ padding: 12px; border-radius: 6px; font-size: 12px; }}
-        .legit {{ background: #f0fdf4; border: 1px solid #bbf7d0; }}
-        .malicious {{ background: #fef2f2; border: 1px solid #fecaca; }}
-        .footer {{ margin-top: 32px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; }}
-    </style>
-</head>
-<body>
-    <h1>Threat Investigation Report</h1>
-    <div class="meta">Domain: <strong>{domain}</strong> · Date: {date}</div>
-
-    <div class="meta-grid">
-        <div class="meta-item"><div class="meta-label">Classification</div><div class="meta-value" style="color:{cls_color}">{classification}</div></div>
-        <div class="meta-item"><div class="meta-label">Confidence</div><div class="meta-value">{confidence}</div></div>
-        <div class="meta-item"><div class="meta-label">Risk Score</div><div class="meta-value">{risk_score}/100</div></div>
-        <div class="meta-item"><div class="meta-label">Action</div><div class="meta-value">{action}</div></div>
-    </div>
-
-    <h2>Primary Reasoning</h2>
-    <p>{report.get('primary_reasoning', 'N/A')}</p>
-
-    <h2>Hypothesis Comparison</h2>
-    <div class="hypothesis">
-        <div class="legit"><strong>✓ Legitimate</strong><br>{report.get('legitimate_explanation', 'N/A')}</div>
-        <div class="malicious"><strong>✗ Malicious</strong><br>{report.get('malicious_explanation', 'N/A')}</div>
-    </div>
-
-    <h2>Recommended Steps</h2>
-    <ol>{steps_html}</ol>
-
-    <h2>Findings</h2>
-    {findings_html or '<p style="color: #94a3b8;">No findings.</p>'}
-
-    <h2>Indicators of Compromise</h2>
-    {f'<table><tr><th>Type</th><th>Value</th><th>Context</th></tr>{iocs_html}</table>' if iocs_html else '<p style="color: #94a3b8;">No IOCs.</p>'}
-
-    <div class="footer">Generated by Threat Investigator v1.0.0 · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</div>
-</body>
-</html>"""
+<html><head><meta charset="utf-8">
+<style>body{{font-family:sans-serif;color:#1e293b;margin:40px;font-size:13px;line-height:1.6}}
+h1{{font-size:20px}}h2{{font-size:15px;color:#3b82f6;margin-top:20px}}</style>
+</head><body>
+<h1>Threat Investigation Report — {domain}</h1>
+<p><strong>Classification:</strong> <span style="color:{cls_color}">{classification}</span> &nbsp;
+<strong>Risk:</strong> {report.get('risk_score','?')}/100</p>
+<h2>Primary Reasoning</h2><p>{report.get('primary_reasoning','N/A')}</p>
+<h2>Recommended Steps</h2><ol>{steps}</ol>
+<p style="color:#94a3b8;font-size:10px">Generated {generated_at[:19]} UTC</p>
+</body></html>"""

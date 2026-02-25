@@ -355,6 +355,29 @@ class WHOISHistory(Base):
     )
 
 
+class IPLookup(Base):
+    """Persisted history of standalone IP reputation lookups."""
+    __tablename__ = "ip_lookups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ip: Mapped[str] = mapped_column(String(45), nullable=False)
+    abuse_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    isp: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    threatfox_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    queried_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_ip_lookups_ip", "ip"),
+        Index("idx_ip_lookups_queried", "queried_at"),
+    )
+
+
 class LookupCache(Base):
     """Cache for external lookups (ASN, RDAP, crt.sh) to reduce API calls."""
     __tablename__ = "lookup_cache"

@@ -87,30 +87,31 @@ export default function DashboardPage() {
     }));
 
   return (
-    <div style={{ paddingBottom: 80 }}>
+    <div style={{ paddingTop: 20, paddingBottom: 40 }}>
       {/* Page title */}
       <div style={{
-        fontSize: 20, fontWeight: 700, color: "var(--text)",
-        fontFamily: "var(--font-sans)", marginBottom: 24,
+        fontSize: 18, fontWeight: 800, color: "var(--text)",
+        fontFamily: "var(--font-mono)", marginBottom: 20,
+        letterSpacing: "0.04em",
       }}>
-        Dashboard
+        DASHBOARD
       </div>
 
       {/* Stats cards */}
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12,
-        marginBottom: 32,
+        marginBottom: 20,
       }}>
-        <StatCard label="Total Investigations" value={stats.total_investigations} color="var(--accent)" />
-        <StatCard label="Malicious" value={maliciousCount} color="var(--red)" />
-        <StatCard label="Suspicious" value={suspiciousCount} color="var(--yellow)" />
-        <StatCard label="Concluded" value={totalConcluded} color="var(--green)" />
+        <StatCard label="Total Investigations" value={stats.total_investigations} color="var(--accent)" index={0} />
+        <StatCard label="Malicious" value={maliciousCount} color="var(--red)" index={1} />
+        <StatCard label="Suspicious" value={suspiciousCount} color="var(--yellow)" index={2} />
+        <StatCard label="Concluded" value={totalConcluded} color="var(--green)" index={3} />
       </div>
 
       {/* Charts row 1: Classification pie + Risk distribution */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16,
-        marginBottom: 24,
+      <div className="animate-fade-up" style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12,
+        marginBottom: 16,
       }}>
         {/* Classification breakdown */}
         <ChartCard title="Classification Breakdown">
@@ -198,7 +199,7 @@ export default function DashboardPage() {
 
       {/* Timeline */}
       {timelineData.length > 0 && (
-        <ChartCard title="Investigation Timeline (30 days)">
+        <ChartCard title="Investigation Timeline (30 days)" className="animate-fade-up">
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={timelineData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -221,9 +222,9 @@ export default function DashboardPage() {
       )}
 
       {/* Charts row 2: Top registrars + hosting */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16,
-        marginTop: 24, marginBottom: 24,
+      <div className="animate-fade-up" style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12,
+        marginTop: 16, marginBottom: 16,
       }}>
         <ChartCard title="Top Registrars (Malicious/Suspicious)">
           {stats.top_registrars.length > 0 ? (
@@ -280,7 +281,7 @@ export default function DashboardPage() {
 
       {/* Recent malicious */}
       {stats.recent_malicious.length > 0 && (
-        <ChartCard title="Recent Malicious Investigations">
+        <ChartCard title="Recent Malicious Investigations" className="animate-fade-up">
           <div style={{ display: "flex", flexDirection: "column" }}>
             {stats.recent_malicious.map((inv, i) => (
               <button
@@ -337,18 +338,21 @@ export default function DashboardPage() {
   );
 }
 
-function StatCard({ label, value, color }: {
-  label: string; value: number; color: string;
+function StatCard({ label, value, color, index = 0 }: {
+  label: string; value: number; color: string; index?: number;
 }) {
   return (
-    <div style={{
-      padding: "20px 16px",
-      background: "var(--bg-card)",
-      border: "1px solid var(--border)",
-      borderRadius: "var(--radius-lg)",
-      textAlign: "center",
-    }}>
-      <div style={{
+    <div
+      className={`animate-in card-hover stagger-${index + 1}`}
+      style={{
+        padding: "20px 16px",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)",
+        textAlign: "center",
+      }}
+    >
+      <div className="stat-value" style={{
         fontSize: 28, fontWeight: 800, color,
         fontFamily: "var(--font-mono)",
       }}>
@@ -365,11 +369,11 @@ function StatCard({ label, value, color }: {
   );
 }
 
-function ChartCard({ title, children }: {
-  title: string; children: React.ReactNode;
+function ChartCard({ title, children, className }: {
+  title: string; children: React.ReactNode; className?: string;
 }) {
   return (
-    <div style={{
+    <div className={className} style={{
       padding: 20,
       background: "var(--bg-card)",
       border: "1px solid var(--border)",

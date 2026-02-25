@@ -167,6 +167,8 @@ class IntelEvidence(BaseModel):
     related_certs: list[str] = []
     related_subdomains: list[str] = []
     notes: list[str] = []
+    # Raw cert entries from crt.sh for downstream timeline analysis
+    cert_entries_raw: list[dict] = []
 
 # ─── VirusTotal Evidence ───
 
@@ -212,6 +214,122 @@ class VTEvidence(BaseModel):
     notes: list[str] = []
 
     
+
+# ─── Certificate Transparency Timeline ───
+
+class CertTimelineEntry(BaseModel):
+    serial_number: str
+    issuer_name: str
+    common_name: str
+    not_before: str
+    not_after: str
+    entry_timestamp: str
+    validity_days: int = 0
+    is_short_lived: bool = False
+
+
+class CertTimelineEvidence(BaseModel):
+    domain: str
+    total_certs: int = 0
+    entries: list[CertTimelineEntry] = []
+    unique_issuers: list[str] = []
+    cert_burst_detected: bool = False
+    burst_periods: list[dict] = []
+    short_lived_count: int = 0
+    earliest_cert: Optional[str] = None
+    latest_cert: Optional[str] = None
+    notes: list[str] = []
+
+
+# ─── Threat Feed Intelligence ───
+
+class AbuseIPDBResult(BaseModel):
+    ip: str
+    abuse_confidence_score: int = 0
+    total_reports: int = 0
+    last_reported_at: Optional[str] = None
+    categories: list[int] = []
+    isp: Optional[str] = None
+    usage_type: Optional[str] = None
+    country_code: Optional[str] = None
+
+
+class PhishTankResult(BaseModel):
+    in_database: bool = False
+    phish_id: Optional[str] = None
+    verified: Optional[bool] = None
+    verified_at: Optional[str] = None
+    target_brand: Optional[str] = None
+
+
+class ThreatFoxResult(BaseModel):
+    ioc_value: str
+    ioc_type: str
+    threat_type: str
+    malware: Optional[str] = None
+    confidence_level: Optional[int] = None
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
+    tags: list[str] = []
+
+
+class ThreatFeedEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="threat_feeds"))
+    abuseipdb: Optional[AbuseIPDBResult] = None
+    phishtank: Optional[PhishTankResult] = None
+    threatfox_matches: list[ThreatFoxResult] = []
+    openphish_listed: bool = False
+    feeds_checked: list[str] = []
+    feeds_skipped: list[str] = []
+
+
+# ─── Infrastructure Pivot ───
+
+class ReverseIPResult(BaseModel):
+    ip: str
+    domains: list[str] = []
+    total_domains: int = 0
+
+
+class NSCluster(BaseModel):
+    nameservers: list[str] = []
+    domains: list[str] = []
+
+
+class RegistrantPivot(BaseModel):
+    registrar: Optional[str] = None
+    registrant_org: Optional[str] = None
+    domains: list[str] = []
+
+
+class InfrastructurePivotEvidence(BaseModel):
+    reverse_ip: list[ReverseIPResult] = []
+    ns_clusters: list[NSCluster] = []
+    registrant_pivots: list[RegistrantPivot] = []
+    total_related_domains: int = 0
+    shared_hosting_detected: bool = False
+    notes: list[str] = []
+
+
+# ─── Favicon Hash Intelligence ───
+
+class FaviconHost(BaseModel):
+    ip: str
+    hostnames: list[str] = []
+    org: Optional[str] = None
+    port: int = 80
+    asn: Optional[str] = None
+    country: Optional[str] = None
+
+
+class FaviconIntelEvidence(BaseModel):
+    favicon_hash: Optional[str] = None
+    total_hosts_sharing: int = 0
+    hosts: list[FaviconHost] = []
+    is_unique_favicon: bool = True
+    is_default_favicon: bool = False
+    notes: list[str] = []
+
 
 # ─── Domain Similarity (typosquatting / visual lookalike) ───
 
@@ -495,6 +613,18 @@ class CollectedEvidence(BaseModel):
 
     # JavaScript behavior analysis (Playwright sandbox)
     js_analysis: Optional[JSAnalysisEvidence] = None
+
+    # Threat feed intelligence (AbuseIPDB, PhishTank, ThreatFox, OpenPhish)
+    threat_feeds: Optional[ThreatFeedEvidence] = None
+
+    # Favicon hash pivot (Shodan infrastructure clustering)
+    favicon_intel: Optional[FaviconIntelEvidence] = None
+
+    # Certificate Transparency timeline (crt.sh full cert details)
+    cert_timeline: Optional[CertTimelineEvidence] = None
+
+    # Infrastructure pivot (reverse IP, NS clustering, registrant pivot)
+    infrastructure_pivot: Optional[InfrastructurePivotEvidence] = None
 
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None

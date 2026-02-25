@@ -523,6 +523,195 @@ def generate_signals(evidence: dict) -> list[Signal]:
                 evidence_refs=["subdomains.interesting_subdomains"],
             ))
 
+    # ── Infrastructure pivot signals ──
+    infra_pivot = evidence.get("infrastructure_pivot", {})
+    if infra_pivot:
+        if infra_pivot.get("shared_hosting_detected"):
+            for rip in infra_pivot.get("reverse_ip", []):
+                total = rip.get("total_domains", 0)
+                if total > 10:
+                    signals.append(Signal(
+                        id="sig_shared_hosting",
+                        category="infrastructure",
+                        description=(
+                            f"IP {rip.get('ip')} hosts {total} domains — "
+                            f"shared/bulletproof hosting environment"
+                        ),
+                        severity="medium",
+                        evidence_refs=["infrastructure_pivot.reverse_ip"],
+                    ))
+
+        ns_clusters = infra_pivot.get("ns_clusters", [])
+        for cluster in ns_clusters:
+            cluster_domains = cluster.get("domains", [])
+            if cluster_domains:
+                signals.append(Signal(
+                    id="sig_ns_cluster",
+                    category="infrastructure",
+                    description=(
+                        f"Nameservers shared with {len(cluster_domains)} other investigated domain(s) in our database"
+                    ),
+                    severity="medium",
+                    evidence_refs=["infrastructure_pivot.ns_clusters"],
+                ))
+                break  # one signal is enough
+
+        registrant_pivots = infra_pivot.get("registrant_pivots", [])
+        for pivot in registrant_pivots:
+            pivot_domains = pivot.get("domains", [])
+            if pivot_domains:
+                signals.append(Signal(
+                    id="sig_registrant_pivot",
+                    category="infrastructure",
+                    description=(
+                        f"Registrant/registrar matches {len(pivot_domains)} other investigated domain(s) — "
+                        f"possible same threat actor"
+                    ),
+                    severity="medium",
+                    evidence_refs=["infrastructure_pivot.registrant_pivots"],
+                ))
+                break
+
+    # ── Certificate Transparency Timeline signals ──
+    cert_timeline = evidence.get("cert_timeline", {})
+    if cert_timeline:
+        if cert_timeline.get("cert_burst_detected"):
+            burst_periods = cert_timeline.get("burst_periods", [])
+            max_burst = max((bp.get("count", 0) for bp in burst_periods), default=0)
+            signals.append(Signal(
+                id="sig_cert_burst_detected",
+                category="certificate",
+                description=(
+                    f"Certificate burst detected: {max_burst} certificates issued in a 7-day window — "
+                    f"possible rapid domain repurposing or phishing kit deployment"
+                ),
+                severity="high",
+                evidence_refs=["cert_timeline.cert_burst_detected", "cert_timeline.burst_periods"],
+            ))
+
+        short_lived = cert_timeline.get("short_lived_count", 0)
+        if short_lived > 0:
+            signals.append(Signal(
+                id="sig_cert_short_lived",
+                category="certificate",
+                description=(
+                    f"{short_lived} short-lived certificate(s) detected (<30 day validity) — "
+                    f"common in phishing infrastructure using automated tooling"
+                ),
+                severity="medium",
+                evidence_refs=["cert_timeline.short_lived_count"],
+            ))
+
+        unique_issuers = cert_timeline.get("unique_issuers", [])
+        if len(unique_issuers) > 3:
+            signals.append(Signal(
+                id="sig_cert_issuer_diversity",
+                category="certificate",
+                description=(
+                    f"{len(unique_issuers)} different certificate issuers across {cert_timeline.get('total_certs', 0)} certs — "
+                    f"infrastructure changes over time"
+                ),
+                severity="info",
+                evidence_refs=["cert_timeline.unique_issuers"],
+            ))
+
+    # ── Favicon hash intelligence signals ──
+    favicon_intel = evidence.get("favicon_intel", {})
+    if favicon_intel:
+        total_sharing = favicon_intel.get("total_hosts_sharing", 0)
+        is_default = favicon_intel.get("is_default_favicon", False)
+        if total_sharing > 5 and not is_default:
+            signals.append(Signal(
+                id="sig_favicon_shared_infrastructure",
+                category="infrastructure",
+                description=(
+                    f"Favicon hash shared by {total_sharing} other hosts on Shodan — "
+                    f"potential shared phishing infrastructure"
+                ),
+                severity="medium",
+                evidence_refs=["favicon_intel.total_hosts_sharing"],
+            ))
+        elif total_sharing <= 3 and not is_default and favicon_intel.get("favicon_hash"):
+            signals.append(Signal(
+                id="sig_favicon_unique",
+                category="infrastructure",
+                description="Favicon hash is unique or rare — custom/bespoke deployment",
+                severity="info",
+                evidence_refs=["favicon_intel.is_unique_favicon"],
+            ))
+
+    # ── Threat feed signals ──
+    threat_feeds = evidence.get("threat_feeds", {})
+    if threat_feeds:
+        abuseipdb = threat_feeds.get("abuseipdb", {}) or {}
+        abuse_score = abuseipdb.get("abuse_confidence_score", 0)
+        if abuse_score >= 75:
+            signals.append(Signal(
+                id="sig_abuseipdb_high",
+                category="reputation",
+                description=(
+                    f"AbuseIPDB: IP has {abuse_score}% abuse confidence score "
+                    f"({abuseipdb.get('total_reports', 0)} reports)"
+                ),
+                severity="high",
+                evidence_refs=["threat_feeds.abuseipdb.abuse_confidence_score"],
+            ))
+        elif abuse_score >= 25:
+            signals.append(Signal(
+                id="sig_abuseipdb_medium",
+                category="reputation",
+                description=(
+                    f"AbuseIPDB: IP has {abuse_score}% abuse confidence score "
+                    f"({abuseipdb.get('total_reports', 0)} reports)"
+                ),
+                severity="medium",
+                evidence_refs=["threat_feeds.abuseipdb.abuse_confidence_score"],
+            ))
+
+        phishtank = threat_feeds.get("phishtank", {}) or {}
+        if phishtank.get("in_database") and phishtank.get("verified"):
+            signals.append(Signal(
+                id="sig_phishtank_match",
+                category="reputation",
+                description="PhishTank: URL confirmed as active phishing site (verified by community)",
+                severity="critical",
+                evidence_refs=["threat_feeds.phishtank.in_database", "threat_feeds.phishtank.verified"],
+            ))
+        elif phishtank.get("in_database"):
+            signals.append(Signal(
+                id="sig_phishtank_listed",
+                category="reputation",
+                description="PhishTank: URL found in phishing database (pending verification)",
+                severity="high",
+                evidence_refs=["threat_feeds.phishtank.in_database"],
+            ))
+
+        threatfox_matches = threat_feeds.get("threatfox_matches", []) or []
+        if threatfox_matches:
+            malware_names = list(set(
+                m.get("malware", "unknown") for m in threatfox_matches if m.get("malware")
+            ))
+            signals.append(Signal(
+                id="sig_threatfox_match",
+                category="reputation",
+                description=(
+                    f"ThreatFox: {len(threatfox_matches)} IOC match(es) found"
+                    f" — malware: {', '.join(malware_names[:3])}" if malware_names else
+                    f"ThreatFox: {len(threatfox_matches)} IOC match(es) found"
+                ),
+                severity="critical",
+                evidence_refs=["threat_feeds.threatfox_matches"],
+            ))
+
+        if threat_feeds.get("openphish_listed"):
+            signals.append(Signal(
+                id="sig_openphish_listed",
+                category="reputation",
+                description="OpenPhish: Domain found in active phishing feed",
+                severity="high",
+                evidence_refs=["threat_feeds.openphish_listed"],
+            ))
+
     # ── Domain similarity signals ──
     similarity = evidence.get("domain_similarity")
     if similarity:

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(docker compose build:*)",
-      "Bash(docker compose stop:*)"
+      "Bash(docker compose stop:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }

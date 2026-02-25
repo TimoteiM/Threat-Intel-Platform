@@ -18,6 +18,7 @@ from app.api.iocs import router as iocs_router
 from app.api.watchlist import router as watchlist_router
 from app.api.whois_history import router as whois_history_router
 from app.api.geo import router as geo_router
+from app.api.ip_lookup import router as ip_lookup_router
 
 api_router = APIRouter()
 
@@ -35,3 +36,4 @@ api_router.include_router(iocs_router)
 api_router.include_router(watchlist_router)
 api_router.include_router(whois_history_router)
 api_router.include_router(geo_router)
+api_router.include_router(ip_lookup_router)

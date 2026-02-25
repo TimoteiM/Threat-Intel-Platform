@@ -236,6 +236,27 @@ export function getGeoPoints(investigationId: string) {
   return request<any[]>(`/investigations/${investigationId}/geo-points`);
 }
 
+// ─── IP Lookup ───
+
+export function lookupIP(ip: string) {
+  return request<any>("/tools/ip-lookup", {
+    method: "POST",
+    body: JSON.stringify({ ip }),
+  });
+}
+
+export function getIPLookupHistory(limit = 50, offset = 0) {
+  return request<any[]>(`/tools/ip-lookup/history?limit=${limit}&offset=${offset}`);
+}
+
+export function getIPLookup(id: string) {
+  return request<any>(`/tools/ip-lookup/history/${id}`);
+}
+
+export function deleteIPLookup(id: string) {
+  return request<void>(`/tools/ip-lookup/history/${id}`, { method: "DELETE" });
+}
+
 // ─── SSE helper ───
 
 export function subscribeToProgress(

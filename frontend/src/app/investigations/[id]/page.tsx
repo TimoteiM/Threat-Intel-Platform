@@ -138,7 +138,7 @@ export default function InvestigationPage() {
         case "signals":
           return evidence ? <SignalsTab evidence={evidence} /> : <NoData label="evidence" />;
         case "infrastructure":
-          return <InfrastructureTab investigationId={investigationId} />;
+          return <InfrastructureTab investigationId={investigationId} evidence={evidence} />;
         case "raw":
           return <RawJsonView evidence={evidence} report={report} detail={detail} />;
         default:

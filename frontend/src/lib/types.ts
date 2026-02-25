@@ -378,6 +378,122 @@ export interface DataGap {
   impact: string;
 }
 
+// ─── Infrastructure Pivot ───
+
+export interface ReverseIPResult {
+  ip: string;
+  domains: string[];
+  total_domains: number;
+}
+
+export interface NSCluster {
+  nameservers: string[];
+  domains: string[];
+}
+
+export interface RegistrantPivot {
+  registrar?: string;
+  registrant_org?: string;
+  domains: string[];
+}
+
+export interface InfrastructurePivotEvidence {
+  reverse_ip: ReverseIPResult[];
+  ns_clusters: NSCluster[];
+  registrant_pivots: RegistrantPivot[];
+  total_related_domains: number;
+  shared_hosting_detected: boolean;
+  notes: string[];
+}
+
+// ─── Certificate Transparency Timeline ───
+
+export interface CertTimelineEntry {
+  serial_number: string;
+  issuer_name: string;
+  common_name: string;
+  not_before: string;
+  not_after: string;
+  entry_timestamp: string;
+  validity_days: number;
+  is_short_lived: boolean;
+}
+
+export interface CertTimelineEvidence {
+  domain: string;
+  total_certs: number;
+  entries: CertTimelineEntry[];
+  unique_issuers: string[];
+  cert_burst_detected: boolean;
+  burst_periods: { start: string; end: string; count: number }[];
+  short_lived_count: number;
+  earliest_cert?: string;
+  latest_cert?: string;
+  notes: string[];
+}
+
+// ─── Favicon Hash Intelligence ───
+
+export interface FaviconHost {
+  ip: string;
+  hostnames: string[];
+  org?: string;
+  port: number;
+  asn?: string;
+  country?: string;
+}
+
+export interface FaviconIntelEvidence {
+  favicon_hash?: string;
+  total_hosts_sharing: number;
+  hosts: FaviconHost[];
+  is_unique_favicon: boolean;
+  is_default_favicon: boolean;
+  notes: string[];
+}
+
+// ─── Threat Feed Intelligence ───
+
+export interface AbuseIPDBResult {
+  ip: string;
+  abuse_confidence_score: number;
+  total_reports: number;
+  last_reported_at?: string;
+  categories: number[];
+  isp?: string;
+  usage_type?: string;
+  country_code?: string;
+}
+
+export interface PhishTankResult {
+  in_database: boolean;
+  phish_id?: string;
+  verified?: boolean;
+  verified_at?: string;
+  target_brand?: string;
+}
+
+export interface ThreatFoxResult {
+  ioc_value: string;
+  ioc_type: string;
+  threat_type: string;
+  malware?: string;
+  confidence_level?: number;
+  first_seen?: string;
+  last_seen?: string;
+  tags: string[];
+}
+
+export interface ThreatFeedEvidence {
+  meta: CollectorMeta;
+  abuseipdb?: AbuseIPDBResult;
+  phishtank?: PhishTankResult;
+  threatfox_matches: ThreatFoxResult[];
+  openphish_listed: boolean;
+  feeds_checked: string[];
+  feeds_skipped: string[];
+}
+
 // ─── Master Evidence ───
 
 export interface CollectedEvidence {
@@ -398,6 +514,10 @@ export interface CollectedEvidence {
   email_security?: EmailSecurityEvidence;
   redirect_analysis?: RedirectAnalysisEvidence;
   js_analysis?: JSAnalysisEvidence;
+  threat_feeds?: ThreatFeedEvidence;
+  favicon_intel?: FaviconIntelEvidence;
+  cert_timeline?: CertTimelineEvidence;
+  infrastructure_pivot?: InfrastructurePivotEvidence;
   signals: Signal[];
   data_gaps: DataGap[];
   artifact_hashes: Record<string, string>;

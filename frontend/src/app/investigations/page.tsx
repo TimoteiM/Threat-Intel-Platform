@@ -59,10 +59,10 @@ export default function InvestigationsListPage() {
   const filters = ["all", "created", "gathering", "evaluating", "concluded", "failed"];
 
   return (
-    <div style={{ paddingTop: 24, paddingBottom: 80 }}>
-      <div style={{
+    <div style={{ paddingTop: 20, paddingBottom: 40 }}>
+      <div className="animate-in" style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: 24,
+        marginBottom: 16,
       }}>
         <div>
           <div style={{
@@ -92,7 +92,7 @@ export default function InvestigationsListPage() {
       </div>
 
       {/* Search bar */}
-      <div style={{ marginBottom: 16 }}>
+      <div className="animate-in stagger-1" style={{ marginBottom: 12 }}>
         <input
           type="text"
           value={search}
@@ -115,7 +115,7 @@ export default function InvestigationsListPage() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+      <div className="animate-in stagger-2" style={{ display: "flex", gap: 6, marginBottom: 16 }}>
         {filters.map((f) => (
           <button
             key={f}
@@ -146,7 +146,7 @@ export default function InvestigationsListPage() {
           No investigations found.
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div className="animate-fade-up" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {/* Header */}
           <div style={{
             display: "grid",
@@ -171,6 +171,7 @@ export default function InvestigationsListPage() {
             return (
               <button
                 key={inv.id}
+                className="row-hover"
                 onClick={() => router.push(`/investigations/${inv.id}`)}
                 style={{
                   display: "grid",
@@ -182,11 +183,8 @@ export default function InvestigationsListPage() {
                   cursor: "pointer", textAlign: "left",
                   fontFamily: "var(--font-mono)",
                   color: "var(--text)", width: "100%",
-                  transition: "background 0.15s",
                   alignItems: "center",
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-card-hover)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg-card)")}
               >
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.domain}</div>
                 <div>
@@ -230,7 +228,7 @@ export default function InvestigationsListPage() {
       {total > 0 && (
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          marginTop: 24, padding: "12px 0",
+          marginTop: 16, padding: "12px 0",
           borderTop: "1px solid var(--border)",
         }}>
           {/* Left: showing info + page size selector */}

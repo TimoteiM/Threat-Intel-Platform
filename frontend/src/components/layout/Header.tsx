@@ -75,6 +75,7 @@ export default function Header() {
           <NavLink href="/investigations">All Cases</NavLink>
           <NavLink href="/batches">Bulk Analysis</NavLink>
           <NavLink href="/watchlist">Watchlist</NavLink>
+          <NavLink href="/ip-lookup">IP Lookup</NavLink>
           <span style={{
             fontSize: 11,
             color: "var(--text-muted)",

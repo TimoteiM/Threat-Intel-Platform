@@ -3,11 +3,12 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "@/lib/api";
-import { PivotResponse, RelatedInvestigation, SharedInfrastructure } from "@/lib/types";
+import { PivotResponse, RelatedInvestigation, SharedInfrastructure, CollectedEvidence } from "@/lib/types";
 import GeoMap from "@/components/report/GeoMap";
 
 interface Props {
   investigationId: string;
+  evidence?: CollectedEvidence | null;
 }
 
 const INFRA_TYPE_COLORS: Record<string, string> = {
@@ -25,11 +26,20 @@ const CLASSIFICATION_COLORS: Record<string, string> = {
   inconclusive: "var(--text-muted)",
 };
 
-export default function InfrastructureTab({ investigationId }: Props) {
+interface DomainModal {
+  ip: string;
+  domains: string[];
+  total: number;
+}
+
+export default function InfrastructureTab({ investigationId, evidence }: Props) {
+  const infraPivot = evidence?.infrastructure_pivot;
   const router = useRouter();
   const [data, setData] = useState<PivotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [domainModal, setDomainModal] = useState<DomainModal | null>(null);
+  const [domainSearch, setDomainSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -155,10 +165,268 @@ export default function InfrastructureTab({ investigationId }: Props) {
         )}
       </Section>
 
+      {/* Reverse IP */}
+      {infraPivot && infraPivot.reverse_ip.length > 0 && (
+        <Section title="Reverse IP Lookup">
+          {infraPivot.reverse_ip.map((rip, i) => {
+            const preview = rip.domains.slice(0, 20);
+            const hasMore = rip.domains.length > 20;
+            return (
+              <div key={i} style={{ marginBottom: 16 }}>
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  marginBottom: 8, padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                }}>
+                  <span style={{
+                    fontSize: 12, fontWeight: 600,
+                    color: rip.total_domains > 10 ? "var(--yellow)" : "var(--accent)",
+                  }}>
+                    {rip.ip} — {rip.total_domains} co-hosted domain{rip.total_domains !== 1 ? "s" : ""}
+                    {rip.total_domains > 10 && " · shared hosting"}
+                  </span>
+                  {rip.domains.length > 20 && (
+                    <button
+                      onClick={() => {
+                        setDomainSearch("");
+                        setDomainModal({ ip: rip.ip, domains: rip.domains, total: rip.total_domains });
+                      }}
+                      style={{
+                        padding: "4px 12px", fontSize: 11, fontWeight: 600,
+                        background: "var(--bg-input)", color: "var(--accent)",
+                        border: "1px solid var(--accent)", borderRadius: "var(--radius-sm)",
+                        cursor: "pointer", fontFamily: "var(--font-sans)",
+                      }}
+                    >
+                      View all {rip.domains.length} →
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {preview.map((d, j) => (
+                    <span key={j} style={{
+                      padding: "3px 10px", fontSize: 11,
+                      background: "var(--bg-input)", color: "var(--text-secondary)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid var(--border-dim)",
+                      fontFamily: "var(--font-mono)",
+                    }}>{d}</span>
+                  ))}
+                  {hasMore && (
+                    <button
+                      onClick={() => {
+                        setDomainSearch("");
+                        setDomainModal({ ip: rip.ip, domains: rip.domains, total: rip.total_domains });
+                      }}
+                      style={{
+                        padding: "3px 10px", fontSize: 11, fontWeight: 500,
+                        background: "rgba(96,165,250,0.08)", color: "var(--accent)",
+                        border: "1px solid rgba(96,165,250,0.25)", borderRadius: "var(--radius-sm)",
+                        cursor: "pointer", fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      +{rip.domains.length - 20} more…
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </Section>
+      )}
+
+      {/* NS Cluster */}
+      {infraPivot && infraPivot.ns_clusters.length > 0 && infraPivot.ns_clusters.some(c => c.domains.length > 0) && (
+        <Section title="Nameserver Clustering">
+          {infraPivot.ns_clusters.map((cluster, i) => (
+            <div key={i} style={{ marginBottom: 12 }}>
+              <div style={{
+                fontSize: 11, color: "var(--text-muted)", marginBottom: 6,
+                fontFamily: "var(--font-mono)",
+              }}>
+                NS: {cluster.nameservers.slice(0, 3).join(", ")}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {cluster.domains.map((d, j) => (
+                  <span key={j} style={{
+                    padding: "3px 10px", fontSize: 11,
+                    background: "rgba(96,165,250,0.08)", color: "var(--accent)",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(96,165,250,0.2)",
+                    fontFamily: "var(--font-mono)",
+                  }}>{d}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {/* Registrant Pivot */}
+      {infraPivot && infraPivot.registrant_pivots.length > 0 && infraPivot.registrant_pivots.some(p => p.domains.length > 0) && (
+        <Section title="Registrant Pivot">
+          {infraPivot.registrant_pivots.map((pivot, i) => (
+            <div key={i} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+                {pivot.registrar && <span>Registrar: <strong style={{ color: "var(--text-secondary)" }}>{pivot.registrar}</strong></span>}
+                {pivot.registrar && pivot.registrant_org && <span style={{ margin: "0 8px" }}>·</span>}
+                {pivot.registrant_org && <span>Org: <strong style={{ color: "var(--text-secondary)" }}>{pivot.registrant_org}</strong></span>}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {pivot.domains.map((d, j) => (
+                  <span key={j} style={{
+                    padding: "3px 10px", fontSize: 11,
+                    background: "rgba(167,139,250,0.08)", color: "#a78bfa",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(167,139,250,0.2)",
+                    fontFamily: "var(--font-mono)",
+                  }}>{d}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+
       {/* Geolocation Map */}
       <Section title="Geolocation">
         <GeoMap investigationId={investigationId} />
       </Section>
+
+      {/* Domain List Modal */}
+      {domainModal && (
+        <div
+          onClick={() => setDomainModal(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(700px, 95vw)", maxHeight: "80vh",
+              background: "var(--bg-surface)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius)", display: "flex", flexDirection: "column",
+              overflow: "hidden", boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
+            }}
+          >
+            {/* Header */}
+            <div style={{
+              padding: "16px 20px", borderBottom: "1px solid var(--border)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              flexShrink: 0,
+            }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                  {domainModal.ip}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2, fontFamily: "var(--font-sans)" }}>
+                  {domainModal.domains.length} stored · {domainModal.total} total co-hosted domains
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(domainModal.domains.join("\n"));
+                  }}
+                  style={{
+                    padding: "5px 12px", fontSize: 11, fontWeight: 600,
+                    background: "rgba(96,165,250,0.08)", color: "var(--accent)",
+                    border: "1px solid rgba(96,165,250,0.25)", borderRadius: "var(--radius-sm)",
+                    cursor: "pointer", fontFamily: "var(--font-sans)",
+                  }}
+                >
+                  Copy all
+                </button>
+                <button
+                  onClick={() => setDomainModal(null)}
+                  style={{
+                    width: 28, height: 28, fontSize: 16, lineHeight: "28px",
+                    textAlign: "center", background: "var(--bg-input)",
+                    border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                    color: "var(--text-dim)", cursor: "pointer",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border-dim)", flexShrink: 0 }}>
+              <input
+                autoFocus
+                placeholder="Filter domains…"
+                value={domainSearch}
+                onChange={(e) => setDomainSearch(e.target.value)}
+                style={{
+                  width: "100%", padding: "7px 12px", fontSize: 12,
+                  background: "var(--bg-input)", color: "var(--text)",
+                  border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                  outline: "none", fontFamily: "var(--font-mono)",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {/* List */}
+            <div style={{ overflowY: "auto", flex: 1, padding: "8px 0" }}>
+              {(() => {
+                const filtered = domainSearch.trim()
+                  ? domainModal.domains.filter((d) =>
+                      d.toLowerCase().includes(domainSearch.toLowerCase())
+                    )
+                  : domainModal.domains;
+                return filtered.length === 0 ? (
+                  <div style={{ padding: "20px", textAlign: "center", fontSize: 12, color: "var(--text-muted)" }}>
+                    No domains match "{domainSearch}"
+                  </div>
+                ) : (
+                  filtered.map((d, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        padding: "6px 20px", fontSize: 12,
+                        fontFamily: "var(--font-mono)", color: "var(--text-secondary)",
+                        borderBottom: "1px solid var(--border-dim)",
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        cursor: "default",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-input)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span>{d}</span>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(d)}
+                        style={{
+                          fontSize: 10, padding: "2px 8px",
+                          background: "transparent", color: "var(--text-muted)",
+                          border: "1px solid var(--border-dim)", borderRadius: "var(--radius-sm)",
+                          cursor: "pointer", fontFamily: "var(--font-sans)",
+                          opacity: 0.6,
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.opacity = "0.6"; }}
+                      >
+                        copy
+                      </button>
+                    </div>
+                  ))
+                );
+              })()}
+            </div>
+
+            {/* Footer count */}
+            <div style={{
+              padding: "8px 20px", borderTop: "1px solid var(--border-dim)",
+              fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)",
+              flexShrink: 0,
+            }}>
+              {domainSearch.trim()
+                ? `${domainModal.domains.filter((d) => d.toLowerCase().includes(domainSearch.toLowerCase())).length} of ${domainModal.domains.length} domains`
+                : `${domainModal.domains.length} domains`}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
