@@ -26,7 +26,7 @@ PRIVACY_INDICATORS = [
 
 
 class WHOISCollector(BaseCollector):
-    supported_types = frozenset({"domain"})
+    supported_types = frozenset({"domain", "url"})
     name = "whois"
 
     def _collect(self) -> WHOISEvidence:
@@ -34,8 +34,9 @@ class WHOISCollector(BaseCollector):
 
         # WHOIS only works at the registered domain level (eTLD+1),
         # not on subdomains. e.g. revantage.drojifri.solutions → drojifri.solutions
-        query_domain = extract_registered_domain(self.domain)
-        if query_domain != self.domain:
+        # For URL type, target_domain extracts the hostname from the URL first.
+        query_domain = extract_registered_domain(self.target_domain)
+        if query_domain != self.target_domain:
             logger.info(f"WHOIS: querying registered domain '{query_domain}' (input was '{self.domain}')")
 
         w = python_whois.whois(query_domain)

@@ -32,36 +32,38 @@ DNSBL_LISTS = [
 
 
 class IntelCollector(BaseCollector):
-    supported_types = frozenset({"domain"})
+    supported_types = frozenset({"domain", "url"})
     name = "intel"
 
     def _collect(self) -> IntelEvidence:
         evidence = IntelEvidence()
+        # For URL type, all intel queries target the extracted hostname
+        target = self.target_domain
 
         # ── 1. Certificate Transparency via crt.sh ──
         try:
-            certs, subdomains, raw_entries = self._query_crtsh()
+            certs, subdomains, raw_entries = self._query_crtsh(target)
             evidence.related_certs = certs[:50]  # Cap at 50
             evidence.related_subdomains = subdomains[:100]
             evidence.cert_entries_raw = raw_entries[:200]  # Store for timeline analysis
         except Exception as e:
-            logger.warning(f"crt.sh query failed for {self.domain}: {e}")
+            logger.warning(f"crt.sh query failed for {target}: {e}")
             evidence.notes.append(f"crt.sh lookup failed: {e}")
 
         # ── 2. DNS Blocklist checks ──
         try:
-            blocklist_hits = self._check_dns_blocklists()
+            blocklist_hits = self._check_dns_blocklists(target)
             evidence.blocklist_hits = blocklist_hits
         except Exception as e:
-            logger.warning(f"DNSBL check failed for {self.domain}: {e}")
+            logger.warning(f"DNSBL check failed for {target}: {e}")
             evidence.notes.append(f"DNSBL check failed: {e}")
 
         # ── 3. URLhaus lookup ──
         try:
-            urlhaus_hits = self._check_urlhaus()
+            urlhaus_hits = self._check_urlhaus(target)
             evidence.blocklist_hits.extend(urlhaus_hits)
         except Exception as e:
-            logger.warning(f"URLhaus lookup failed for {self.domain}: {e}")
+            logger.warning(f"URLhaus lookup failed for {target}: {e}")
             evidence.notes.append(f"URLhaus lookup failed: {e}")
 
         # ── Store artifact ──
@@ -74,14 +76,14 @@ class IntelCollector(BaseCollector):
 
         return evidence
 
-    def _query_crtsh(self) -> tuple[list[str], list[str], list[dict]]:
+    def _query_crtsh(self, target: str) -> tuple[list[str], list[str], list[dict]]:
         """
         Query crt.sh Certificate Transparency logs.
         Returns (cert_identities, unique_subdomains, raw_entries).
         """
         resp = requests.get(
             "https://crt.sh/",
-            params={"q": f"%.{self.domain}", "output": "json"},
+            params={"q": f"%.{target}", "output": "json"},
             timeout=self.timeout,
             headers={"User-Agent": "ThreatInvestigator/1.0"},
         )
@@ -119,13 +121,13 @@ class IntelCollector(BaseCollector):
             # Extract subdomains from SAN name_value
             for name in name_value.split("\n"):
                 name = name.strip().lower()
-                if name and (name.endswith(f".{self.domain}") or name == self.domain):
+                if name and (name.endswith(f".{target}") or name == target):
                     subdomains_set.add(name)
 
         subdomains = sorted(subdomains_set)
         return certs, subdomains, raw_entries
 
-    def _check_dns_blocklists(self) -> list[IntelHit]:
+    def _check_dns_blocklists(self, target: str) -> list[IntelHit]:
         """
         Check domain against DNS-based blocklists.
         A positive result (DNS resolves) means the domain is listed.
@@ -133,7 +135,7 @@ class IntelCollector(BaseCollector):
         hits = []
 
         for dnsbl_zone, source_name in DNSBL_LISTS:
-            query = f"{self.domain}.{dnsbl_zone}"
+            query = f"{target}.{dnsbl_zone}"
             try:
                 answers = socket.getaddrinfo(query, None, socket.AF_INET)
                 if answers:
@@ -141,7 +143,7 @@ class IntelCollector(BaseCollector):
                     result_ip = answers[0][4][0]
                     hits.append(IntelHit(
                         source=source_name,
-                        indicator=self.domain,
+                        indicator=target,
                         category="blocklist",
                         severity="high",
                         details=f"Listed in {source_name} (response: {result_ip})",
@@ -154,14 +156,14 @@ class IntelCollector(BaseCollector):
 
         return hits
 
-    def _check_urlhaus(self) -> list[IntelHit]:
+    def _check_urlhaus(self, target: str) -> list[IntelHit]:
         """
         Check domain against abuse.ch URLhaus.
         Free API, no key needed.
         """
         resp = requests.post(
             "https://urlhaus-api.abuse.ch/v1/host/",
-            data={"host": self.domain},
+            data={"host": target},
             timeout=self.timeout,
         )
 
@@ -178,7 +180,7 @@ class IntelCollector(BaseCollector):
             if url_count and int(url_count) > 0:
                 hits.append(IntelHit(
                     source="URLhaus (abuse.ch)",
-                    indicator=self.domain,
+                    indicator=target,
                     category="malware_distribution",
                     severity="high",
                     details=f"URLhaus: {url_count} malicious URLs associated",

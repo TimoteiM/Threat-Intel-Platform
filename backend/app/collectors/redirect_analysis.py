@@ -103,7 +103,8 @@ def _probe_with_ua(
     timeout: int,
 ) -> dict:
     """Send a request with a specific User-Agent and capture redirect chain."""
-    url = f"https://{domain}"
+    # Accept both bare domains ("phishing.com") and full URLs ("https://phishing.com/path")
+    url = domain if domain.startswith(("http://", "https://")) else f"https://{domain}"
     session = requests.Session()
     session.headers["User-Agent"] = ua_string
 

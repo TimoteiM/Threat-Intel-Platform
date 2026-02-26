@@ -41,7 +41,7 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
 const COLLECTORS_PER_TYPE: Record<ObservableType, string[]> = {
   domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan"],
   ip:     ["asn", "vt", "threat_feeds", "urlscan"],
-  url:    ["http", "tls", "asn", "vt", "threat_feeds", "urlscan"],
+  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan"],
   hash:   ["vt", "threat_feeds"],
   file:   ["vt"],
 };

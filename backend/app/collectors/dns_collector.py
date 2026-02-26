@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class DNSCollector(BaseCollector):
     name = "dns"
-    supported_types = frozenset({"domain"})
+    supported_types = frozenset({"domain", "url"})
 
     def _collect(self) -> DNSEvidence:
         evidence = DNSEvidence()
@@ -27,6 +27,9 @@ class DNSCollector(BaseCollector):
         resolver.nameservers = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
         resolver.timeout = self.timeout
         resolver.lifetime = self.timeout
+
+        # For URL type, resolve the extracted hostname rather than the full URL
+        target = self.target_domain
 
         # ── Standard record types ──
         record_map = {
@@ -42,14 +45,14 @@ class DNSCollector(BaseCollector):
 
         for rtype, field_name in record_map.items():
             try:
-                answers = resolver.resolve(self.domain, rtype)
+                answers = resolver.resolve(target, rtype)
                 values = []
                 for rdata in answers:
                     val = str(rdata).strip('"')
                     values.append(val)
                     all_records.append(DNSRecord(
                         type=rtype,
-                        name=self.domain,
+                        name=target,
                         value=val,
                         ttl=answers.rrset.ttl if answers.rrset else None,
                     ))
@@ -61,18 +64,18 @@ class DNSCollector(BaseCollector):
             ):
                 pass
             except Exception as e:
-                logger.debug(f"DNS {rtype} lookup failed for {self.domain}: {e}")
+                logger.debug(f"DNS {rtype} lookup failed for {target}: {e}")
 
         # ── DMARC (TXT record at _dmarc.{domain}) ──
         try:
-            dmarc_answers = resolver.resolve(f"_dmarc.{self.domain}", "TXT")
+            dmarc_answers = resolver.resolve(f"_dmarc.{target}", "TXT")
             for rdata in dmarc_answers:
                 val = str(rdata).strip('"')
                 if val.lower().startswith("v=dmarc"):
                     evidence.dmarc = val
                     all_records.append(DNSRecord(
                         type="TXT",
-                        name=f"_dmarc.{self.domain}",
+                        name=f"_dmarc.{target}",
                         value=val,
                     ))
                     break

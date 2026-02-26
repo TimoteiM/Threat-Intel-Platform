@@ -110,6 +110,20 @@ class BaseCollector(abc.ABC):
             empty = self._empty_evidence(meta)
             return empty, meta, {}
 
+    @property
+    def target_domain(self) -> str:
+        """Return the hostname for domain-based lookups.
+
+        For URL type, extracts the hostname from the URL so collectors like
+        DNS, WHOIS, and Intel can operate on the domain rather than the full URL.
+        For all other types returns self.domain as-is.
+        """
+        if self.observable_type == "url":
+            from urllib.parse import urlparse
+            parsed = urlparse(self.domain)
+            return parsed.hostname or self.domain
+        return self.domain
+
     def _store_artifact(self, name: str, data: bytes | str) -> None:
         """
         Buffer a raw artifact for later persistence.

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React from "react";
 import { CollectedEvidence } from "@/lib/types";
@@ -60,7 +60,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
           if (hasVtDns) {
             return (
               <>
-                <EmptyNote>No live A/AAAA records found â€” showing VT passive DNS (historical)</EmptyNote>
+                <EmptyNote>No live A/AAAA records found — showing VT passive DNS (historical)</EmptyNote>
                 <EvidenceTable
                   title="A / AAAA Records (VT Passive DNS)"
                   data={[
@@ -162,7 +162,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                       fontSize: 24, fontWeight: 800, color: scoreColor,
                       fontFamily: "var(--font-mono)",
                     }}>
-                      {score ?? "â€”"}
+                      {score ?? "—"}
                     </div>
                     <div style={{
                       fontSize: 11, fontWeight: 600, color: scoreColor,
@@ -183,7 +183,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                       fontSize: 18, fontWeight: 800, color: spoofColor,
                       fontFamily: "var(--font-mono)", textTransform: "uppercase",
                     }}>
-                      {spoofability || "â€”"}
+                      {spoofability || "—"}
                     </div>
                     <div style={{
                       fontSize: 11, fontWeight: 600, color: spoofColor,
@@ -203,10 +203,10 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                   data={[
                     { field: "Record", value: es.dmarc_record || "Not configured" },
                     { field: "Policy", value: es.dmarc_policy || "none" },
-                    { field: "Subdomain Policy", value: es.dmarc_subdomain_policy || "â€”" },
-                    { field: "Percentage", value: es.dmarc_pct != null ? `${es.dmarc_pct}%` : "â€”" },
-                    { field: "DKIM Alignment", value: es.dmarc_alignment_dkim === "s" ? "strict" : es.dmarc_alignment_dkim === "r" ? "relaxed" : "â€”" },
-                    { field: "SPF Alignment", value: es.dmarc_alignment_spf === "s" ? "strict" : es.dmarc_alignment_spf === "r" ? "relaxed" : "â€”" },
+                    { field: "Subdomain Policy", value: es.dmarc_subdomain_policy || "—" },
+                    { field: "Percentage", value: es.dmarc_pct != null ? `${es.dmarc_pct}%` : "—" },
+                    { field: "DKIM Alignment", value: es.dmarc_alignment_dkim === "s" ? "strict" : es.dmarc_alignment_dkim === "r" ? "relaxed" : "—" },
+                    { field: "SPF Alignment", value: es.dmarc_alignment_spf === "s" ? "strict" : es.dmarc_alignment_spf === "r" ? "relaxed" : "—" },
                     ...(arr(es.dmarc_rua).length > 0 ? [{ field: "Aggregate Reports", value: arr(es.dmarc_rua).join(", ") }] : []),
                     ...(arr(es.dmarc_ruf).length > 0 ? [{ field: "Forensic Reports", value: arr(es.dmarc_ruf).join(", ") }] : []),
                   ]}
@@ -218,8 +218,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                   title="SPF"
                   data={[
                     { field: "Record", value: es.spf_record || "Not configured" },
-                    { field: "All Qualifier", value: es.spf_all_qualifier || "â€”" },
-                    { field: "IP Count", value: es.spf_ip_count ?? "â€”" },
+                    { field: "All Qualifier", value: es.spf_all_qualifier || "—" },
+                    { field: "IP Count", value: es.spf_ip_count ?? "—" },
                     ...(arr(es.spf_includes).length > 0 ? [{ field: "Includes", value: arr(es.spf_includes).join(", ") }] : []),
                     ...(arr(es.spf_mechanisms).length > 0 ? [{ field: "Mechanisms", value: arr(es.spf_mechanisms).join(" ") }] : []),
                   ]}
@@ -233,8 +233,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     data={arr(es.dkim_records).map((r: any) => ({
                       selector: r.selector,
                       key_present: r.public_key_present ? "Yes" : "No",
-                      key_type: r.key_type || "â€”",
-                      notes: r.notes || "â€”",
+                      key_type: r.key_type || "—",
+                      notes: r.notes || "—",
                     }))}
                     columns={[
                       { key: "selector" },
@@ -262,7 +262,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     data={arr(es.mx_records).map((mx: any) => ({
                       priority: mx.priority,
                       hostname: mx.hostname,
-                      ips: arr(mx.ips).join(", ") || "â€”",
+                      ips: arr(mx.ips).join(", ") || "—",
                       blocklist: arr(mx.blocklist_hits).length > 0
                         ? arr(mx.blocklist_hits).join("; ")
                         : "Clean",
@@ -317,15 +317,15 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
           <EvidenceTable
             data={[
               { field: "Present", value: tls.present ?? "Unknown" },
-              { field: "Issuer", value: tls.issuer_org || tls.issuer || "â€”" },
-              { field: "Subject", value: tls.subject || "â€”" },
-              { field: "SANs", value: arr(tls.sans).join(", ") || "â€”" },
+              { field: "Issuer", value: tls.issuer_org || tls.issuer || "—" },
+              { field: "Subject", value: tls.subject || "—" },
+              { field: "SANs", value: arr(tls.sans).join(", ") || "—" },
               { field: "Valid From", value: fmtDate(tls.valid_from) },
               { field: "Valid To", value: fmtDate(tls.valid_to) },
-              { field: "Days Remaining", value: tls.valid_days_remaining ?? "â€”" },
+              { field: "Days Remaining", value: tls.valid_days_remaining ?? "—" },
               { field: "Self-Signed", value: tls.is_self_signed },
               { field: "Wildcard", value: tls.is_wildcard },
-              { field: "SHA-256", value: tls.cert_sha256 || "â€”" },
+              { field: "SHA-256", value: tls.cert_sha256 || "—" },
             ]}
             columns={[{ key: "field" }, { key: "value", wrap: true }]}
           />
@@ -342,11 +342,11 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
               title="Connection"
               data={[
                 { field: "Reachable", value: http.reachable ?? "Unknown" },
-                { field: "Final URL", value: http.final_url || "â€”" },
-                { field: "Status Code", value: http.final_status_code ?? "â€”" },
-                { field: "Server", value: http.server || "â€”" },
-                { field: "Title", value: http.title || "â€”" },
-                { field: "Login Form", value: http.has_login_form ? "âš  Yes" : "No" },
+                { field: "Final URL", value: http.final_url || "—" },
+                { field: "Status Code", value: http.final_status_code ?? "—" },
+                { field: "Server", value: http.server || "—" },
+                { field: "Title", value: http.title || "—" },
+                { field: "Login Form", value: http.has_login_form ? "⚠ Yes" : "No" },
                 { field: "Redirects", value: arr(http.redirect_chain).length },
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
@@ -357,8 +357,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                 title="Redirect Chain"
                 data={arr(http.redirect_chain).map((r: any, i: number) => ({
                   step: `${i + 1}`,
-                  url: r?.url || r?.location || "â€”",
-                  status: r?.status_code === 0 ? "JS/Meta" : (r?.status_code ?? "â€”"),
+                  url: r?.url || r?.location || "—",
+                  status: r?.status_code === 0 ? "JS/Meta" : (r?.status_code ?? "—"),
                 }))}
                 columns={[{ key: "step" }, { key: "url", wrap: true }, { key: "status" }]}
               />
@@ -408,8 +408,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                   fontWeight: 600,
                 }}>
                   {cloaking
-                    ? "UA-based cloaking detected â€” different URLs or status codes across User-Agents"
-                    : "No cloaking detected â€” consistent URLs and status codes across User-Agents"}
+                    ? "UA-based cloaking detected — different URLs or status codes across User-Agents"
+                    : "No cloaking detected — consistent URLs and status codes across User-Agents"}
                 </div>
 
                 {/* Cloaking details */}
@@ -437,10 +437,10 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     data={arr(ra.probes).map((p: any) => ({
                       ua_type: p.user_agent_type,
                       status: p.status_code || "Failed",
-                      final_url: p.final_url || "â€”",
+                      final_url: p.final_url || "—",
                       redirects: p.redirect_count,
-                      title: p.title || "â€”",
-                      content_hash: p.content_hash ? `${p.content_hash.substring(0, 12)}...` : "â€”",
+                      title: p.title || "—",
+                      content_hash: p.content_hash ? `${p.content_hash.substring(0, 12)}...` : "—",
                     }))}
                     columns={[
                       { key: "ua_type" },
@@ -488,8 +488,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     data={arr(ra.intermediate_domains).map((d: any) => ({
                       domain: d.domain,
                       hop: d.hop_number,
-                      tracker: d.is_known_tracker ? "Yes" : "â€”",
-                      redirector: d.is_known_redirector ? "Yes" : "â€”",
+                      tracker: d.is_known_tracker ? "Yes" : "—",
+                      redirector: d.is_known_redirector ? "Yes" : "—",
                     }))}
                     columns={[
                       { key: "domain", wrap: true },
@@ -616,7 +616,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
 
             return (
               <>
-                {/* Summary stat boxes â€” clickable to expand details */}
+                {/* Summary stat boxes — clickable to expand details */}
                 <div style={{
                   display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8,
                   marginBottom: 16,
@@ -965,7 +965,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     data={arr(ja.suspicious_scripts).slice(0, 15).map((s: any) => ({
                       domain: s.domain,
                       reason: s.reason,
-                      url: s.url ? `${s.url.substring(0, 60)}...` : "â€”",
+                      url: s.url ? `${s.url.substring(0, 60)}...` : "—",
                     }))}
                     columns={[
                       { key: "domain", wrap: true },
@@ -1037,18 +1037,31 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
 
       {/* WHOIS */}
       <Section title="WHOIS Registration">
+        {/* For URL type, show which domain was queried */}
+        {type === "url" && domain && (() => {
+          let queried = domain;
+          try { queried = new URL(domain).hostname; } catch {}
+          return (
+            <div style={{
+              fontSize: 11, color: "var(--text-muted)", marginBottom: 10,
+              fontFamily: "var(--font-mono)",
+            }}>
+              Queried domain: <span style={{ color: "var(--accent)" }}>{queried}</span>
+            </div>
+          );
+        })()}
         {whois.meta?.status === "failed" ? (
           <EmptyNote>WHOIS lookup failed: {whois.meta?.error || "unknown error"}</EmptyNote>
         ) : (
           <EvidenceTable
             data={[
-              { field: "Registrar", value: whois.registrar || "â€”" },
+              { field: "Registrar", value: whois.registrar || "—" },
               { field: "Created", value: fmtDate(whois.created_date) },
               { field: "Updated", value: fmtDate(whois.updated_date) },
               { field: "Expires", value: fmtDate(whois.expiry_date) },
-              { field: "Domain Age", value: whois.domain_age_days != null ? `${whois.domain_age_days} days` : "â€”" },
-              { field: "Privacy", value: whois.privacy_protected == null ? "â€”" : whois.privacy_protected ? "âš  Yes" : "No" },
-              { field: "Registrant Org", value: whois.registrant_org || "â€”" },
+              { field: "Domain Age", value: whois.domain_age_days != null ? `${whois.domain_age_days} days` : "—" },
+              { field: "Privacy", value: whois.privacy_protected == null ? "—" : whois.privacy_protected ? "⚠ Yes" : "No" },
+              { field: "Registrant Org", value: whois.registrant_org || "—" },
               { field: "Country", value: whois.registrant_country || "Redacted" },
               ...(arr(whois.name_servers).length > 0
                 ? [{ field: "Name Servers", value: arr(whois.name_servers).join(", ") }]
@@ -1059,8 +1072,14 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         )}
       </Section>
 
-      {/* WHOIS History */}
-      {domain && <WHOISHistorySection domain={domain} />}
+      {/* WHOIS History — for URL type use extracted hostname, not full URL */}
+      {domain && (() => {
+        let historyDomain = domain;
+        if (type === "url") {
+          try { historyDomain = new URL(domain).hostname; } catch {}
+        }
+        return <WHOISHistorySection domain={historyDomain} />;
+      })()}
 
       {/* Hosting */}
       <Section title="Hosting / ASN">
@@ -1069,12 +1088,12 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         ) : (
           <EvidenceTable
             data={[
-              { field: "IP", value: hosting.ip || "â€”" },
-              { field: "ASN", value: hosting.asn ? `AS${hosting.asn}` : "â€”" },
-              { field: "Organization", value: hosting.asn_org || "â€”" },
-              { field: "ISP", value: hosting.asn_description || "â€”" },
-              { field: "Country", value: hosting.country || "â€”" },
-              { field: "City", value: hosting.city || "â€”" },
+              { field: "IP", value: hosting.ip || "—" },
+              { field: "ASN", value: hosting.asn ? `AS${hosting.asn}` : "—" },
+              { field: "Organization", value: hosting.asn_org || "—" },
+              { field: "ISP", value: hosting.asn_description || "—" },
+              { field: "Country", value: hosting.country || "—" },
+              { field: "City", value: hosting.city || "—" },
               { field: "CDN", value: hosting.is_cdn },
               { field: "Cloud", value: hosting.is_cloud },
               { field: "Hosting", value: hosting.is_hosting },
@@ -1252,6 +1271,46 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
           <EmptyNote>Domain not found in VirusTotal database</EmptyNote>
         ) : (
           <>
+            {/* File identity — only shown for hash/file investigations */}
+            {isFileHash && (vt.file_name || arr(vt.file_names).length > 0) && (
+              <div style={{ marginBottom: 16 }}>
+                {vt.file_name && (
+                  <EvidenceTable
+                    title="File Identity"
+                    data={[
+                      { field: "File Name", value: vt.file_name },
+                      ...(vt.vt_registrar ? [{ field: "File Type", value: vt.vt_registrar }] : []),
+                    ]}
+                    columns={[{ key: "field" }, { key: "value", wrap: true }]}
+                  />
+                )}
+                {arr(vt.file_names).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{
+                      fontSize: 12, fontWeight: 600, color: "var(--text-secondary)",
+                      letterSpacing: "0.01em", marginBottom: 8,
+                      padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
+                      fontFamily: "var(--font-sans)",
+                    }}>
+                      Known File Names ({arr(vt.file_names).length})
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {arr(vt.file_names).map((name: string, i: number) => (
+                        <span key={i} style={{
+                          padding: "4px 10px", fontSize: 11, fontWeight: 500,
+                          background: "var(--bg-input)", color: "var(--text-dim)",
+                          borderRadius: "var(--radius-sm)", border: "1px solid var(--border)",
+                          fontFamily: "var(--font-mono)",
+                        }}>
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Detection summary bar */}
             <div style={{
               display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8,
@@ -1287,7 +1346,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
               />
             </div>
 
-            {/* Flagging vendors â€” most critical info */}
+            {/* Flagging vendors — most critical info */}
             {arr(vt.flagged_malicious_by).length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{
@@ -1352,10 +1411,12 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             <EvidenceTable
               title="VT Metadata"
               data={[
-                { field: "Community Reputation", value: vt.reputation_score ?? "â€”" },
+                { field: "Community Reputation", value: vt.reputation_score ?? "—" },
                 { field: "Last Analysis", value: fmtDate(vt.last_analysis_date) },
-                { field: "VT Registrar", value: vt.vt_registrar || "â€”" },
-                { field: "VT Cert Issuer", value: vt.vt_cert_issuer || "â€”" },
+                ...(isFileHash
+                  ? (vt.vt_registrar ? [{ field: "File Type", value: vt.vt_registrar }] : [])
+                  : [{ field: "VT Registrar", value: vt.vt_registrar || "—" }]),
+                ...(!isFileHash ? [{ field: "VT Cert Issuer", value: vt.vt_cert_issuer || "—" }] : []),
                 ...(arr(vt.tags).length > 0
                   ? [{ field: "Tags", value: arr(vt.tags).join(", ") }]
                   : []),
@@ -1369,8 +1430,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                 title={`VT Passive DNS (${arr(vt.vt_dns_records).length} records)`}
                 data={arr(vt.vt_dns_records).slice(0, 20).map((r: any) => ({
                   type: r?.type || "?",
-                  value: r?.value || "â€”",
-                  ttl: r?.ttl ?? "â€”",
+                  value: r?.value || "—",
+                  ttl: r?.ttl ?? "—",
                 }))}
                 columns={[{ key: "type" }, { key: "value", wrap: true }, { key: "ttl" }]}
               />
@@ -1433,7 +1494,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
 
             {arr(intel.related_subdomains).length > 0 && (
               <EvidenceTable
-                title={`Subdomains (crt.sh) â€” ${arr(intel.related_subdomains).length} found`}
+                title={`Subdomains (crt.sh) — ${arr(intel.related_subdomains).length} found`}
                 data={arr(intel.related_subdomains).slice(0, 30).map((s: string) => ({
                   field: "subdomain", value: s,
                 }))}
@@ -1467,14 +1528,14 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         </Section>
       )}
 
-      {/* FAVICON HASH INTELLIGENCE â€” domain-specific */}
+      {/* FAVICON HASH INTELLIGENCE — domain-specific */}
       {!isFileHash && evidence?.favicon_intel && (
         <Section title="Favicon Hash Intelligence">
           <FaviconIntelSection faviconIntel={evidence.favicon_intel} />
         </Section>
       )}
 
-      {/* CERTIFICATE TRANSPARENCY TIMELINE â€” domain-specific */}
+      {/* CERTIFICATE TRANSPARENCY TIMELINE — domain-specific */}
       {!isFileHash && evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0 && (
         <Section title="Certificate Transparency Timeline">
           <CertTimelineSection certTimeline={evidence.cert_timeline} />
@@ -1506,7 +1567,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   );
 }
 
-// â”€â”€â”€ Helpers â”€â”€â”€
+// --- Helpers ---
 
 /** Safely coerce anything to an array */
 function arr(val: any): any[] {
@@ -1514,9 +1575,9 @@ function arr(val: any): any[] {
   return [];
 }
 
-/** Format a date string, return "â€”" if missing */
+/** Format a date string, return "—" if missing */
 function fmtDate(val: string | null | undefined): string {
-  if (!val) return "â€”";
+  if (!val) return "—";
   try {
     return new Date(val).toLocaleDateString("en-US", {
       year: "numeric",
@@ -1533,9 +1594,9 @@ function metaRow(name: string, meta: any) {
   if (!meta) return null;
   return {
     collector: name,
-    status: meta.status || "â€”",
-    duration: meta.duration_ms != null ? `${meta.duration_ms}ms` : "â€”",
-    error: meta.error || "â€”",
+    status: meta.status || "—",
+    duration: meta.duration_ms != null ? `${meta.duration_ms}ms` : "—",
+    error: meta.error || "—",
   };
 }
 

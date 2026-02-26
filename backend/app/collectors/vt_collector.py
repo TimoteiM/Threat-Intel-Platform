@@ -220,6 +220,12 @@ class VTCollector(BaseCollector):
         # Extract file-specific metadata
         attrs = data.get("data", {}).get("attributes", {})
         evidence.vt_registrar = attrs.get("type_description", "")  # reuse field for file type
+        # File names: meaningful_name is the most common/recognisable name;
+        # names contains every name the file has been submitted under.
+        evidence.file_name = attrs.get("meaningful_name") or None
+        raw_names = attrs.get("names", [])
+        if isinstance(raw_names, list):
+            evidence.file_names = [n for n in raw_names if n][:20]
         if attrs.get("sha256"):
             evidence.notes.append(f"SHA256: {attrs['sha256']}")
         if attrs.get("md5"):

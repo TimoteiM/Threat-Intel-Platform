@@ -212,8 +212,11 @@ class VTEvidence(BaseModel):
     # Tags
     tags: list[str] = []
     notes: list[str] = []
+    # File-specific (hash/file investigations)
+    file_name: Optional[str] = None
+    file_names: list[str] = []
 
-    
+
 
 # â”€â”€â”€ Certificate Transparency Timeline â”€â”€â”€
 

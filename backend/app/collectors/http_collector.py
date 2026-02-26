@@ -211,10 +211,12 @@ class HTTPCollector(BaseCollector):
             r'<form[^>]+action\s*=\s*["\']?(https?://[^"\'\s>]+)',
             body, re.I,
         )
+        # For URL type, compare against the hostname, not the full URL string
+        own_host = self.target_domain
         for action_url in form_actions:
             try:
                 action_domain = urlparse(action_url).hostname
-                if action_domain and action_domain != self.domain:
+                if action_domain and action_domain != own_host:
                     evidence.phishing_indicators.append(
                         f"Form posts to external domain: {action_domain}"
                     )
@@ -232,7 +234,7 @@ class HTTPCollector(BaseCollector):
             for match in rp.findall(body):
                 try:
                     rd = urlparse(match).hostname
-                    if rd and rd != self.domain:
+                    if rd and rd != own_host:
                         resource_domains.add(rd)
                 except Exception:
                     pass
