@@ -20,6 +20,7 @@ from app.api.router import api_router
 from app.config import get_settings
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.db.session import async_engine
+from app.utils.runtime_guardrails import build_runtime_guardrail_report
 
 settings = get_settings()
 
@@ -52,6 +53,15 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(stmt))
 
     logger.info("Database schema verified / migrated")
+    try:
+        guardrails = build_runtime_guardrail_report()
+        if not guardrails.get("ok", True):
+            for warning in guardrails.get("warnings", []):
+                logger.warning("Runtime guardrail: %s", warning)
+        else:
+            logger.info("Runtime guardrails: no duplicate runtime patterns detected")
+    except Exception as exc:
+        logger.warning("Runtime guardrail check failed at startup: %s", exc)
 
     logger.info("Threat Investigation Platform starting")
     logger.info(f"Environment: {settings.app_env}")

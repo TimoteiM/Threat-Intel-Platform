@@ -41,7 +41,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
               +------------------+------------------+
               |                                     |
        +------+------+                      +-------+-------+
-       | PostgreSQL   |                      |     Redis     |
+       | PostgreSQL   |                      |    Valkey     |
        |   port 5432  |                      |   port 6379   |
        | Evidence,    |                      | Celery broker |
        | Reports,     |                      | SSE pub/sub   |
@@ -63,7 +63,16 @@ Automated, evidence-based domain threat investigation platform powered by Claude
                        Collector  Collector   Similarity Comparison Enumeration
 ```
 
-**Stack:** FastAPI + Celery + PostgreSQL + Redis + Next.js + Playwright + Claude AI
+**Stack:** FastAPI + Celery + PostgreSQL + Valkey + Next.js + Playwright + Claude AI
+
+---
+
+## Agent Workflows
+
+- Project agent rules: `AGENTS.md`
+- Task routing playbook: `docs/AGENT_PLAYBOOK.md`
+
+Use these when working with Codex/agent sessions to keep planning, execution, and verification consistent.
 
 ---
 
@@ -578,8 +587,8 @@ Investigations can be exported as:
 
 - Python 3.12+
 - Node.js 20+
-- PostgreSQL 16
-- Redis 7
+- PostgreSQL 18
+- Valkey 8 (Redis-compatible)
 - An Anthropic API key
 
 ### Option 1: Docker Compose (Recommended)
@@ -599,12 +608,16 @@ docker-compose exec api alembic upgrade head
 # http://localhost:3000
 ```
 
+Note: PostgreSQL major upgrades (for example `16 -> 18`) require data migration.
+If an old `pgdata` volume exists, either migrate with `pg_upgrade`/dump-restore
+or use a fresh dev volume.
+
 ### Option 2: Manual Setup
 
 ```bash
 # 1. Start infrastructure
 docker-compose up -d postgres redis
-# Or install PostgreSQL and Redis natively
+# Or install PostgreSQL and Valkey natively
 
 # 2. Configure environment
 cp .env.example .env
@@ -632,13 +645,19 @@ npm run dev
 ### Using the Makefile
 
 ```bash
-make infra       # Start PostgreSQL + Redis
+make infra       # Start PostgreSQL + Valkey
 make migrate     # Run database migrations
 make api         # Start FastAPI with hot reload
 make worker      # Start Celery worker
+make doctor      # Runtime sanity diagnostics (API/Celery/Valkey/Postgres)
 make test        # Run test suite
 make investigate domain=example.com   # CLI investigation
 make seed        # Seed test data
+```
+
+PowerShell alternative (if `make` is not installed):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 ```
 
 ---
@@ -654,7 +673,7 @@ All configuration is via environment variables (`.env` file):
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude | `sk-ant-...` |
 | `DATABASE_URL` | Async PostgreSQL connection string | `postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel` |
 | `DATABASE_SYNC_URL` | Sync PostgreSQL connection string (for Celery/Alembic) | `postgresql://threatintel:threatintel@localhost:5432/threatintel` |
-| `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
+| `REDIS_URL` | Valkey connection string (Redis-compatible) | `redis://localhost:6379/0` |
 | `CELERY_BROKER_URL` | Celery broker URL | `redis://localhost:6379/0` |
 | `CELERY_RESULT_BACKEND` | Celery result backend URL | `redis://localhost:6379/1` |
 

@@ -14,6 +14,7 @@ interface Props {
     requestedCollectors?: string[],
     observableType?: ObservableType,
     fileToUpload?: File,
+    deepScan?: boolean,
   ) => void;
   loading: boolean;
 }
@@ -51,6 +52,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   const [domain, setDomain] = useState("");
   const [fileToUpload, setFileToUpload] = useState<File | null>(null);
   const [context, setContext] = useState("");
+  const [deepScan, setDeepScan] = useState(false);
   const [clientDomain, setClientDomain] = useState("");
   const [showContext, setShowContext] = useState(false);
   const [showClientDomain, setShowClientDomain] = useState(false);
@@ -72,6 +74,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     setSelectedCollectors(COLLECTORS_PER_TYPE[type]); // auto-select all applicable
     setDomain("");
     setFileToUpload(null);
+    if (type !== "file") setDeepScan(false);
   };
 
   const handleSubmit = async () => {
@@ -99,6 +102,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       selectedCollectors.length > 0 ? selectedCollectors : undefined,
       observableType,
       fileToUpload || undefined,
+      observableType === "file" ? deepScan : undefined,
     );
   };
 
@@ -281,6 +285,62 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
             If provided, this URL will be screenshotted for visual comparison instead of the domain homepage
           </div>
+        </div>
+      )}
+
+      {observableType === "file" && (
+        <div style={{
+          marginTop: 10,
+          padding: "10px 12px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border)",
+          background: "var(--bg-elevated)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--text)",
+              fontFamily: "var(--font-sans)",
+            }}>
+              Deep scan mode
+            </div>
+            <div style={{
+              fontSize: 10,
+              color: "var(--text-muted)",
+              marginTop: 2,
+              fontFamily: "var(--font-sans)",
+            }}>
+              Off gives the fastest hash-based response. On uses file mode for richer evidence.
+            </div>
+          </div>
+          <label style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}>
+            <input
+              type="checkbox"
+              checked={deepScan}
+              onChange={(e) => setDeepScan(e.target.checked)}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            <span style={{
+              fontSize: 11,
+              color: deepScan ? "var(--accent)" : "var(--text-dim)",
+              fontWeight: 600,
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.03em",
+            }}>
+              {deepScan ? "DEEP" : "FAST"}
+            </span>
+          </label>
         </div>
       )}
 

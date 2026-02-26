@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import InvestigationInput from "@/components/investigation/InvestigationInput";
-import { createInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
+import { createInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats, getDoctorStatus } from "@/lib/api";
 import type { ObservableType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 
@@ -13,6 +13,44 @@ interface Stats {
   total: number;
   threats: number;
   suspicious: number;
+}
+
+function RuntimeGuardrailBanner({ warnings }: { warnings: string[] }) {
+  if (!warnings.length) return null;
+  return (
+    <div style={{
+      marginTop: 16,
+      marginBottom: 6,
+      background: "rgba(251,191,36,0.10)",
+      border: "1px solid rgba(251,191,36,0.35)",
+      borderRadius: "var(--radius)",
+      padding: "10px 12px",
+    }}>
+      <div style={{
+        fontSize: 11,
+        fontWeight: 700,
+        color: "#fbbf24",
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        marginBottom: 6,
+        fontFamily: "var(--font-sans)",
+      }}>
+        Runtime Guardrail Warning
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {warnings.slice(0, 3).map((w, i) => (
+          <div key={i} style={{
+            color: "var(--text-dim)",
+            fontSize: 12,
+            lineHeight: 1.4,
+            fontFamily: "var(--font-sans)",
+          }}>
+            {w}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -458,6 +496,7 @@ interface SubmitArgs {
   requestedCollectors?: string[];
   observableType?: ObservableType;
   fileToUpload?: File;
+  deepScan?: boolean;
 }
 
 function getTypeLabel(observableType?: string): string {
@@ -671,6 +710,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [recent, setRecent] = useState<any[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, threats: 0, suspicious: 0 });
+  const [runtimeWarnings, setRuntimeWarnings] = useState<string[]>([]);
 
   // Duplicate-check modal state
   const [duplicates, setDuplicates] = useState<any[] | null>(null);
@@ -691,6 +731,13 @@ export default function HomePage() {
         });
       })
       .catch(() => {});
+
+    getDoctorStatus()
+      .then((data: any) => {
+        const warnings = data?.checks?.runtime_guardrails?.warnings || [];
+        setRuntimeWarnings(Array.isArray(warnings) ? warnings : []);
+      })
+      .catch(() => {});
   }, []);
 
   const doCreate = useCallback(async (args: SubmitArgs) => {
@@ -702,7 +749,7 @@ export default function HomePage() {
 
       if (args.observableType === "file" && args.fileToUpload) {
         // File upload goes through a dedicated multipart endpoint
-        const result = await uploadFileInvestigation(args.fileToUpload, args.context);
+        const result = await uploadFileInvestigation(args.fileToUpload, args.context, args.deepScan);
         investigationId = result.investigation_id;
       } else {
         const result = await createInvestigation({
@@ -734,10 +781,11 @@ export default function HomePage() {
       requestedCollectors?: string[],
       observableType?: ObservableType,
       fileToUpload?: File,
+      deepScan?: boolean,
     ) => {
       const args: SubmitArgs = {
         domain, context, clientDomain, investigatedUrl, clientUrl,
-        requestedCollectors, observableType, fileToUpload,
+        requestedCollectors, observableType, fileToUpload, deepScan,
       };
 
       // Duplicate check for all observable types
@@ -781,6 +829,7 @@ export default function HomePage() {
           onClose={() => { setDuplicates(null); setPendingArgs(null); }}
         />
       )}
+      <RuntimeGuardrailBanner warnings={runtimeWarnings} />
 
       {/* ── Hero ── */}
       <div style={{

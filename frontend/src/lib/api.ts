@@ -5,6 +5,8 @@
  * so /api/* → http://localhost:8000/api/*
  */
 
+import type { DoctorStatus } from "@/lib/types";
+
 const BASE = "/api";
 
 class ApiError extends Error {
@@ -54,10 +56,12 @@ export function createInvestigation(data: {
 export async function uploadFileInvestigation(
   file: File,
   context?: string,
+  deepScan?: boolean,
 ): Promise<{ investigation_id: string; domain: string; observable_type: string; state: string }> {
   const formData = new FormData();
   formData.append("file", file);
   if (context) formData.append("context", context);
+  if (deepScan !== undefined) formData.append("deep_scan", String(deepScan));
 
   const res = await fetch(`${BASE}/investigations/upload-file`, {
     method: "POST",
@@ -208,6 +212,10 @@ export function getBatchCampaigns(id: string) {
 
 export function getDashboardStats() {
   return request<any>("/dashboard/stats");
+}
+
+export function getDoctorStatus() {
+  return request<DoctorStatus>("/doctor");
 }
 
 // ─── Watchlist ───

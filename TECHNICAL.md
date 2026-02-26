@@ -643,6 +643,7 @@ Base URL: `http://localhost:8000`
 |---|---|---|
 | `GET` | `/api/health` | Health check |
 | `POST` | `/api/investigations` | Start investigation |
+| `POST` | `/api/investigations/upload-file` | Upload file sample (`multipart/form-data`; supports `deep_scan=true|false`) |
 | `GET` | `/api/investigations` | List (`?state=`, `?search=`, `?limit=`, `?offset=`) |
 | `GET` | `/api/investigations/{id}` | Investigation metadata |
 | `GET` | `/api/investigations/{id}/evidence` | Full evidence JSON |
@@ -668,6 +669,7 @@ Base URL: `http://localhost:8000`
 | `POST` | `/api/tools/ip-lookup` | IP reputation lookup |
 | `GET` | `/api/tools/ip-lookup/history` | IP lookup history |
 | `GET` | `/api/tools/ip-lookup/history/{id}` | Retrieve past lookup |
+| `GET` | `/api/doctor` | Runtime diagnostics + duplicate runtime guardrail checks |
 | `DELETE` | `/api/tools/ip-lookup/history/{id}` | Delete past lookup |
 
 ### Rate Limits

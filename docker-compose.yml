@@ -3,7 +3,7 @@ version: "3.9"
 services:
   # ── Database ──
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: threatintel
       POSTGRES_PASSWORD: threatintel
@@ -18,13 +18,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Redis (queue + pub/sub) ──
+  # ── Valkey (queue + pub/sub, Redis-compatible) ──
   redis:
-    image: redis:7-alpine
+    image: valkey/valkey:8-alpine
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "valkey-cli ping || redis-cli ping"]
       interval: 5s
       timeout: 5s
       retries: 5

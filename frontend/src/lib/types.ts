@@ -750,6 +750,35 @@ export interface DashboardStats {
   recent_malicious: RecentMalicious[];
 }
 
+// --- Runtime Doctor ---
+
+export interface RuntimeGuardrailReport {
+  ok: boolean;
+  warnings: string[];
+  api_runtime: {
+    port: number;
+    listener_pids: string[];
+    warning_count: number;
+    warnings: string[];
+  };
+  celery_runtime: {
+    nodes: string[];
+    node_count: number;
+    warning_count: number;
+    warnings: string[];
+  };
+}
+
+export interface DoctorStatus {
+  ok: boolean;
+  checks: {
+    database?: { ok: boolean; error?: string };
+    redis?: { ok: boolean; url?: string; error?: string };
+    api_keys?: { virustotal?: boolean; anthropic?: boolean };
+    runtime_guardrails?: RuntimeGuardrailReport;
+  };
+}
+
 // --- Watchlist ---
 
 export type WatchlistStatus = "active" | "paused" | "removed";
@@ -844,6 +873,5 @@ export interface GeoPoint {
   city?: string;
   ip: string;
 }
-
 
 

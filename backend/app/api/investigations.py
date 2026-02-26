@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
+from app.config import get_settings
 from app.dependencies import DBSession
 from app.models.schemas import InvestigationCreate
 from app.services.investigation_service import InvestigationService
@@ -112,13 +113,17 @@ async def upload_file_investigation(
     session: DBSession,
     file: UploadFile = File(...),
     context: str = Form(default=""),
+    deep_scan: bool | None = Form(default=None),
 ):
     """
     Upload a file sample for fast hash-based analysis.
 
-    Computes SHA-256 and investigates as observable_type='hash' so VT can do a
-    direct hash lookup (faster than file submission). The uploaded binary is
-    still stored as an artifact for traceability.
+    Args:
+        deep_scan:
+            - false (default): investigate as observable_type='hash' for fastest return.
+            - true: investigate as observable_type='file' for richer file-mode evidence.
+
+    The uploaded binary is always stored as an artifact for traceability.
     """
     import hashlib
     from app.models.schemas import InvestigationCreate
@@ -129,11 +134,13 @@ async def upload_file_investigation(
 
     sha256 = hashlib.sha256(file_bytes).hexdigest()
     filename = file.filename or "unknown"
+    settings = get_settings()
+    use_deep_scan = settings.upload_file_deep_scan_default if deep_scan is None else deep_scan
 
     # Create the investigation via the service (hash-first for speed)
     request = InvestigationCreate(
         domain=sha256,
-        observable_type="hash",
+        observable_type="file" if use_deep_scan else "hash",
         context=context or None,
         requested_collectors=["vt"],
     )

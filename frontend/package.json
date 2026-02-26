@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3000",
-    "build": "next build",
-    "start": "next start",
+    "check:node": "node scripts/check-node-version.cjs",
+    "dev": "node scripts/check-node-version.cjs && next dev --port 3000",
+    "build": "node scripts/check-node-version.cjs && next build",
+    "start": "node scripts/check-node-version.cjs && next start",
     "lint": "next lint"
+  },
+  "engines": {
+    "node": ">=18 <23"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

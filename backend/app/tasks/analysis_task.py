@@ -19,11 +19,13 @@ from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
+from app.config import get_settings
 from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Map collector names to evidence field names when they differ
 COLLECTOR_FIELD_MAP = {
@@ -82,6 +84,7 @@ def run_analysis(
         "domain": domain,
         "observable_type": observable_type,
         "investigation_id": investigation_id,
+        "schema_version": settings.evidence_schema_version,
         # Hostname extracted from URL (equals domain for non-URL types)
         "target_domain": effective_domain,
         "timestamps": {
@@ -355,6 +358,7 @@ def run_analysis(
                 "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
                 "risk_score": None,
             }
+    report_data.setdefault("schema_version", settings.report_schema_version)
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
 
@@ -401,6 +405,8 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         vt_suspicious = vt.get("suspicious_count", 0)
         vt_total     = vt.get("total_vendors", 0)
         flagged_by   = vt.get("flagged_malicious_by", []) or []
+        malware_families = vt.get("malware_family_names", []) or []
+        yara_matches = vt.get("yara_rule_matches", []) or []
 
         if not vt_found:
             classification = "inconclusive"
@@ -437,12 +443,24 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             vendor         = flagged_by[0] if flagged_by else "unknown vendor"
             key_evidence   = [f"Single vendor detection ({vendor})  -  may be a false positive"]
             recommended_action = "investigate"
+        elif malware_families or yara_matches:
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = 55
+            key_evidence = []
+            recommended_action = "escalate"
+            recommended_steps = ["Run deeper sandbox and EDR pivoting", "Search environment for related hashes/IOCs"]
         else:
             classification = "benign"
             confidence     = "medium"
             risk_score     = 5
             key_evidence   = [f"Clean  -  0/{vt_total} detections in VirusTotal"]
             recommended_action = "allow"
+
+        if malware_families:
+            key_evidence.append(f"Malware family tags: {', '.join(malware_families[:4])}")
+        if yara_matches:
+            key_evidence.append(f"YARA matches: {', '.join(yara_matches[:4])}")
 
     # -- Email ----------------------------------------------------------------
     elif observable_type == "ip":
@@ -496,6 +514,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
     )
 
     return {
+        "schema_version": settings.report_schema_version,
         "classification": classification,
         "confidence": confidence,
         "investigation_state": "concluded",
@@ -555,6 +574,11 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
     elif observable_type in ("hash", "file"):
         # Keep the investigated hash/file identifier as a primary pivot IOC.
         add_ioc("hash", observable, "Investigated sample/hash", "high")
+        vt = evidence_data.get("vt") or {}
+        for family in (vt.get("malware_family_names") or []):
+            add_ioc("malware_family", family, "VirusTotal family classification", "medium")
+        for yara_rule in (vt.get("yara_rule_matches") or []):
+            add_ioc("yara_rule", yara_rule, "VirusTotal YARA match", "medium")
 
     # ThreatFox IOC matches from threat_feeds collector.
     threat_feeds = evidence_data.get("threat_feeds") or {}
@@ -959,6 +983,3 @@ def _publish_progress(
         )
     except Exception as e:
         logger.warning(f"Failed to publish progress: {e}")
-
-
-

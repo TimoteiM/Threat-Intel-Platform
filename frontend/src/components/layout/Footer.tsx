@@ -131,7 +131,7 @@ export default function Footer() {
               fontFamily: "var(--font-sans)",
             }}
           >
-            &copy; {YEAR} Threat Investigator - Timotei Moscaliuc. All rights reserved.
+            &copy; {YEAR} Threat Investigator by Timotei Moscaliuc. All rights reserved.
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

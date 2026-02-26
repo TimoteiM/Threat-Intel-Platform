@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     max_analyst_iterations: int = 1
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
+    upload_file_deep_scan_default: bool = False
+    collector_retry_attempts: int = 2
+    collector_retry_backoff_sec: float = 1.5
+    investigation_slow_log_threshold_sec: int = 45
+    evidence_schema_version: str = "1.1"
+    report_schema_version: str = "1.1"
 
     @property
     def cors_origins_list(self) -> list[str]:

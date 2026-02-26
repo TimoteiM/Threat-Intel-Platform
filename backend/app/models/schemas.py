@@ -211,6 +211,8 @@ class VTEvidence(BaseModel):
     vt_registrar: str = ""
     # Tags
     tags: list[str] = []
+    malware_family_names: list[str] = []
+    yara_rule_matches: list[str] = []
     notes: list[str] = []
     # File-specific (hash/file investigations)
     file_name: Optional[str] = None
@@ -871,5 +873,4 @@ class ClientAlertRead(BaseModel):
 class ClientAlertListResponse(BaseModel):
     items: list[ClientAlertRead]
     total: int
-
 

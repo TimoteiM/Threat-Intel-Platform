@@ -293,8 +293,54 @@ class VTCollector(BaseCollector):
         if not evidence.vt_registrar:
             evidence.vt_registrar = attrs.get("registrar", "")
         evidence.tags = attrs.get("tags", [])
+        evidence.malware_family_names = self._extract_malware_family_names(attrs)
+        evidence.yara_rule_matches = self._extract_yara_rule_matches(attrs)
 
         return evidence
+
+    @staticmethod
+    def _extract_malware_family_names(attrs: dict) -> list[str]:
+        families: list[str] = []
+        seen: set[str] = set()
+
+        # Common VT file classification block.
+        classification = attrs.get("popular_threat_classification") or {}
+        for entry in classification.get("popular_threat_name", []) or []:
+            value = (entry.get("value") if isinstance(entry, dict) else entry) or ""
+            normalized = str(value).strip()
+            key = normalized.lower()
+            if normalized and key not in seen:
+                seen.add(key)
+                families.append(normalized)
+
+        # Optional high-level label when no concrete family names are available.
+        label = str(classification.get("suggested_threat_label") or "").strip()
+        if label and label.lower() not in seen:
+            seen.add(label.lower())
+            families.append(label)
+
+        return families
+
+    @staticmethod
+    def _extract_yara_rule_matches(attrs: dict) -> list[str]:
+        matches: list[str] = []
+        seen: set[str] = set()
+
+        for rule in attrs.get("crowdsourced_yara_results", []) or []:
+            if not isinstance(rule, dict):
+                continue
+            name = str(rule.get("rule_name") or "").strip()
+            ruleset = str(rule.get("ruleset_name") or "").strip()
+            if not name:
+                continue
+            display = f"{ruleset}:{name}" if ruleset else name
+            key = display.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.append(display)
+
+        return matches
 
     def _empty_evidence(self, meta: CollectorMeta) -> VTEvidence:
         return VTEvidence(meta=meta)

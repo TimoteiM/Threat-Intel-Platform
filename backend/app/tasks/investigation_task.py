@@ -18,6 +18,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -81,6 +82,7 @@ def run_investigation(
         f"[{investigation_id}] Starting investigation for {domain} "
         f"(type={observable_type})"
     )
+    task_start = time.monotonic()
 
     # ── Guard: verify investigation exists in DB before doing any work ──
     # Protects against stale re-queued tasks where the investigation row was
@@ -152,6 +154,19 @@ def run_investigation(
         max_iterations=settings.max_analyst_iterations,
     )
 
+    total_duration = time.monotonic() - task_start
+    if total_duration >= settings.investigation_slow_log_threshold_sec:
+        logger.warning(
+            "[%s] Slow investigation completed in %.2fs (threshold=%ss, type=%s, collectors=%s)",
+            investigation_id,
+            total_duration,
+            settings.investigation_slow_log_threshold_sec,
+            observable_type,
+            ",".join(collectors_to_run),
+        )
+    else:
+        logger.info("[%s] Investigation completed in %.2fs", investigation_id, total_duration)
+
     return investigation_id
 
 
@@ -171,20 +186,15 @@ def _run_collectors_inline(
     Failed collectors are logged and excluded from the returned list.
     """
     def _run_one(name: str) -> dict:
-        collector_cls = get_collector(name)
-        if not collector_cls:
-            logger.warning(f"[{investigation_id}] Unknown collector: {name}")
-            return {"collector": name, "status": "failed", "evidence": {}, "meta": {}, "artifacts": {}}
-
-        collector = collector_cls(
+        result = _run_collector_with_retries(
+            collector_name=name,
             domain=domain,
             investigation_id=investigation_id,
-            timeout=timeout,
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
+            timeout=timeout,
         )
-
-        evidence, meta, raw_artifacts = collector.run()
+        status = result.get("status", "failed")
 
         # Publish per-collector SSE progress (same as collector_task.py does)
         try:
@@ -195,19 +205,12 @@ def _run_collectors_inline(
                     "type": "collector_complete",
                     "investigation_id": investigation_id,
                     "collector": name,
-                    "status": meta.status.value,
+                    "status": status,
                 }),
             )
         except Exception as pub_err:
             logger.warning(f"[{investigation_id}] Failed to publish collector progress: {pub_err}")
-
-        return {
-            "collector": name,
-            "status": meta.status.value,
-            "evidence": evidence.model_dump(mode="json"),
-            "meta": meta.model_dump(mode="json"),
-            "artifacts": {k: v.hex() for k, v in raw_artifacts.items()},
-        }
+        return result
 
     results: list[dict] = []
     max_workers = max(4, len(collectors_to_run))
@@ -225,6 +228,110 @@ def _run_collectors_inline(
                 logger.error(f"[{investigation_id}] Collector '{name}' raised: {e}")
 
     return results
+
+
+def _run_collector_with_retries(
+    collector_name: str,
+    domain: str,
+    investigation_id: str,
+    observable_type: str,
+    file_artifact_id: str | None,
+    timeout: int,
+) -> dict:
+    collector_cls = get_collector(collector_name)
+    if not collector_cls:
+        logger.warning(f"[{investigation_id}] Unknown collector: {collector_name}")
+        return {
+            "collector": collector_name,
+            "status": "failed",
+            "evidence": {},
+            "meta": {"collector": collector_name, "status": "failed", "error": "Unknown collector"},
+            "artifacts": {},
+        }
+
+    attempts = max(1, int(settings.collector_retry_attempts))
+    backoff = max(0.0, float(settings.collector_retry_backoff_sec))
+    last_result: dict | None = None
+    last_error = ""
+
+    for attempt in range(1, attempts + 1):
+        collector_start = time.monotonic()
+        try:
+            collector = collector_cls(
+                domain=domain,
+                investigation_id=investigation_id,
+                timeout=timeout,
+                observable_type=observable_type,
+                file_artifact_id=file_artifact_id,
+            )
+            evidence, meta, raw_artifacts = collector.run()
+
+            last_result = {
+                "collector": collector_name,
+                "status": meta.status.value,
+                "evidence": evidence.model_dump(mode="json"),
+                "meta": meta.model_dump(mode="json"),
+                "artifacts": {k: v.hex() for k, v in raw_artifacts.items()},
+            }
+            if meta.status.value != "failed":
+                elapsed = time.monotonic() - collector_start
+                logger.info(
+                    "[%s] Collector %s completed in %.2fs (attempt %d/%d)",
+                    investigation_id,
+                    collector_name,
+                    elapsed,
+                    attempt,
+                    attempts,
+                )
+                return last_result
+
+            last_error = (last_result["meta"] or {}).get("error", "collector returned failed status")
+
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[%s] Collector %s exception on attempt %d/%d: %s",
+                investigation_id,
+                collector_name,
+                attempt,
+                attempts,
+                last_error,
+            )
+            last_result = {
+                "collector": collector_name,
+                "status": "failed",
+                "evidence": {},
+                "meta": {"collector": collector_name, "status": "failed", "error": last_error},
+                "artifacts": {},
+            }
+
+        if attempt < attempts and backoff > 0:
+            sleep_for = backoff * attempt
+            logger.info(
+                "[%s] Retrying collector %s in %.1fs (attempt %d/%d, reason=%s)",
+                investigation_id,
+                collector_name,
+                sleep_for,
+                attempt + 1,
+                attempts,
+                last_error or "failed status",
+            )
+            time.sleep(sleep_for)
+
+    logger.error(
+        "[%s] Collector %s failed after %d attempts (%s)",
+        investigation_id,
+        collector_name,
+        attempts,
+        last_error or "unknown error",
+    )
+    return last_result or {
+        "collector": collector_name,
+        "status": "failed",
+        "evidence": {},
+        "meta": {"collector": collector_name, "status": "failed", "error": last_error or "failed"},
+        "artifacts": {},
+    }
 
 
 def _update_state(investigation_id: str, state: InvestigationState) -> None:

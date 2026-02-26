@@ -11,16 +11,20 @@ Install these if you don't have them:
 
 - **Python 3.11+**: https://python.org/downloads
 - **Node.js 18+**: https://nodejs.org
-- **PostgreSQL 16**: https://www.postgresql.org/download/windows/
-- **Redis**: Use Memurai (Redis for Windows) → https://www.memurai.com/get-memurai
-  OR use Docker: `docker run -d -p 6379:6379 redis:7-alpine`
+- **PostgreSQL 18**: https://www.postgresql.org/download/windows/
+- **Valkey**: Use Memurai (Redis-compatible server for Windows) → https://www.memurai.com/get-memurai
+  OR use Docker: `docker run -d -p 6379:6379 valkey/valkey:8-alpine`
 - **Git**: https://git-scm.com/download/win
 
-**Alternative**: If you have Docker Desktop, skip Postgres/Redis installs and use:
+**Alternative**: If you have Docker Desktop, skip Postgres/Valkey installs and use:
 ```powershell
-docker run -d --name ti-postgres -e POSTGRES_USER=threatintel -e POSTGRES_PASSWORD=threatintel -e POSTGRES_DB=threatintel -p 5432:5432 postgres:16-alpine
-docker run -d --name ti-redis -p 6379:6379 redis:7-alpine
+docker run -d --name ti-postgres -e POSTGRES_USER=threatintel -e POSTGRES_PASSWORD=threatintel -e POSTGRES_DB=threatintel -p 5432:5432 postgres:18-alpine
+docker run -d --name ti-valkey -p 6379:6379 valkey/valkey:8-alpine
 ```
+
+If you are upgrading from an older PostgreSQL container (for example 16 -> 18),
+reuse of the same Docker volume can fail at startup. For local dev, use a fresh
+volume or perform a proper `pg_upgrade`/dump-restore.
 
 ---
 
@@ -68,7 +72,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 DATABASE_URL=postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel
 DATABASE_SYNC_URL=postgresql://threatintel:threatintel@localhost:5432/threatintel
 
-# ─── Redis ───
+# ─── Valkey (Redis-compatible) ───
 REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
@@ -229,7 +233,7 @@ You should see:
 | Component   | Check                                           | Expected                          |
 |-------------|------------------------------------------------|-----------------------------------|
 | PostgreSQL  | `psql -U threatintel -d threatintel -c '\dt'`  | Lists 7 tables                    |
-| Redis       | `redis-cli ping`                                | `PONG`                            |
+| Valkey      | `redis-cli ping` or `valkey-cli ping`          | `PONG`                            |
 | API         | http://localhost:8000/api/health                | `{"status":"ok",...}`             |
 | API         | http://localhost:8000/docs                       | Swagger UI                        |
 | Worker      | Check terminal output                           | `Ready.`                          |
@@ -254,8 +258,8 @@ Use `--pool=solo` flag. Windows doesn't support the default prefork pool.
 ### "Module not found" errors
 Make sure your virtual environment is activated (`.\venv\Scripts\Activate.ps1`).
 
-### Redis connection refused
-Start Redis/Memurai. On Windows with Docker: `docker start ti-redis`
+### Valkey connection refused
+Start Valkey/Memurai. On Windows with Docker: `docker start ti-valkey`
 
 ### Alembic can't find models
 Run alembic from the `backend/` directory, not from `backend/app/`.
@@ -273,16 +277,16 @@ Browser (localhost:3000)
                               │
                               ├── Reads/writes ──→ PostgreSQL (localhost:5432)
                               │
-                              ├── Dispatches tasks ──→ Redis (localhost:6379)
+                              ├── Dispatches tasks ──→ Valkey (localhost:6379)
                               │                           │
                               │                           └──→ Celery Worker
                               │                                    │
                               │                                    ├── Runs collectors (DNS/HTTP/TLS/WHOIS/ASN)
                               │                                    ├── Calls Claude API (anthropic.com)
                               │                                    ├── Writes results → PostgreSQL
-                              │                                    └── Publishes progress → Redis pub/sub
+                              │                                    └── Publishes progress → Valkey pub/sub
                               │
-                              └── SSE stream ←── Redis pub/sub (live progress)
+                              └── SSE stream ←── Valkey pub/sub (live progress)
 ```
 
 ---
@@ -290,7 +294,7 @@ Browser (localhost:3000)
 ## Running Order (every time)
 
 1. PostgreSQL (service or Docker container)
-2. Redis (service or Docker container)
+2. Valkey (service or Docker container)
 3. Backend API: `uvicorn app.main:app --reload --port 8000`
 4. Celery Worker: `celery -A app.tasks.celery_app worker --loglevel=info --pool=solo`
 5. Frontend: `npm run dev`
