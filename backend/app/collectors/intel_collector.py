@@ -32,6 +32,7 @@ DNSBL_LISTS = [
 
 
 class IntelCollector(BaseCollector):
+    supported_types = frozenset({"domain"})
     name = "intel"
 
     def _collect(self) -> IntelEvidence:

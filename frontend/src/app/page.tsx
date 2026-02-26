@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import InvestigationInput from "@/components/investigation/InvestigationInput";
-import { createInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
+import { createInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
+import type { ObservableType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -360,7 +361,7 @@ function RecentInvestigations({ items, onOpen }: { items: any[]; onOpen: (id: st
                 padding: "12px 18px",
                 flex: 1, minWidth: 0,
               }}>
-                {/* Domain */}
+                {/* Domain + observable type badge */}
                 <span style={{
                   fontSize: 13, fontWeight: 600,
                   fontFamily: "var(--font-mono)",
@@ -370,6 +371,22 @@ function RecentInvestigations({ items, onOpen }: { items: any[]; onOpen: (id: st
                 }}>
                   {inv.domain}
                 </span>
+                {inv.observable_type && inv.observable_type !== "domain" && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700,
+                    padding: "2px 6px",
+                    background: "rgba(129,140,248,0.12)",
+                    color: "#818cf8",
+                    border: "1px solid rgba(129,140,248,0.25)",
+                    borderRadius: 3,
+                    fontFamily: "var(--font-mono)",
+                    letterSpacing: "0.04em",
+                    flexShrink: 0,
+                    textTransform: "uppercase" as const,
+                  }}>
+                    {inv.observable_type}
+                  </span>
+                )}
 
                 {/* Classification badge */}
                 {clsConfig && (
@@ -438,21 +455,39 @@ interface SubmitArgs {
   clientDomain?: string;
   investigatedUrl?: string;
   clientUrl?: string;
+  requestedCollectors?: string[];
+  observableType?: ObservableType;
+  fileToUpload?: File;
+}
+
+function getTypeLabel(observableType?: string): string {
+  const labels: Record<string, string> = {
+    domain: "Domain",
+    ip: "IP Address",
+    hash: "Hash",
+    email: "Email",
+    file: "File",
+    url: "URL",
+  };
+  return labels[observableType || "domain"] || (observableType || "Observable");
 }
 
 function DuplicateModal({
   existing,
+  observableType,
   onViewExisting,
   onRunNew,
   onClose,
 }: {
   existing: any[];
+  observableType?: string;
   onViewExisting: (id: string) => void;
   onRunNew: () => void;
   onClose: () => void;
 }) {
   const best = existing[0]; // most recent
   const clsConfig = CLASSIFICATION_CONFIG[best?.classification as keyof typeof CLASSIFICATION_CONFIG];
+  const typeLabel = getTypeLabel(observableType);
 
   return (
     /* Backdrop */
@@ -497,13 +532,13 @@ function DuplicateModal({
               color: "var(--text)", fontFamily: "var(--font-sans)",
               marginBottom: 4,
             }}>
-              Domain already investigated
+              {typeLabel} already investigated
             </div>
             <div style={{
               fontSize: 12, color: "var(--text-dim)",
               fontFamily: "var(--font-sans)", lineHeight: 1.5,
             }}>
-              This domain has {existing.length > 1 ? `${existing.length} previous investigations` : "a previous investigation"}.
+              This {typeLabel.toLowerCase()} has {existing.length > 1 ? `${existing.length} previous investigations` : "a previous investigation"}.
               Viewing the existing report saves time and API resources.
             </div>
           </div>
@@ -663,14 +698,26 @@ export default function HomePage() {
     setDuplicates(null);
     setPendingArgs(null);
     try {
-      const result = await createInvestigation({
-        domain:            args.domain,
-        context:           args.context,
-        client_domain:     args.clientDomain,
-        investigated_url:  args.investigatedUrl,
-        client_url:        args.clientUrl,
-      });
-      router.push(`/investigations/${result.investigation_id}`);
+      let investigationId: string;
+
+      if (args.observableType === "file" && args.fileToUpload) {
+        // File upload goes through a dedicated multipart endpoint
+        const result = await uploadFileInvestigation(args.fileToUpload, args.context);
+        investigationId = result.investigation_id;
+      } else {
+        const result = await createInvestigation({
+          domain:               args.domain,
+          observable_type:      args.observableType,
+          context:              args.context,
+          client_domain:        args.clientDomain,
+          investigated_url:     args.investigatedUrl,
+          client_url:           args.clientUrl,
+          requested_collectors: args.requestedCollectors,
+        });
+        investigationId = result.investigation_id;
+      }
+
+      router.push(`/investigations/${investigationId}`);
     } catch (e: any) {
       alert(`Failed: ${e.message}`);
       setLoading(false);
@@ -684,14 +731,26 @@ export default function HomePage() {
       clientDomain?: string,
       investigatedUrl?: string,
       clientUrl?: string,
+      requestedCollectors?: string[],
+      observableType?: ObservableType,
+      fileToUpload?: File,
     ) => {
-      const args: SubmitArgs = { domain, context, clientDomain, investigatedUrl, clientUrl };
+      const args: SubmitArgs = {
+        domain, context, clientDomain, investigatedUrl, clientUrl,
+        requestedCollectors, observableType, fileToUpload,
+      };
 
-      // Check for existing concluded investigations for this exact domain
+      // Duplicate check for all observable types
       try {
-        const data = await listInvestigations({ search: domain, limit: 10, state: "concluded" });
+        const effectiveType = observableType || "domain";
+        const data = await listInvestigations({
+          search: domain, limit: 10, state: "concluded",
+          observable_type: effectiveType,
+        });
         const exact = (data.items || []).filter(
-          (inv: any) => inv.domain.toLowerCase() === domain.toLowerCase(),
+          (inv: any) =>
+            inv.domain.toLowerCase() === domain.toLowerCase() &&
+            (inv.observable_type || "domain") === effectiveType,
         );
         if (exact.length > 0) {
           setPendingArgs(args);
@@ -716,6 +775,7 @@ export default function HomePage() {
       {duplicates && pendingArgs && (
         <DuplicateModal
           existing={duplicates}
+          observableType={pendingArgs.observableType}
           onViewExisting={(id) => router.push(`/investigations/${id}`)}
           onRunNew={() => doCreate(pendingArgs)}
           onClose={() => { setDuplicates(null); setPendingArgs(null); }}

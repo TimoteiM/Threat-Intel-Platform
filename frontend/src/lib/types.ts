@@ -1,11 +1,11 @@
-/**
- * TypeScript types — mirrors backend Pydantic schemas.
+﻿/**
+ * TypeScript types â€” mirrors backend Pydantic schemas.
  *
  * Keep in sync with: backend/app/models/schemas.py
  * Keep in sync with: backend/app/models/enums.py
  */
 
-// ─── Enums ───
+// â”€â”€â”€ Enums â”€â”€â”€
 
 export type InvestigationState =
   | "created"
@@ -15,13 +15,15 @@ export type InvestigationState =
   | "concluded"
   | "failed";
 
+export type ObservableType = "domain" | "ip" | "url" | "hash" | "file";
+
 export type Classification = "benign" | "suspicious" | "malicious" | "inconclusive";
 export type Confidence = "low" | "medium" | "high";
 export type SOCAction = "monitor" | "investigate" | "block" | "hunt";
 export type CollectorStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export type IOCType = "ip" | "domain" | "url" | "hash" | "email";
 
-// ─── Collector Evidence ───
+// â”€â”€â”€ Collector Evidence â”€â”€â”€
 
 export interface CollectorMeta {
   collector: string;
@@ -126,7 +128,7 @@ export interface ASNEvidence {
   related_domains_same_ip: string[];
 }
 
-// ─── Intel Evidence ───
+// â”€â”€â”€ Intel Evidence â”€â”€â”€
 
 export interface IntelHit {
   source: string;
@@ -146,7 +148,7 @@ export interface IntelEvidence {
   notes: string[];
 }
 
-// ─── VirusTotal Evidence ───
+// â”€â”€â”€ VirusTotal Evidence â”€â”€â”€
 
 export interface VTVendorResult {
   vendor: string;
@@ -180,7 +182,7 @@ export interface VTEvidence {
   notes: string[];
 }
 
-// ─── Domain Similarity ───
+// â”€â”€â”€ Domain Similarity â”€â”€â”€
 
 export interface TyposquattingTechnique {
   technique: string;
@@ -210,7 +212,7 @@ export interface DomainSimilarityEvidence {
   summary: string;
 }
 
-// ─── Visual Comparison ───
+// â”€â”€â”€ Visual Comparison â”€â”€â”€
 
 export interface VisualComparisonEvidence {
   investigated_domain: string;
@@ -230,7 +232,7 @@ export interface VisualComparisonEvidence {
   client_capture_error?: string;
 }
 
-// ─── Domain Screenshot ───
+// â”€â”€â”€ Domain Screenshot â”€â”€â”€
 
 export interface ScreenshotEvidence {
   artifact_id?: string;
@@ -238,7 +240,7 @@ export interface ScreenshotEvidence {
   capture_error?: string;
 }
 
-// ─── Subdomain Enumeration ───
+// â”€â”€â”€ Subdomain Enumeration â”€â”€â”€
 
 export interface SubdomainEntry {
   subdomain: string;
@@ -254,7 +256,7 @@ export interface SubdomainEvidence {
   ip_groups: Record<string, string[]>;
 }
 
-// ─── Email Security ───
+// â”€â”€â”€ Email Security â”€â”€â”€
 
 export interface DKIMRecord {
   selector: string;
@@ -292,7 +294,7 @@ export interface EmailSecurityEvidence {
   email_security_score?: number;
 }
 
-// ─── Redirect Analysis ───
+// â”€â”€â”€ Redirect Analysis â”€â”€â”€
 
 export interface RedirectProbe {
   user_agent_type: string;
@@ -321,7 +323,7 @@ export interface RedirectAnalysisEvidence {
   has_geo_block?: boolean;
 }
 
-// ─── JavaScript Analysis ───
+// â”€â”€â”€ JavaScript Analysis â”€â”€â”€
 
 export interface CapturedRequest {
   url: string;
@@ -360,7 +362,7 @@ export interface JSAnalysisEvidence {
   har_artifact_id?: string;
 }
 
-// ─── Signals & Gaps ───
+// â”€â”€â”€ Signals & Gaps â”€â”€â”€
 
 export interface Signal {
   id: string;
@@ -378,7 +380,7 @@ export interface DataGap {
   impact: string;
 }
 
-// ─── Infrastructure Pivot ───
+// â”€â”€â”€ Infrastructure Pivot â”€â”€â”€
 
 export interface ReverseIPResult {
   ip: string;
@@ -406,7 +408,7 @@ export interface InfrastructurePivotEvidence {
   notes: string[];
 }
 
-// ─── Certificate Transparency Timeline ───
+// â”€â”€â”€ Certificate Transparency Timeline â”€â”€â”€
 
 export interface CertTimelineEntry {
   serial_number: string;
@@ -432,7 +434,7 @@ export interface CertTimelineEvidence {
   notes: string[];
 }
 
-// ─── Favicon Hash Intelligence ───
+// â”€â”€â”€ Favicon Hash Intelligence â”€â”€â”€
 
 export interface FaviconHost {
   ip: string;
@@ -452,7 +454,27 @@ export interface FaviconIntelEvidence {
   notes: string[];
 }
 
-// ─── Threat Feed Intelligence ───
+// â”€â”€â”€ URLScan Evidence â”€â”€â”€
+
+export interface URLScanEvidence {
+  meta: CollectorMeta;
+  scan_id?: string;
+  verdict?: string;         // malicious | suspicious | benign
+  score?: number;           // 0-100
+  page_url?: string;
+  page_ip?: string;
+  page_country?: string;
+  page_server?: string;
+  page_title?: string;
+  screenshot_artifact_id?: string;
+  requests_count?: number;
+  verdicts: Record<string, any>;
+  tags: string[];
+  notes: string[];
+}
+
+
+// â”€â”€â”€ Threat Feed Intelligence â”€â”€â”€
 
 export interface AbuseIPDBResult {
   ip: string;
@@ -494,19 +516,22 @@ export interface ThreatFeedEvidence {
   feeds_skipped: string[];
 }
 
-// ─── Master Evidence ───
+// â”€â”€â”€ Master Evidence â”€â”€â”€
 
 export interface CollectedEvidence {
   domain: string;
+  observable_type: ObservableType;
   investigation_id: string;
   timestamps: Record<string, string>;
-  dns: DNSEvidence;
-  whois: WHOISEvidence;
-  http: HTTPEvidence;
-  tls: TLSEvidence;
-  hosting: ASNEvidence;
-  intel: IntelEvidence;
-  vt: VTEvidence;
+  dns?: DNSEvidence;
+  whois?: WHOISEvidence;
+  http?: HTTPEvidence;
+  tls?: TLSEvidence;
+  hosting?: ASNEvidence;
+  intel?: IntelEvidence;
+  vt?: VTEvidence;
+  urlscan?: URLScanEvidence;
+  threat_feeds?: ThreatFeedEvidence;
   domain_similarity?: DomainSimilarityEvidence;
   visual_comparison?: VisualComparisonEvidence;
   screenshot?: ScreenshotEvidence;
@@ -514,7 +539,6 @@ export interface CollectedEvidence {
   email_security?: EmailSecurityEvidence;
   redirect_analysis?: RedirectAnalysisEvidence;
   js_analysis?: JSAnalysisEvidence;
-  threat_feeds?: ThreatFeedEvidence;
   favicon_intel?: FaviconIntelEvidence;
   cert_timeline?: CertTimelineEvidence;
   infrastructure_pivot?: InfrastructurePivotEvidence;
@@ -529,7 +553,7 @@ export interface CollectedEvidence {
   };
 }
 
-// ─── Infrastructure Pivot ───
+// â”€â”€â”€ Infrastructure Pivot â”€â”€â”€
 
 export interface SharedInfrastructure {
   type: string;
@@ -559,7 +583,7 @@ export interface PivotResponse {
   related_investigations: RelatedInvestigation[];
 }
 
-// ─── Analyst Report ───
+// â”€â”€â”€ Analyst Report â”€â”€â”€
 
 export interface AnalystFinding {
   id: string;
@@ -601,11 +625,12 @@ export interface AnalystReport {
   recommendations_narrative?: string;
 }
 
-// ─── API Responses ───
+// â”€â”€â”€ API Responses â”€â”€â”€
 
 export interface InvestigationListItem {
   id: string;
   domain: string;
+  observable_type?: ObservableType;
   state: InvestigationState;
   classification?: Classification;
   risk_score?: number;
@@ -615,6 +640,7 @@ export interface InvestigationListItem {
 export interface InvestigationDetail {
   id: string;
   domain: string;
+  observable_type?: ObservableType;
   state: InvestigationState;
   classification?: Classification;
   confidence?: Confidence;
@@ -635,7 +661,7 @@ export interface ProgressEvent {
   done?: boolean;
 }
 
-// ─── Batch Investigation ───
+// â”€â”€â”€ Batch Investigation â”€â”€â”€
 
 export interface BatchListItem {
   id: string;
@@ -686,7 +712,7 @@ export interface CampaignResponse {
   unclustered: CampaignDomain[];
 }
 
-// ─── Dashboard ───
+// â”€â”€â”€ Dashboard â”€â”€â”€
 
 export interface RiskBucket {
   bucket: string;
@@ -722,7 +748,7 @@ export interface DashboardStats {
   recent_malicious: RecentMalicious[];
 }
 
-// ─── Watchlist ───
+// â”€â”€â”€ Watchlist â”€â”€â”€
 
 export type WatchlistStatus = "active" | "paused" | "removed";
 
@@ -745,7 +771,56 @@ export interface WatchlistAlert {
   acknowledged: boolean;
 }
 
-// ─── WHOIS History ───
+// â”€â”€â”€ Client Management â”€â”€â”€
+
+export type ClientStatus = "active" | "paused";
+export type AlertSeverity = "critical" | "high" | "medium" | "low";
+export type AlertType =
+  | "brand_impersonation"
+  | "typosquatting"
+  | "phishing_detected"
+  | "infrastructure_overlap";
+
+export interface Client {
+  id: string;
+  name: string;
+  domain: string;
+  aliases: string[];
+  brand_keywords: string[];
+  contact_email?: string;
+  notes?: string;
+  status: ClientStatus;
+  created_at: string;
+  alert_count: number;
+  last_alert_at?: string;
+  // Cortex-like per-org config
+  default_collectors: string[];
+}
+
+export interface ClientAlert {
+  id: string;
+  client_id: string;
+  investigation_id?: string;
+  alert_type: AlertType;
+  severity: AlertSeverity;
+  title: string;
+  details_json: Record<string, any>;
+  created_at: string;
+  acknowledged: boolean;
+  resolved: boolean;
+}
+
+export interface ClientListResponse {
+  items: Client[];
+  total: number;
+}
+
+export interface ClientAlertListResponse {
+  items: ClientAlert[];
+  total: number;
+}
+
+// â”€â”€â”€ WHOIS History â”€â”€â”€
 
 export interface WHOISHistorySnapshot {
   id: string;
@@ -756,7 +831,7 @@ export interface WHOISHistorySnapshot {
   changes_from_previous?: Record<string, { old: any; new: any }>;
 }
 
-// ─── Geolocation ───
+// â”€â”€â”€ Geolocation â”€â”€â”€
 
 export interface GeoPoint {
   lat: number;
@@ -767,3 +842,6 @@ export interface GeoPoint {
   city?: string;
   ip: string;
 }
+
+
+

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class DNSCollector(BaseCollector):
     name = "dns"
+    supported_types = frozenset({"domain"})
 
     def _collect(self) -> DNSEvidence:
         evidence = DNSEvidence()

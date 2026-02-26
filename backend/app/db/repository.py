@@ -38,6 +38,7 @@ class InvestigationRepository:
     async def create(
         self,
         domain: str,
+        observable_type: str = "domain",
         context: Optional[str] = None,
         client_domain: Optional[str] = None,
         max_iterations: int = 3,
@@ -45,6 +46,7 @@ class InvestigationRepository:
     ) -> Investigation:
         inv = Investigation(
             domain=domain,
+            observable_type=observable_type,
             context=context,
             client_domain=client_domain,
             state="created",
@@ -67,12 +69,15 @@ class InvestigationRepository:
         offset: int = 0,
         state: Optional[str] = None,
         search: Optional[str] = None,
+        observable_type: Optional[str] = None,
     ) -> Sequence[Investigation]:
         query = select(Investigation).order_by(Investigation.created_at.desc())
         if state:
             query = query.where(Investigation.state == state)
         if search:
             query = query.where(Investigation.domain.ilike(f"%{search}%"))
+        if observable_type:
+            query = query.where(Investigation.observable_type == observable_type)
         query = query.limit(limit).offset(offset)
         result = await self.session.execute(query)
         return result.scalars().all()
@@ -81,12 +86,15 @@ class InvestigationRepository:
         self,
         state: Optional[str] = None,
         search: Optional[str] = None,
+        observable_type: Optional[str] = None,
     ) -> int:
         query = select(func.count(Investigation.id))
         if state:
             query = query.where(Investigation.state == state)
         if search:
             query = query.where(Investigation.domain.ilike(f"%{search}%"))
+        if observable_type:
+            query = query.where(Investigation.observable_type == observable_type)
         result = await self.session.execute(query)
         return result.scalar() or 0
 

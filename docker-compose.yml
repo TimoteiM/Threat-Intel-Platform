@@ -104,6 +104,8 @@ services:
       dockerfile: ../docker/Dockerfile.frontend
     ports:
       - "3000:3000"
+    environment:
+      API_PROXY_TARGET: http://api:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules

@@ -33,8 +33,12 @@ celery_app.conf.update(
     task_acks_late=True,           # Ack after completion (not on receive)
 
     # Performance
-    worker_prefetch_multiplier=1,  # One task at a time per worker process
-    worker_concurrency=4,          # 4 parallel worker processes
+    # Use threads pool — prefork (billiard) fails on Windows with WinError 5/6
+    # (shared-memory semaphores don't work reliably on Windows).
+    # Threads are fine here: all tasks are I/O-bound (HTTP, DNS, DB).
+    worker_pool="threads",
+    worker_prefetch_multiplier=1,  # One task at a time per worker thread
+    worker_concurrency=8,          # 8 concurrent I/O threads
 
     # Task routing (optional — all tasks go to default queue for now)
     task_default_queue="investigations",

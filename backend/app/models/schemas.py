@@ -1,5 +1,5 @@
-"""
-Pydantic schemas — the data contract for the entire application.
+﻿"""
+Pydantic schemas â€” the data contract for the entire application.
 
 Three categories:
 1. Evidence schemas (collector outputs)
@@ -25,9 +25,9 @@ from app.models.enums import (
 )
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 1. EVIDENCE SCHEMAS (collector outputs)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class CollectorMeta(BaseModel):
     """Audit trail attached to every collector result."""
@@ -41,7 +41,7 @@ class CollectorMeta(BaseModel):
     raw_artifact_hash: Optional[str] = None
 
 
-# ─── DNS ───
+# â”€â”€â”€ DNS â”€â”€â”€
 
 class DNSRecord(BaseModel):
     type: str
@@ -64,7 +64,7 @@ class DNSEvidence(BaseModel):
     has_dnssec: Optional[bool] = None
 
 
-# ─── WHOIS ───
+# â”€â”€â”€ WHOIS â”€â”€â”€
 
 class WHOISEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="whois"))
@@ -80,7 +80,7 @@ class WHOISEvidence(BaseModel):
     statuses: list[str] = []
 
 
-# ─── HTTP ───
+# â”€â”€â”€ HTTP â”€â”€â”€
 
 class HTTPRedirect(BaseModel):
     url: str
@@ -111,7 +111,7 @@ class HTTPEvidence(BaseModel):
     external_resources: list[str] = []
 
 
-# ─── TLS ───
+# â”€â”€â”€ TLS â”€â”€â”€
 
 class TLSEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="tls"))
@@ -132,7 +132,7 @@ class TLSEvidence(BaseModel):
     cert_sha256: Optional[str] = None
 
 
-# ─── ASN / Hosting ───
+# â”€â”€â”€ ASN / Hosting â”€â”€â”€
 
 class ASNEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="asn"))
@@ -149,7 +149,7 @@ class ASNEvidence(BaseModel):
     related_domains_same_ip: list[str] = []
 
 
-# ─── Intel / Reputation ───
+# â”€â”€â”€ Intel / Reputation â”€â”€â”€
 
 class IntelHit(BaseModel):
     source: str
@@ -170,7 +170,7 @@ class IntelEvidence(BaseModel):
     # Raw cert entries from crt.sh for downstream timeline analysis
     cert_entries_raw: list[dict] = []
 
-# ─── VirusTotal Evidence ───
+# â”€â”€â”€ VirusTotal Evidence â”€â”€â”€
 
 class VTVendorResult(BaseModel):
     vendor: str
@@ -215,7 +215,7 @@ class VTEvidence(BaseModel):
 
     
 
-# ─── Certificate Transparency Timeline ───
+# â”€â”€â”€ Certificate Transparency Timeline â”€â”€â”€
 
 class CertTimelineEntry(BaseModel):
     serial_number: str
@@ -241,7 +241,7 @@ class CertTimelineEvidence(BaseModel):
     notes: list[str] = []
 
 
-# ─── Threat Feed Intelligence ───
+# â”€â”€â”€ Threat Feed Intelligence â”€â”€â”€
 
 class AbuseIPDBResult(BaseModel):
     ip: str
@@ -283,7 +283,7 @@ class ThreatFeedEvidence(BaseModel):
     feeds_skipped: list[str] = []
 
 
-# ─── Infrastructure Pivot ───
+# â”€â”€â”€ Infrastructure Pivot â”€â”€â”€
 
 class ReverseIPResult(BaseModel):
     ip: str
@@ -311,7 +311,7 @@ class InfrastructurePivotEvidence(BaseModel):
     notes: list[str] = []
 
 
-# ─── Favicon Hash Intelligence ───
+# â”€â”€â”€ Favicon Hash Intelligence â”€â”€â”€
 
 class FaviconHost(BaseModel):
     ip: str
@@ -331,7 +331,7 @@ class FaviconIntelEvidence(BaseModel):
     notes: list[str] = []
 
 
-# ─── Domain Similarity (typosquatting / visual lookalike) ───
+# â”€â”€â”€ Domain Similarity (typosquatting / visual lookalike) â”€â”€â”€
 
 class TyposquattingTechnique(BaseModel):
     """A specific typosquatting technique detected between two domains."""
@@ -364,7 +364,7 @@ class DomainSimilarityEvidence(BaseModel):
     summary: str
 
 
-# ─── Visual Comparison ───
+# â”€â”€â”€ Visual Comparison â”€â”€â”€
 
 class VisualComparisonEvidence(BaseModel):
     """Screenshot-based visual comparison between investigated and client domains."""
@@ -376,14 +376,14 @@ class VisualComparisonEvidence(BaseModel):
     investigated_final_url: Optional[str] = None
     client_final_url: Optional[str] = None
 
-    # Similarity metrics (0.0–1.0, higher = more similar)
+    # Similarity metrics (0.0â€“1.0, higher = more similar)
     phash_similarity: Optional[float] = None
     histogram_similarity: Optional[float] = None
     overall_visual_similarity: Optional[float] = None
 
     # Classification
     is_visual_clone: bool = False       # overall >= 0.80
-    is_partial_clone: bool = False      # overall 0.50–0.79
+    is_partial_clone: bool = False      # overall 0.50â€“0.79
 
     summary: str = ""
 
@@ -392,7 +392,7 @@ class VisualComparisonEvidence(BaseModel):
     client_capture_error: Optional[str] = None
 
 
-# ─── Domain Screenshot ───
+# â”€â”€â”€ Domain Screenshot â”€â”€â”€
 
 class ScreenshotEvidence(BaseModel):
     """Standalone screenshot of the investigated domain."""
@@ -401,7 +401,7 @@ class ScreenshotEvidence(BaseModel):
     capture_error: Optional[str] = None
 
 
-# ─── Subdomain Enumeration ───
+# â”€â”€â”€ Subdomain Enumeration â”€â”€â”€
 
 class SubdomainEntry(BaseModel):
     """A resolved subdomain with its IPs."""
@@ -419,7 +419,7 @@ class SubdomainEvidence(BaseModel):
     ip_groups: dict[str, list[str]] = {}  # IP -> [subdomains]
 
 
-# ─── Email Security ───
+# â”€â”€â”€ Email Security â”€â”€â”€
 
 class DKIMRecord(BaseModel):
     """A discovered DKIM selector and its key status."""
@@ -465,7 +465,7 @@ class EmailSecurityEvidence(BaseModel):
     email_security_score: Optional[int] = None
 
 
-# ─── Redirect Analysis ───
+# â”€â”€â”€ Redirect Analysis â”€â”€â”€
 
 class RedirectProbe(BaseModel):
     """Result of probing a domain with a specific User-Agent."""
@@ -497,7 +497,7 @@ class RedirectAnalysisEvidence(BaseModel):
     has_geo_block: Optional[bool] = None
 
 
-# ─── JavaScript Analysis ───
+# â”€â”€â”€ JavaScript Analysis â”€â”€â”€
 
 class CapturedRequest(BaseModel):
     """A single network request captured during JS analysis."""
@@ -540,10 +540,29 @@ class JSAnalysisEvidence(BaseModel):
     har_artifact_id: Optional[str] = None
 
 
-# ─── Signals & Gaps ───
+# â”€â”€â”€ URLScan Evidence â”€â”€â”€
+
+class URLScanEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="urlscan"))
+    scan_id: Optional[str] = None
+    verdict: Optional[str] = None        # malicious | suspicious | benign
+    score: Optional[int] = None          # 0-100
+    page_url: Optional[str] = None
+    page_ip: Optional[str] = None
+    page_country: Optional[str] = None
+    page_server: Optional[str] = None
+    page_title: Optional[str] = None
+    screenshot_artifact_id: Optional[str] = None
+    requests_count: Optional[int] = None
+    verdicts: dict[str, Any] = {}
+    tags: list[str] = []
+    notes: list[str] = []
+
+
+# —— Signals & Gaps â”€â”€â”€
 
 class Signal(BaseModel):
-    """An investigative clue — NOT a conclusion."""
+    """An investigative clue â€” NOT a conclusion."""
     id: str
     category: str
     description: str
@@ -560,7 +579,7 @@ class DataGap(BaseModel):
     impact: str
 
 
-# ─── External Context (user-provided CTI) ───
+# â”€â”€â”€ External Context (user-provided CTI) â”€â”€â”€
 
 class ExternalContext(BaseModel):
     opencti_observables: list[dict[str, Any]] = []
@@ -569,7 +588,7 @@ class ExternalContext(BaseModel):
     additional_context: Optional[str] = None
 
 
-# ─── Master Evidence Object ───
+# â”€â”€â”€ Master Evidence Object â”€â”€â”€
 
 class CollectedEvidence(BaseModel):
     """
@@ -626,6 +645,12 @@ class CollectedEvidence(BaseModel):
     # Infrastructure pivot (reverse IP, NS clustering, registrant pivot)
     infrastructure_pivot: Optional[InfrastructurePivotEvidence] = None
 
+    # URLScan.io full page scan (domain, ip, url types)
+    urlscan: Optional[URLScanEvidence] = None
+
+    # Observable type that was investigated
+    observable_type: str = "domain"
+
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None
 
@@ -633,9 +658,9 @@ class CollectedEvidence(BaseModel):
     artifact_hashes: dict[str, str] = {}
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 2. ANALYST SCHEMAS (Claude's output)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AnalystFinding(BaseModel):
     id: str
@@ -691,13 +716,14 @@ class AnalystReport(BaseModel):
     recommendations_narrative: Optional[str] = None
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 3. API SCHEMAS (request / response)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class InvestigationCreate(BaseModel):
     """POST /investigations request body."""
-    domain: str
+    domain: str                                     # Observable value (domain, IP, URL, hash, filename)
+    observable_type: str = "domain"                 # domain | ip | url | hash | file
     context: Optional[str] = None
     client_domain: Optional[str] = None
     investigated_url: Optional[str] = None   # Specific URL to screenshot (visual comparison)
@@ -710,6 +736,7 @@ class InvestigationResponse(BaseModel):
     """GET /investigations/{id} response."""
     id: str
     domain: str
+    observable_type: str = "domain"
     state: InvestigationState
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -725,6 +752,7 @@ class InvestigationListItem(BaseModel):
     """Item in GET /investigations list response."""
     id: str
     domain: str
+    observable_type: str = "domain"
     state: InvestigationState
     classification: Optional[Classification] = None
     risk_score: Optional[int] = None
@@ -769,3 +797,76 @@ class WatchlistUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     schedule_interval: Optional[str] = None  # weekly, biweekly, monthly, or "none" to disable
+
+
+# â”€â”€â”€ Client Management â”€â”€â”€
+
+import uuid as _uuid
+from pydantic import ConfigDict
+
+
+class ClientCreate(BaseModel):
+    """POST /api/clients request body."""
+    name: str
+    domain: str
+    aliases: list[str] = []
+    brand_keywords: list[str] = []
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    default_collectors: list[str] = []   # Empty = run all collectors
+
+
+class ClientUpdate(BaseModel):
+    """PATCH /api/clients/{id} request body."""
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    brand_keywords: Optional[list[str]] = None
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+    default_collectors: Optional[list[str]] = None
+
+
+class ClientRead(BaseModel):
+    """Client in API responses."""
+    id: _uuid.UUID
+    name: str
+    domain: str
+    aliases: list[str]
+    brand_keywords: list[str]
+    contact_email: Optional[str]
+    notes: Optional[str]
+    status: str
+    created_at: datetime
+    alert_count: int
+    last_alert_at: Optional[datetime]
+    default_collectors: list[str]
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientListResponse(BaseModel):
+    items: list[ClientRead]
+    total: int
+
+
+class ClientAlertRead(BaseModel):
+    """Alert record in API responses."""
+    id: _uuid.UUID
+    client_id: _uuid.UUID
+    investigation_id: Optional[_uuid.UUID] = None
+    alert_type: str
+    severity: str
+    title: str
+    details_json: dict
+    created_at: datetime
+    acknowledged: bool
+    resolved: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientAlertListResponse(BaseModel):
+    items: list[ClientAlertRead]
+    total: int
+
+

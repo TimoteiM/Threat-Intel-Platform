@@ -57,8 +57,11 @@ ABUSEIPDB_CATEGORIES: dict[int, str] = {
 
 class ThreatFeedsCollector(BaseCollector):
     name = "threat_feeds"
+    supported_types = frozenset({"domain", "ip", "url", "hash"})
 
     def _collect(self) -> ThreatFeedEvidence:
+        from urllib.parse import urlparse
+
         settings = get_settings()
         evidence = ThreatFeedEvidence(
             meta=CollectorMeta(collector=self.name),
@@ -66,28 +69,81 @@ class ThreatFeedsCollector(BaseCollector):
             feeds_skipped=[],
         )
 
-        # Resolve domain → IP for AbuseIPDB
-        resolved_ip: str | None = None
-        try:
-            resolved_ip = socket.gethostbyname(self.domain)
-        except socket.gaierror:
-            logger.warning(f"[{self.name}] Could not resolve {self.domain} to IP")
+        obs_type = self.observable_type
 
-        # Run all feed queries concurrently
+        # ── Determine query value and which feeds apply ──────────────────────
+        # For hash: only ThreatFox is applicable
+        # For IP: AbuseIPDB directly, skip PhishTank/OpenPhish (URL/domain feeds)
+        # For URL: extract hostname for PhishTank/OpenPhish; resolve to IP for AbuseIPDB
+        # For domain: existing full logic
+
+        if obs_type == "hash":
+            # Only ThreatFox applies for hashes
+            evidence.feeds_skipped.extend([
+                "abuseipdb (not applicable for hash)",
+                "phishtank (not applicable for hash)",
+                "openphish (not applicable for hash)",
+            ])
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                futures = {executor.submit(self._query_threatfox, self.domain): "threatfox"}
+                for future in as_completed(futures):
+                    try:
+                        evidence.threatfox_matches = future.result()
+                        evidence.feeds_checked.append("threatfox")
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] ThreatFox failed: {e}")
+                        evidence.feeds_skipped.append(f"threatfox (error: {type(e).__name__})")
+            return evidence
+
+        # ── Determine IP and domain for feeds that need them ─────────────────
+        if obs_type == "ip":
+            resolved_ip: str | None = self.domain
+            query_domain = self.domain  # use IP string for PhishTank/ThreatFox
+        elif obs_type == "url":
+            parsed = urlparse(self.domain)
+            query_domain = parsed.hostname or self.domain
+            resolved_ip = None
+            try:
+                resolved_ip = socket.gethostbyname(query_domain)
+            except socket.gaierror:
+                logger.warning(f"[{self.name}] Could not resolve {query_domain} to IP")
+        else:  # domain
+            query_domain = self.domain
+            resolved_ip = None
+            try:
+                resolved_ip = socket.gethostbyname(self.domain)
+            except socket.gaierror:
+                logger.warning(f"[{self.name}] Could not resolve {self.domain} to IP")
+
+        # ── Run feed queries concurrently ─────────────────────────────────────
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {}
 
-            if settings.abuseipdb_api_key and resolved_ip:
-                futures[executor.submit(self._query_abuseipdb, resolved_ip, settings.abuseipdb_api_key)] = "abuseipdb"
-            else:
-                if not settings.abuseipdb_api_key:
+            if obs_type == "ip":
+                # AbuseIPDB is the primary feed for IPs
+                if settings.abuseipdb_api_key:
+                    futures[executor.submit(self._query_abuseipdb, resolved_ip, settings.abuseipdb_api_key)] = "abuseipdb"
+                else:
                     evidence.feeds_skipped.append("abuseipdb (no API key)")
-                elif not resolved_ip:
-                    evidence.feeds_skipped.append("abuseipdb (DNS resolution failed)")
+                # PhishTank/OpenPhish are URL/domain feeds — skip for pure IP
+                evidence.feeds_skipped.extend([
+                    "phishtank (not applicable for IP)",
+                    "openphish (not applicable for IP)",
+                ])
+            else:
+                # domain or url: all feeds apply
+                if settings.abuseipdb_api_key and resolved_ip:
+                    futures[executor.submit(self._query_abuseipdb, resolved_ip, settings.abuseipdb_api_key)] = "abuseipdb"
+                else:
+                    if not settings.abuseipdb_api_key:
+                        evidence.feeds_skipped.append("abuseipdb (no API key)")
+                    elif not resolved_ip:
+                        evidence.feeds_skipped.append("abuseipdb (DNS resolution failed)")
 
-            futures[executor.submit(self._query_phishtank, self.domain)] = "phishtank"
+                futures[executor.submit(self._query_phishtank, query_domain)] = "phishtank"
+                futures[executor.submit(self._query_openphish, query_domain)] = "openphish"
+
             futures[executor.submit(self._query_threatfox, self.domain)] = "threatfox"
-            futures[executor.submit(self._query_openphish, self.domain)] = "openphish"
 
             for future in as_completed(futures):
                 feed_name = futures[future]

@@ -100,6 +100,7 @@ def _detect_js_redirect(body: str) -> str | None:
 
 class HTTPCollector(BaseCollector):
     name = "http"
+    supported_types = frozenset({"domain", "url"})
 
     def _collect(self) -> HTTPEvidence:
         evidence = HTTPEvidence()
@@ -111,14 +112,20 @@ class HTTPCollector(BaseCollector):
         })
 
         # ── Try HTTPS first, fall back to HTTP ──
+        # For URL type, use the value directly; for domain, prepend scheme
         response = None
-        for scheme in ("https", "http"):
+        if self.observable_type == "url":
+            schemes_to_try = [("direct", self.domain)]
+        else:
+            schemes_to_try = [("https", f"https://{self.domain}"), ("http", f"http://{self.domain}")]
+
+        for scheme, target_url in schemes_to_try:
             try:
                 response = session.get(
-                    f"{scheme}://{self.domain}",
+                    target_url,
                     timeout=self.timeout,
                     allow_redirects=True,
-                    verify=(scheme == "https"),
+                    verify=(not target_url.startswith("http://")),
                 )
                 break
             except requests.exceptions.SSLError:

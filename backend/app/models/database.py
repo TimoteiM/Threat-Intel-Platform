@@ -64,7 +64,10 @@ class Investigation(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    domain: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    observable_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True, default="domain"
+    )
     state: Mapped[str] = mapped_column(
         String(50), nullable=False, default="created"
     )
@@ -328,6 +331,70 @@ class WatchlistAlert(Base):
 
     __table_args__ = (
         Index("idx_watchlist_alerts_wl", "watchlist_id"),
+    )
+
+
+class Client(Base):
+    """Registered client organizations whose assets we monitor."""
+    __tablename__ = "clients"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    aliases: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    brand_keywords: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    alert_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_alert_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Default collectors to run for this client's domains (empty = run all)
+    default_collectors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    alerts: Mapped[list[ClientAlert]] = relationship(
+        back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+class ClientAlert(Base):
+    """Alert triggered when an investigation impacts a registered client."""
+    __tablename__ = "client_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="high")
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    details_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    client: Mapped[Client] = relationship(back_populates="alerts")
+
+    __table_args__ = (
+        Index("idx_client_alerts_client", "client_id"),
     )
 
 

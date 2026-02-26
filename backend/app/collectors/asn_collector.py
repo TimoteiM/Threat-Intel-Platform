@@ -31,21 +31,33 @@ CLOUD_INDICATORS = [
 
 class ASNCollector(BaseCollector):
     name = "asn"
+    supported_types = frozenset({"domain", "ip", "url"})
 
     def _collect(self) -> ASNEvidence:
+        from urllib.parse import urlparse
+
         evidence = ASNEvidence()
 
-        # ── Resolve domain to IP ──
-        try:
-            resolver = dns.resolver.Resolver(configure=False)
-            resolver.nameservers = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
-            resolver.timeout = self.timeout
-            resolver.lifetime = self.timeout
-            answers = resolver.resolve(self.domain, "A")
-            if answers:
-                evidence.ip = str(answers[0])
-        except Exception as e:
-            raise ValueError(f"Cannot resolve {self.domain}: {e}")
+        # ── Determine IP based on observable type ──
+        if self.observable_type == "ip":
+            # Use directly — no DNS resolution needed
+            evidence.ip = self.domain
+        else:
+            # For domain or url: resolve hostname to IP
+            hostname = self.domain
+            if self.observable_type == "url":
+                parsed = urlparse(self.domain)
+                hostname = parsed.hostname or self.domain
+            try:
+                resolver = dns.resolver.Resolver(configure=False)
+                resolver.nameservers = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
+                resolver.timeout = self.timeout
+                resolver.lifetime = self.timeout
+                answers = resolver.resolve(hostname, "A")
+                if answers:
+                    evidence.ip = str(answers[0])
+            except Exception as e:
+                raise ValueError(f"Cannot resolve {hostname}: {e}")
 
         if not evidence.ip:
             return evidence

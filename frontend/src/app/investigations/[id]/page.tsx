@@ -17,7 +17,8 @@ import InfrastructureTab from "@/components/report/InfrastructureTab";
 
 import * as api from "@/lib/api";
 
-const TABS = [
+// Full tab set for domain / URL investigations (Claude analysis available)
+const DOMAIN_TABS = [
   { id: "summary", label: "Executive Summary" },
   { id: "evidence", label: "Technical Evidence" },
   { id: "findings", label: "Findings" },
@@ -27,7 +28,16 @@ const TABS = [
   { id: "raw", label: "Raw JSON" },
 ] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+// Minimal tab set for fast-path types (hash / ip / file)
+// No AI-generated narrative — just technical evidence and IOCs.
+const FAST_PATH_TABS = [
+  { id: "evidence", label: "Technical Evidence" },
+  { id: "indicators", label: "Indicators & Pivots" },
+] as const;
+
+const FAST_PATH_TYPES = new Set(["hash", "ip", "file"]);
+
+type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "raw";
 
 export default function InvestigationPage() {
   const params = useParams();
@@ -39,7 +49,11 @@ export default function InvestigationPage() {
   const [report, setReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabId>("summary");
+  const observableType = detail?.observable_type || "domain";
+  const isFastPath = FAST_PATH_TYPES.has(observableType);
+  const tabs = isFastPath ? FAST_PATH_TABS : DOMAIN_TABS;
+  const defaultTab: TabId = isFastPath ? "evidence" : "summary";
+  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabError, setTabError] = useState<string | null>(null);
 
   // Fetch all data
@@ -75,6 +89,14 @@ export default function InvestigationPage() {
     return () => clearInterval(interval);
   }, [fetchData, detail?.state]);
 
+  // Reset activeTab when observable type loads and the current tab isn't in the tab set
+  useEffect(() => {
+    const validIds = tabs.map((t) => t.id);
+    if (!validIds.includes(activeTab as any)) {
+      setActiveTab(tabs[0].id as TabId);
+    }
+  }, [isFastPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Clear tab error when switching tabs
   useEffect(() => {
     setTabError(null);
@@ -98,8 +120,25 @@ export default function InvestigationPage() {
   if (!report && detail?.state !== "concluded" && detail?.state !== "failed") {
     return (
       <div style={{ paddingTop: 24 }}>
-        <div style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
-          {detail?.domain || investigationId}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+            {detail?.domain || investigationId}
+          </span>
+          {detail?.observable_type && detail.observable_type !== "domain" && (
+            <span style={{
+              fontSize: 10, fontWeight: 700,
+              padding: "3px 8px",
+              background: "rgba(129,140,248,0.12)",
+              color: "#818cf8",
+              border: "1px solid rgba(129,140,248,0.25)",
+              borderRadius: 4,
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.05em",
+              textTransform: "uppercase" as const,
+            }}>
+              {detail.observable_type}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20, fontFamily: "var(--font-sans)" }}>
           State: {detail?.state || "loading..."}
@@ -130,7 +169,7 @@ export default function InvestigationPage() {
         case "summary":
           return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} /> : <NoData label="evidence" />;
         case "findings":
           return report ? <FindingsTab report={report} /> : <NoData label="report" />;
         case "indicators":
@@ -186,11 +225,28 @@ export default function InvestigationPage() {
         display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8,
       }}>
         <div>
-          <div style={{
-            fontSize: 24, fontWeight: 700, color: "var(--text)",
-            letterSpacing: "-0.01em", fontFamily: "var(--font-sans)",
-          }}>
-            {detail?.domain || evidence?.domain || investigationId}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{
+              fontSize: 24, fontWeight: 700, color: "var(--text)",
+              letterSpacing: "-0.01em", fontFamily: "var(--font-sans)",
+            }}>
+              {detail?.domain || evidence?.domain || investigationId}
+            </span>
+            {detail?.observable_type && detail.observable_type !== "domain" && (
+              <span style={{
+                fontSize: 10, fontWeight: 700,
+                padding: "3px 8px",
+                background: "rgba(129,140,248,0.12)",
+                color: "#818cf8",
+                border: "1px solid rgba(129,140,248,0.25)",
+                borderRadius: 4,
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.05em",
+                textTransform: "uppercase" as const,
+              }}>
+                {detail.observable_type}
+              </span>
+            )}
           </div>
           <div style={{
             fontSize: 12, color: "var(--text-muted)", marginTop: 4,
@@ -251,7 +307,7 @@ export default function InvestigationPage() {
       <EnrichmentPanel onSubmit={handleEnrich} />
 
       {/* Tabs */}
-      <TabBar tabs={TABS} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+      <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
 
       {/* Tab content wrapped in ErrorBoundary */}
       <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>

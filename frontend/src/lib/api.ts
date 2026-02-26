@@ -32,6 +32,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function createInvestigation(data: {
   domain: string;
+  observable_type?: string;
   context?: string;
   client_domain?: string;
   investigated_url?: string;
@@ -41,12 +42,34 @@ export function createInvestigation(data: {
   return request<{
     investigation_id: string;
     domain: string;
+    observable_type: string;
     state: string;
     message: string;
   }>("/investigations", {
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+export async function uploadFileInvestigation(
+  file: File,
+  context?: string,
+): Promise<{ investigation_id: string; domain: string; observable_type: string; state: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (context) formData.append("context", context);
+
+  const res = await fetch(`${BASE}/investigations/upload-file`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || res.statusText);
+  }
+
+  return res.json();
 }
 
 export interface PaginatedResponse<T> {
@@ -57,13 +80,14 @@ export interface PaginatedResponse<T> {
 }
 
 export function listInvestigations(params?: {
-  limit?: number; offset?: number; state?: string; search?: string;
+  limit?: number; offset?: number; state?: string; search?: string; observable_type?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.offset) qs.set("offset", String(params.offset));
   if (params?.state) qs.set("state", params.state);
   if (params?.search) qs.set("search", params.search);
+  if (params?.observable_type) qs.set("observable_type", params.observable_type);
   const query = qs.toString();
   return request<PaginatedResponse<any>>(`/investigations${query ? `?${query}` : ""}`);
 }
@@ -255,6 +279,97 @@ export function getIPLookup(id: string) {
 
 export function deleteIPLookup(id: string) {
   return request<void>(`/tools/ip-lookup/history/${id}`, { method: "DELETE" });
+}
+
+// ─── Client Management ───
+
+export function createClient(data: {
+  name: string;
+  domain: string;
+  aliases?: string[];
+  brand_keywords?: string[];
+  contact_email?: string;
+  notes?: string;
+  default_collectors?: string[];
+}) {
+  return request<any>("/clients", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function listClients(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.search) qs.set("search", params.search);
+  if (params?.status) qs.set("status", params.status);
+  const query = qs.toString();
+  return request<any>(`/clients${query ? `?${query}` : ""}`);
+}
+
+export function getClient(id: string) {
+  return request<any>(`/clients/${id}`);
+}
+
+export function updateClient(
+  id: string,
+  data: {
+    name?: string;
+    domain?: string;
+    aliases?: string[];
+    brand_keywords?: string[];
+    contact_email?: string;
+    notes?: string;
+    status?: string;
+    default_collectors?: string[];
+  },
+) {
+  return request<any>(`/clients/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+}
+
+export function deleteClient(id: string) {
+  return request<any>(`/clients/${id}`, { method: "DELETE" });
+}
+
+export function listClientAlerts(
+  clientId: string,
+  params?: { limit?: number; offset?: number; resolved?: boolean; severity?: string },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.resolved !== undefined) qs.set("resolved", String(params.resolved));
+  if (params?.severity) qs.set("severity", params.severity);
+  const query = qs.toString();
+  return request<any>(`/clients/${clientId}/alerts${query ? `?${query}` : ""}`);
+}
+
+export function listAllAlerts(params?: {
+  limit?: number;
+  offset?: number;
+  severity?: string;
+  resolved?: boolean;
+  acknowledged?: boolean;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.severity) qs.set("severity", params.severity);
+  if (params?.resolved !== undefined) qs.set("resolved", String(params.resolved));
+  if (params?.acknowledged !== undefined) qs.set("acknowledged", String(params.acknowledged));
+  const query = qs.toString();
+  return request<any>(`/client-alerts${query ? `?${query}` : ""}`);
+}
+
+export function acknowledgeAlert(alertId: string) {
+  return request<any>(`/client-alerts/${alertId}/acknowledge`, { method: "POST" });
+}
+
+export function resolveAlert(alertId: string) {
+  return request<any>(`/client-alerts/${alertId}/resolve`, { method: "POST" });
 }
 
 // ─── SSE helper ───

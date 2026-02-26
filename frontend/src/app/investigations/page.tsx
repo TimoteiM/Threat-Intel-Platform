@@ -186,7 +186,23 @@ export default function InvestigationsListPage() {
                   alignItems: "center",
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{inv.domain}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)" }}>{inv.domain}</span>
+                  {inv.observable_type && inv.observable_type !== "domain" && (
+                    <span style={{
+                      fontSize: 9, fontWeight: 700,
+                      padding: "1px 5px",
+                      background: "rgba(129,140,248,0.12)",
+                      color: "#818cf8",
+                      border: "1px solid rgba(129,140,248,0.25)",
+                      borderRadius: 3,
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase" as const,
+                    }}>
+                      {inv.observable_type}
+                    </span>
+                  )}
+                </div>
                 <div>
                   {config ? (
                     <Badge label={config.label} color={config.color} bg={config.bg} />

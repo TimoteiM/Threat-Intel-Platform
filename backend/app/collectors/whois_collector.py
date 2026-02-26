@@ -26,6 +26,7 @@ PRIVACY_INDICATORS = [
 
 
 class WHOISCollector(BaseCollector):
+    supported_types = frozenset({"domain"})
     name = "whois"
 
     def _collect(self) -> WHOISEvidence:

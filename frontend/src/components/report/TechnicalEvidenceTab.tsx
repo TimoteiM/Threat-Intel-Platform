@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React from "react";
 import { CollectedEvidence } from "@/lib/types";
@@ -13,9 +13,10 @@ import CertTimelineSection from "@/components/report/CertTimelineSection";
 interface Props {
   evidence: CollectedEvidence;
   domain?: string;
+  observableType?: string;
 }
 
-export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
+export default function TechnicalEvidenceTab({ evidence, domain, observableType }: Props) {
   const dns = evidence?.dns || ({} as any);
   const tls = evidence?.tls || ({} as any);
   const http = evidence?.http || ({} as any);
@@ -25,8 +26,15 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
   const vt = evidence?.vt || ({} as any);
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
 
+  const type = observableType || (evidence as any)?.observable_type || "domain";
+  const isFileHash = type === "file" || type === "hash";
+
   return (
     <div>
+
+      {/* —— DOMAIN/URL/IP sections — hidden for file/hash investigations —— */}
+      {!isFileHash && <>
+
       {/* DNS */}
       <Section title="DNS Records">
         {(() => {
@@ -52,7 +60,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
           if (hasVtDns) {
             return (
               <>
-                <EmptyNote>No live A/AAAA records found — showing VT passive DNS (historical)</EmptyNote>
+                <EmptyNote>No live A/AAAA records found â€” showing VT passive DNS (historical)</EmptyNote>
                 <EvidenceTable
                   title="A / AAAA Records (VT Passive DNS)"
                   data={[
@@ -154,7 +162,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                       fontSize: 24, fontWeight: 800, color: scoreColor,
                       fontFamily: "var(--font-mono)",
                     }}>
-                      {score ?? "—"}
+                      {score ?? "â€”"}
                     </div>
                     <div style={{
                       fontSize: 11, fontWeight: 600, color: scoreColor,
@@ -175,7 +183,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                       fontSize: 18, fontWeight: 800, color: spoofColor,
                       fontFamily: "var(--font-mono)", textTransform: "uppercase",
                     }}>
-                      {spoofability || "—"}
+                      {spoofability || "â€”"}
                     </div>
                     <div style={{
                       fontSize: 11, fontWeight: 600, color: spoofColor,
@@ -195,10 +203,10 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                   data={[
                     { field: "Record", value: es.dmarc_record || "Not configured" },
                     { field: "Policy", value: es.dmarc_policy || "none" },
-                    { field: "Subdomain Policy", value: es.dmarc_subdomain_policy || "—" },
-                    { field: "Percentage", value: es.dmarc_pct != null ? `${es.dmarc_pct}%` : "—" },
-                    { field: "DKIM Alignment", value: es.dmarc_alignment_dkim === "s" ? "strict" : es.dmarc_alignment_dkim === "r" ? "relaxed" : "—" },
-                    { field: "SPF Alignment", value: es.dmarc_alignment_spf === "s" ? "strict" : es.dmarc_alignment_spf === "r" ? "relaxed" : "—" },
+                    { field: "Subdomain Policy", value: es.dmarc_subdomain_policy || "â€”" },
+                    { field: "Percentage", value: es.dmarc_pct != null ? `${es.dmarc_pct}%` : "â€”" },
+                    { field: "DKIM Alignment", value: es.dmarc_alignment_dkim === "s" ? "strict" : es.dmarc_alignment_dkim === "r" ? "relaxed" : "â€”" },
+                    { field: "SPF Alignment", value: es.dmarc_alignment_spf === "s" ? "strict" : es.dmarc_alignment_spf === "r" ? "relaxed" : "â€”" },
                     ...(arr(es.dmarc_rua).length > 0 ? [{ field: "Aggregate Reports", value: arr(es.dmarc_rua).join(", ") }] : []),
                     ...(arr(es.dmarc_ruf).length > 0 ? [{ field: "Forensic Reports", value: arr(es.dmarc_ruf).join(", ") }] : []),
                   ]}
@@ -210,8 +218,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                   title="SPF"
                   data={[
                     { field: "Record", value: es.spf_record || "Not configured" },
-                    { field: "All Qualifier", value: es.spf_all_qualifier || "—" },
-                    { field: "IP Count", value: es.spf_ip_count ?? "—" },
+                    { field: "All Qualifier", value: es.spf_all_qualifier || "â€”" },
+                    { field: "IP Count", value: es.spf_ip_count ?? "â€”" },
                     ...(arr(es.spf_includes).length > 0 ? [{ field: "Includes", value: arr(es.spf_includes).join(", ") }] : []),
                     ...(arr(es.spf_mechanisms).length > 0 ? [{ field: "Mechanisms", value: arr(es.spf_mechanisms).join(" ") }] : []),
                   ]}
@@ -225,8 +233,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                     data={arr(es.dkim_records).map((r: any) => ({
                       selector: r.selector,
                       key_present: r.public_key_present ? "Yes" : "No",
-                      key_type: r.key_type || "—",
-                      notes: r.notes || "—",
+                      key_type: r.key_type || "â€”",
+                      notes: r.notes || "â€”",
                     }))}
                     columns={[
                       { key: "selector" },
@@ -254,7 +262,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                     data={arr(es.mx_records).map((mx: any) => ({
                       priority: mx.priority,
                       hostname: mx.hostname,
-                      ips: arr(mx.ips).join(", ") || "—",
+                      ips: arr(mx.ips).join(", ") || "â€”",
                       blocklist: arr(mx.blocklist_hits).length > 0
                         ? arr(mx.blocklist_hits).join("; ")
                         : "Clean",
@@ -309,15 +317,15 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
           <EvidenceTable
             data={[
               { field: "Present", value: tls.present ?? "Unknown" },
-              { field: "Issuer", value: tls.issuer_org || tls.issuer || "—" },
-              { field: "Subject", value: tls.subject || "—" },
-              { field: "SANs", value: arr(tls.sans).join(", ") || "—" },
+              { field: "Issuer", value: tls.issuer_org || tls.issuer || "â€”" },
+              { field: "Subject", value: tls.subject || "â€”" },
+              { field: "SANs", value: arr(tls.sans).join(", ") || "â€”" },
               { field: "Valid From", value: fmtDate(tls.valid_from) },
               { field: "Valid To", value: fmtDate(tls.valid_to) },
-              { field: "Days Remaining", value: tls.valid_days_remaining ?? "—" },
+              { field: "Days Remaining", value: tls.valid_days_remaining ?? "â€”" },
               { field: "Self-Signed", value: tls.is_self_signed },
               { field: "Wildcard", value: tls.is_wildcard },
-              { field: "SHA-256", value: tls.cert_sha256 || "—" },
+              { field: "SHA-256", value: tls.cert_sha256 || "â€”" },
             ]}
             columns={[{ key: "field" }, { key: "value", wrap: true }]}
           />
@@ -334,11 +342,11 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
               title="Connection"
               data={[
                 { field: "Reachable", value: http.reachable ?? "Unknown" },
-                { field: "Final URL", value: http.final_url || "—" },
-                { field: "Status Code", value: http.final_status_code ?? "—" },
-                { field: "Server", value: http.server || "—" },
-                { field: "Title", value: http.title || "—" },
-                { field: "Login Form", value: http.has_login_form ? "⚠ Yes" : "No" },
+                { field: "Final URL", value: http.final_url || "â€”" },
+                { field: "Status Code", value: http.final_status_code ?? "â€”" },
+                { field: "Server", value: http.server || "â€”" },
+                { field: "Title", value: http.title || "â€”" },
+                { field: "Login Form", value: http.has_login_form ? "âš  Yes" : "No" },
                 { field: "Redirects", value: arr(http.redirect_chain).length },
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
@@ -349,8 +357,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                 title="Redirect Chain"
                 data={arr(http.redirect_chain).map((r: any, i: number) => ({
                   step: `${i + 1}`,
-                  url: r?.url || r?.location || "—",
-                  status: r?.status_code === 0 ? "JS/Meta" : (r?.status_code ?? "—"),
+                  url: r?.url || r?.location || "â€”",
+                  status: r?.status_code === 0 ? "JS/Meta" : (r?.status_code ?? "â€”"),
                 }))}
                 columns={[{ key: "step" }, { key: "url", wrap: true }, { key: "status" }]}
               />
@@ -400,8 +408,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                   fontWeight: 600,
                 }}>
                   {cloaking
-                    ? "UA-based cloaking detected — different URLs or status codes across User-Agents"
-                    : "No cloaking detected — consistent URLs and status codes across User-Agents"}
+                    ? "UA-based cloaking detected â€” different URLs or status codes across User-Agents"
+                    : "No cloaking detected â€” consistent URLs and status codes across User-Agents"}
                 </div>
 
                 {/* Cloaking details */}
@@ -429,10 +437,10 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                     data={arr(ra.probes).map((p: any) => ({
                       ua_type: p.user_agent_type,
                       status: p.status_code || "Failed",
-                      final_url: p.final_url || "—",
+                      final_url: p.final_url || "â€”",
                       redirects: p.redirect_count,
-                      title: p.title || "—",
-                      content_hash: p.content_hash ? `${p.content_hash.substring(0, 12)}...` : "—",
+                      title: p.title || "â€”",
+                      content_hash: p.content_hash ? `${p.content_hash.substring(0, 12)}...` : "â€”",
                     }))}
                     columns={[
                       { key: "ua_type" },
@@ -480,8 +488,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                     data={arr(ra.intermediate_domains).map((d: any) => ({
                       domain: d.domain,
                       hop: d.hop_number,
-                      tracker: d.is_known_tracker ? "Yes" : "—",
-                      redirector: d.is_known_redirector ? "Yes" : "—",
+                      tracker: d.is_known_tracker ? "Yes" : "â€”",
+                      redirector: d.is_known_redirector ? "Yes" : "â€”",
                     }))}
                     columns={[
                       { key: "domain", wrap: true },
@@ -608,7 +616,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
 
             return (
               <>
-                {/* Summary stat boxes — clickable to expand details */}
+                {/* Summary stat boxes â€” clickable to expand details */}
                 <div style={{
                   display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8,
                   marginBottom: 16,
@@ -957,7 +965,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                     data={arr(ja.suspicious_scripts).slice(0, 15).map((s: any) => ({
                       domain: s.domain,
                       reason: s.reason,
-                      url: s.url ? `${s.url.substring(0, 60)}...` : "—",
+                      url: s.url ? `${s.url.substring(0, 60)}...` : "â€”",
                     }))}
                     columns={[
                       { key: "domain", wrap: true },
@@ -1034,13 +1042,13 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
         ) : (
           <EvidenceTable
             data={[
-              { field: "Registrar", value: whois.registrar || "—" },
+              { field: "Registrar", value: whois.registrar || "â€”" },
               { field: "Created", value: fmtDate(whois.created_date) },
               { field: "Updated", value: fmtDate(whois.updated_date) },
               { field: "Expires", value: fmtDate(whois.expiry_date) },
-              { field: "Domain Age", value: whois.domain_age_days != null ? `${whois.domain_age_days} days` : "—" },
-              { field: "Privacy", value: whois.privacy_protected == null ? "—" : whois.privacy_protected ? "⚠ Yes" : "No" },
-              { field: "Registrant Org", value: whois.registrant_org || "—" },
+              { field: "Domain Age", value: whois.domain_age_days != null ? `${whois.domain_age_days} days` : "â€”" },
+              { field: "Privacy", value: whois.privacy_protected == null ? "â€”" : whois.privacy_protected ? "âš  Yes" : "No" },
+              { field: "Registrant Org", value: whois.registrant_org || "â€”" },
               { field: "Country", value: whois.registrant_country || "Redacted" },
               ...(arr(whois.name_servers).length > 0
                 ? [{ field: "Name Servers", value: arr(whois.name_servers).join(", ") }]
@@ -1061,12 +1069,12 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
         ) : (
           <EvidenceTable
             data={[
-              { field: "IP", value: hosting.ip || "—" },
-              { field: "ASN", value: hosting.asn ? `AS${hosting.asn}` : "—" },
-              { field: "Organization", value: hosting.asn_org || "—" },
-              { field: "ISP", value: hosting.asn_description || "—" },
-              { field: "Country", value: hosting.country || "—" },
-              { field: "City", value: hosting.city || "—" },
+              { field: "IP", value: hosting.ip || "â€”" },
+              { field: "ASN", value: hosting.asn ? `AS${hosting.asn}` : "â€”" },
+              { field: "Organization", value: hosting.asn_org || "â€”" },
+              { field: "ISP", value: hosting.asn_description || "â€”" },
+              { field: "Country", value: hosting.country || "â€”" },
+              { field: "City", value: hosting.city || "â€”" },
               { field: "CDN", value: hosting.is_cdn },
               { field: "Cloud", value: hosting.is_cloud },
               { field: "Hosting", value: hosting.is_hosting },
@@ -1220,7 +1228,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
               data={evidence.subdomains.resolved.slice(0, 50).map((entry) => ({
                 subdomain: entry.subdomain,
                 ips: entry.ips.join(", "),
-                flag: entry.is_interesting ? "★" : "",
+                flag: entry.is_interesting ? "â˜…" : "",
               }))}
               columns={[
                 { key: "subdomain", wrap: true },
@@ -1231,6 +1239,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
           )}
         </Section>
       )}
+
+      </>}
 
       {/* VIRUSTOTAL */}
       <Section title="VirusTotal Reputation">
@@ -1277,7 +1287,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
               />
             </div>
 
-            {/* Flagging vendors — most critical info */}
+            {/* Flagging vendors â€” most critical info */}
             {arr(vt.flagged_malicious_by).length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{
@@ -1342,10 +1352,10 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
             <EvidenceTable
               title="VT Metadata"
               data={[
-                { field: "Community Reputation", value: vt.reputation_score ?? "—" },
+                { field: "Community Reputation", value: vt.reputation_score ?? "â€”" },
                 { field: "Last Analysis", value: fmtDate(vt.last_analysis_date) },
-                { field: "VT Registrar", value: vt.vt_registrar || "—" },
-                { field: "VT Cert Issuer", value: vt.vt_cert_issuer || "—" },
+                { field: "VT Registrar", value: vt.vt_registrar || "â€”" },
+                { field: "VT Cert Issuer", value: vt.vt_cert_issuer || "â€”" },
                 ...(arr(vt.tags).length > 0
                   ? [{ field: "Tags", value: arr(vt.tags).join(", ") }]
                   : []),
@@ -1359,8 +1369,8 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
                 title={`VT Passive DNS (${arr(vt.vt_dns_records).length} records)`}
                 data={arr(vt.vt_dns_records).slice(0, 20).map((r: any) => ({
                   type: r?.type || "?",
-                  value: r?.value || "—",
-                  ttl: r?.ttl ?? "—",
+                  value: r?.value || "â€”",
+                  ttl: r?.ttl ?? "â€”",
                 }))}
                 columns={[{ key: "type" }, { key: "value", wrap: true }, { key: "ttl" }]}
               />
@@ -1423,7 +1433,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
 
             {arr(intel.related_subdomains).length > 0 && (
               <EvidenceTable
-                title={`Subdomains (crt.sh) — ${arr(intel.related_subdomains).length} found`}
+                title={`Subdomains (crt.sh) â€” ${arr(intel.related_subdomains).length} found`}
                 data={arr(intel.related_subdomains).slice(0, 30).map((s: string) => ({
                   field: "subdomain", value: s,
                 }))}
@@ -1441,7 +1451,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
               <div style={{ marginTop: 12 }}>
                 {arr(intel.notes).map((note: string, i: number) => (
                   <div key={i} style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
-                    ℹ {note}
+                    â„¹ {note}
                   </div>
                 ))}
               </div>
@@ -1457,15 +1467,15 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
         </Section>
       )}
 
-      {/* FAVICON HASH INTELLIGENCE */}
-      {evidence?.favicon_intel && (
+      {/* FAVICON HASH INTELLIGENCE â€” domain-specific */}
+      {!isFileHash && evidence?.favicon_intel && (
         <Section title="Favicon Hash Intelligence">
           <FaviconIntelSection faviconIntel={evidence.favicon_intel} />
         </Section>
       )}
 
-      {/* CERTIFICATE TRANSPARENCY TIMELINE */}
-      {evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0 && (
+      {/* CERTIFICATE TRANSPARENCY TIMELINE â€” domain-specific */}
+      {!isFileHash && evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0 && (
         <Section title="Certificate Transparency Timeline">
           <CertTimelineSection certTimeline={evidence.cert_timeline} />
         </Section>
@@ -1496,7 +1506,7 @@ export default function TechnicalEvidenceTab({ evidence, domain }: Props) {
   );
 }
 
-// ─── Helpers ───
+// â”€â”€â”€ Helpers â”€â”€â”€
 
 /** Safely coerce anything to an array */
 function arr(val: any): any[] {
@@ -1504,9 +1514,9 @@ function arr(val: any): any[] {
   return [];
 }
 
-/** Format a date string, return "—" if missing */
+/** Format a date string, return "â€”" if missing */
 function fmtDate(val: string | null | undefined): string {
-  if (!val) return "—";
+  if (!val) return "â€”";
   try {
     return new Date(val).toLocaleDateString("en-US", {
       year: "numeric",
@@ -1523,9 +1533,9 @@ function metaRow(name: string, meta: any) {
   if (!meta) return null;
   return {
     collector: name,
-    status: meta.status || "—",
-    duration: meta.duration_ms != null ? `${meta.duration_ms}ms` : "—",
-    error: meta.error || "—",
+    status: meta.status || "â€”",
+    duration: meta.duration_ms != null ? `${meta.duration_ms}ms` : "â€”",
+    error: meta.error || "â€”",
   };
 }
 
@@ -1651,3 +1661,6 @@ function VTStatBox({ label, count, total, color, highlight }: {
     </div>
   );
 }
+
+
+

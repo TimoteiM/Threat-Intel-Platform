@@ -35,11 +35,22 @@ COLLECTOR_VERSION = "1.0.0"
 class BaseCollector(abc.ABC):
 
     name: str = "base"
+    # Observable types this collector can handle (subclasses override)
+    supported_types: frozenset[str] = frozenset({"domain"})
 
-    def __init__(self, domain: str, investigation_id: str, timeout: int = 30):
-        self.domain = domain
+    def __init__(
+        self,
+        domain: str,
+        investigation_id: str,
+        observable_type: str = "domain",
+        timeout: int = 30,
+        file_artifact_id: str | None = None,
+    ):
+        self.domain = domain                    # Observable value (backwards-compat name)
+        self.observable_type = observable_type  # domain | ip | url | hash | file
         self.investigation_id = investigation_id
         self.timeout = timeout
+        self.file_artifact_id = file_artifact_id
         self._artifacts: dict[str, bytes] = {}
 
     @abc.abstractmethod

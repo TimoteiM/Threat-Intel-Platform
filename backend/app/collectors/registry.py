@@ -2,7 +2,7 @@
 Collector Registry — maps collector names to their classes.
 
 To add a new collector:
-1. Create the file (e.g., screenshot_collector.py)
+1. Create the file (e.g., my_collector.py)
 2. Import and register it here
 3. The pipeline picks it up automatically
 """
@@ -20,17 +20,19 @@ from app.collectors.asn_collector import ASNCollector
 from app.collectors.intel_collector import IntelCollector
 from app.collectors.vt_collector import VTCollector
 from app.collectors.threat_feeds_collector import ThreatFeedsCollector
+from app.collectors.urlscan_collector import URLScanCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
-    "dns": DNSCollector,
-    "http": HTTPCollector,
-    "tls": TLSCollector,
-    "whois": WHOISCollector,
-    "asn": ASNCollector,
-    "intel": IntelCollector,
-    "vt": VTCollector,
+    "dns":          DNSCollector,
+    "http":         HTTPCollector,
+    "tls":          TLSCollector,
+    "whois":        WHOISCollector,
+    "asn":          ASNCollector,
+    "intel":        IntelCollector,
+    "vt":           VTCollector,
     "threat_feeds": ThreatFeedsCollector,
+    "urlscan":      URLScanCollector,
 }
 
 
@@ -42,3 +44,12 @@ def get_collector(name: str) -> Type[BaseCollector] | None:
 def available_collectors() -> list[str]:
     """List all registered collector names."""
     return list(COLLECTOR_REGISTRY.keys())
+
+
+def get_collectors_for_type(observable_type: str) -> list[str]:
+    """Return collector names that support the given observable type."""
+    return [
+        name
+        for name, cls in COLLECTOR_REGISTRY.items()
+        if observable_type in cls.supported_types
+    ]

@@ -1,5 +1,5 @@
-"""
-Analysis Task — aggregates collector results and runs the Claude analyst.
+﻿"""
+Analysis Task â€” aggregates collector results and runs the Claude analyst.
 
 This task is the callback of the collector chord:
   chord(collector_tasks)(run_analysis.s(...))
@@ -35,13 +35,14 @@ COLLECTOR_FIELD_MAP = {
     bind=True,
     name="tasks.run_analysis",
     time_limit=300,       # Hard kill after 5 min (Playwright steps can be slow)
-    soft_time_limit=270,  # Soft limit at 4.5 min — gives time to persist partial results
+    soft_time_limit=270,  # Soft limit at 4.5 min â€” gives time to persist partial results
 )
 def run_analysis(
     self,
     collector_results: list[dict],
     domain: str,
     investigation_id: str,
+    observable_type: str = "domain",
     context: str | None = None,
     client_domain: str | None = None,
     investigated_url: str | None = None,
@@ -66,9 +67,10 @@ def run_analysis(
     """
     logger.info(f"[{investigation_id}] Aggregating evidence for {domain}")
 
-    # ── 1. Build evidence object ──
+    # â”€â”€ 1. Build evidence object â”€â”€
     evidence_data = {
         "domain": domain,
+        "observable_type": observable_type,
         "investigation_id": investigation_id,
         "timestamps": {
             "started": datetime.now(timezone.utc).isoformat(),
@@ -92,9 +94,9 @@ def run_analysis(
 
     evidence_data["artifact_hashes"] = all_artifact_hashes
 
-    # ── 1b. Subdomain enumeration (post-processing on intel results) ──
+    # â”€â”€ 1b. Subdomain enumeration (post-processing on intel results) â€” domain only â”€â”€
     intel_subdomains = evidence_data.get("intel", {}).get("related_subdomains", [])
-    if intel_subdomains:
+    if observable_type == "domain" and intel_subdomains:
         try:
             from app.collectors.subdomain_collector import enumerate_subdomains
             subdomain_result = enumerate_subdomains(domain, intel_subdomains)
@@ -107,9 +109,9 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Subdomain enumeration failed: {e}")
 
-    # ── 1c. Email security analysis (post-processing on DNS results) ──
+    # â”€â”€ 1c. Email security analysis (post-processing on DNS results) â€” domain only â”€â”€
     dns_data = evidence_data.get("dns", {})
-    if dns_data.get("meta", {}).get("status") == "completed":
+    if observable_type == "domain" and dns_data.get("meta", {}).get("status") == "completed":
         try:
             from app.collectors.email_security import analyze_email_security
             email_result = analyze_email_security(domain, dns_data)
@@ -122,9 +124,9 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Email security analysis failed: {e}")
 
-    # ── 1d. Redirect chain analysis (multi-UA cloaking detection) ──
+    # â”€â”€ 1d. Redirect chain analysis (multi-UA cloaking detection) â€” domain + url â”€â”€
     http_data = evidence_data.get("http", {})
-    if http_data.get("reachable"):
+    if observable_type in ("domain", "url") and http_data.get("reachable"):
         try:
             from app.collectors.redirect_analysis import analyze_redirects
             redirect_result = analyze_redirects(domain, timeout=15)
@@ -138,43 +140,44 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Redirect analysis failed: {e}")
 
-    # ── 1e. Standalone screenshot (always captured) ──
-    try:
-        from app.collectors.visual_comparison import capture_screenshot
+    # â”€â”€ 1e. Standalone screenshot â€” domain + url only (skip if site unreachable) â”€â”€
+    if observable_type in ("domain", "url") and http_data.get("reachable"):
+        try:
+            from app.collectors.visual_comparison import capture_screenshot
 
-        screenshot_target = investigated_url or domain
-        logger.info(f"[{investigation_id}] Capturing screenshot of {screenshot_target}")
-        ss_bytes, ss_final_url = capture_screenshot(screenshot_target, timeout=45)
+            screenshot_target = investigated_url or domain
+            logger.info(f"[{investigation_id}] Capturing screenshot of {screenshot_target}")
+            ss_bytes, ss_final_url = capture_screenshot(screenshot_target, timeout=25)
 
-        ss_art_id = _save_artifact_sync(
-            investigation_id, "screenshot",
-            "screenshot_domain.png",
-            ss_bytes, "image/png",
-        )
-        if ss_art_id:
-            evidence_data["screenshot"] = {
-                "artifact_id": ss_art_id,
-                "final_url": ss_final_url,
-            }
-        else:
-            evidence_data["screenshot"] = {
-                "capture_error": "Screenshot captured but failed to save artifact",
-                "final_url": ss_final_url,
-            }
-        logger.info(
-            f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, "
-            f"final_url={ss_final_url}"
-        )
-    except SoftTimeLimitExceeded:
-        evidence_data["screenshot"] = {"capture_error": "Task time limit reached during screenshot"}
-        logger.warning(f"[{investigation_id}] Screenshot aborted: task soft time limit reached")
-        # Don't re-raise — let the task continue to persist partial results
-    except Exception as e:
-        evidence_data["screenshot"] = {"capture_error": str(e)}
-        logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
+            ss_art_id = _save_artifact_sync(
+                investigation_id, "screenshot",
+                "screenshot_domain.png",
+                ss_bytes, "image/png",
+            )
+            if ss_art_id:
+                evidence_data["screenshot"] = {
+                    "artifact_id": ss_art_id,
+                    "final_url": ss_final_url,
+                }
+            else:
+                evidence_data["screenshot"] = {
+                    "capture_error": "Screenshot captured but failed to save artifact",
+                    "final_url": ss_final_url,
+                }
+            logger.info(
+                f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, "
+                f"final_url={ss_final_url}"
+            )
+        except SoftTimeLimitExceeded:
+            evidence_data["screenshot"] = {"capture_error": "Task time limit reached during screenshot"}
+            logger.warning(f"[{investigation_id}] Screenshot aborted: task soft time limit reached")
+            # Don't re-raise â€” let the task continue to persist partial results
+        except Exception as e:
+            evidence_data["screenshot"] = {"capture_error": str(e)}
+            logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
 
-    # ── 1f. JavaScript behavior analysis (Playwright sandbox) ──
-    if evidence_data.get("http", {}).get("reachable"):
+    # â”€â”€ 1f. JavaScript behavior analysis (Playwright sandbox) â€” domain + url only â”€â”€
+    if observable_type in ("domain", "url") and evidence_data.get("http", {}).get("reachable"):
         try:
             from app.collectors.js_analysis import analyze_js_behavior
             js_target = investigated_url or domain
@@ -183,7 +186,7 @@ def run_analysis(
                 js_target,
                 investigation_id,
                 save_artifact_fn=_save_artifact_sync,
-                timeout=45,
+                timeout=25,
             )
             evidence_data["js_analysis"] = js_result
             logger.info(
@@ -195,12 +198,12 @@ def run_analysis(
             )
         except SoftTimeLimitExceeded:
             logger.warning(f"[{investigation_id}] JS analysis aborted: task soft time limit reached")
-            # Don't re-raise — continue to persist partial results
+            # Don't re-raise â€” continue to persist partial results
         except Exception as e:
             logger.warning(f"[{investigation_id}] JS behavior analysis failed: {e}")
 
-    # ── 2. Domain similarity analysis (if client_domain provided) ──
-    if client_domain:
+    # â”€â”€ 2. Domain similarity analysis (if client_domain provided) â€” domain only â”€â”€
+    if observable_type == "domain" and client_domain:
         try:
             from app.collectors.domain_similarity import analyze_similarity
             similarity_result = analyze_similarity(domain, client_domain)
@@ -212,7 +215,7 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Domain similarity analysis failed: {e}")
 
-        # ── 2b. Visual comparison (screenshot-based) ──
+        # â”€â”€ 2b. Visual comparison (screenshot-based) â”€â”€
         try:
             from app.collectors.visual_comparison import compare_websites
 
@@ -227,7 +230,7 @@ def run_analysis(
             visual_result = compare_websites(
                 inv_target, cli_target,
                 client_reference_image=reference_image,
-                timeout=45,
+                timeout=25,
             )
 
             # Persist screenshots as artifacts and get their IDs
@@ -262,48 +265,47 @@ def run_analysis(
                 )
         except SoftTimeLimitExceeded:
             logger.warning(f"[{investigation_id}] Visual comparison aborted: task soft time limit reached")
-            # Don't re-raise — continue to persist partial results
+            # Don't re-raise â€” continue to persist partial results
         except Exception as e:
             logger.warning(f"[{investigation_id}] Visual comparison failed: {e}")
 
-    # ── Infrastructure Pivot ──
-    try:
-        from app.collectors.infrastructure_pivot import collect_infrastructure_pivot
-        pivot_result = collect_infrastructure_pivot(evidence_data, domain, investigation_id)
-        if pivot_result:
-            evidence_data["infrastructure_pivot"] = pivot_result
-            logger.info(
-                f"[{investigation_id}] Infrastructure pivot: {pivot_result.get('total_related_domains', 0)} related domains"
-            )
-    except Exception as e:
-        logger.warning(f"[{investigation_id}] Infrastructure pivot failed: {e}")
+    # â”€â”€ Infrastructure Pivot + Cert Timeline + Favicon â€” domain only â”€â”€
+    if observable_type == "domain":
+        try:
+            from app.collectors.infrastructure_pivot import collect_infrastructure_pivot
+            pivot_result = collect_infrastructure_pivot(evidence_data, domain, investigation_id)
+            if pivot_result:
+                evidence_data["infrastructure_pivot"] = pivot_result
+                logger.info(
+                    f"[{investigation_id}] Infrastructure pivot: {pivot_result.get('total_related_domains', 0)} related domains"
+                )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Infrastructure pivot failed: {e}")
 
-    # ── Certificate Transparency Timeline ──
-    try:
-        from app.collectors.intel_collector import build_cert_timeline
-        cert_timeline = build_cert_timeline(evidence_data, domain)
-        if cert_timeline:
-            evidence_data["cert_timeline"] = cert_timeline
-            logger.info(
-                f"[{investigation_id}] Cert timeline: {cert_timeline.get('total_certs', 0)} certs, "
-                f"burst={cert_timeline.get('cert_burst_detected', False)}"
-            )
-    except Exception as e:
-        logger.warning(f"[{investigation_id}] Cert timeline failed: {e}")
+        try:
+            from app.collectors.intel_collector import build_cert_timeline
+            cert_timeline = build_cert_timeline(evidence_data, domain)
+            if cert_timeline:
+                evidence_data["cert_timeline"] = cert_timeline
+                logger.info(
+                    f"[{investigation_id}] Cert timeline: {cert_timeline.get('total_certs', 0)} certs, "
+                    f"burst={cert_timeline.get('cert_burst_detected', False)}"
+                )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Cert timeline failed: {e}")
 
-    # ── Favicon Hash Intelligence (Shodan pivot) ──
-    try:
-        from app.collectors.favicon_intel import collect_favicon_intel
-        favicon_result = collect_favicon_intel(evidence_data, domain, investigation_id)
-        if favicon_result:
-            evidence_data["favicon_intel"] = favicon_result
-            logger.info(
-                f"[{investigation_id}] Favicon intel: {favicon_result.get('total_hosts_sharing', 0)} hosts sharing hash"
-            )
-    except Exception as e:
-        logger.warning(f"[{investigation_id}] Favicon intel failed: {e}")
+        try:
+            from app.collectors.favicon_intel import collect_favicon_intel
+            favicon_result = collect_favicon_intel(evidence_data, domain, investigation_id)
+            if favicon_result:
+                evidence_data["favicon_intel"] = favicon_result
+                logger.info(
+                    f"[{investigation_id}] Favicon intel: {favicon_result.get('total_hosts_sharing', 0)} hosts sharing hash"
+                )
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Favicon intel failed: {e}")
 
-    # ── 3. Generate signals and detect gaps ──
+    # â”€â”€ 3. Generate signals and detect gaps â”€â”€
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)
 
@@ -315,30 +317,36 @@ def run_analysis(
 
     evidence_data["timestamps"]["collected"] = datetime.now(timezone.utc).isoformat()
 
-    # ── 3. Publish evaluating state ──
-    _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
-                      "Evidence collected. Running analyst...", 70)
-
-    # ── 4. Run Claude analyst ──
-    try:
-        report_data = _run_analyst_sync(evidence_data, max_iterations)
-    except Exception as e:
-        logger.error(f"[{investigation_id}] Analyst failed: {e}")
-        report_data = {
-            "classification": "inconclusive",
-            "confidence": "low",
-            "investigation_state": "concluded",
-            "primary_reasoning": f"Analyst error: {e}",
-            "legitimate_explanation": "",
-            "malicious_explanation": "",
-            "recommended_action": "investigate",
-            "recommended_steps": ["Review evidence manually — analyst encountered an error"],
-            "risk_score": None,
-        }
+    # â”€â”€ 4. Generate report â€” fast-path (rule-based) or Claude analyst â”€â”€
+    # Only DOMAIN investigations use Claude for interpretation.
+    # All other observable types return a deterministic technical report.
+    if observable_type != "domain":
+        _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
+                          "Generating automated report...", 70)
+        logger.info(f"[{investigation_id}] Using fast-path (rule-based) report for type={observable_type}")
+        report_data = _generate_automated_report(evidence_data, observable_type)
+    else:
+        _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
+                          "Evidence collected. Running analyst...", 70)
+        try:
+            report_data = _run_analyst_sync(evidence_data, max_iterations)
+        except Exception as e:
+            logger.error(f"[{investigation_id}] Analyst failed: {e}")
+            report_data = {
+                "classification": "inconclusive",
+                "confidence": "low",
+                "investigation_state": "concluded",
+                "primary_reasoning": f"Analyst error: {e}",
+                "legitimate_explanation": "",
+                "malicious_explanation": "",
+                "recommended_action": "investigate",
+                "recommended_steps": ["Review evidence manually â€” analyst encountered an error"],
+                "risk_score": None,
+            }
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
 
-    # ── 5. Build final result ──
+    # â”€â”€ 5. Build final result â”€â”€
     result = {
         "investigation_id": investigation_id,
         "domain": domain,
@@ -348,14 +356,217 @@ def run_analysis(
         "collector_statuses": collector_statuses,
     }
 
-    # ── 6. Persist to database ──
+    # â”€â”€ 6. Persist to database â”€â”€
     _persist_results(investigation_id, evidence_data, report_data, collector_statuses)
 
-    # ── 7. Publish completion ──
+    # â”€â”€ 7. Publish completion â”€â”€
     _publish_progress(investigation_id, InvestigationState.CONCLUDED, collector_statuses,
                       "Investigation complete", 100)
 
     return result
+
+
+def _generate_automated_report(evidence_data: dict, observable_type: str) -> dict:
+    """
+    Rule-based report for ip / hash / file investigations.
+    No Claude API call â€” classification derived directly from collector scores.
+    """
+    vt          = evidence_data.get("vt") or {}
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    domain      = evidence_data.get("domain", "")
+
+    classification     = "benign"
+    confidence         = "medium"
+    risk_score: int | None = 10
+    key_evidence: list[str] = []
+    recommended_action = "monitor"
+    recommended_steps: list[str] = []
+
+    # â”€â”€ Hash / File â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if observable_type in ("hash", "file"):
+        vt_found     = vt.get("found", False)
+        vt_malicious = vt.get("malicious_count", 0)
+        vt_suspicious = vt.get("suspicious_count", 0)
+        vt_total     = vt.get("total_vendors", 0)
+        flagged_by   = vt.get("flagged_malicious_by", []) or []
+
+        if not vt_found:
+            classification = "inconclusive"
+            confidence     = "low"
+            risk_score     = None
+            key_evidence   = ["Hash not found in VirusTotal database"]
+            recommended_action = "investigate"
+        elif vt_malicious >= 5:
+            classification = "malicious"
+            confidence     = "high"
+            risk_score     = min(98, 70 + vt_malicious)
+            vendors_str    = ", ".join(flagged_by[:5]) + (f" +{len(flagged_by)-5} more" if len(flagged_by) > 5 else "")
+            key_evidence   = [
+                f"Detected malicious by {vt_malicious}/{vt_total} antivirus vendors",
+                f"Flagged by: {vendors_str}",
+            ]
+            recommended_action = "block"
+            recommended_steps  = [
+                "Quarantine and remove the file from all systems",
+                "Investigate execution history and lateral movement",
+                "Check EDR telemetry for related processes or persistence",
+            ]
+        elif vt_malicious >= 2 or vt_suspicious >= 3:
+            classification = "suspicious"
+            confidence     = "medium"
+            risk_score     = 65
+            key_evidence   = [f"{vt_malicious} malicious, {vt_suspicious} suspicious vendor flags"]
+            recommended_action = "escalate"
+            recommended_steps  = ["Submit for deeper static/dynamic analysis", "Check for related artifacts"]
+        elif vt_malicious == 1:
+            classification = "suspicious"
+            confidence     = "low"
+            risk_score     = 35
+            vendor         = flagged_by[0] if flagged_by else "unknown vendor"
+            key_evidence   = [f"Single vendor detection ({vendor}) â€” may be a false positive"]
+            recommended_action = "investigate"
+        else:
+            classification = "benign"
+            confidence     = "medium"
+            risk_score     = 5
+            key_evidence   = [f"Clean â€” 0/{vt_total} detections in VirusTotal"]
+            recommended_action = "allow"
+
+    # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    elif observable_type == "ip":
+        vt_malicious  = vt.get("malicious_count", 0) if vt.get("found") else 0
+        vt_total      = vt.get("total_vendors", 0)
+        abuseipdb     = threat_feeds.get("abuseipdb") or {}
+        abuse_score   = abuseipdb.get("abuse_confidence_score", 0)
+        abuse_reports = abuseipdb.get("total_reports", 0)
+        tf_matches    = threat_feeds.get("threatfox_matches") or []
+
+        if vt_malicious >= 5 or abuse_score >= 80 or tf_matches:
+            classification = "malicious"
+            confidence     = "high"
+            risk_score     = max(85, min(98, abuse_score))
+            if vt_malicious:
+                key_evidence.append(f"Flagged malicious by {vt_malicious}/{vt_total} VT vendors")
+            if abuse_score:
+                key_evidence.append(f"AbuseIPDB confidence: {abuse_score}% ({abuse_reports} reports)")
+            if tf_matches:
+                key_evidence.append(f"ThreatFox IOC matches: {len(tf_matches)}")
+            recommended_action = "block"
+            recommended_steps  = ["Block at perimeter firewall", "Review connection logs for this IP"]
+
+        elif vt_malicious >= 2 or abuse_score >= 40:
+            classification = "suspicious"
+            confidence     = "medium"
+            risk_score     = max(45, min(70, abuse_score))
+            if vt_malicious:
+                key_evidence.append(f"Flagged by {vt_malicious} VT vendors")
+            if abuse_score:
+                key_evidence.append(f"AbuseIPDB score: {abuse_score}%")
+            recommended_action = "investigate"
+
+        else:
+            classification = "benign"
+            confidence     = "medium"
+            risk_score     = 10
+            if vt.get("found"):
+                key_evidence.append(f"VT clean: 0/{vt_total} detections")
+            if abuse_score == 0 and abuse_reports == 0:
+                key_evidence.append("No AbuseIPDB reports")
+            recommended_action = "monitor"
+
+    # â”€â”€ Build summary text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    evidence_str = "; ".join(key_evidence) if key_evidence else "No significant threat indicators found."
+    risk_str     = f"Risk score: {risk_score}/100." if risk_score is not None else "Risk score undetermined."
+    summary      = (
+        f"Automated analysis for {observable_type.upper()} â€” {domain}. "
+        f"Classification: {classification.upper()} ({confidence} confidence). "
+        f"{risk_str} Key evidence: {evidence_str}"
+    )
+
+    return {
+        "classification": classification,
+        "confidence": confidence,
+        "investigation_state": "concluded",
+        "primary_reasoning": summary,
+        "legitimate_explanation": (
+            "" if classification == "malicious"
+            else f"No significant threat indicators found for this {observable_type}."
+        ),
+        "malicious_explanation": (
+            evidence_str if classification != "benign" else ""
+        ),
+        "key_evidence": key_evidence,
+        "contradicting_evidence": [],
+        "data_needed": [],
+        "findings": [],
+        "iocs": _build_iocs_from_evidence(evidence_data, observable_type),
+        "recommended_action": recommended_action,
+        "recommended_steps": recommended_steps,
+        "risk_score": risk_score,
+        "risk_rationale": evidence_str,
+        "executive_summary": summary,
+        "technical_narrative": summary,
+        "recommendations_narrative": (
+            f"Recommended action: {recommended_action}. "
+            + (" ".join(recommended_steps) if recommended_steps else "No additional steps required.")
+        ),
+    }
+
+
+def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list[dict]:
+    """
+    Build IOC list directly from collected technical evidence for non-domain types.
+    """
+    iocs: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_ioc(ioc_type: str, value: str, context: str, confidence: str = "medium") -> None:
+        if not value:
+            return
+        v = str(value).strip()
+        if not v:
+            return
+        key = (ioc_type, v.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        iocs.append({
+            "type": ioc_type,
+            "value": v,
+            "context": context,
+            "confidence": confidence,
+        })
+
+    observable = (evidence_data.get("domain") or "").strip()
+    if observable_type == "ip":
+        add_ioc("ip", observable, "Investigated IP", "high")
+    elif observable_type in ("hash", "file"):
+        # Keep the investigated hash/file identifier as a primary pivot IOC.
+        add_ioc("hash", observable, "Investigated sample/hash", "high")
+
+    # ThreatFox IOC matches from threat_feeds collector.
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    for match in (threat_feeds.get("threatfox_matches") or []):
+        ioc_type = str(match.get("ioc_type") or "").lower()
+        ioc_value = str(match.get("ioc_value") or "").strip()
+        if ioc_type in {"ip", "domain", "url", "hash", "email"}:
+            add_ioc(ioc_type, ioc_value, "ThreatFox match", "high")
+    # IP threat intelligence pivots.
+    abuse = threat_feeds.get("abuseipdb") or {}
+    if abuse.get("ip"):
+        add_ioc("ip", abuse["ip"], "AbuseIPDB lookup target", "medium")
+
+    return iocs
+
+
+def _looks_like_ip(value: str) -> bool:
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(p) <= 255 for p in parts)
+    except ValueError:
+        return False
 
 
 def _run_analyst_sync(evidence_data: dict, max_iterations: int) -> dict:
@@ -411,13 +622,19 @@ def _persist_results(
         with Session(sync_engine) as session:
             # Update investigation state
             inv = session.get(Investigation, inv_id)
-            if inv:
-                inv.state = "concluded"
-                inv.concluded_at = datetime.now(timezone.utc)
-                inv.classification = report_data.get("classification")
-                inv.confidence = report_data.get("confidence")
-                inv.risk_score = report_data.get("risk_score")
-                inv.recommended_action = report_data.get("recommended_action")
+            if not inv:
+                logger.error(
+                    f"[{investigation_id}] Investigation not found in DB â€” skipping persist. "
+                    "This task may be a stale re-queue for a deleted/reset investigation."
+                )
+                return
+
+            inv.state = "concluded"
+            inv.concluded_at = datetime.now(timezone.utc)
+            inv.classification = report_data.get("classification")
+            inv.confidence = report_data.get("confidence")
+            inv.risk_score = report_data.get("risk_score")
+            inv.recommended_action = report_data.get("recommended_action")
 
             # Save evidence
             ev = Evidence(
@@ -484,12 +701,111 @@ def _persist_results(
 
             session.commit()
 
+            # â”€â”€ Client Alert Check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            if inv:
+                try:
+                    _check_client_alerts_sync(session, inv, report_data)
+                except Exception as e:
+                    logger.warning(f"[{investigation_id}] Client alert check failed: {e}")
+
             # Update batch progress if this investigation belongs to a batch
             if inv and inv.batch_id:
                 _update_batch_progress(session, inv.batch_id)
 
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to persist results: {e}")
+
+
+def _check_client_alerts_sync(session, inv, report_data: dict) -> None:
+    """Sync version of client alert check â€” runs inside the Celery task DB session."""
+    from app.models.database import Client, ClientAlert
+
+    classification = (report_data.get("classification") or "").lower()
+    if classification in ("", "benign"):
+        return
+
+    SEVERITY_MAP = {
+        "malicious": "critical",
+        "suspicious": "high",
+        "inconclusive": "medium",
+    }
+    severity = SEVERITY_MAP.get(classification, "medium")
+    inv_domain = inv.domain.lower().removeprefix("www.")
+
+    clients = session.execute(
+        __import__("sqlalchemy", fromlist=["select"]).select(Client).where(Client.status == "active")
+    ).scalars().all()
+
+    now = datetime.now(timezone.utc)
+    new_alerts: list[ClientAlert] = []
+
+    for client in clients:
+        client_root = client.domain.lower().removeprefix("www.")
+        aliases = [a.lower().removeprefix("www.") for a in (client.aliases or [])]
+
+        # 1. Alias match
+        if inv_domain in aliases:
+            new_alerts.append(ClientAlert(
+                client_id=client.id,
+                investigation_id=inv.id,
+                alert_type="phishing_detected",
+                severity=severity,
+                title=f"Monitored alias {inv.domain} classified as {classification}",
+                details_json={"investigated_domain": inv.domain, "classification": classification},
+            ))
+
+        # 2. Typosquatting: investigation ran with this client as client_domain
+        elif getattr(inv, "client_domain", None) and \
+                (inv.client_domain or "").lower().removeprefix("www.") == client_root:
+            new_alerts.append(ClientAlert(
+                client_id=client.id,
+                investigation_id=inv.id,
+                alert_type="typosquatting",
+                severity=severity,
+                title=f"Potential typosquatting of {client.domain}: {inv.domain}",
+                details_json={
+                    "investigated_domain": inv.domain,
+                    "client_domain": client.domain,
+                    "classification": classification,
+                },
+            ))
+
+        # 3. Brand keyword match
+        else:
+            matched_kw = next(
+                (kw for kw in (client.brand_keywords or []) if kw.lower() in inv_domain),
+                None,
+            )
+            if matched_kw:
+                new_alerts.append(ClientAlert(
+                    client_id=client.id,
+                    investigation_id=inv.id,
+                    alert_type="brand_impersonation",
+                    severity=severity,
+                    title=f"Brand keyword '{matched_kw}' in {classification} domain: {inv.domain}",
+                    details_json={
+                        "investigated_domain": inv.domain,
+                        "classification": classification,
+                        "matched_keyword": matched_kw,
+                        "client_name": client.name,
+                    },
+                ))
+
+    for alert in new_alerts:
+        session.add(alert)
+
+    # Update client counters
+    from collections import Counter
+    counts = Counter(str(a.client_id) for a in new_alerts)
+    for client in clients:
+        n = counts.get(str(client.id), 0)
+        if n:
+            client.alert_count = (client.alert_count or 0) + n
+            client.last_alert_at = now
+
+    if new_alerts:
+        session.commit()
+        logger.info("Created %d client alert(s) for investigation %s", len(new_alerts), inv.id)
 
 
 def _update_batch_progress(session, batch_id) -> None:
@@ -572,7 +888,7 @@ def _save_artifact_sync(
             dest.write_bytes(data)
             storage_path = str(dest)
         else:
-            # For S3, we'd need async — for now store locally as fallback
+            # For S3, we'd need async â€” for now store locally as fallback
             base = Path(settings.artifact_local_path)
             dest = base / investigation_id / artifact_name
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -629,3 +945,6 @@ def _publish_progress(
         )
     except Exception as e:
         logger.warning(f"Failed to publish progress: {e}")
+
+
+

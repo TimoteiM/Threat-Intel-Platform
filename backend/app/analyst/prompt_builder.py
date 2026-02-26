@@ -1,5 +1,5 @@
-"""
-Prompt Builder — constructs the Claude API message array from evidence.
+﻿"""
+Prompt Builder â€” constructs the Claude API message array from evidence.
 
 Handles first-pass and follow-up iterations.
 """
@@ -32,7 +32,7 @@ def build_messages(
     """
     system = ANALYST_SYSTEM_PROMPT.replace("{max_iterations}", str(max_iterations))
 
-    # Serialize machine-collected evidence — exclude user-supplied free-text fields
+    # Serialize machine-collected evidence â€” exclude user-supplied free-text fields
     # so they can be injected in a clearly-labelled, separate block below.
     evidence_json = evidence.model_dump_json(
         indent=2,
@@ -51,7 +51,7 @@ compared against the client's legitimate domain '{sim.client_domain}' to detect 
 impersonation, typosquatting, or visual lookalike attacks.
 
 You MUST include domain similarity analysis in your assessment. The domain_similarity
-section in the evidence contains computed algorithmic metrics — treat these as factual
+section in the evidence contains computed algorithmic metrics â€” treat these as factual
 measurements, not speculation.
 </client_domain_comparison>
 """
@@ -71,7 +71,7 @@ Visual similarity: {overall:.0%} | Clone: {vc.is_visual_clone} | Partial clone: 
 {"Reference image was used (uploaded by analyst)." if vc.reference_image_used else "Live screenshots were captured."}
 
 You MUST include visual comparison findings in your Technical Evidence Analysis section.
-The visual_comparison metrics are computed from actual page screenshots — treat them as
+The visual_comparison metrics are computed from actual page screenshots â€” treat them as
 objective measurements.
 </visual_comparison_context>
 """
@@ -97,7 +97,7 @@ DMARC policy: {es.dmarc_policy or 'none'} | SPF: {es.spf_all_qualifier or 'none'
 MX records: {len(es.mx_records)}
 
 Include email security findings in your Technical Evidence Analysis section.
-Weak email security alone is NOT malicious — but combined with impersonation indicators
+Weak email security alone is NOT malicious â€” but combined with impersonation indicators
 it strengthens phishing hypotheses.
 </email_security_context>
 """
@@ -145,11 +145,11 @@ CRITICAL GUIDANCE FOR JS ANALYSIS:
 - The ONLY strong malicious indicator is credential harvesting: {len(cred_posts)} external
   POST(s) to auth endpoints found. This is significant ONLY when combined with impersonation.
 - Do NOT create findings about "tracking implementation" or "fingerprinting" for legitimate
-  sites — these are informational only and should not appear as findings.
+  sites â€” these are informational only and should not appear as findings.
 </js_analysis_context>
 """
 
-    # Build operator-supplied context block — clearly fenced as TEXT DATA, not instructions.
+    # Build operator-supplied context block â€” clearly fenced as TEXT DATA, not instructions.
     operator_context_block = ""
     if evidence.external_context:
         ec = evidence.external_context
@@ -169,12 +169,47 @@ CRITICAL GUIDANCE FOR JS ANALYSIS:
         lines.append("</operator_supplied_context>")
         operator_context_block = "\n".join(lines) + "\n"
 
-    user_message = f"""Analyze the following domain investigation evidence and produce your assessment.
+    # Type-aware intro and focus directive
+    observable_type = getattr(evidence, "observable_type", "domain") or "domain"
+    _type_intros = {
+        "domain": (
+            "Analyze the following domain investigation evidence and produce your assessment.",
+            "Focus: phishing, typosquatting, brand abuse, malicious hosting, C2 infrastructure.",
+        ),
+        "ip": (
+            "Analyze the following IP address investigation evidence and produce your assessment.",
+            "Focus: C2 server, scanner, botnet node, bullet-proof hosting, malicious egress. "
+            "Do NOT apply domain-specific logic (login forms, WHOIS age, TLD analysis). "
+            "Evaluate ASN, reputation, open services, and threat feed hits.",
+        ),
+        "url": (
+            "Analyze the following URL investigation evidence and produce your assessment.",
+            "Focus: malware delivery, credential harvesting, phishing page, malicious redirect chain. "
+            "Evaluate the full redirect chain, page content, VT/URLScan verdicts, and JS behavior.",
+        ),
+        "hash": (
+            "Analyze the following file hash investigation evidence and produce your assessment.",
+            "Focus: malware classification, detection ratio, malware family, sandbox behaviors, IOCs. "
+            "Do NOT apply domain/web analysis logic. Evaluate VT detections, HA sandbox verdict, "
+            "network indicators, malware family names, and behavioral signatures.",
+        ),
+        "file": (
+            "Analyze the following file sample investigation evidence and produce your assessment.",
+            "Focus: malware classification, detection ratio, malware family, sandbox behaviors, IOCs. "
+            "Do NOT apply domain/web analysis logic. Evaluate VT detections, HA sandbox verdict, "
+            "network indicators, malware family names, and behavioral signatures.",
+        ),
+    }
+    intro_line, focus_line = _type_intros.get(observable_type, _type_intros["domain"])
+
+    user_message = f"""{intro_line}
 
 <investigation>
-<domain>{evidence.domain}</domain>
+<observable>{evidence.domain}</observable>
+<observable_type>{observable_type}</observable_type>
 <investigation_id>{evidence.investigation_id}</investigation_id>
 <iteration>{iteration} of {max_iterations}</iteration>
+<analyst_focus>{focus_line}</analyst_focus>
 {similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}
 <machine_collected_evidence>
 {evidence_json}
@@ -182,7 +217,8 @@ CRITICAL GUIDANCE FOR JS ANALYSIS:
 {operator_context_block}</investigation>
 
 Produce your structured JSON assessment followed by the human-readable report.
-Follow your methodology strictly. Do not skip any step."""
+Follow your methodology strictly. Adapt every section to the observable_type above.
+Do not skip any step."""
 
     messages = []
 
@@ -202,3 +238,4 @@ Follow your methodology strictly. Do not skip any step."""
         messages.append({"role": "user", "content": user_message})
 
     return system, messages
+

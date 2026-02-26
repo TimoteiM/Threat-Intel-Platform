@@ -7,6 +7,7 @@ Configures CORS, security middleware, lifespan events, and mounts the API router
 from __future__ import annotations
 
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -18,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.router import api_router
 from app.config import get_settings
 from app.middleware.rate_limit import RateLimitMiddleware
+from app.db.session import async_engine
 
 settings = get_settings()
 
@@ -32,6 +34,25 @@ logger = logging.getLogger(__name__)
 # ── Lifespan ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from sqlalchemy import text
+    from app.models.database import Base  # noqa: F401 — import registers all models
+
+    async with async_engine.begin() as conn:
+        # Create any tables that don't exist yet (idempotent)
+        await conn.run_sync(Base.metadata.create_all)
+
+        # Add columns that may be missing from tables created before these fields existed.
+        # ALTER TABLE ... ADD COLUMN IF NOT EXISTS is idempotent — safe to run every boot.
+        col_migrations = [
+            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'",
+            "ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)",
+        ]
+        for stmt in col_migrations:
+            await conn.execute(text(stmt))
+
+    logger.info("Database schema verified / migrated")
+
     logger.info("Threat Investigation Platform starting")
     logger.info(f"Environment: {settings.app_env}")
     logger.info(f"Analyst model: {settings.anthropic_model}")
@@ -89,6 +110,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     In development: returns exception type + message for easier debugging.
     In production: returns a generic 500 with no internal details.
     """
+    print(
+        f"\n[EXCEPTION] {request.method} {request.url.path} → "
+        f"{type(exc).__name__}: {exc}",
+        flush=True,
+    )
+    traceback.print_exc()
     logger.error(
         f"Unhandled exception on {request.method} {request.url.path}: "
         f"{type(exc).__name__}: {exc}",
