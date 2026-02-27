@@ -1,0 +1,25 @@
+[config] Loaded .env from: C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\.env
+[config] Settings loaded — VT key: SET
+ 
+ -------------- celery-local-8015-20260227-233630@EXP-JFW2P34 v5.6.2 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-11-10.0.26200-SP0 2026-02-27 23:36:34
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         threat_intel:0x2470a8f7320
+- ** ---------- .> transport:   redis://127.0.0.1:6379/5
+- ** ---------- .> results:     redis://127.0.0.1:6379/6
+- *** --- * --- .> concurrency: 4 (thread)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> investigations   exchange=investigations(direct) key=investigations
+                
+
+[tasks]
+  . tasks.process_batch
+  . tasks.run_analysis
+  . tasks.run_collector
+  . tasks.run_investigation
+  . tasks.watchlist_check
+

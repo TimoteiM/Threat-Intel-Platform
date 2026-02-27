@@ -137,20 +137,25 @@ class InvestigationService:
         await self.session.commit()
 
         # Dispatch async pipeline
-        run_investigation.delay(
-            investigation_id=investigation_id,
-            domain=domain,
-            observable_type=observable_type,
-            context=request.context,
-            client_domain=client_domain,
-            investigated_url=request.investigated_url,
-            client_url=request.client_url,
-            external_context=(
-                request.external_context.model_dump()
-                if request.external_context else None
-            ),
-            requested_collectors=effective_collectors,
-        )
+        try:
+            run_investigation.delay(
+                investigation_id=investigation_id,
+                domain=domain,
+                observable_type=observable_type,
+                context=request.context,
+                client_domain=client_domain,
+                investigated_url=request.investigated_url,
+                client_url=request.client_url,
+                external_context=(
+                    request.external_context.model_dump()
+                    if request.external_context else None
+                ),
+                requested_collectors=effective_collectors,
+            )
+        except Exception as exc:
+            await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
+            await self.session.commit()
+            raise RuntimeError(f"Failed to queue investigation task: {exc}") from exc
 
         return {
             "investigation_id": investigation_id,
@@ -227,14 +232,19 @@ class InvestigationService:
         await self.session.commit()
 
         # Dispatch pipeline with file_artifact_id
-        run_investigation.delay(
-            investigation_id=investigation_id,
-            domain=request.domain,
-            observable_type=observable_type,
-            context=request.context,
-            requested_collectors=request.requested_collectors or ["vt"],
-            file_artifact_id=file_artifact_id,
-        )
+        try:
+            run_investigation.delay(
+                investigation_id=investigation_id,
+                domain=request.domain,
+                observable_type=observable_type,
+                context=request.context,
+                requested_collectors=request.requested_collectors or ["vt"],
+                file_artifact_id=file_artifact_id,
+            )
+        except Exception as exc:
+            await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
+            await self.session.commit()
+            raise RuntimeError(f"Failed to queue file investigation task: {exc}") from exc
 
         return {
             "investigation_id": investigation_id,

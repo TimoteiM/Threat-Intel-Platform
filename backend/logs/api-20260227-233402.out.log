@@ -1,0 +1,72 @@
+[config] Loaded .env from: C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\.env
+[config] Settings loaded — VT key: SET
+2026-02-27 23:34:07,543 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-02-27 23:34:07,549 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-27 23:34:07,553 INFO sqlalchemy.engine.Engine select current_schema()
+2026-02-27 23:34:07,555 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-27 23:34:07,557 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-02-27 23:34:07,559 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-27 23:34:07,563 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-27 23:34:07,565 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,566 INFO sqlalchemy.engine.Engine [generated in 0.00077s] ('batches', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,571 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,573 INFO sqlalchemy.engine.Engine [cached since 0.006877s ago] ('investigations', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,574 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,574 INFO sqlalchemy.engine.Engine [cached since 0.008785s ago] ('collector_results', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,575 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,576 INFO sqlalchemy.engine.Engine [cached since 0.01046s ago] ('evidence', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,577 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,577 INFO sqlalchemy.engine.Engine [cached since 0.01185s ago] ('reports', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,578 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,579 INFO sqlalchemy.engine.Engine [cached since 0.01368s ago] ('artifacts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,580 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,580 INFO sqlalchemy.engine.Engine [cached since 0.01508s ago] ('iocs', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,581 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,582 INFO sqlalchemy.engine.Engine [cached since 0.01627s ago] ('watchlist', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,582 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,583 INFO sqlalchemy.engine.Engine [cached since 0.01746s ago] ('watchlist_alerts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,584 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,584 INFO sqlalchemy.engine.Engine [cached since 0.01858s ago] ('clients', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,585 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,585 INFO sqlalchemy.engine.Engine [cached since 0.01969s ago] ('client_alerts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,586 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,586 INFO sqlalchemy.engine.Engine [cached since 0.02082s ago] ('whois_history', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,587 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,588 INFO sqlalchemy.engine.Engine [cached since 0.02224s ago] ('ip_lookups', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,588 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-27 23:34:07,589 INFO sqlalchemy.engine.Engine [cached since 0.0235s ago] ('lookup_cache', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-27 23:34:07,590 INFO sqlalchemy.engine.Engine ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb
+2026-02-27 23:34:07,590 INFO sqlalchemy.engine.Engine [generated in 0.00049s] ()
+2026-02-27 23:34:07,591 INFO sqlalchemy.engine.Engine ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'
+2026-02-27 23:34:07,593 INFO sqlalchemy.engine.Engine [generated in 0.00047s] ()
+2026-02-27 23:34:07,594 INFO sqlalchemy.engine.Engine ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)
+2026-02-27 23:34:07,594 INFO sqlalchemy.engine.Engine [generated in 0.00050s] ()
+2026-02-27 23:34:07,598 INFO sqlalchemy.engine.Engine COMMIT

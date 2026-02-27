@@ -68,6 +68,7 @@ class Settings(BaseSettings):
 
     # —— Investigation Defaults ———
     max_analyst_iterations: int = 1
+    analyst_timeout_seconds: int = 45
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
 

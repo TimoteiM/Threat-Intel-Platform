@@ -1,0 +1,1612 @@
+[config] Loaded .env from: C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\.env
+[config] Settings loaded — VT key: SET
+2026-02-28 01:36:29,488 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-02-28 01:36:29,498 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-28 01:36:29,506 INFO sqlalchemy.engine.Engine select current_schema()
+2026-02-28 01:36:29,509 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-28 01:36:29,516 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-02-28 01:36:29,519 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-28 01:36:29,526 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:36:29,542 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,546 INFO sqlalchemy.engine.Engine [generated in 0.00468s] ('batches', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,558 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,560 INFO sqlalchemy.engine.Engine [cached since 0.01858s ago] ('investigations', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,563 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,565 INFO sqlalchemy.engine.Engine [cached since 0.023s ago] ('collector_results', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,568 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,569 INFO sqlalchemy.engine.Engine [cached since 0.02748s ago] ('evidence', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,572 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,574 INFO sqlalchemy.engine.Engine [cached since 0.03261s ago] ('reports', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,577 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,578 INFO sqlalchemy.engine.Engine [cached since 0.03678s ago] ('artifacts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,581 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,583 INFO sqlalchemy.engine.Engine [cached since 0.04082s ago] ('iocs', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,586 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,587 INFO sqlalchemy.engine.Engine [cached since 0.04537s ago] ('watchlist', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,589 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,591 INFO sqlalchemy.engine.Engine [cached since 0.04884s ago] ('watchlist_alerts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,593 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,594 INFO sqlalchemy.engine.Engine [cached since 0.05211s ago] ('clients', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,596 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,598 INFO sqlalchemy.engine.Engine [cached since 0.05586s ago] ('client_alerts', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,601 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,602 INFO sqlalchemy.engine.Engine [cached since 0.06048s ago] ('whois_history', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,604 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,606 INFO sqlalchemy.engine.Engine [cached since 0.06433s ago] ('ip_lookups', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,608 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+2026-02-28 01:36:29,609 INFO sqlalchemy.engine.Engine [cached since 0.06753s ago] ('lookup_cache', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+2026-02-28 01:36:29,614 INFO sqlalchemy.engine.Engine ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb
+2026-02-28 01:36:29,617 INFO sqlalchemy.engine.Engine [generated in 0.00250s] ()
+2026-02-28 01:36:29,621 INFO sqlalchemy.engine.Engine ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'
+2026-02-28 01:36:29,624 INFO sqlalchemy.engine.Engine [generated in 0.00205s] ()
+2026-02-28 01:36:29,627 INFO sqlalchemy.engine.Engine ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)
+2026-02-28 01:36:29,628 INFO sqlalchemy.engine.Engine [generated in 0.00156s] ()
+2026-02-28 01:36:29,637 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:30,447 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:30,481 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations ORDER BY investigations.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 01:37:30,484 INFO sqlalchemy.engine.Engine [generated in 0.00276s] (10, 0)
+2026-02-28 01:37:30,495 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:37:30,497 INFO sqlalchemy.engine.Engine [generated in 0.00170s] ()
+INFO:     127.0.0.1:57850 - "GET /api/investigations?limit=10 HTTP/1.1" 200 OK
+2026-02-28 01:37:30,501 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:30,512 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:30,513 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations ORDER BY investigations.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 01:37:30,514 INFO sqlalchemy.engine.Engine [cached since 0.03242s ago] (10, 0)
+2026-02-28 01:37:30,516 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:37:30,517 INFO sqlalchemy.engine.Engine [cached since 0.02123s ago] ()
+INFO:     127.0.0.1:57853 - "GET /api/investigations?limit=10 HTTP/1.1" 200 OK
+2026-02-28 01:37:30,519 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:30,647 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:30,650 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:37:30,652 INFO sqlalchemy.engine.Engine [cached since 0.157s ago] ()
+2026-02-28 01:37:30,660 INFO sqlalchemy.engine.Engine SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-02-28 01:37:30,665 INFO sqlalchemy.engine.Engine [generated in 0.00460s] ('concluded',)
+2026-02-28 01:37:30,671 INFO sqlalchemy.engine.Engine SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-02-28 01:37:30,672 INFO sqlalchemy.engine.Engine [generated in 0.00116s] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-02-28 01:37:30,681 INFO sqlalchemy.engine.Engine SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-02-28 01:37:30,682 INFO sqlalchemy.engine.Engine [generated in 0.00174s] ('day', datetime.datetime(2026, 1, 28, 23, 37, 30, 677056, tzinfo=datetime.timezone.utc), 'concluded')
+2026-02-28 01:37:30,685 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:37:30,687 INFO sqlalchemy.engine.Engine [generated in 0.00100s] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-02-28 01:37:30,700 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:37:30,704 INFO sqlalchemy.engine.Engine [cached since 0.0182s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-02-28 01:37:30,716 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:30,720 INFO sqlalchemy.engine.Engine [generated in 0.00329s] ('malicious', 10)
+INFO:     127.0.0.1:57851 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+2026-02-28 01:37:30,726 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:30,742 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:30,745 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:37:30,747 INFO sqlalchemy.engine.Engine [cached since 0.2513s ago] ()
+2026-02-28 01:37:30,750 INFO sqlalchemy.engine.Engine SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-02-28 01:37:30,751 INFO sqlalchemy.engine.Engine [cached since 0.09059s ago] ('concluded',)
+2026-02-28 01:37:30,756 INFO sqlalchemy.engine.Engine SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-02-28 01:37:30,757 INFO sqlalchemy.engine.Engine [cached since 0.08597s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-02-28 01:37:30,761 INFO sqlalchemy.engine.Engine SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-02-28 01:37:30,763 INFO sqlalchemy.engine.Engine [cached since 0.08207s ago] ('day', datetime.datetime(2026, 1, 28, 23, 37, 30, 760212, tzinfo=datetime.timezone.utc), 'concluded')
+2026-02-28 01:37:30,766 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:37:30,767 INFO sqlalchemy.engine.Engine [cached since 0.08144s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-02-28 01:37:30,782 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:37:30,784 INFO sqlalchemy.engine.Engine [cached since 0.09798s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-02-28 01:37:30,797 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:30,798 INFO sqlalchemy.engine.Engine [cached since 0.08238s ago] ('malicious', 10)
+INFO:     127.0.0.1:57854 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+2026-02-28 01:37:30,805 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:34,775 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:34,777 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.domain ILIKE $2::VARCHAR AND investigations.observable_type = $3::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $4::INTEGER OFFSET $5::INTEGER
+2026-02-28 01:37:34,778 INFO sqlalchemy.engine.Engine [generated in 0.00085s] ('concluded', '%expertware.net%', 'domain', 10, 0)
+2026-02-28 01:37:34,783 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.domain ILIKE $2::VARCHAR AND investigations.observable_type = $3::VARCHAR
+2026-02-28 01:37:34,783 INFO sqlalchemy.engine.Engine [generated in 0.00093s] ('concluded', '%expertware.net%', 'domain')
+INFO:     127.0.0.1:57857 - "GET /api/investigations?limit=10&state=concluded&search=expertware.net&observable_type=domain HTTP/1.1" 200 OK
+2026-02-28 01:37:34,788 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:36,143 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,147 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.name, clients.domain, clients.aliases, clients.brand_keywords, clients.contact_email, clients.notes, clients.status, clients.created_at, clients.alert_count, clients.last_alert_at, clients.default_collectors 
+FROM clients 
+WHERE clients.status = $1::VARCHAR
+2026-02-28 01:37:36,148 INFO sqlalchemy.engine.Engine [generated in 0.00115s] ('active',)
+2026-02-28 01:37:36,158 INFO sqlalchemy.engine.Engine INSERT INTO investigations (id, domain, observable_type, state, context, client_domain, batch_id, updated_at, concluded_at, classification, confidence, risk_score, recommended_action, analyst_iterations, max_analyst_iterations) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::UUID, $8::TIMESTAMP WITH TIME ZONE, $9::TIMESTAMP WITH TIME ZONE, $10::VARCHAR, $11::VARCHAR, $12::INTEGER, $13::VARCHAR, $14::INTEGER, $15::INTEGER) RETURNING investigations.created_at
+2026-02-28 01:37:36,159 INFO sqlalchemy.engine.Engine [generated in 0.00150s] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 'expertware.net', 'domain', 'created', None, None, None, None, None, None, None, None, None, 0, 1)
+2026-02-28 01:37:36,164 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:50774 - "POST /api/investigations HTTP/1.1" 200 OK
+2026-02-28 01:37:36,704 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,709 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:36,711 INFO sqlalchemy.engine.Engine [generated in 0.00258s] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:54748 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54747 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:36,738 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:36,748 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,749 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:36,750 INFO sqlalchemy.engine.Engine [cached since 0.04161s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:36,757 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:37:36,770 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,774 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:36,775 INFO sqlalchemy.engine.Engine [cached since 0.06591s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:55661 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:36,779 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:36,799 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,800 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:36,801 INFO sqlalchemy.engine.Engine [cached since 0.09251s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:62687 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:36,806 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:36,951 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,957 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:36,957 INFO sqlalchemy.engine.Engine [generated in 0.00129s] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:36,963 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55663 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:36,983 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:36,984 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:36,985 INFO sqlalchemy.engine.Engine [cached since 0.02797s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:36,988 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50197 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:37,001 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:37,007 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:37,009 INFO sqlalchemy.engine.Engine [generated in 0.00166s] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:37,014 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50198 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:37,024 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:37,026 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:37,027 INFO sqlalchemy.engine.Engine [cached since 0.0701s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:37,030 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:56330 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:37,039 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:37,041 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:37,042 INFO sqlalchemy.engine.Engine [cached since 0.03455s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:37,046 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:51258 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:37,059 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:37,062 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:37,063 INFO sqlalchemy.engine.Engine [cached since 0.05492s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:37,064 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59824 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:42,507 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:42,510 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:42,511 INFO sqlalchemy.engine.Engine [cached since 5.802s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:61166 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:42,517 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:42,539 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:42,542 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:42,543 INFO sqlalchemy.engine.Engine [cached since 5.587s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:42,546 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61179 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:42,576 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:42,578 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:42,579 INFO sqlalchemy.engine.Engine [cached since 5.571s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:42,582 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57998 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:47,515 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:47,518 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:47,519 INFO sqlalchemy.engine.Engine [cached since 10.81s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:61819 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:47,523 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:47,541 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:47,544 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:47,544 INFO sqlalchemy.engine.Engine [cached since 10.59s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:47,546 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50327 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:47,567 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:47,570 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:47,571 INFO sqlalchemy.engine.Engine [cached since 10.56s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:47,574 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57405 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:52,507 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:52,508 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:52,509 INFO sqlalchemy.engine.Engine [cached since 15.8s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:55673 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:52,515 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:52,531 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:52,532 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:52,532 INFO sqlalchemy.engine.Engine [cached since 15.58s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:52,533 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:63982 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:52,554 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:52,556 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:52,557 INFO sqlalchemy.engine.Engine [cached since 15.55s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:52,561 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:49380 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:37:57,516 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:57,521 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:37:57,522 INFO sqlalchemy.engine.Engine [cached since 20.81s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:62777 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:37:57,525 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:37:57,539 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:57,540 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:37:57,541 INFO sqlalchemy.engine.Engine [cached since 20.58s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:37:57,544 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:64820 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:37:57,558 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:37:57,559 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:37:57,559 INFO sqlalchemy.engine.Engine [cached since 20.55s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:37:57,562 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:52902 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:02,225 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:02,228 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:02,228 INFO sqlalchemy.engine.Engine [cached since 25.52s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:50487 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:02,233 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:02,245 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:02,247 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:02,248 INFO sqlalchemy.engine.Engine [cached since 25.29s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:02,250 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57190 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:02,271 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:02,272 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:02,273 INFO sqlalchemy.engine.Engine [cached since 25.27s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:02,276 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:63122 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:06,767 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,771 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:06,772 INFO sqlalchemy.engine.Engine [cached since 30.06s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:51744 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:06,776 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:06,796 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,797 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:06,798 INFO sqlalchemy.engine.Engine [cached since 30.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:06,798 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,799 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:06,800 INFO sqlalchemy.engine.Engine [cached since 29.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:06,803 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:65078 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:06,807 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:65079 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:06,825 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,828 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:06,828 INFO sqlalchemy.engine.Engine [cached since 29.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:06,832 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:38:06,834 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,835 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:06,835 INFO sqlalchemy.engine.Engine [cached since 29.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+INFO:     127.0.0.1:63635 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:06,839 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:63636 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:06,857 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:06,859 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:06,860 INFO sqlalchemy.engine.Engine [cached since 29.85s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:06,861 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55136 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:11,797 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:11,799 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:11,800 INFO sqlalchemy.engine.Engine [cached since 35.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:60860 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:11,805 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:11,821 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:11,824 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:11,825 INFO sqlalchemy.engine.Engine [cached since 34.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:11,827 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:49976 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:11,842 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:11,844 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:11,845 INFO sqlalchemy.engine.Engine [cached since 34.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:11,848 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55965 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:16,791 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:16,795 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:16,796 INFO sqlalchemy.engine.Engine [cached since 40.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:51044 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:16,801 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:16,814 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:16,816 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:16,817 INFO sqlalchemy.engine.Engine [cached since 39.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:16,819 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:63619 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:16,836 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:16,837 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:16,838 INFO sqlalchemy.engine.Engine [cached since 39.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:16,840 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:56153 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:21,799 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:21,801 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:21,802 INFO sqlalchemy.engine.Engine [cached since 45.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:56736 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:21,807 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:21,824 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:21,826 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:21,828 INFO sqlalchemy.engine.Engine [cached since 44.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:21,830 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:52561 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:21,848 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:21,851 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:21,852 INFO sqlalchemy.engine.Engine [cached since 44.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:21,855 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58450 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:26,800 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:26,801 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:26,803 INFO sqlalchemy.engine.Engine [cached since 50.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:58425 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:26,806 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:26,819 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:26,821 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:26,822 INFO sqlalchemy.engine.Engine [cached since 49.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:26,824 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:53526 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:26,842 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:26,843 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:26,843 INFO sqlalchemy.engine.Engine [cached since 49.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:26,844 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:62839 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:31,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:31,798 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:31,798 INFO sqlalchemy.engine.Engine [cached since 55.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:50063 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:31,801 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:31,813 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:31,814 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:31,815 INFO sqlalchemy.engine.Engine [cached since 54.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:31,817 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61176 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:31,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:31,832 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:31,833 INFO sqlalchemy.engine.Engine [cached since 54.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:31,835 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59975 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:36,793 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:36,794 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:36,795 INFO sqlalchemy.engine.Engine [cached since 60.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:52043 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:36,799 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:36,813 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:36,814 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:36,815 INFO sqlalchemy.engine.Engine [cached since 59.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:36,817 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:53530 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:36,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:36,832 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:36,832 INFO sqlalchemy.engine.Engine [cached since 59.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:36,834 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:62314 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:38,603 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:38,607 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations ORDER BY investigations.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 01:38:38,608 INFO sqlalchemy.engine.Engine [cached since 68.13s ago] (1, 0)
+2026-02-28 01:38:38,611 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:38:38,612 INFO sqlalchemy.engine.Engine [cached since 68.12s ago] ()
+INFO:     127.0.0.1:62323 - "GET /api/investigations?limit=1 HTTP/1.1" 200 OK
+2026-02-28 01:38:38,615 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:41,795 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:41,798 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:41,799 INFO sqlalchemy.engine.Engine [cached since 65.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:54964 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:41,803 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:41,815 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:41,816 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:41,818 INFO sqlalchemy.engine.Engine [cached since 64.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:41,821 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:51069 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:41,836 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:41,837 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:41,838 INFO sqlalchemy.engine.Engine [cached since 64.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:41,843 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59325 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:46,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:46,797 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:46,798 INFO sqlalchemy.engine.Engine [cached since 70.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:54755 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:46,802 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:46,816 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:46,818 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:46,819 INFO sqlalchemy.engine.Engine [cached since 69.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:46,822 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:51165 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:46,835 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:46,836 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:46,837 INFO sqlalchemy.engine.Engine [cached since 69.83s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:46,840 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:60870 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:48,152 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:48,156 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.name, clients.domain, clients.aliases, clients.brand_keywords, clients.contact_email, clients.notes, clients.status, clients.created_at, clients.alert_count, clients.last_alert_at, clients.default_collectors 
+FROM clients 
+WHERE clients.status = $1::VARCHAR
+2026-02-28 01:38:48,157 INFO sqlalchemy.engine.Engine [cached since 72.01s ago] ('active',)
+2026-02-28 01:38:48,159 INFO sqlalchemy.engine.Engine INSERT INTO investigations (id, domain, observable_type, state, context, client_domain, batch_id, updated_at, concluded_at, classification, confidence, risk_score, recommended_action, analyst_iterations, max_analyst_iterations) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::UUID, $8::TIMESTAMP WITH TIME ZONE, $9::TIMESTAMP WITH TIME ZONE, $10::VARCHAR, $11::VARCHAR, $12::INTEGER, $13::VARCHAR, $14::INTEGER, $15::INTEGER) RETURNING investigations.created_at
+2026-02-28 01:38:48,160 INFO sqlalchemy.engine.Engine [cached since 72s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'), 'example.com', 'domain', 'created', None, None, None, None, None, None, None, None, None, 0, 1)
+2026-02-28 01:38:48,161 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60871 - "POST /api/investigations HTTP/1.1" 200 OK
+2026-02-28 01:38:48,175 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:48,176 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:48,177 INFO sqlalchemy.engine.Engine [cached since 71.47s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:60872 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:38:48,180 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:51,205 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:51,209 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:51,210 INFO sqlalchemy.engine.Engine [cached since 74.5s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:61386 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:38:51,214 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:51,802 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:51,804 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:51,804 INFO sqlalchemy.engine.Engine [cached since 75.1s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:53083 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:51,809 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:51,822 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:51,823 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:51,824 INFO sqlalchemy.engine.Engine [cached since 74.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:51,826 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:52981 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:51,842 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:51,843 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:51,844 INFO sqlalchemy.engine.Engine [cached since 74.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:51,846 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:56600 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:54,221 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:54,221 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:54,222 INFO sqlalchemy.engine.Engine [cached since 77.51s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56604 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:38:54,227 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:56,799 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:56,801 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:56,802 INFO sqlalchemy.engine.Engine [cached since 80.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:54838 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:38:56,807 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:38:56,822 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:56,825 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:38:56,825 INFO sqlalchemy.engine.Engine [cached since 79.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:38:56,827 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:56231 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:38:56,844 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:56,847 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:38:56,849 INFO sqlalchemy.engine.Engine [cached since 79.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:38:56,851 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55194 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:38:57,235 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:38:57,236 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:38:57,236 INFO sqlalchemy.engine.Engine [cached since 80.53s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:55195 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:38:57,239 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:00,245 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:00,246 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:00,247 INFO sqlalchemy.engine.Engine [cached since 83.54s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:55204 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:00,250 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:01,793 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:01,795 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:01,798 INFO sqlalchemy.engine.Engine [cached since 85.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:54663 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:01,804 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:01,821 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:01,823 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:01,823 INFO sqlalchemy.engine.Engine [cached since 84.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:39:01,826 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58692 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:39:01,844 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:01,848 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:01,850 INFO sqlalchemy.engine.Engine [cached since 84.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:39:01,853 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59463 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:39:03,272 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:03,272 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:03,273 INFO sqlalchemy.engine.Engine [cached since 86.56s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:54910 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:03,277 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:06,285 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:06,288 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:06,289 INFO sqlalchemy.engine.Engine [cached since 89.58s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:54911 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:06,293 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:06,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:06,795 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:06,795 INFO sqlalchemy.engine.Engine [cached since 90.09s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:49207 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:06,798 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:06,813 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:06,816 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:06,818 INFO sqlalchemy.engine.Engine [cached since 89.86s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:39:06,821 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50496 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:39:06,851 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:06,854 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:06,855 INFO sqlalchemy.engine.Engine [cached since 89.85s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:39:06,860 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:63709 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:39:09,312 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:09,315 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:09,317 INFO sqlalchemy.engine.Engine [cached since 92.61s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:63710 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:09,320 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:11,808 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:11,812 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:11,814 INFO sqlalchemy.engine.Engine [cached since 95.1s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:55999 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:11,818 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:11,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:11,831 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:11,832 INFO sqlalchemy.engine.Engine [cached since 94.88s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:39:11,834 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:56775 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:39:11,850 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:11,852 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:11,852 INFO sqlalchemy.engine.Engine [cached since 94.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:39:11,855 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:51045 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:39:12,328 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:12,332 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:12,334 INFO sqlalchemy.engine.Engine [cached since 95.62s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51047 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:12,339 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:15,346 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:15,349 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:15,350 INFO sqlalchemy.engine.Engine [cached since 98.64s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51504 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:15,353 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:16,807 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:16,809 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:16,810 INFO sqlalchemy.engine.Engine [cached since 100.1s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:53190 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:16,813 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:16,824 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:16,825 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:16,825 INFO sqlalchemy.engine.Engine [cached since 99.87s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:39:16,827 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61299 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:39:16,843 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:16,845 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:16,846 INFO sqlalchemy.engine.Engine [cached since 99.84s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+2026-02-28 01:39:16,848 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61133 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 404 Not Found
+2026-02-28 01:39:18,371 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:18,375 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:18,377 INFO sqlalchemy.engine.Engine [cached since 101.7s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:61136 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:18,380 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,403 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,408 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:21,410 INFO sqlalchemy.engine.Engine [cached since 104.7s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:61139 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:21,413 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,805 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,808 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:21,809 INFO sqlalchemy.engine.Engine [cached since 105.1s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:56631 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:21,813 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,829 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,831 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:21,832 INFO sqlalchemy.engine.Engine [cached since 104.9s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:39:21,833 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,834 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:21,834 INFO sqlalchemy.engine.Engine [cached since 105.1s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:59521 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795 HTTP/1.1" 200 OK
+2026-02-28 01:39:21,837 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59520 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 200 OK
+2026-02-28 01:39:21,849 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,862 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,863 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:39:21,863 INFO sqlalchemy.engine.Engine [cached since 104.9s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:63374 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/evidence HTTP/1.1" 200 OK
+2026-02-28 01:39:21,877 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,878 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,879 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:21,881 INFO sqlalchemy.engine.Engine [cached since 104.9s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+INFO:     127.0.0.1:58327 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 200 OK
+2026-02-28 01:39:21,886 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:21,897 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:21,897 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:39:21,898 INFO sqlalchemy.engine.Engine [cached since 104.9s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 1)
+INFO:     127.0.0.1:64032 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/report HTTP/1.1" 200 OK
+2026-02-28 01:39:21,902 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:24,423 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:24,426 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:24,427 INFO sqlalchemy.engine.Engine [cached since 107.7s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:64043 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:24,431 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:27,465 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:27,468 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:27,469 INFO sqlalchemy.engine.Engine [cached since 110.8s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:64046 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:27,473 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:30,481 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:30,485 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:30,486 INFO sqlalchemy.engine.Engine [cached since 113.8s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56544 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:30,490 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:33,515 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:33,519 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:33,520 INFO sqlalchemy.engine.Engine [cached since 116.8s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:55317 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:33,523 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:36,529 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:36,533 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:36,535 INFO sqlalchemy.engine.Engine [cached since 119.8s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56461 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:36,539 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:39,549 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:39,552 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:39,553 INFO sqlalchemy.engine.Engine [cached since 122.8s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56464 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:39,557 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:42,565 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:42,570 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:42,571 INFO sqlalchemy.engine.Engine [cached since 125.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56467 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:42,574 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:45,581 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:45,583 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:45,584 INFO sqlalchemy.engine.Engine [cached since 128.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:56470 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:45,586 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:48,597 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:48,602 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:48,604 INFO sqlalchemy.engine.Engine [cached since 131.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:63333 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:48,609 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:51,616 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:51,620 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:51,621 INFO sqlalchemy.engine.Engine [cached since 134.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:63334 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:51,625 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:54,632 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:54,635 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:54,636 INFO sqlalchemy.engine.Engine [cached since 137.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:63336 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:54,640 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:55,548 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:55,551 INFO sqlalchemy.engine.Engine SELECT artifacts.id, artifacts.investigation_id, artifacts.collector_name, artifacts.artifact_name, artifacts.sha256_hash, artifacts.content_type, artifacts.size_bytes, artifacts.storage_path, artifacts.created_at 
+FROM artifacts 
+WHERE artifacts.id = $1::UUID
+2026-02-28 01:39:55,551 INFO sqlalchemy.engine.Engine [generated in 0.00086s] (UUID('b0948cc7-95de-4177-943d-eb2382fd56aa'),)
+2026-02-28 01:39:55,553 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:55,556 INFO sqlalchemy.engine.Engine SELECT whois_history.id, whois_history.domain, whois_history.whois_json, whois_history.captured_at, whois_history.investigation_id, whois_history.changes_from_previous 
+FROM whois_history 
+WHERE whois_history.domain = $1::VARCHAR ORDER BY whois_history.captured_at DESC
+2026-02-28 01:39:55,557 INFO sqlalchemy.engine.Engine [generated in 0.00125s] ('expertware.net',)
+INFO:     127.0.0.1:62529 - "GET /api/whois-history/expertware.net HTTP/1.1" 200 OK
+2026-02-28 01:39:55,565 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62528 - "GET /api/artifacts/b0948cc7-95de-4177-943d-eb2382fd56aa HTTP/1.1" 200 OK
+2026-02-28 01:39:55,569 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:55,579 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:55,580 INFO sqlalchemy.engine.Engine SELECT whois_history.id, whois_history.domain, whois_history.whois_json, whois_history.captured_at, whois_history.investigation_id, whois_history.changes_from_previous 
+FROM whois_history 
+WHERE whois_history.domain = $1::VARCHAR ORDER BY whois_history.captured_at DESC
+2026-02-28 01:39:55,581 INFO sqlalchemy.engine.Engine [cached since 0.02541s ago] ('expertware.net',)
+INFO:     127.0.0.1:52427 - "GET /api/whois-history/expertware.net HTTP/1.1" 200 OK
+2026-02-28 01:39:55,586 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:39:57,649 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:39:57,654 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:39:57,656 INFO sqlalchemy.engine.Engine [cached since 140.9s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:52429 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:39:57,662 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:00,674 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:00,680 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:00,682 INFO sqlalchemy.engine.Engine [cached since 144s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:52431 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:00,689 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:03,697 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:03,700 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:03,701 INFO sqlalchemy.engine.Engine [cached since 147s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51629 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:03,703 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:06,724 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:06,728 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:06,729 INFO sqlalchemy.engine.Engine [cached since 150s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51631 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:06,732 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:09,745 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:09,748 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:09,749 INFO sqlalchemy.engine.Engine [cached since 153s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51633 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:09,755 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:12,762 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:12,766 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:12,767 INFO sqlalchemy.engine.Engine [cached since 156.1s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51634 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:12,770 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:15,791 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:15,795 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:15,796 INFO sqlalchemy.engine.Engine [cached since 159.1s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51635 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:15,800 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:18,836 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:18,840 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:18,842 INFO sqlalchemy.engine.Engine [cached since 162.1s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51636 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:18,847 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:21,877 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:21,882 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:21,882 INFO sqlalchemy.engine.Engine [cached since 165.2s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51641 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:21,887 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:24,893 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:24,897 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:24,897 INFO sqlalchemy.engine.Engine [cached since 168.2s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51643 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:24,899 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:27,923 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:27,925 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:27,927 INFO sqlalchemy.engine.Engine [cached since 171.2s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51646 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:27,932 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:30,941 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:30,943 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:30,944 INFO sqlalchemy.engine.Engine [cached since 174.2s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51649 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:30,948 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:33,957 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:33,961 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:33,962 INFO sqlalchemy.engine.Engine [cached since 177.3s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:51651 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:33,966 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:35,411 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:35,413 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:40:35,414 INFO sqlalchemy.engine.Engine [cached since 178.5s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:40:35,424 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.classification, investigations.risk_score, investigations.state, investigations.created_at, evidence.evidence_json 
+FROM investigations JOIN evidence ON evidence.investigation_id = investigations.id 
+WHERE investigations.id != $1::UUID AND investigations.state = $2::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $3::INTEGER
+2026-02-28 01:40:35,425 INFO sqlalchemy.engine.Engine [generated in 0.00146s] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 'concluded', 200)
+INFO:     127.0.0.1:60656 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/pivots HTTP/1.1" 200 OK
+2026-02-28 01:40:35,503 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:35,519 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:35,522 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:40:35,523 INFO sqlalchemy.engine.Engine [cached since 178.6s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+2026-02-28 01:40:35,527 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.classification, investigations.risk_score, investigations.state, investigations.created_at, evidence.evidence_json 
+FROM investigations JOIN evidence ON evidence.investigation_id = investigations.id 
+WHERE investigations.id != $1::UUID AND investigations.state = $2::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $3::INTEGER
+2026-02-28 01:40:35,528 INFO sqlalchemy.engine.Engine [cached since 0.105s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'), 'concluded', 200)
+INFO:     127.0.0.1:56077 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/pivots HTTP/1.1" 200 OK
+2026-02-28 01:40:35,576 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:35,601 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:35,602 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:40:35,602 INFO sqlalchemy.engine.Engine [cached since 178.6s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:60118 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/geo-points HTTP/1.1" 200 OK
+2026-02-28 01:40:35,778 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:35,787 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:35,788 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:40:35,789 INFO sqlalchemy.engine.Engine [cached since 178.8s ago] (UUID('0f71a07b-d958-4737-b633-1891913a5795'),)
+INFO:     127.0.0.1:49406 - "GET /api/investigations/0f71a07b-d958-4737-b633-1891913a5795/geo-points HTTP/1.1" 200 OK
+2026-02-28 01:40:36,040 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:36,973 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:36,975 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:40:36,976 INFO sqlalchemy.engine.Engine [cached since 180.3s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:54264 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30 HTTP/1.1" 200 OK
+2026-02-28 01:40:36,979 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:36,986 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:36,987 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:40:36,988 INFO sqlalchemy.engine.Engine [cached since 180s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'),)
+INFO:     127.0.0.1:54265 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30/evidence HTTP/1.1" 200 OK
+2026-02-28 01:40:36,995 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:40:37,003 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:40:37,003 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:40:37,004 INFO sqlalchemy.engine.Engine [cached since 180s ago] (UUID('df84d348-3d8c-4d54-a2fc-bd9d81188b30'), 1)
+INFO:     127.0.0.1:54266 - "GET /api/investigations/df84d348-3d8c-4d54-a2fc-bd9d81188b30/report HTTP/1.1" 200 OK
+2026-02-28 01:40:37,008 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:11,311 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:11,313 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations ORDER BY investigations.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 01:41:11,314 INFO sqlalchemy.engine.Engine [cached since 220.8s ago] (10, 0)
+2026-02-28 01:41:11,318 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:41:11,319 INFO sqlalchemy.engine.Engine [cached since 220.8s ago] ()
+2026-02-28 01:41:11,322 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:11,324 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:41:11,324 INFO sqlalchemy.engine.Engine [cached since 220.8s ago] ()
+INFO:     127.0.0.1:55550 - "GET /api/investigations?limit=10 HTTP/1.1" 200 OK
+2026-02-28 01:41:11,327 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:11,329 INFO sqlalchemy.engine.Engine SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-02-28 01:41:11,331 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('concluded',)
+2026-02-28 01:41:11,333 INFO sqlalchemy.engine.Engine SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-02-28 01:41:11,334 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-02-28 01:41:11,337 INFO sqlalchemy.engine.Engine SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-02-28 01:41:11,338 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('day', datetime.datetime(2026, 1, 28, 23, 41, 11, 336946, tzinfo=datetime.timezone.utc), 'concluded')
+2026-02-28 01:41:11,343 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:41:11,344 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-02-28 01:41:11,346 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:11,347 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations ORDER BY investigations.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 01:41:11,348 INFO sqlalchemy.engine.Engine [cached since 220.9s ago] (10, 0)
+2026-02-28 01:41:11,352 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:41:11,353 INFO sqlalchemy.engine.Engine [cached since 220.9s ago] ()
+INFO:     127.0.0.1:55555 - "GET /api/investigations?limit=10 HTTP/1.1" 200 OK
+2026-02-28 01:41:11,356 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:11,359 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:41:11,360 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-02-28 01:41:11,376 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:11,378 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('malicious', 10)
+INFO:     127.0.0.1:55551 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+2026-02-28 01:41:11,381 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:11,391 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:11,393 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-02-28 01:41:11,394 INFO sqlalchemy.engine.Engine [cached since 220.9s ago] ()
+2026-02-28 01:41:11,397 INFO sqlalchemy.engine.Engine SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-02-28 01:41:11,398 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('concluded',)
+2026-02-28 01:41:11,401 INFO sqlalchemy.engine.Engine SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-02-28 01:41:11,402 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-02-28 01:41:11,404 INFO sqlalchemy.engine.Engine SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-02-28 01:41:11,405 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('day', datetime.datetime(2026, 1, 28, 23, 41, 11, 404457, tzinfo=datetime.timezone.utc), 'concluded')
+2026-02-28 01:41:11,407 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:41:11,409 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-02-28 01:41:11,422 INFO sqlalchemy.engine.Engine 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-02-28 01:41:11,424 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-02-28 01:41:11,438 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:11,440 INFO sqlalchemy.engine.Engine [cached since 220.7s ago] ('malicious', 10)
+INFO:     127.0.0.1:55558 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+2026-02-28 01:41:11,444 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:28,627 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:28,628 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.domain ILIKE $2::VARCHAR AND investigations.observable_type = $3::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $4::INTEGER OFFSET $5::INTEGER
+2026-02-28 01:41:28,630 INFO sqlalchemy.engine.Engine [cached since 233.9s ago] ('concluded', '%https://time.expertware.ro/Timesheet/Index%', 'url', 10, 0)
+2026-02-28 01:41:28,636 INFO sqlalchemy.engine.Engine SELECT count(investigations.id) AS count_1 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.domain ILIKE $2::VARCHAR AND investigations.observable_type = $3::VARCHAR
+2026-02-28 01:41:28,637 INFO sqlalchemy.engine.Engine [cached since 233.9s ago] ('concluded', '%https://time.expertware.ro/Timesheet/Index%', 'url')
+INFO:     127.0.0.1:63099 - "GET /api/investigations?limit=10&state=concluded&search=https%3A%2F%2Ftime.expertware.ro%2FTimesheet%2FIndex&observable_type=url HTTP/1.1" 200 OK
+2026-02-28 01:41:28,642 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:28,664 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:28,668 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.name, clients.domain, clients.aliases, clients.brand_keywords, clients.contact_email, clients.notes, clients.status, clients.created_at, clients.alert_count, clients.last_alert_at, clients.default_collectors 
+FROM clients 
+WHERE clients.status = $1::VARCHAR
+2026-02-28 01:41:28,668 INFO sqlalchemy.engine.Engine [cached since 232.5s ago] ('active',)
+2026-02-28 01:41:28,674 INFO sqlalchemy.engine.Engine INSERT INTO investigations (id, domain, observable_type, state, context, client_domain, batch_id, updated_at, concluded_at, classification, confidence, risk_score, recommended_action, analyst_iterations, max_analyst_iterations) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::UUID, $8::TIMESTAMP WITH TIME ZONE, $9::TIMESTAMP WITH TIME ZONE, $10::VARCHAR, $11::VARCHAR, $12::INTEGER, $13::VARCHAR, $14::INTEGER, $15::INTEGER) RETURNING investigations.created_at
+2026-02-28 01:41:28,675 INFO sqlalchemy.engine.Engine [cached since 232.5s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 'https://time.expertware.ro/Timesheet/Index', 'url', 'created', None, None, None, None, None, None, None, None, None, 0, 1)
+2026-02-28 01:41:28,681 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:51673 - "POST /api/investigations HTTP/1.1" 200 OK
+2026-02-28 01:41:29,302 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,303 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:29,304 INFO sqlalchemy.engine.Engine [cached since 232.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:53690 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53688 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:29,325 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:29,336 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,337 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:29,339 INFO sqlalchemy.engine.Engine [cached since 232.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:29,342 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:41:29,362 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,365 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:29,366 INFO sqlalchemy.engine.Engine [cached since 232.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:64851 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:29,372 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:29,403 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,413 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:29,414 INFO sqlalchemy.engine.Engine [cached since 232.5s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:29,418 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:64853 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:29,486 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,490 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:29,491 INFO sqlalchemy.engine.Engine [cached since 232.8s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:52879 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:29,497 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:29,562 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,574 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:29,575 INFO sqlalchemy.engine.Engine [cached since 232.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:29,576 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,577 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:29,577 INFO sqlalchemy.engine.Engine [cached since 232.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:29,579 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:41:29,582 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:52880 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52881 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:29,641 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,643 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:29,644 INFO sqlalchemy.engine.Engine [cached since 232.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:29,646 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55702 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:29,681 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,683 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:29,684 INFO sqlalchemy.engine.Engine [cached since 232.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:29,688 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55703 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:29,733 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:29,735 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:29,737 INFO sqlalchemy.engine.Engine [cached since 232.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:29,740 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:62090 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:34,350 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:34,352 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:34,353 INFO sqlalchemy.engine.Engine [cached since 237.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:55206 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:34,357 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:34,374 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:34,376 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:34,378 INFO sqlalchemy.engine.Engine [cached since 237.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:34,382 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:60935 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:34,397 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:34,399 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:34,400 INFO sqlalchemy.engine.Engine [cached since 237.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:34,402 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:60005 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:39,349 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:39,354 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:39,356 INFO sqlalchemy.engine.Engine [cached since 242.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:58247 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:39,365 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:39,386 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:39,388 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:39,390 INFO sqlalchemy.engine.Engine [cached since 242.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:39,393 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61569 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:39,406 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:39,408 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:39,409 INFO sqlalchemy.engine.Engine [cached since 242.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:39,412 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:65330 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:44,347 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:44,352 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:44,353 INFO sqlalchemy.engine.Engine [cached since 247.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:55571 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:44,355 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:44,365 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:44,366 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:44,367 INFO sqlalchemy.engine.Engine [cached since 247.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:44,369 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:51160 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:44,380 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:44,382 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:44,382 INFO sqlalchemy.engine.Engine [cached since 247.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:44,384 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:54498 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:49,353 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:49,357 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:49,357 INFO sqlalchemy.engine.Engine [cached since 252.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:63803 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:49,361 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:49,371 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:49,374 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:49,376 INFO sqlalchemy.engine.Engine [cached since 252.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:49,378 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:65460 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:49,392 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:49,395 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:49,396 INFO sqlalchemy.engine.Engine [cached since 252.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:49,398 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57147 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:54,345 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,348 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:54,350 INFO sqlalchemy.engine.Engine [cached since 257.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:58094 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:54,354 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:54,380 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,382 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:54,384 INFO sqlalchemy.engine.Engine [cached since 257.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:54,386 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,387 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:54,388 INFO sqlalchemy.engine.Engine [cached since 257.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:54,391 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:62405 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:54,396 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62404 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:54,411 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,414 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:54,415 INFO sqlalchemy.engine.Engine [cached since 257.5s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:54,419 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:41:54,422 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,424 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:54,425 INFO sqlalchemy.engine.Engine [cached since 257.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+INFO:     127.0.0.1:65398 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:54,430 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:65399 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:54,581 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:54,585 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:54,587 INFO sqlalchemy.engine.Engine [cached since 257.6s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:54,589 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:61408 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:41:59,383 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:59,385 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:41:59,386 INFO sqlalchemy.engine.Engine [cached since 262.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:58837 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:41:59,389 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:41:59,401 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:59,402 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:41:59,402 INFO sqlalchemy.engine.Engine [cached since 262.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:41:59,405 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:62055 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:41:59,417 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:41:59,419 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:41:59,420 INFO sqlalchemy.engine.Engine [cached since 262.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:41:59,422 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50270 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:42:04,380 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:04,383 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:42:04,383 INFO sqlalchemy.engine.Engine [cached since 267.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:61719 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:42:04,386 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:42:04,398 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:04,400 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:42:04,400 INFO sqlalchemy.engine.Engine [cached since 267.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:42:04,401 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58248 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:42:04,416 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:04,416 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:42:04,417 INFO sqlalchemy.engine.Engine [cached since 267.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:42:04,419 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:49786 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:42:09,374 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:09,377 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:42:09,378 INFO sqlalchemy.engine.Engine [cached since 272.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:53292 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:42:09,384 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:42:09,402 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:09,405 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:42:09,406 INFO sqlalchemy.engine.Engine [cached since 272.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:42:09,408 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58942 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:42:09,422 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:09,424 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:42:09,425 INFO sqlalchemy.engine.Engine [cached since 272.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:42:09,427 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57469 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:42:14,374 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:14,377 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:42:14,378 INFO sqlalchemy.engine.Engine [cached since 277.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:58374 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:42:14,381 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:42:14,397 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:14,399 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:42:14,400 INFO sqlalchemy.engine.Engine [cached since 277.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:42:14,401 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57475 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:42:14,414 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:14,416 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:42:14,416 INFO sqlalchemy.engine.Engine [cached since 277.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:42:14,418 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57979 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found
+2026-02-28 01:42:19,384 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:19,386 INFO sqlalchemy.engine.Engine SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-02-28 01:42:19,387 INFO sqlalchemy.engine.Engine [cached since 282.7s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+INFO:     127.0.0.1:64542 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9 HTTP/1.1" 200 OK
+2026-02-28 01:42:19,390 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:42:19,402 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:19,404 INFO sqlalchemy.engine.Engine SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-02-28 01:42:19,404 INFO sqlalchemy.engine.Engine [cached since 282.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'),)
+2026-02-28 01:42:19,406 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:60328 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/evidence HTTP/1.1" 404 Not Found
+2026-02-28 01:42:19,421 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:42:19,423 INFO sqlalchemy.engine.Engine SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-02-28 01:42:19,424 INFO sqlalchemy.engine.Engine [cached since 282.4s ago] (UUID('f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9'), 1)
+2026-02-28 01:42:19,425 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:57507 - "GET /api/investigations/f92b5c0a-1f1f-4c80-9498-c41a7a9e3af9/report HTTP/1.1" 404 Not Found

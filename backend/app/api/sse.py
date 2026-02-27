@@ -14,13 +14,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from app.config import get_settings
+from app.db.session import AsyncSessionLocal
+from app.models.database import Investigation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["sse"])
@@ -43,6 +47,36 @@ async def investigation_status_stream(investigation_id: str):
 
         await pubsub.subscribe(channel)
         logger.debug(f"SSE: subscribed to {channel}")
+
+        # Send a best-effort initial snapshot so UI can render immediately.
+        try:
+            inv_uuid = uuid.UUID(investigation_id)
+            async with AsyncSessionLocal() as session:
+                inv = (
+                    await session.execute(
+                        select(Investigation).where(Investigation.id == inv_uuid)
+                    )
+                ).scalar_one_or_none()
+                if inv:
+                    state = (inv.state or "created").lower()
+                    percent = {
+                        "created": 2,
+                        "gathering": 25,
+                        "evaluating": 75,
+                        "concluded": 100,
+                        "failed": 100,
+                    }.get(state, 0)
+                    initial = json.dumps({
+                        "type": "state_change",
+                        "investigation_id": investigation_id,
+                        "state": state,
+                        "percent_complete": percent,
+                        "message": f"Investigation state: {state}",
+                        "done": state in ("concluded", "failed"),
+                    })
+                    yield f"data: {initial}\n\n"
+        except Exception as e:
+            logger.debug(f"SSE initial snapshot failed for {investigation_id}: {e}")
 
         try:
             idle_count = 0

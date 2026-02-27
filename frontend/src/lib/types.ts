@@ -361,6 +361,7 @@ export interface JSAnalysisEvidence {
   websocket_connections: string[];
   data_exfil_indicators: string[];
   console_errors: string[];
+  error?: string;
   har_artifact_id?: string;
 }
 
@@ -660,6 +661,8 @@ export interface ProgressEvent {
   collectors?: Record<string, CollectorStatus>;
   message?: string;
   percent_complete?: number;
+  duration_ms?: number;
+  total_elapsed_ms?: number;
   done?: boolean;
 }
 

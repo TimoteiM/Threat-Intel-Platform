@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import concurrent.futures
 from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -22,8 +24,10 @@ from celery.exceptions import SoftTimeLimitExceeded
 from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Map collector names to evidence field names when they differ
 COLLECTOR_FIELD_MAP = {
@@ -66,6 +70,15 @@ def run_analysis(
         Full investigation result dict with evidence + report
     """
     logger.info(f"[{investigation_id}] Aggregating evidence for {domain}")
+    analysis_started = time.monotonic()
+    phase_timings_ms: dict[str, int] = {}
+    _publish_progress(
+        investigation_id,
+        InvestigationState.EVALUATING,
+        {},
+        "Merging collector evidence...",
+        62,
+    )
 
     # For URL investigations, extract the hostname for all domain-based post-processors
     # (subdomain enum, email security, cert timeline, infra pivot, favicon, WHOIS history).
@@ -92,6 +105,9 @@ def run_analysis(
     all_artifact_hashes = {}
     collector_statuses = {}
 
+    def _time_phase(name: str, started_at: float) -> None:
+        phase_timings_ms[name] = int((time.monotonic() - started_at) * 1000)
+
     for result in collector_results:
         name = result["collector"]
         field_name = COLLECTOR_FIELD_MAP.get(name, name)
@@ -109,6 +125,13 @@ def run_analysis(
     # -- 1b. Subdomain enumeration (post-processing on intel results)  -  domain + url --
     intel_subdomains = evidence_data.get("intel", {}).get("related_subdomains", [])
     if observable_type in ("domain", "url") and intel_subdomains:
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            collector_statuses,
+            "Analyzing discovered subdomains...",
+            64,
+        )
         try:
             from app.collectors.subdomain_collector import enumerate_subdomains
             subdomain_result = enumerate_subdomains(effective_domain, intel_subdomains)
@@ -124,6 +147,14 @@ def run_analysis(
     # -- 1c. Email security analysis (post-processing on DNS results)  -  domain + url --
     dns_data = evidence_data.get("dns", {})
     if observable_type in ("domain", "url") and dns_data.get("meta", {}).get("status") == "completed":
+        email_phase_start = time.monotonic()
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            collector_statuses,
+            "Analyzing email security controls...",
+            66,
+        )
         try:
             from app.collectors.email_security import analyze_email_security
             email_result = analyze_email_security(effective_domain, dns_data)
@@ -135,10 +166,19 @@ def run_analysis(
             )
         except Exception as e:
             logger.warning(f"[{investigation_id}] Email security analysis failed: {e}")
+        _time_phase("email_security", email_phase_start)
 
     # -- 1d. Redirect chain analysis (multi-UA cloaking detection)  -  domain + url --
     http_data = evidence_data.get("http", {})
     if observable_type in ("domain", "url") and http_data.get("reachable"):
+        redirect_phase_start = time.monotonic()
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            collector_statuses,
+            "Analyzing redirects and cloaking...",
+            68,
+        )
         try:
             from app.collectors.redirect_analysis import analyze_redirects
             redirect_result = analyze_redirects(domain, timeout=15)
@@ -151,46 +191,42 @@ def run_analysis(
             )
         except Exception as e:
             logger.warning(f"[{investigation_id}] Redirect analysis failed: {e}")
+        _time_phase("redirect_analysis", redirect_phase_start)
 
-    # -- 1e. Standalone screenshot  -  domain + url only (skip if site unreachable) --
+    # -- 1e + 1f. Browser post-processing (screenshot + JS) in parallel --
     if observable_type in ("domain", "url") and http_data.get("reachable"):
-        try:
-            from app.collectors.visual_comparison import capture_screenshot
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            collector_statuses,
+            "Running browser analysis (screenshot + JavaScript)...",
+            74,
+        )
+        browser_phase_start = time.monotonic()
 
+        def _run_screenshot() -> tuple[str, dict]:
+            from app.collectors.visual_comparison import capture_screenshot
             screenshot_target = investigated_url or domain
             logger.info(f"[{investigation_id}] Capturing screenshot of {screenshot_target}")
             ss_bytes, ss_final_url = capture_screenshot(screenshot_target, timeout=25)
-
             ss_art_id = _save_artifact_sync(
                 investigation_id, "screenshot",
                 "screenshot_domain.png",
                 ss_bytes, "image/png",
             )
             if ss_art_id:
-                evidence_data["screenshot"] = {
-                    "artifact_id": ss_art_id,
-                    "final_url": ss_final_url,
-                }
+                payload = {"artifact_id": ss_art_id, "final_url": ss_final_url}
             else:
-                evidence_data["screenshot"] = {
+                payload = {
                     "capture_error": "Screenshot captured but failed to save artifact",
                     "final_url": ss_final_url,
                 }
             logger.info(
-                f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, "
-                f"final_url={ss_final_url}"
+                f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, final_url={ss_final_url}"
             )
-        except SoftTimeLimitExceeded:
-            evidence_data["screenshot"] = {"capture_error": "Task time limit reached during screenshot"}
-            logger.warning(f"[{investigation_id}] Screenshot aborted: task soft time limit reached")
-            # Don't re-raise  -  let the task continue to persist partial results
-        except Exception as e:
-            evidence_data["screenshot"] = {"capture_error": str(e)}
-            logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
+            return "screenshot", payload
 
-    # -- 1f. JavaScript behavior analysis (Playwright sandbox)  -  domain + url only --
-    if observable_type in ("domain", "url") and evidence_data.get("http", {}).get("reachable"):
-        try:
+        def _run_js_analysis() -> tuple[str, dict]:
             from app.collectors.js_analysis import analyze_js_behavior
             js_target = investigated_url or domain
             logger.info(f"[{investigation_id}] Starting JS behavior analysis of {js_target}")
@@ -200,7 +236,6 @@ def run_analysis(
                 save_artifact_fn=_save_artifact_sync,
                 timeout=25,
             )
-            evidence_data["js_analysis"] = js_result
             logger.info(
                 f"[{investigation_id}] JS analysis: "
                 f"requests={js_result.get('total_requests')}, "
@@ -208,11 +243,62 @@ def run_analysis(
                 f"POST endpoints={len(js_result.get('post_endpoints', []))}, "
                 f"fingerprinting={len(js_result.get('fingerprinting_apis', []))}"
             )
-        except SoftTimeLimitExceeded:
-            logger.warning(f"[{investigation_id}] JS analysis aborted: task soft time limit reached")
-            # Don't re-raise  -  continue to persist partial results
-        except Exception as e:
-            logger.warning(f"[{investigation_id}] JS behavior analysis failed: {e}")
+            return "js_analysis", js_result
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            future_map = {
+                pool.submit(_run_screenshot): "screenshot",
+                pool.submit(_run_js_analysis): "js_analysis",
+            }
+            for future in concurrent.futures.as_completed(future_map):
+                name = future_map[future]
+                try:
+                    key, value = future.result()
+                    evidence_data[key] = value
+                except SoftTimeLimitExceeded:
+                    if name == "screenshot":
+                        evidence_data["screenshot"] = {"capture_error": "Task time limit reached during screenshot"}
+                        logger.warning(f"[{investigation_id}] Screenshot aborted: task soft time limit reached")
+                    else:
+                        evidence_data["js_analysis"] = {
+                            "total_requests": 0,
+                            "external_requests": 0,
+                            "request_domains": [],
+                            "captured_requests": [],
+                            "post_endpoints": [],
+                            "tracking_pixels": [],
+                            "fingerprinting_apis": [],
+                            "suspicious_scripts": [],
+                            "websocket_connections": [],
+                            "data_exfil_indicators": [],
+                            "console_errors": [],
+                            "error": "Task time limit reached during JavaScript analysis",
+                            "har_artifact_id": None,
+                        }
+                        logger.warning(f"[{investigation_id}] JS analysis aborted: task soft time limit reached")
+                except Exception as e:
+                    if name == "screenshot":
+                        evidence_data["screenshot"] = {"capture_error": str(e)}
+                        logger.warning(f"[{investigation_id}] Screenshot capture failed: {e}")
+                    else:
+                        evidence_data["js_analysis"] = {
+                            "total_requests": 0,
+                            "external_requests": 0,
+                            "request_domains": [],
+                            "captured_requests": [],
+                            "post_endpoints": [],
+                            "tracking_pixels": [],
+                            "fingerprinting_apis": [],
+                            "suspicious_scripts": [],
+                            "websocket_connections": [],
+                            "data_exfil_indicators": [],
+                            "console_errors": [],
+                            "error": str(e),
+                            "har_artifact_id": None,
+                        }
+                        logger.warning(f"[{investigation_id}] JS behavior analysis failed: {e}")
+
+        _time_phase("browser_postprocessing", browser_phase_start)
 
     # -- 2. Domain similarity analysis (if client_domain provided)  -  domain only --
     if observable_type == "domain" and client_domain:
@@ -283,6 +369,14 @@ def run_analysis(
 
     # -- Infrastructure Pivot + Cert Timeline + Favicon  -  domain + url --
     if observable_type in ("domain", "url"):
+        infra_phase_start = time.monotonic()
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            collector_statuses,
+            "Running infrastructure correlation...",
+            82,
+        )
         try:
             from app.collectors.infrastructure_pivot import collect_infrastructure_pivot
             pivot_result = collect_infrastructure_pivot(evidence_data, effective_domain, investigation_id)
@@ -316,10 +410,13 @@ def run_analysis(
                 )
         except Exception as e:
             logger.warning(f"[{investigation_id}] Favicon intel failed: {e}")
+        _time_phase("infrastructure_correlation", infra_phase_start)
 
     # -- 3. Generate signals and detect gaps --
+    signal_phase_start = time.monotonic()
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)
+    _time_phase("signals_and_gaps", signal_phase_start)
 
     evidence_data["signals"] = [s.model_dump() for s in signals]
     evidence_data["data_gaps"] = [g.model_dump() for g in gaps]
@@ -333,15 +430,33 @@ def run_analysis(
     # Domain and URL investigations use Claude for full AI interpretation.
     # Hash/file/IP use fast-path rule-based classification (no Claude API call).
     if observable_type not in ("domain", "url"):
+        report_phase_start = time.monotonic()
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
-                          "Generating automated report...", 70)
+                          "Generating automated report...", 90)
         logger.info(f"[{investigation_id}] Using fast-path (rule-based) report for type={observable_type}")
         report_data = _generate_automated_report(evidence_data, observable_type)
+        _time_phase("report_generation", report_phase_start)
     else:
+        report_phase_start = time.monotonic()
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
-                          "Evidence collected. Running analyst...", 70)
+                          "Evidence collected. Running analyst...", 90)
         try:
-            report_data = _run_analyst_sync(evidence_data, max_iterations)
+            report_data = _run_analyst_sync(
+                evidence_data,
+                max_iterations,
+                timeout_seconds=settings.analyst_timeout_seconds,
+            )
+        except TimeoutError as e:
+            logger.warning(
+                f"[{investigation_id}] Analyst timed out after "
+                f"{settings.analyst_timeout_seconds}s: {e}. Falling back to automated report."
+            )
+            report_data = _generate_automated_report(evidence_data, observable_type)
+            report_data["primary_reasoning"] = (
+                f"Analyst timeout after {settings.analyst_timeout_seconds}s. "
+                f"Fallback automated analysis applied. "
+                f"{report_data.get('primary_reasoning', '')}"
+            ).strip()
         except Exception as e:
             logger.error(f"[{investigation_id}] Analyst failed: {e}")
             report_data = {
@@ -355,8 +470,12 @@ def run_analysis(
                 "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
                 "risk_score": None,
             }
+        _time_phase("report_generation", report_phase_start)
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
+    phase_timings_ms["analysis_total"] = int((time.monotonic() - analysis_started) * 1000)
+    evidence_data["pipeline_timings_ms"] = phase_timings_ms
+    logger.info(f"[{investigation_id}] Analysis phase timings (ms): {phase_timings_ms}")
 
     # -- 5. Build final result --
     result = {
@@ -369,7 +488,9 @@ def run_analysis(
     }
 
     # -- 6. Persist to database --
+    persist_start = time.monotonic()
     _persist_results(investigation_id, evidence_data, report_data, collector_statuses)
+    logger.info(f"[{investigation_id}] Persist phase took {int((time.monotonic() - persist_start) * 1000)}ms")
 
     # -- 7. Publish completion --
     _publish_progress(investigation_id, InvestigationState.CONCLUDED, collector_statuses,
@@ -486,6 +607,57 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
                 key_evidence.append("No AbuseIPDB reports")
             recommended_action = "monitor"
 
+    # -- Domain / URL ---------------------------------------------------------
+    elif observable_type in ("domain", "url"):
+        vt_found = vt.get("found", False)
+        vt_malicious = vt.get("malicious_count", 0) if vt_found else 0
+        vt_suspicious = vt.get("suspicious_count", 0) if vt_found else 0
+        vt_total = vt.get("total_vendors", 0)
+
+        intel = evidence_data.get("intel") or {}
+        intel_hits = intel.get("blocklist_hits") or []
+
+        tf_matches = threat_feeds.get("threatfox_matches") or []
+        openphish_listed = bool(threat_feeds.get("openphish_listed"))
+        phishtank = threat_feeds.get("phishtank") or {}
+        phishtank_positive = bool(phishtank.get("in_database"))
+        phishtank_verified = bool(phishtank.get("verified"))
+
+        if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_listed:
+            classification = "malicious"
+            confidence = "high"
+            risk_score = 90
+            recommended_action = "block"
+        elif vt_malicious >= 2 or vt_suspicious >= 5 or len(intel_hits) >= 2:
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = 60
+            recommended_action = "investigate"
+        elif phishtank_positive:
+            classification = "inconclusive"
+            confidence = "low"
+            risk_score = 30
+            recommended_action = "investigate"
+        else:
+            classification = "benign"
+            confidence = "medium"
+            risk_score = 15
+            recommended_action = "monitor"
+
+        if vt_found:
+            key_evidence.append(f"VirusTotal: {vt_malicious} malicious, {vt_suspicious} suspicious of {vt_total}")
+        if intel_hits:
+            key_evidence.append(f"Intel blocklist hits: {len(intel_hits)}")
+        if tf_matches:
+            key_evidence.append(f"ThreatFox matches: {len(tf_matches)}")
+        if openphish_listed:
+            key_evidence.append("OpenPhish listed")
+        if phishtank_positive:
+            key_evidence.append(
+                "PhishTank match"
+                + (" (verified)" if phishtank_verified else " (unverified)")
+            )
+
     # -- Build summary text ---------------------------------------------------
     evidence_str = "; ".join(key_evidence) if key_evidence else "No significant threat indicators found."
     risk_str     = f"Risk score: {risk_score}/100." if risk_score is not None else "Risk score undetermined."
@@ -581,7 +753,7 @@ def _looks_like_ip(value: str) -> bool:
         return False
 
 
-def _run_analyst_sync(evidence_data: dict, max_iterations: int) -> dict:
+def _run_analyst_sync(evidence_data: dict, max_iterations: int, timeout_seconds: int) -> dict:
     """
     Synchronous wrapper for the async Claude analyst call.
     Celery workers are sync, so we run the async code in a new event loop.
@@ -595,7 +767,10 @@ def _run_analyst_sync(evidence_data: dict, max_iterations: int) -> dict:
     loop = asyncio.new_event_loop()
     try:
         report = loop.run_until_complete(
-            run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations)
+            asyncio.wait_for(
+                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations),
+                timeout=timeout_seconds,
+            )
         )
         report_dict = report.model_dump(mode="json")
 

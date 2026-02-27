@@ -18,6 +18,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -99,58 +100,83 @@ def run_investigation(
         return investigation_id
 
     # ── Determine which collectors to run ──
-    supported_for_type = set(get_collectors_for_type(observable_type))
+    try:
+        supported_for_type = set(get_collectors_for_type(observable_type))
 
-    if requested_collectors:
-        # Service already filtered; still validate against registry + type support
-        valid = set(available_collectors()) & supported_for_type
-        collectors_to_run = [c for c in requested_collectors if c in valid]
-    else:
-        collectors_to_run = [
-            c for c in settings.default_collectors_list if c in supported_for_type
-        ]
+        if requested_collectors:
+            # Service already filtered; still validate against registry + type support
+            valid = set(available_collectors()) & supported_for_type
+            collectors_to_run = [c for c in requested_collectors if c in valid]
+        else:
+            collectors_to_run = [
+                c for c in settings.default_collectors_list if c in supported_for_type
+            ]
 
-    if not collectors_to_run:
-        logger.error(f"[{investigation_id}] No valid collectors for type={observable_type}")
+        if not collectors_to_run:
+            logger.error(f"[{investigation_id}] No valid collectors for type={observable_type}")
+            _update_state(investigation_id, InvestigationState.FAILED)
+            _publish_progress(
+                investigation_id,
+                InvestigationState.FAILED,
+                f"No valid collectors for observable type '{observable_type}'",
+                100,
+            )
+            return investigation_id
+
+        _update_state(investigation_id, InvestigationState.GATHERING)
+        collector_statuses = {name: "running" for name in collectors_to_run}
+        _publish_progress(
+            investigation_id,
+            InvestigationState.GATHERING,
+            f"Starting {len(collectors_to_run)} collectors...",
+            5,
+            collectors=collector_statuses,
+        )
+
+        safe_results, collector_statuses = _run_collectors_inline(
+            collectors_to_run=collectors_to_run,
+            domain=domain,
+            investigation_id=investigation_id,
+            observable_type=observable_type,
+            file_artifact_id=file_artifact_id,
+            timeout=settings.collector_timeout,
+        )
+
+        logger.info(
+            f"[{investigation_id}] Collectors complete: "
+            f"{len(safe_results)}/{len(collectors_to_run)} succeeded. Starting analysis..."
+        )
+
+        _update_state(investigation_id, InvestigationState.EVALUATING)
+        _publish_progress(
+            investigation_id,
+            InvestigationState.EVALUATING,
+            "Collectors complete. Correlating evidence...",
+            60,
+            collectors=collector_statuses,
+        )
+
+        run_analysis(
+            safe_results,
+            domain=domain,
+            investigation_id=investigation_id,
+            observable_type=observable_type,
+            context=context,
+            client_domain=client_domain,
+            investigated_url=investigated_url,
+            client_url=client_url,
+            external_context=external_context,
+            max_iterations=settings.max_analyst_iterations,
+        )
+    except Exception as exc:
+        logger.exception(f"[{investigation_id}] Investigation task failed: {exc}")
         _update_state(investigation_id, InvestigationState.FAILED)
-        return investigation_id
-
-    # ── Update state to gathering ──
-    _update_state(investigation_id, InvestigationState.GATHERING)
-    _publish_progress(investigation_id, InvestigationState.GATHERING,
-                      f"Starting {len(collectors_to_run)} collectors...", 5)
-
-    # ── Run all collectors in parallel via ThreadPoolExecutor ──
-    # We bypass Celery sub-tasks entirely. Collectors are plain Python functions
-    # called in threads — no broker round-trips, no chord/group result tracking,
-    # zero Windows-specific Celery bugs. SSE progress is still published via Redis.
-    safe_results = _run_collectors_inline(
-        collectors_to_run=collectors_to_run,
-        domain=domain,
-        investigation_id=investigation_id,
-        observable_type=observable_type,
-        file_artifact_id=file_artifact_id,
-        timeout=settings.collector_timeout,
-    )
-
-    logger.info(
-        f"[{investigation_id}] Collectors complete: "
-        f"{len(safe_results)}/{len(collectors_to_run)} succeeded. Starting analysis..."
-    )
-
-    # ── Run analysis directly (same task thread) ──
-    run_analysis(
-        safe_results,
-        domain=domain,
-        investigation_id=investigation_id,
-        observable_type=observable_type,
-        context=context,
-        client_domain=client_domain,
-        investigated_url=investigated_url,
-        client_url=client_url,
-        external_context=external_context,
-        max_iterations=settings.max_analyst_iterations,
-    )
+        _publish_progress(
+            investigation_id,
+            InvestigationState.FAILED,
+            f"Investigation failed: {type(exc).__name__}",
+            100,
+        )
 
     return investigation_id
 
@@ -162,7 +188,7 @@ def _run_collectors_inline(
     observable_type: str,
     file_artifact_id: str | None,
     timeout: int,
-) -> list[dict]:
+) -> tuple[list[dict], dict[str, str]]:
     """
     Run all collectors in parallel using ThreadPoolExecutor.
 
@@ -174,7 +200,14 @@ def _run_collectors_inline(
         collector_cls = get_collector(name)
         if not collector_cls:
             logger.warning(f"[{investigation_id}] Unknown collector: {name}")
-            return {"collector": name, "status": "failed", "evidence": {}, "meta": {}, "artifacts": {}}
+            return {
+                "collector": name,
+                "status": "failed",
+                "evidence": {},
+                "meta": {"status": "failed", "error": "Unknown collector"},
+                "artifacts": {},
+                "duration_ms": None,
+            }
 
         collector = collector_cls(
             domain=domain,
@@ -186,30 +219,19 @@ def _run_collectors_inline(
 
         evidence, meta, raw_artifacts = collector.run()
 
-        # Publish per-collector SSE progress (same as collector_task.py does)
-        try:
-            r = redis_lib.Redis.from_url(settings.redis_url)
-            r.publish(
-                f"investigation:{investigation_id}",
-                json.dumps({
-                    "type": "collector_complete",
-                    "investigation_id": investigation_id,
-                    "collector": name,
-                    "status": meta.status.value,
-                }),
-            )
-        except Exception as pub_err:
-            logger.warning(f"[{investigation_id}] Failed to publish collector progress: {pub_err}")
-
         return {
             "collector": name,
             "status": meta.status.value,
             "evidence": evidence.model_dump(mode="json"),
             "meta": meta.model_dump(mode="json"),
             "artifacts": {k: v.hex() for k, v in raw_artifacts.items()},
+            "duration_ms": meta.duration_ms,
         }
 
     results: list[dict] = []
+    collector_statuses: dict[str, str] = {name: "running" for name in collectors_to_run}
+    start_ts = time.monotonic()
+    total_collectors = max(1, len(collectors_to_run))
     max_workers = max(4, len(collectors_to_run))
 
     with concurrent.futures.ThreadPoolExecutor(
@@ -217,14 +239,39 @@ def _run_collectors_inline(
         thread_name_prefix=f"collector-{investigation_id[:8]}",
     ) as pool:
         future_to_name = {pool.submit(_run_one, name): name for name in collectors_to_run}
-        for future in concurrent.futures.as_completed(future_to_name, timeout=timeout + 30):
-            name = future_to_name[future]
-            try:
-                results.append(future.result())
-            except Exception as e:
-                logger.error(f"[{investigation_id}] Collector '{name}' raised: {e}")
+        try:
+            for future in concurrent.futures.as_completed(future_to_name, timeout=timeout + 30):
+                name = future_to_name[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    collector_statuses[name] = result.get("status", "failed")
+                except Exception as e:
+                    logger.error(f"[{investigation_id}] Collector '{name}' raised: {e}")
+                    collector_statuses[name] = "failed"
 
-    return results
+                completed = sum(1 for s in collector_statuses.values() if s != "running")
+                percent = 10 + int((completed / total_collectors) * 45)
+                duration_ms = None
+                if results and results[-1].get("collector") == name:
+                    duration_ms = results[-1].get("duration_ms")
+
+                _publish_progress(
+                    investigation_id,
+                    InvestigationState.GATHERING,
+                    f"Collector {name.upper()} {collector_statuses[name]}",
+                    percent,
+                    collectors=collector_statuses,
+                    collector=name,
+                    duration_ms=duration_ms,
+                    total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                )
+        except concurrent.futures.TimeoutError:
+            logger.error(
+                f"[{investigation_id}] Collector phase timed out after {timeout + 30}s; "
+                "continuing with completed collector results only"
+            )
+    return results, collector_statuses
 
 
 def _update_state(investigation_id: str, state: InvestigationState) -> None:
@@ -246,19 +293,22 @@ def _publish_progress(
     state: InvestigationState,
     message: str,
     percent: int,
+    collectors: dict[str, str] | None = None,
+    **extra: object,
 ) -> None:
     """Push progress event to Redis for SSE streaming."""
     try:
         r = redis_lib.Redis.from_url(settings.redis_url)
-        r.publish(
-            f"investigation:{investigation_id}",
-            json.dumps({
-                "type": "state_change",
-                "investigation_id": investigation_id,
-                "state": state.value,
-                "message": message,
-                "percent_complete": percent,
-            }),
-        )
+        payload = {
+            "type": "state_change",
+            "investigation_id": investigation_id,
+            "state": state.value,
+            "message": message,
+            "percent_complete": percent,
+        }
+        if collectors:
+            payload["collectors"] = collectors
+        payload.update(extra)
+        r.publish(f"investigation:{investigation_id}", json.dumps(payload))
     except Exception as e:
         logger.warning(f"Failed to publish progress: {e}")

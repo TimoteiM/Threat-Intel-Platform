@@ -540,6 +540,7 @@ class JSAnalysisEvidence(BaseModel):
     websocket_connections: list[str] = []
     data_exfil_indicators: list[str] = []
     console_errors: list[str] = []
+    error: Optional[str] = None
     har_artifact_id: Optional[str] = None
 
 

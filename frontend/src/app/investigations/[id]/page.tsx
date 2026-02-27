@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
 import EnrichmentPanel from "@/components/investigation/EnrichmentPanel";
+import CollectorTimingTable from "@/components/investigation/CollectorTimingTable";
 import Spinner from "@/components/shared/Spinner";
 import TabBar from "@/components/shared/TabBar";
 
@@ -16,6 +17,8 @@ import SignalsTab from "@/components/report/SignalsTab";
 import InfrastructureTab from "@/components/report/InfrastructureTab";
 
 import * as api from "@/lib/api";
+import { useSSE } from "@/hooks/useSSE";
+import { CollectorStatus } from "@/lib/types";
 
 // Full tab set for domain / URL investigations (Claude analysis available)
 const DOMAIN_TABS = [
@@ -36,6 +39,7 @@ const FAST_PATH_TABS = [
 ] as const;
 
 const FAST_PATH_TYPES = new Set(["hash", "ip", "file"]);
+const TIMED_COLLECTORS = ["dns", "tls", "http", "whois", "asn", "intel", "vt"] as const;
 
 type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "raw";
 
@@ -55,6 +59,15 @@ export default function InvestigationPage() {
   const defaultTab: TabId = isFastPath ? "evidence" : "summary";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabError, setTabError] = useState<string | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const sse = useSSE(investigationId || null);
+  const collectorRows = TIMED_COLLECTORS.map((c) => {
+    const evidenceKey = c === "asn" ? "hosting" : c;
+    const evidenceMeta = evidence?.[evidenceKey]?.meta || {};
+    const status = (sse.collectors[c] || evidenceMeta.status || "pending") as CollectorStatus;
+    const durationMs = sse.collectorDurations[c] ?? evidenceMeta.duration_ms;
+    return { collector: c, status, durationMs };
+  });
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -102,6 +115,11 @@ export default function InvestigationPage() {
     setTabError(null);
   }, [activeTab]);
 
+  useEffect(() => {
+    const timer = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const handleEnrich = useCallback(async (text: string) => {
     try {
       const data = JSON.parse(text);
@@ -118,6 +136,26 @@ export default function InvestigationPage() {
 
   // ─── Waiting for results ───
   if (!report && detail?.state !== "concluded" && detail?.state !== "failed") {
+    const liveState = sse.state || detail?.state || "created";
+    const fallbackPercent =
+      liveState === "created" ? 2 :
+      liveState === "gathering" ? 25 :
+      liveState === "evaluating" ? 75 :
+      liveState === "concluded" ? 100 :
+      liveState === "failed" ? 100 : 0;
+    const progressPct = Math.max(sse.percent || 0, fallbackPercent);
+    const stageText = sse.message || `Investigation in progress (${liveState})`;
+    const elapsedSec = detail?.created_at
+      ? Math.max(0, Math.floor((nowTs - new Date(detail.created_at).getTime()) / 1000))
+      : 0;
+    const steps = [
+      { key: "queued", label: "Queued", done: true, active: liveState === "created" },
+      { key: "collectors", label: "Collectors Running", done: ["evaluating", "concluded", "failed"].includes(liveState), active: liveState === "gathering" },
+      { key: "correlation", label: "Evidence Correlation", done: ["concluded", "failed"].includes(liveState), active: liveState === "evaluating" },
+      { key: "analyst", label: "Analyst Decision", done: ["concluded", "failed"].includes(liveState), active: liveState === "evaluating" && /analyst/i.test(stageText) },
+      { key: "complete", label: "Completed", done: ["concluded", "failed"].includes(liveState), active: ["concluded", "failed"].includes(liveState) },
+    ];
+
     return (
       <div style={{ paddingTop: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
@@ -141,9 +179,55 @@ export default function InvestigationPage() {
           )}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20, fontFamily: "var(--font-sans)" }}>
-          State: {detail?.state || "loading..."}
+          State: {liveState} · Elapsed: {elapsedSec}s · SSE: {sse.connected ? "live" : "reconnecting"}
         </div>
-        <Spinner message={`Investigation in progress — ${detail?.state || "gathering"}...`} />
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          background: "var(--bg-card)",
+          padding: 16,
+          marginBottom: 14,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>Progress</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{progressPct}%</span>
+          </div>
+          <div style={{ height: 10, background: "var(--bg-input)", borderRadius: 999, overflow: "hidden", border: "1px solid var(--border)" }}>
+            <div style={{
+              height: "100%",
+              width: `${progressPct}%`,
+              background: liveState === "failed"
+                ? "linear-gradient(90deg, #ef4444, #f87171)"
+                : "linear-gradient(90deg, var(--accent), #34d399)",
+              transition: "width 400ms ease",
+            }} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text)" }}>{stageText}</div>
+        </div>
+        <div style={{
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          background: "var(--bg-card)",
+          padding: 12,
+          marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, marginBottom: 8 }}>
+            Investigation Stages
+          </div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {steps.map((step) => (
+              <div key={step.key} style={{ fontSize: 12, color: step.active ? "var(--accent)" : step.done ? "var(--green)" : "var(--text-muted)" }}>
+                {step.done ? "✓" : step.active ? "●" : "○"} {step.label}
+              </div>
+            ))}
+          </div>
+        </div>
+        <CollectorTimingTable
+          rows={collectorRows}
+          totalDurationMs={sse.totalElapsedMs ?? (elapsedSec * 1000)}
+          live={true}
+          title="Collector Timings"
+        />
         <div style={{ textAlign: "center", marginTop: 16 }}>
           <button
             onClick={fetchData}
@@ -288,19 +372,29 @@ export default function InvestigationPage() {
 
       {/* Collector progress */}
       {evidence && (
-        <ProgressTimeline
-          collectors={Object.fromEntries(
-            ["dns", "tls", "http", "whois", "asn", "intel", "vt"]
-              .map((c) => {
-                // Backend stores ASN evidence under "hosting" key
-                const evidenceKey = c === "asn" ? "hosting" : c;
-                const collectorData = evidence?.[evidenceKey];
-                const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
-                return [c, status];
-              })
-          )}
-          analystDone={!!report}
-        />
+        <>
+          <ProgressTimeline
+            collectors={Object.fromEntries(
+              TIMED_COLLECTORS
+                .map((c) => {
+                  const evidenceKey = c === "asn" ? "hosting" : c;
+                  const collectorData = evidence?.[evidenceKey];
+                  const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
+                  return [c, status];
+                })
+            )}
+            analystDone={!!report}
+          />
+          <CollectorTimingTable
+            rows={collectorRows}
+            totalDurationMs={
+              detail?.created_at && detail?.concluded_at
+                ? Math.max(0, new Date(detail.concluded_at).getTime() - new Date(detail.created_at).getTime())
+                : undefined
+            }
+            title="Collector Timings"
+          />
+        </>
       )}
 
       {/* Enrichment */}
@@ -453,3 +547,5 @@ class ErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
+
+

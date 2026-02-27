@@ -616,6 +616,9 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
 
             return (
               <>
+                {ja.error && (
+                  <EmptyNote>JavaScript analysis failed: {ja.error}</EmptyNote>
+                )}
                 {/* Summary stat boxes — clickable to expand details */}
                 <div style={{
                   display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8,

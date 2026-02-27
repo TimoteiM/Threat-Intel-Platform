@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-import socket
+import concurrent.futures
 from typing import Optional
 
 import dns.resolver
@@ -33,7 +33,7 @@ MX_BLOCKLISTS = [
 def analyze_email_security(
     domain: str,
     dns_evidence: dict,
-    timeout: float = 5.0,
+    timeout: float = 2.0,
 ) -> dict:
     """
     Analyze email security posture for a domain.
@@ -213,7 +213,7 @@ def _discover_dkim_selectors(
     found_selectors: list[str] = []
     dkim_records: list[dict] = []
 
-    for selector in DKIM_SELECTORS:
+    def _probe_selector(selector: str) -> dict | None:
         qname = f"{selector}._domainkey.{domain}"
         try:
             answers = resolver.resolve(qname, "TXT")
@@ -228,24 +228,34 @@ def _discover_dkim_selectors(
             if kt_match:
                 key_type = kt_match.group(1)
 
-            found_selectors.append(selector)
-            dkim_records.append({
+            return {
                 "selector": selector,
                 "public_key_present": has_key,
                 "key_type": key_type,
                 "notes": None,
-            })
+            }
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-            continue
+            return None
         except dns.resolver.LifetimeTimeout:
-            dkim_records.append({
+            return {
                 "selector": selector,
                 "public_key_present": False,
                 "key_type": None,
                 "notes": "timeout",
-            })
+            }
         except Exception:
-            continue
+            return None
+
+    max_workers = min(5, len(DKIM_SELECTORS))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_probe_selector, selector) for selector in DKIM_SELECTORS]
+        for future in concurrent.futures.as_completed(futures, timeout=resolver.lifetime * len(DKIM_SELECTORS)):
+            rec = future.result()
+            if not rec:
+                continue
+            dkim_records.append(rec)
+            if rec.get("public_key_present"):
+                found_selectors.append(rec["selector"])
 
     return found_selectors, dkim_records
 
@@ -282,7 +292,7 @@ def _resolve_mx_records(
         blocklist_hits: list[str] = []
         for ip in ips:
             for bl in MX_BLOCKLISTS:
-                if _check_mx_blocklist(ip, bl):
+                if _check_mx_blocklist(ip, bl, resolver):
                     blocklist_hits.append(f"{ip} on {bl}")
 
         records.append({
@@ -295,14 +305,14 @@ def _resolve_mx_records(
     return records
 
 
-def _check_mx_blocklist(ip: str, blocklist: str) -> bool:
+def _check_mx_blocklist(ip: str, blocklist: str, resolver: dns.resolver.Resolver) -> bool:
     """Check if an IP is listed in a DNS blocklist."""
     try:
         reversed_ip = ".".join(reversed(ip.split(".")))
         query = f"{reversed_ip}.{blocklist}"
-        socket.getaddrinfo(query, None, socket.AF_INET, socket.SOCK_STREAM, 0, socket.AI_NUMERICSERV)
+        resolver.resolve(query, "A")
         return True
-    except socket.gaierror:
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers, dns.resolver.LifetimeTimeout):
         return False
     except Exception:
         return False
