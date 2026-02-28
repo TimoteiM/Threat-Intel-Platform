@@ -13,6 +13,7 @@ export default function ExecutiveSummaryTab({ report }: Props) {
   const actionKey = report?.recommended_action || "monitor";
   const actionConfig = ACTION_CONFIG[actionKey] || ACTION_CONFIG.monitor;
   const steps = Array.isArray(report?.recommended_steps) ? report.recommended_steps : [];
+  const reasoningText = report?.primary_reasoning || "No reasoning provided.";
 
   return (
     <div>
@@ -24,7 +25,7 @@ export default function ExecutiveSummaryTab({ report }: Props) {
 
       <Section title="Primary Reasoning">
         <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-          {report?.primary_reasoning || "No reasoning provided."}
+          {reasoningText}
         </p>
       </Section>
 
@@ -57,23 +58,6 @@ export default function ExecutiveSummaryTab({ report }: Props) {
         )}
       </Section>
 
-      {(report?.legitimate_explanation || report?.malicious_explanation) && (
-        <Section title="Hypothesis Comparison">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <HypothesisCard
-              type="legitimate"
-              color="var(--green)"
-              text={report?.legitimate_explanation || "Not provided."}
-            />
-            <HypothesisCard
-              type="malicious"
-              color="var(--red)"
-              text={report?.malicious_explanation || "Not provided."}
-            />
-          </div>
-        </Section>
-      )}
-
       {report?.risk_rationale && (
         <Section title="Risk Rationale">
           <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
@@ -97,25 +81,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {title}
       </div>
       {children}
-    </div>
-  );
-}
-
-function HypothesisCard({ type, color, text }: { type: "legitimate" | "malicious"; color: string; text: string }) {
-  return (
-    <div style={{
-      padding: 20,
-      background: `${color}08`,
-      border: `1px solid ${color}20`,
-      borderRadius: "var(--radius)",
-    }}>
-      <div style={{
-        fontSize: 11, fontWeight: 600, color, marginBottom: 10,
-        fontFamily: "var(--font-sans)",
-      }}>
-        {type === "legitimate" ? "Legitimate Hypothesis" : "Malicious Hypothesis"}
-      </div>
-      <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7 }}>{text}</div>
     </div>
   );
 }

@@ -452,11 +452,18 @@ def run_analysis(
                 f"{settings.analyst_timeout_seconds}s: {e}. Falling back to automated report."
             )
             report_data = _generate_automated_report(evidence_data, observable_type)
-            report_data["primary_reasoning"] = (
+            timeout_note = (
                 f"Analyst timeout after {settings.analyst_timeout_seconds}s. "
-                f"Fallback automated analysis applied. "
-                f"{report_data.get('primary_reasoning', '')}"
-            ).strip()
+                "Fallback automated analysis applied."
+            )
+            detailed_text = (
+                report_data.get("executive_summary")
+                or report_data.get("technical_narrative")
+                or report_data.get("primary_reasoning", "")
+            )
+            report_data["primary_reasoning"] = f"{timeout_note} {detailed_text}".strip()
+            if report_data.get("executive_summary"):
+                report_data["executive_summary"] = f"{timeout_note} {report_data['executive_summary']}".strip()
         except Exception as e:
             logger.error(f"[{investigation_id}] Analyst failed: {e}")
             report_data = {
@@ -514,6 +521,13 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
     key_evidence: list[str] = []
     recommended_action = "monitor"
     recommended_steps: list[str] = []
+    findings: list[dict] = []
+    data_needed: list[str] = []
+    legitimate_explanation = ""
+    malicious_explanation = ""
+    executive_summary = ""
+    technical_narrative = ""
+    recommendations_narrative = ""
 
     # -- Hash / File ----------------------------------------------------------
     if observable_type in ("hash", "file"):
@@ -658,6 +672,168 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
                 + (" (verified)" if phishtank_verified else " (unverified)")
             )
 
+        whois = evidence_data.get("whois") or {}
+        http = evidence_data.get("http") or {}
+        email_sec = evidence_data.get("email_security") or {}
+        js = evidence_data.get("js_analysis") or {}
+        pipeline = evidence_data.get("pipeline_timings_ms") or {}
+
+        domain_age = whois.get("domain_age_days")
+        registrar = whois.get("registrar")
+        final_url = http.get("final_url")
+        email_spoofability = email_sec.get("spoofability_score")
+        js_total = js.get("total_requests", 0)
+        js_external = js.get("external_requests", 0)
+
+        if phishtank_positive:
+            findings.append({
+                "id": "fallback_phishtank_hit",
+                "title": "PhishTank listing observed",
+                "description": "Domain/URL was found in PhishTank feed"
+                               + (" with verified status." if phishtank_verified else " but not verified."),
+                "severity": "high" if phishtank_verified else "medium",
+                "evidence_refs": ["threat_feeds.phishtank"],
+            })
+            if not phishtank_verified:
+                data_needed.append("Confirm whether the PhishTank listing is a true positive or stale/unverified entry.")
+
+        if vt_malicious > 0 or vt_suspicious > 0:
+            findings.append({
+                "id": "fallback_vt_signal",
+                "title": "VirusTotal detection signal",
+                "description": f"VT reports {vt_malicious} malicious and {vt_suspicious} suspicious detections.",
+                "severity": "high" if vt_malicious >= 3 else "medium",
+                "evidence_refs": ["vt.malicious_count", "vt.suspicious_count"],
+            })
+
+        if email_spoofability in {"high", "medium"}:
+            findings.append({
+                "id": "fallback_email_spoofability",
+                "title": "Email spoofability exposure",
+                "description": f"Email security posture indicates spoofability score: {email_spoofability}.",
+                "severity": "medium",
+                "evidence_refs": ["email_security.spoofability_score"],
+            })
+
+        redirect_count = len(http.get("redirect_chain") or [])
+        if redirect_count >= 3:
+            findings.append({
+                "id": "fallback_redirect_chain",
+                "title": "Long redirect chain observed",
+                "description": f"HTTP probing observed {redirect_count} redirect hops before final destination.",
+                "severity": "medium",
+                "evidence_refs": ["http.redirect_chain"],
+            })
+
+        if (domain_age or 0) > 0 and (domain_age or 0) <= 30:
+            findings.append({
+                "id": "fallback_young_domain",
+                "title": "Recently registered domain",
+                "description": f"WHOIS indicates the domain is {domain_age} days old.",
+                "severity": "medium",
+                "evidence_refs": ["whois.domain_age_days"],
+            })
+
+        if js_total >= 50 and js_external >= 10:
+            findings.append({
+                "id": "fallback_high_js_external",
+                "title": "Elevated external JavaScript activity",
+                "description": (
+                    f"Browser telemetry captured {js_total} requests, including {js_external} to external domains."
+                ),
+                "severity": "low",
+                "evidence_refs": ["js_analysis.total_requests", "js_analysis.external_requests"],
+            })
+
+        if not findings:
+            findings.append({
+                "id": "fallback_no_high_risk_findings",
+                "title": "No high-risk technical findings detected",
+                "description": (
+                    "Automated checks across reputation, DNS/WHOIS age, HTTP behavior, "
+                    "email controls, and JavaScript telemetry did not produce high-confidence malicious indicators."
+                ),
+                "severity": "info",
+                "evidence_refs": [
+                    "vt",
+                    "threat_feeds",
+                    "whois.domain_age_days",
+                    "http.redirect_chain",
+                    "email_security.spoofability_score",
+                    "js_analysis.total_requests",
+                ],
+            })
+
+        if classification == "benign":
+            legitimate_explanation = (
+                "Registration, hosting, and observed web behavior are consistent with normal operations. "
+                "No strong malicious indicators were confirmed across the primary telemetry sources."
+            )
+            malicious_explanation = (
+                "Limited weak indicators may exist in open-source feeds, but evidence does not support "
+                "a high-confidence malicious conclusion at this time."
+            )
+            recommended_steps = [
+                "Keep the observable in passive monitoring for 7-14 days.",
+                "Track certificate and DNS changes for sudden infrastructure shifts.",
+                "Alert only if verified malicious feed matches appear.",
+            ]
+        elif classification == "inconclusive":
+            legitimate_explanation = (
+                "Some telemetry appears consistent with legitimate usage, but confidence is reduced due to "
+                "conflicting or unverified threat-feed signals."
+            )
+            malicious_explanation = (
+                "Unverified phishing/reputation indicators suggest potential risk, but current evidence is insufficient "
+                "for a definitive malicious classification."
+            )
+            recommended_steps = [
+                "Validate external feed matches (especially PhishTank/OpenPhish) with manual review.",
+                "Correlate with internal telemetry (proxy, DNS, EDR) for real user impact.",
+                "Re-run investigation if infrastructure/content changes are observed.",
+            ]
+        else:
+            legitimate_explanation = (
+                "Some baseline signals may resemble legitimate behavior, but they are outweighed by risk indicators."
+            )
+            malicious_explanation = (
+                "Multiple threat and behavior signals indicate suspicious or malicious characteristics requiring action."
+            )
+            recommended_steps = [
+                "Open an incident ticket and escalate for SOC validation.",
+                "Block or heavily monitor the observable at perimeter controls.",
+                "Hunt for related indicators in recent logs and endpoint telemetry.",
+            ]
+
+        exec_bits = [
+            f"Observable: {domain} ({observable_type})",
+            f"Classification: {classification.upper()} ({confidence} confidence), risk {risk_score}/100.",
+        ]
+        if registrar:
+            exec_bits.append(f"Registrar: {registrar}.")
+        if domain_age is not None:
+            exec_bits.append(f"Domain age: {domain_age} days.")
+        if final_url:
+            exec_bits.append(f"Final URL observed: {final_url}.")
+        if key_evidence:
+            exec_bits.append("Key evidence: " + "; ".join(key_evidence[:4]))
+        executive_summary = " ".join(exec_bits)
+
+        technical_narrative = (
+            f"Network and web telemetry show reachable={bool(http.get('reachable'))}, "
+            f"redirects={len(http.get('redirect_chain') or [])}, and JS activity "
+            f"{js_total} requests ({js_external} external). "
+            f"Email posture is spoofability={email_spoofability or 'unknown'}. "
+            f"Threat feeds: PhishTank={phishtank_positive} "
+            f"(verified={phishtank_verified}), OpenPhish={openphish_listed}, "
+            f"ThreatFox matches={len(tf_matches)}. "
+            f"Pipeline timings (ms): report_generation={pipeline.get('report_generation')}, "
+            f"browser_postprocessing={pipeline.get('browser_postprocessing')}."
+        )
+        recommendations_narrative = " ".join(
+            [f"{idx + 1}. {step}" for idx, step in enumerate(recommended_steps)]
+        )
+
     # -- Build summary text ---------------------------------------------------
     evidence_str = "; ".join(key_evidence) if key_evidence else "No significant threat indicators found."
     risk_str     = f"Risk score: {risk_score}/100." if risk_score is not None else "Risk score undetermined."
@@ -666,34 +842,42 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         f"Classification: {classification.upper()} ({confidence} confidence). "
         f"{risk_str} Key evidence: {evidence_str}"
     )
+    if not executive_summary:
+        executive_summary = summary
+    if not technical_narrative:
+        technical_narrative = summary
+    if not legitimate_explanation:
+        legitimate_explanation = (
+            "" if classification == "malicious"
+            else f"No significant threat indicators found for this {observable_type}."
+        )
+    if not malicious_explanation:
+        malicious_explanation = evidence_str if classification != "benign" else ""
+    if not recommendations_narrative:
+        recommendations_narrative = (
+            f"Recommended action: {recommended_action}. "
+            + (" ".join(recommended_steps) if recommended_steps else "No additional steps required.")
+        )
 
     return {
         "classification": classification,
         "confidence": confidence,
         "investigation_state": "concluded",
         "primary_reasoning": summary,
-        "legitimate_explanation": (
-            "" if classification == "malicious"
-            else f"No significant threat indicators found for this {observable_type}."
-        ),
-        "malicious_explanation": (
-            evidence_str if classification != "benign" else ""
-        ),
+        "legitimate_explanation": legitimate_explanation,
+        "malicious_explanation": malicious_explanation,
         "key_evidence": key_evidence,
         "contradicting_evidence": [],
-        "data_needed": [],
-        "findings": [],
+        "data_needed": data_needed,
+        "findings": findings,
         "iocs": _build_iocs_from_evidence(evidence_data, observable_type),
         "recommended_action": recommended_action,
         "recommended_steps": recommended_steps,
         "risk_score": risk_score,
         "risk_rationale": evidence_str,
-        "executive_summary": summary,
-        "technical_narrative": summary,
-        "recommendations_narrative": (
-            f"Recommended action: {recommended_action}. "
-            + (" ".join(recommended_steps) if recommended_steps else "No additional steps required.")
-        ),
+        "executive_summary": executive_summary,
+        "technical_narrative": technical_narrative,
+        "recommendations_narrative": recommendations_narrative,
     }
 
 

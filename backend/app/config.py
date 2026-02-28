@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     )
 
     # —— API Keys ———
-    anthropic_api_key: str
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    openai_api_key: str
+    openai_model: str = "gpt-5-mini"
+    # Optional Anthropic fallback fields (used only when OpenAI fails/returns empty output)
+    anthropic_api_key: str = ""
+    anthropic_model: str = ""
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
     phishtank_api_key: str = ""
@@ -68,7 +71,7 @@ class Settings(BaseSettings):
 
     # —— Investigation Defaults ———
     max_analyst_iterations: int = 1
-    analyst_timeout_seconds: int = 45
+    analyst_timeout_seconds: int = 120
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
 
