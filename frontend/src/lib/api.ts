@@ -6,6 +6,10 @@
  */
 
 const BASE = "/api";
+const DIRECT_BACKEND =
+  (process.env.NEXT_PUBLIC_API_PROXY_TARGET ||
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    "http://127.0.0.1:8010").replace(/\/$/, "");
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -69,6 +73,51 @@ export async function uploadFileInvestigation(
     throw new Error(body || res.statusText);
   }
 
+  return res.json();
+}
+
+export async function uploadEmailInvestigation(
+  file: File,
+  options?: {
+    context?: string;
+    max_urls?: number;
+    max_attachment_hashes?: number;
+    include_url_screenshots?: boolean;
+    run_ai?: boolean;
+    ml_phishing_score?: number;
+  },
+): Promise<any> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (options?.context) formData.append("context", options.context);
+  if (options?.max_urls !== undefined) formData.append("max_urls", String(options.max_urls));
+  if (options?.max_attachment_hashes !== undefined) {
+    formData.append("max_attachment_hashes", String(options.max_attachment_hashes));
+  }
+  if (options?.include_url_screenshots !== undefined) {
+    formData.append("include_url_screenshots", String(options.include_url_screenshots));
+  }
+  if (options?.run_ai !== undefined) formData.append("run_ai", String(options.run_ai));
+  if (options?.ml_phishing_score !== undefined) {
+    formData.append("ml_phishing_score", String(options.ml_phishing_score));
+  }
+
+  const endpoint = `${DIRECT_BACKEND}/api/email-investigations/upload`;
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 405) {
+      throw new ApiError(
+        res.status,
+        `Email upload endpoint unavailable at ${DIRECT_BACKEND}. Set NEXT_PUBLIC_API_PROXY_TARGET to the active backend URL and restart frontend.`,
+      );
+    }
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
   return res.json();
 }
 

@@ -1,0 +1,4 @@
+[2026-02-28 18:20:40,415: INFO/MainProcess] Connected to redis://127.0.0.1:6379/5
+[2026-02-28 18:20:40,432: INFO/MainProcess] mingle: searching for neighbors
+[2026-02-28 18:20:41,486: INFO/MainProcess] mingle: all alone
+[2026-02-28 18:20:41,553: INFO/MainProcess] celery-local-8010-20260228-182032@EXP-JFW2P34 ready.

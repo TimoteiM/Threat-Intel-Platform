@@ -848,5 +848,50 @@ export interface GeoPoint {
   ip: string;
 }
 
+// --- Email Investigation ---
+
+export interface EmailInvestigationOutcome {
+  indicator_type: string;
+  value: string;
+  observable_type: ObservableType;
+  investigation_id: string;
+  state: string;
+  classification?: Classification;
+  confidence?: Confidence;
+  risk_score?: number;
+}
+
+export interface EmailInvestigationResolution {
+  email_subject: string;
+  formatted_resolution: string;
+  conclusion: {
+    classification: Classification | "inconclusive";
+    confidence: Confidence;
+    justification: string;
+  };
+  sections: Record<string, any>;
+}
+
+export interface EmailInvestigationResponse {
+  filename: string;
+  email_subject?: string;
+  sender_email?: string;
+  sender_domain?: string;
+  sender_ip?: string;
+  authentication?: Record<string, any>;
+  urls_count: number;
+  urls: string[];
+  url_domains: string[];
+  attachments_count: number;
+  attachments: Array<Record<string, any>>;
+  indicator_checks: {
+    sender_ip: Record<string, any>;
+    urls: Array<Record<string, any>>;
+    attachments: Record<string, any>;
+  };
+  resolution_source: string;
+  resolution: EmailInvestigationResolution;
+}
+
 
 

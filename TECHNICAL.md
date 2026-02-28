@@ -794,44 +794,165 @@ DEFAULT_COLLECTORS=dns,http,tls,whois,asn,intel,vt,my_collector
 
 ---
 
-## 13. Running Locally Without Docker
+## 13. Running Locally (Backend + Frontend + Celery)
 
-### Backend
+This section is the practical local runbook for this repository.
 
-```bash
+Important rule: use one runtime mode at a time.
+- Local-only mode: local Postgres/Redis + local API + local Celery + local frontend
+- Docker-only mode: everything in docker compose
+- Do not mix local API/Celery with docker API/Celery
+
+### 13.1 Prerequisites
+
+- Python 3.12+
+- Node.js LTS (includes `npm`)
+- PostgreSQL running locally
+- Redis/Valkey running locally
+- Playwright Chromium installed for screenshot/JS collectors
+
+### 13.2 Backend Setup (Windows PowerShell)
+
+```powershell
 cd backend
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-playwright install chromium
+python -m playwright install chromium
 
-cp ../.env.example .env            # fill in API keys
+# Prepare env file (if missing)
+Copy-Item ..\.env.example .\.env
 
-# Start PostgreSQL and Redis locally, then:
+# Apply DB migrations
 python -m alembic upgrade head
-uvicorn app.main:app --reload --port 8000
-
-# In a second terminal (Celery worker):
-celery -A app.tasks.celery_app worker --concurrency=4 -l info
-
-# In a third terminal (Celery Beat for watchlist):
-celery -A app.tasks.celery_app beat -l info
 ```
 
-### Frontend
+Required env keys in `backend/.env`:
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL` (default: `gpt-5-mini`)
+- `REDIS_URL`
+- `CELERY_BROKER_URL`
+- `CELERY_RESULT_BACKEND`
+- `DATABASE_URL`
+- `DATABASE_SYNC_URL`
 
-```bash
+Optional fallback keys:
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_MODEL`
+
+### 13.3 Start API + Celery Worker (recommended script)
+
+Use the repository helper script from `backend`:
+
+```powershell
+.\run_celery_local.ps1 -CleanStart
+```
+
+What it does:
+- starts FastAPI (`uvicorn`) in background
+- starts Celery worker in background
+- writes logs in `backend/logs`
+- writes PIDs and log paths to `backend/logs/celery-local-last.json`
+
+Optional flags:
+- `-ApiPort 8000`
+- `-WorkerConcurrency 8`
+- `-StartBeat` (also starts Celery Beat)
+
+### 13.4 Frontend Start
+
+From a separate terminal:
+
+```powershell
 cd frontend
 npm install
-npm run dev    # http://localhost:3000
+npm run dev
 ```
 
-### Running Migrations Inside Docker
+Frontend URL:
+- `http://localhost:3000`
 
-```bash
-# Must use `python -m alembic` (not `alembic`) to get /app on sys.path
-docker compose exec api python -m alembic upgrade head
+Backend URL:
+- `http://127.0.0.1:8000`
 
-# Check current revision
-docker compose exec api python -m alembic current
+### 13.5 How To See Logs
+
+The run script detaches processes, so output goes to files, not terminal.
+
+Tail latest worker logs:
+
+```powershell
+Get-Content .\logs\celery-worker-*.out.log -Tail 100 -Wait
+Get-Content .\logs\celery-worker-*.err.log -Tail 100 -Wait
+```
+
+Tail latest API logs:
+
+```powershell
+Get-Content .\logs\api-*.out.log -Tail 100 -Wait
+Get-Content .\logs\api-*.err.log -Tail 100 -Wait
+```
+
+Show last started PIDs/log files:
+
+```powershell
+Get-Content .\logs\celery-local-last.json | ConvertFrom-Json | Format-List
+```
+
+### 13.6 Stop API + Celery
+
+From `backend`:
+
+```powershell
+$p = Get-Content .\logs\celery-local-last.json | ConvertFrom-Json
+Stop-Process -Id $p.api_pid,$p.worker_pid -Force
+if ($p.beat_pid) { Stop-Process -Id $p.beat_pid -Force }
+```
+
+### 13.7 Quick Health/Status Checks
+
+API listener:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen
+```
+
+Celery ping:
+
+```powershell
+.\venv\Scripts\celery.exe -A app.tasks.celery_app inspect ping
+```
+
+Backend syntax sanity:
+
+```powershell
+python -m py_compile app/config.py app/tasks/analysis_task.py
+```
+
+Frontend build sanity:
+
+```powershell
+cd ..\frontend
+npm run -s build
+```
+
+### 13.8 Common Issues
+
+`npm is not recognized`:
+- Node.js is not installed or not in PATH.
+- Install Node.js LTS and reopen terminal.
+
+`Error: No nodes replied within time constraint`:
+- worker may still be starting or Redis is unavailable.
+- check `backend/logs/celery-worker-*.err.log`
+- confirm Redis is running and `CELERY_BROKER_URL` is correct.
+
+Port 8000 conflict:
+- stale `uvicorn` process is already running.
+- stop existing API processes, then run `.\run_celery_local.ps1 -CleanStart`.
+
+Screenshot/JS collector browser error on Windows worker:
+- reinstall Chromium in backend venv:
+```powershell
+python -m playwright install chromium
 ```

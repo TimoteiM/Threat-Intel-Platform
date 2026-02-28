@@ -75,6 +75,7 @@ export default function Header() {
           <NavLink href="/investigations">All Cases</NavLink>
           <NavLink href="/batches">Bulk Analysis</NavLink>
           <NavLink href="/watchlist">Watchlist</NavLink>
+          <NavLink href="/email-investigations">Email</NavLink>
           <NavLink href="/clients">Clients</NavLink>
           <NavLink href="/alerts">Alerts</NavLink>
           <NavLink href="/ip-lookup">IP Lookup</NavLink>
