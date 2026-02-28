@@ -121,6 +121,22 @@ export async function uploadEmailInvestigation(
   return res.json();
 }
 
+export async function listEmailInvestigationHistory(
+  params?: { limit?: number; offset?: number },
+): Promise<{ items: any[]; limit: number; offset: number }> {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return request<{ items: any[]; limit: number; offset: number }>(
+    `/email-investigations/history${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function getEmailInvestigationHistoryItem(historyId: string): Promise<any> {
+  return request<any>(`/email-investigations/history/${historyId}`);
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;

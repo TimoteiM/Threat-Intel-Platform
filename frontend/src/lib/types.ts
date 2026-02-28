@@ -862,17 +862,28 @@ export interface EmailInvestigationOutcome {
 }
 
 export interface EmailInvestigationResolution {
-  email_subject: string;
+  email_subject?: string;
   formatted_resolution: string;
-  conclusion: {
+  conclusion?: {
     classification: Classification | "inconclusive";
     confidence: Confidence;
     justification: string;
   };
-  sections: Record<string, any>;
+  sections?: Record<string, any>;
+  sender_domain_analysis?: {
+    classification?: string;
+    primary_reasoning?: string;
+    findings?: Array<{
+      title?: string;
+      severity?: string;
+      description?: string;
+    }>;
+  };
 }
 
 export interface EmailInvestigationResponse {
+  history_id?: string;
+  created_at?: string;
   filename: string;
   email_subject?: string;
   sender_email?: string;
@@ -885,12 +896,26 @@ export interface EmailInvestigationResponse {
   attachments_count: number;
   attachments: Array<Record<string, any>>;
   indicator_checks: {
+    sender_domain?: Record<string, any>;
     sender_ip: Record<string, any>;
     urls: Array<Record<string, any>>;
     attachments: Record<string, any>;
   };
   resolution_source: string;
   resolution: EmailInvestigationResolution;
+}
+
+export interface EmailInvestigationHistoryItem {
+  id: string;
+  created_at?: string;
+  filename: string;
+  email_subject?: string;
+  sender_email?: string;
+  sender_domain?: string;
+  sender_ip?: string;
+  resolution_source: string;
+  urls_count: number;
+  attachments_count: number;
 }
 
 

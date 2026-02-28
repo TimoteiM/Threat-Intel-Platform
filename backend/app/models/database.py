@@ -458,3 +458,25 @@ class LookupCache(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+
+
+class EmailInvestigationRun(Base):
+    __tablename__ = "email_investigation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    email_subject: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sender_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sender_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolution_source: Mapped[str] = mapped_column(String(50), nullable=False, default="disabled")
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_email_runs_created", "created_at"),
+    )

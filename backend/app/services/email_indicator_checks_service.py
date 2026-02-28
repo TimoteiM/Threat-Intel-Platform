@@ -5,19 +5,23 @@ Policy:
 - URLs: VirusTotal only (+ optional screenshot/final URL capture)
 - IPs: VirusTotal + AbuseIPDB
 - Attachments: hash extraction + VirusTotal hash lookup
+- Sender domain: WHOIS evidence
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
+import whois as python_whois
 
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
+from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +35,63 @@ def run_email_indicator_checks(
 ) -> dict[str, Any]:
     """Run deterministic checks for extracted email indicators."""
     sender_ip = extracted.get("sender_ip")
+    sender_domain = extracted.get("sender_domain")
     urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u][: max(0, max_urls)]
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
 
     checks = {
+        "sender_domain": _check_sender_domain(sender_domain) if sender_domain else {"present": False, "message": "Not present in the provided evidence."},
         "sender_ip": _check_ip(sender_ip) if sender_ip else {"present": False, "message": "Not present in the provided evidence."},
         "urls": [_check_url(url, include_screenshot=include_url_screenshots) for url in urls],
         "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes),
     }
     return checks
+
+
+def _check_sender_domain(domain: str) -> dict[str, Any]:
+    try:
+        normalized = normalize_domain(domain)
+        query_domain = extract_registered_domain(normalized)
+        record = python_whois.whois(query_domain)
+
+        created = _pick_datetime(getattr(record, "creation_date", None))
+        expiry = _pick_datetime(getattr(record, "expiration_date", None))
+        age_days = None
+        if created:
+            created_utc = created.replace(tzinfo=timezone.utc) if created.tzinfo is None else created
+            age_days = (datetime.now(timezone.utc) - created_utc).days
+
+        statuses_raw = getattr(record, "status", None)
+        statuses = statuses_raw if isinstance(statuses_raw, list) else ([statuses_raw] if statuses_raw else [])
+        statuses_clean = [str(s) for s in statuses if s]
+
+        name_servers_raw = getattr(record, "name_servers", None)
+        name_servers = name_servers_raw if isinstance(name_servers_raw, list) else ([name_servers_raw] if name_servers_raw else [])
+        ns_clean = sorted({str(ns).lower() for ns in name_servers if ns})
+
+        return {
+            "present": True,
+            "domain": normalized,
+            "query_domain": query_domain,
+            "whois": {
+                "registrar": _as_text(getattr(record, "registrar", None)),
+                "created_date": created.isoformat() if created else None,
+                "expiry_date": expiry.isoformat() if expiry else None,
+                "domain_age_days": age_days,
+                "statuses": statuses_clean,
+                "name_servers": ns_clean,
+                "registrant_org": _as_text(getattr(record, "org", None)),
+                "registrant_country": _as_text(getattr(record, "country", None)),
+            },
+        }
+    except Exception as exc:
+        logger.warning("Sender domain WHOIS lookup failed for %s: %s", domain, exc)
+        return {
+            "present": True,
+            "domain": domain,
+            "whois": {},
+            "error": str(exc),
+        }
 
 
 def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
@@ -187,3 +239,21 @@ def _abuseipdb_lookup(ip: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("AbuseIPDB lookup failed for %s: %s", ip, exc)
         return {"checked": False, "error": str(exc)}
+
+
+def _pick_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, datetime):
+                return item
+        return None
+    return value if isinstance(value, datetime) else None
+
+
+def _as_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
