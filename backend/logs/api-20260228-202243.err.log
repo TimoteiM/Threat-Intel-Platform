@@ -149,3 +149,502 @@ FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC
  LIMIT $1::INTEGER OFFSET $2::INTEGER
 2026-02-28 20:46:03,363 INFO     [sqlalchemy.engine.Engine] [cached since 1354s ago] (20, 0)
 2026-02-28 20:46:03,374 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-02-28 20:47:57,107 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-02-28 20:47:57,111 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 20:47:57,112 INFO     [sqlalchemy.engine.Engine] [cached since 1468s ago] (20, 0)
+2026-02-28 20:47:57,117 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-02-28 20:48:09,557 INFO     [extract_msg.msg_classes.msg] Stream "__substg1.0_10130102" was requested but could not be found. Returning `None`.
+2026-02-28 20:48:09,566 INFO     [extract_msg.msg_classes.message_base] HTML body was not found, attempting to generate from RTF.
+2026-02-28 20:48:09,997 INFO     [extract_msg.msg_classes.msg] Stream "__attach_version1.0_#00000005/__substg1.0_370E001F" was requested but could not be found. Returning `None`.
+2026-02-28 20:48:10,002 INFO     [extract_msg.utils] Mimetype not found on attachment, and `mime` dependency not installed. Won't try to generate.
+2026-02-28 20:50:15,227 INFO     [httpx] HTTP Request: POST https://api.openai.com/v1/responses "HTTP/1.1 200 OK"
+2026-02-28 20:50:15,239 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-02-28 20:50:15,241 INFO     [sqlalchemy.engine.Engine] INSERT INTO email_investigation_runs (id, filename, email_subject, sender_email, sender_domain, sender_ip, resolution_source, result_json) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::VARCHAR, $8::JSONB) RETURNING email_investigation_runs.created_at
+2026-02-28 20:50:15,243 INFO     [sqlalchemy.engine.Engine] [cached since 1538s ago] (UUID('648edcff-9547-466f-aab0-31122bf7c1ec'), 'Monitoring SOC RevantageTelenetExpertware   Thursday 26.02.2026  1500 - 0000 .msg', 'Monitoring SOC Revantage&Telenet&Expertware | | Thursday 26.02.2026  15:00 - 00:00', 'stelian.butnariu@expertware.net', 'expertware.net', None, 'ai', '{"filename": "Monitoring SOC RevantageTelenetExpertware   Thursday 26.02.2026  1500 - 0000 .msg", "email_subject": "Monitoring SOC Revantage&Telenet& ... (14827 characters truncated) ... om URL returned \'clean\' across vendors. Attachments (image001.png - image005.png) were not found in VirusTotal (verdict unknown / not found)."}]}}}')
+2026-02-28 20:50:15,249 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-02-28 20:50:15,255 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-02-28 20:50:15,257 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs 
+WHERE email_investigation_runs.id = $1::UUID
+2026-02-28 20:50:15,259 INFO     [sqlalchemy.engine.Engine] [cached since 1538s ago] (UUID('648edcff-9547-466f-aab0-31122bf7c1ec'),)
+2026-02-28 20:50:15,279 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-02-28 20:50:15,303 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-02-28 20:50:15,306 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-02-28 20:50:15,307 INFO     [sqlalchemy.engine.Engine] [cached since 1606s ago] (20, 0)
+2026-02-28 20:50:15,314 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:42:16,079 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:42:16,090 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 09:42:16,092 INFO     [sqlalchemy.engine.Engine] [cached since 1.343e+05s ago] (20, 0)
+2026-03-02 09:42:16,128 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:42:16,143 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:42:16,145 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 09:42:16,146 INFO     [sqlalchemy.engine.Engine] [cached since 1.343e+05s ago] (20, 0)
+2026-03-02 09:42:16,155 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:48,390 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,405 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-03-02 09:43:48,407 INFO     [sqlalchemy.engine.Engine] [generated in 0.00241s] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,476 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:48,490 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,492 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-03-02 09:43:48,493 INFO     [sqlalchemy.engine.Engine] [cached since 0.08873s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,498 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:48,527 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,534 INFO     [sqlalchemy.engine.Engine] SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-03-02 09:43:48,535 INFO     [sqlalchemy.engine.Engine] [generated in 0.00134s] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,650 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:48,657 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,658 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-03-02 09:43:48,660 INFO     [sqlalchemy.engine.Engine] [cached since 0.2566s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,665 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,667 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.observable_type, investigations.state, investigations.context, investigations.client_domain, investigations.batch_id, investigations.created_at, investigations.updated_at, investigations.concluded_at, investigations.classification, investigations.confidence, investigations.risk_score, investigations.recommended_action, investigations.analyst_iterations, investigations.max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = $1::UUID
+2026-03-02 09:43:48,669 INFO     [sqlalchemy.engine.Engine] [cached since 0.2646s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,675 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:48,678 INFO     [sqlalchemy.engine.Engine] ROLLBACK
+2026-03-02 09:43:48,761 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:48,763 INFO     [sqlalchemy.engine.Engine] SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-03-02 09:43:48,764 INFO     [sqlalchemy.engine.Engine] [cached since 0.2301s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:48,784 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:49,419 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:49,421 INFO     [sqlalchemy.engine.Engine] SELECT evidence.id, evidence.investigation_id, evidence.evidence_json, evidence.signals, evidence.data_gaps, evidence.external_context, evidence.created_at 
+FROM evidence 
+WHERE evidence.investigation_id = $1::UUID
+2026-03-02 09:43:49,422 INFO     [sqlalchemy.engine.Engine] [cached since 0.8881s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'),)
+2026-03-02 09:43:49,443 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:49,888 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:49,893 INFO     [sqlalchemy.engine.Engine] SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-03-02 09:43:49,894 INFO     [sqlalchemy.engine.Engine] [generated in 0.00118s] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'), 1)
+2026-03-02 09:43:49,910 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:49,925 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:49,926 INFO     [sqlalchemy.engine.Engine] SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-03-02 09:43:49,927 INFO     [sqlalchemy.engine.Engine] [cached since 0.03493s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'), 1)
+2026-03-02 09:43:49,935 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:43:50,350 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:43:50,353 INFO     [sqlalchemy.engine.Engine] SELECT reports.id, reports.investigation_id, reports.iteration, reports.report_json, reports.executive_summary, reports.technical_narrative, reports.recommendations, reports.created_at 
+FROM reports 
+WHERE reports.investigation_id = $1::UUID ORDER BY reports.iteration DESC 
+ LIMIT $2::INTEGER
+2026-03-02 09:43:50,354 INFO     [sqlalchemy.engine.Engine] [cached since 0.461s ago] (UUID('91f2f9b6-1ef7-4387-aad9-373182ba9891'), 1)
+2026-03-02 09:43:50,391 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:55:30,599 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:55:30,602 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 09:55:30,602 INFO     [sqlalchemy.engine.Engine] [cached since 1.351e+05s ago] (20, 0)
+2026-03-02 09:55:30,616 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:55:30,630 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:55:30,632 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 09:55:30,633 INFO     [sqlalchemy.engine.Engine] [cached since 1.351e+05s ago] (20, 0)
+2026-03-02 09:55:30,640 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:55:31,966 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:55:31,969 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs 
+WHERE email_investigation_runs.id = $1::UUID
+2026-03-02 09:55:31,971 INFO     [sqlalchemy.engine.Engine] [generated in 0.00138s] (UUID('648edcff-9547-466f-aab0-31122bf7c1ec'),)
+2026-03-02 09:55:31,977 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 09:56:32,067 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 09:56:32,068 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs 
+WHERE email_investigation_runs.id = $1::UUID
+2026-03-02 09:56:32,070 INFO     [sqlalchemy.engine.Engine] [cached since 60.12s ago] (UUID('94e81107-79e2-4ef2-8f34-8642324e8c32'),)
+2026-03-02 09:56:32,076 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:49:36,900 INFO     [httpx] HTTP Request: POST https://api.openai.com/v1/responses "HTTP/1.1 200 OK"
+2026-03-02 11:49:37,057 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:49:37,070 INFO     [sqlalchemy.engine.Engine] INSERT INTO email_investigation_runs (id, filename, email_subject, sender_email, sender_domain, sender_ip, resolution_source, result_json) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::VARCHAR, $8::JSONB) RETURNING email_investigation_runs.created_at
+2026-03-02 11:49:37,071 INFO     [sqlalchemy.engine.Engine] [cached since 1.419e+05s ago] (UUID('cb1431bc-8e55-4c72-b7fa-b10ff53d779d'), '15f5c2ce-70bf-f7ba-5944-00f638bda152.eml', 'J2 Marketing Day at UKREiiF - Day Pass & Access', 'noreply@j2.net', 'j2.net', '203.55.21.50', 'ai', '{"filename": "15f5c2ce-70bf-f7ba-5944-00f638bda152.eml", "email_subject": "J2 Marketing Day at UKREiiF - Day Pass & Access", "sender_email": "noreply ... (7848 characters truncated) ...         \\"", "sender_domain_analysis": {"classification": "unknown", "primary_reasoning": "Not present in the provided evidence.", "findings": []}}}')
+2026-03-02 11:49:37,096 INFO     [sqlalchemy.engine.Engine] ROLLBACK
+2026-03-02 11:49:37,100 WARNING  [app.api.email_investigations] Email history persistence failed; returning live response only: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: INSERT INTO email_investigation_runs (id, filename, email_subject, sender_email, sender_domain, sender_ip, resolution_source, result_json) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::VARCHAR, $8::JSONB) RETURNING email_investigation_runs.created_at]
+[parameters: (UUID('cb1431bc-8e55-4c72-b7fa-b10ff53d779d'), '15f5c2ce-70bf-f7ba-5944-00f638bda152.eml', 'J2 Marketing Day at UKREiiF - Day Pass & Access', 'noreply@j2.net', 'j2.net', '203.55.21.50', 'ai', '{"filename": "15f5c2ce-70bf-f7ba-5944-00f638bda152.eml", "email_subject": "J2 Marketing Day at UKREiiF - Day Pass & Access", "sender_email": "noreply ... (7848 characters truncated) ...         \\"", "sender_domain_analysis": {"classification": "unknown", "primary_reasoning": "Not present in the provided evidence.", "findings": []}}}')]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:49:37,245 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:49:37,247 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:49:37,248 INFO     [sqlalchemy.engine.Engine] [cached since 1.42e+05s ago] (20, 0)
+2026-03-02 11:49:37,257 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:49:37,260 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:24,600 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:24,600 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:24,602 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:24,608 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:24,611 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:26,986 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:26,990 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:26,991 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:26,997 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:26,999 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:29,728 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:29,730 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:29,731 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:29,736 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:29,738 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:29,751 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:29,754 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:29,755 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:29,759 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:29,761 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:30,579 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:30,584 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:30,585 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:30,590 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:30,593 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:31,910 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:31,914 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:31,915 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:31,920 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:31,921 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:36,021 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:36,023 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:36,024 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:36,030 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:36,032 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:36,892 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:36,896 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:36,898 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:36,908 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:36,910 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:37,294 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:37,298 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:37,300 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:37,311 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:37,315 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:39,187 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:39,189 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:39,190 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:39,197 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:39,199 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:39,217 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:39,220 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:39,221 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:39,229 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:39,232 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:41,584 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:41,588 INFO     [sqlalchemy.engine.Engine] SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-02 11:52:41,589 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] (20, 0)
+2026-03-02 11:52:41,596 WARNING  [app.api.email_investigations] Email history list unavailable: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedTableError'>: relation "email_investigation_runs" does not exist
+[SQL: SELECT email_investigation_runs.id, email_investigation_runs.filename, email_investigation_runs.email_subject, email_investigation_runs.sender_email, email_investigation_runs.sender_domain, email_investigation_runs.sender_ip, email_investigation_runs.resolution_source, email_investigation_runs.result_json, email_investigation_runs.created_at 
+FROM email_investigation_runs ORDER BY email_investigation_runs.created_at DESC 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER]
+[parameters: (20, 0)]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2026-03-02 11:52:41,597 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:50,750 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:50,755 INFO     [sqlalchemy.engine.Engine] SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-03-02 11:52:50,756 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] ()
+2026-03-02 11:52:50,831 INFO     [sqlalchemy.engine.Engine] SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-03-02 11:52:50,832 INFO     [sqlalchemy.engine.Engine] [generated in 0.00187s] ('concluded',)
+2026-03-02 11:52:50,865 INFO     [sqlalchemy.engine.Engine] SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-03-02 11:52:50,868 INFO     [sqlalchemy.engine.Engine] [generated in 0.00302s] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-03-02 11:52:50,884 INFO     [sqlalchemy.engine.Engine] SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-03-02 11:52:50,885 INFO     [sqlalchemy.engine.Engine] [generated in 0.00151s] ('day', datetime.datetime(2026, 1, 31, 9, 52, 50, 879515, tzinfo=datetime.timezone.utc), 'concluded')
+2026-03-02 11:52:50,899 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:52:50,901 INFO     [sqlalchemy.engine.Engine] [generated in 0.00192s] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-03-02 11:52:50,918 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:52:50,920 INFO     [sqlalchemy.engine.Engine] [cached since 0.02084s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-03-02 11:52:50,929 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-03-02 11:52:50,929 INFO     [sqlalchemy.engine.Engine] [generated in 0.00101s] ('malicious', 10)
+2026-03-02 11:52:50,945 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:52:50,992 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:52:50,995 INFO     [sqlalchemy.engine.Engine] SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-03-02 11:52:50,996 INFO     [sqlalchemy.engine.Engine] [cached since 1.422e+05s ago] ()
+2026-03-02 11:52:51,014 INFO     [sqlalchemy.engine.Engine] SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-03-02 11:52:51,016 INFO     [sqlalchemy.engine.Engine] [cached since 0.1851s ago] ('concluded',)
+2026-03-02 11:52:51,030 INFO     [sqlalchemy.engine.Engine] SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-03-02 11:52:51,031 INFO     [sqlalchemy.engine.Engine] [cached since 0.1655s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-03-02 11:52:51,043 INFO     [sqlalchemy.engine.Engine] SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-03-02 11:52:51,048 INFO     [sqlalchemy.engine.Engine] [cached since 0.1639s ago] ('day', datetime.datetime(2026, 1, 31, 9, 52, 51, 43186, tzinfo=datetime.timezone.utc), 'concluded')
+2026-03-02 11:52:51,059 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:52:51,060 INFO     [sqlalchemy.engine.Engine] [cached since 0.1614s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-03-02 11:52:51,072 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:52:51,073 INFO     [sqlalchemy.engine.Engine] [cached since 0.1748s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-03-02 11:52:51,079 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-03-02 11:52:51,081 INFO     [sqlalchemy.engine.Engine] [cached since 0.1524s ago] ('malicious', 10)
+2026-03-02 11:52:51,095 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:53:35,100 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:53:35,102 INFO     [sqlalchemy.engine.Engine] SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-03-02 11:53:35,103 INFO     [sqlalchemy.engine.Engine] [cached since 1.423e+05s ago] ()
+2026-03-02 11:53:35,108 INFO     [sqlalchemy.engine.Engine] SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-03-02 11:53:35,109 INFO     [sqlalchemy.engine.Engine] [cached since 44.28s ago] ('concluded',)
+2026-03-02 11:53:35,113 INFO     [sqlalchemy.engine.Engine] SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-03-02 11:53:35,114 INFO     [sqlalchemy.engine.Engine] [cached since 44.25s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-03-02 11:53:35,118 INFO     [sqlalchemy.engine.Engine] SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-03-02 11:53:35,119 INFO     [sqlalchemy.engine.Engine] [cached since 44.23s ago] ('day', datetime.datetime(2026, 1, 31, 9, 53, 35, 117679, tzinfo=datetime.timezone.utc), 'concluded')
+2026-03-02 11:53:35,122 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:53:35,123 INFO     [sqlalchemy.engine.Engine] [cached since 44.22s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-03-02 11:53:35,126 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:53:35,127 INFO     [sqlalchemy.engine.Engine] [cached since 44.22s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-03-02 11:53:35,131 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-03-02 11:53:35,132 INFO     [sqlalchemy.engine.Engine] [cached since 44.2s ago] ('malicious', 10)
+2026-03-02 11:53:35,137 INFO     [sqlalchemy.engine.Engine] COMMIT
+2026-03-02 11:53:35,156 INFO     [sqlalchemy.engine.Engine] BEGIN (implicit)
+2026-03-02 11:53:35,159 INFO     [sqlalchemy.engine.Engine] SELECT count(investigations.id) AS count_1 
+FROM investigations
+2026-03-02 11:53:35,160 INFO     [sqlalchemy.engine.Engine] [cached since 1.423e+05s ago] ()
+2026-03-02 11:53:35,165 INFO     [sqlalchemy.engine.Engine] SELECT investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $1::VARCHAR AND investigations.classification IS NOT NULL GROUP BY investigations.classification
+2026-03-02 11:53:35,167 INFO     [sqlalchemy.engine.Engine] [cached since 44.33s ago] ('concluded',)
+2026-03-02 11:53:35,171 INFO     [sqlalchemy.engine.Engine] SELECT CASE WHEN (investigations.risk_score <= $1::INTEGER) THEN $2::VARCHAR WHEN (investigations.risk_score <= $3::INTEGER) THEN $4::VARCHAR WHEN (investigations.risk_score <= $5::INTEGER) THEN $6::VARCHAR WHEN (investigations.risk_score <= $7::INTEGER) THEN $8::VARCHAR ELSE $9::VARCHAR END AS bucket, count(*) AS count 
+FROM investigations 
+WHERE investigations.state = $10::VARCHAR AND investigations.risk_score IS NOT NULL GROUP BY bucket
+2026-03-02 11:53:35,172 INFO     [sqlalchemy.engine.Engine] [cached since 44.3s ago] (20, '0-20', 40, '21-40', 60, '41-60', 80, '61-80', '81-100', 'concluded')
+2026-03-02 11:53:35,177 INFO     [sqlalchemy.engine.Engine] SELECT date_trunc($1::VARCHAR, investigations.created_at) AS day, investigations.classification, count(*) AS count 
+FROM investigations 
+WHERE investigations.created_at >= $2::TIMESTAMP WITH TIME ZONE AND investigations.state = $3::VARCHAR GROUP BY day, investigations.classification ORDER BY day
+2026-03-02 11:53:35,177 INFO     [sqlalchemy.engine.Engine] [cached since 44.29s ago] ('day', datetime.datetime(2026, 1, 31, 9, 53, 35, 176221, tzinfo=datetime.timezone.utc), 'concluded')
+2026-03-02 11:53:35,180 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:53:35,181 INFO     [sqlalchemy.engine.Engine] [cached since 44.28s ago] ('whois', 'registrar', ['malicious', 'suspicious'], 10)
+2026-03-02 11:53:35,185 INFO     [sqlalchemy.engine.Engine] 
+                SELECT
+                    e.evidence_json->$1->>$2 AS field_value,
+                    COUNT(*) AS count
+                FROM evidence e
+                JOIN investigations i ON i.id = e.investigation_id
+                WHERE i.classification = ANY($3)
+                  AND i.state = 'concluded'
+                  AND e.evidence_json->$1->>$2 IS NOT NULL
+                  AND e.evidence_json->$1->>$2 != ''
+                GROUP BY field_value
+                ORDER BY count DESC
+                LIMIT $4
+            
+2026-03-02 11:53:35,185 INFO     [sqlalchemy.engine.Engine] [cached since 44.28s ago] ('hosting', 'asn_org', ['malicious', 'suspicious'], 10)
+2026-03-02 11:53:35,188 INFO     [sqlalchemy.engine.Engine] SELECT investigations.id, investigations.domain, investigations.risk_score, investigations.classification, investigations.created_at 
+FROM investigations 
+WHERE investigations.classification = $1::VARCHAR ORDER BY investigations.created_at DESC 
+ LIMIT $2::INTEGER
+2026-03-02 11:53:35,190 INFO     [sqlalchemy.engine.Engine] [cached since 44.26s ago] ('malicious', 10)
+2026-03-02 11:53:35,195 INFO     [sqlalchemy.engine.Engine] COMMIT

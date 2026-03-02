@@ -1,14 +1,14 @@
 ﻿{
-    "api_out_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\api-20260228-202243.out.log",
-    "api_pid":  113552,
-    "api_err_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\api-20260228-202243.err.log",
-    "api_port":  8010,
+    "api_out_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\api-20260302-130542.out.log",
+    "api_pid":  118852,
+    "api_err_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\api-20260302-130542.err.log",
+    "api_port":  8000,
     "beat_err_log":  null,
-    "worker_err_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\celery-worker-20260228-202243.err.log",
-    "started_at":  "2026-02-28T20:25:17.9705549+02:00",
-    "worker_pid":  26208,
-    "worker_nodename":  "celery-local-8010-20260228-202243@%h",
+    "worker_err_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\celery-worker-20260302-130542.err.log",
+    "started_at":  "2026-03-02T13:07:29.4023182+02:00",
+    "worker_pid":  87908,
+    "worker_nodename":  "celery-local-8000-20260302-130542@%h",
     "beat_pid":  null,
-    "worker_out_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\celery-worker-20260228-202243.out.log",
+    "worker_out_log":  "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\logs\\celery-worker-20260302-130542.out.log",
     "beat_out_log":  null
 }

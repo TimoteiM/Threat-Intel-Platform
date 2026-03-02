@@ -7,9 +7,8 @@
 
 const BASE = "/api";
 const DIRECT_BACKEND =
-  (process.env.NEXT_PUBLIC_API_PROXY_TARGET ||
-    process.env.NEXT_PUBLIC_BACKEND_URL ||
-    "http://127.0.0.1:8010").replace(/\/$/, "");
+  (process.env.NEXT_PUBLIC_BACKEND_URL ||
+    "http://127.0.0.1:8000").replace(/\/$/, "");
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -102,19 +101,61 @@ export async function uploadEmailInvestigation(
     formData.append("ml_phishing_score", String(options.ml_phishing_score));
   }
 
-  const endpoint = `${DIRECT_BACKEND}/api/email-investigations/upload`;
+  const proxiedEndpoint = `${BASE}/email-investigations/upload`;
+  const directEndpoint = `${DIRECT_BACKEND}/api/email-investigations/upload`;
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    body: formData,
-  });
-  if (!res.ok) {
-    if (res.status === 404 || res.status === 405) {
-      throw new ApiError(
-        res.status,
-        `Email upload endpoint unavailable at ${DIRECT_BACKEND}. Set NEXT_PUBLIC_API_PROXY_TARGET to the active backend URL and restart frontend.`,
-      );
+  function shouldPreferDirectBackend(): boolean {
+    // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
+    // Prefer direct backend in local development; keep proxy-first behavior elsewhere.
+    if (typeof window === "undefined") return false;
+    const host = (window.location.hostname || "").toLowerCase();
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    const direct = directEndpoint.toLowerCase();
+    const isLocalBackend = direct.includes("127.0.0.1") || direct.includes("localhost");
+    return isLocalHost && isLocalBackend;
+  }
+
+  async function postMultipart(endpoint: string): Promise<Response> {
+    return fetch(endpoint, { method: "POST", body: formData });
+  }
+
+  const endpoints = shouldPreferDirectBackend()
+    ? [directEndpoint, proxiedEndpoint]
+    : [proxiedEndpoint, directEndpoint];
+
+  let res: Response | null = null;
+  let lastNetworkError: unknown = null;
+  for (const endpoint of endpoints) {
+    try {
+      res = await postMultipart(endpoint);
+      // If we got a valid non-5xx HTTP response, stop retrying endpoint order.
+      if (res.status < 500) break;
+    } catch (err) {
+      lastNetworkError = err;
     }
+  }
+
+  if (!res) {
+    throw new Error(
+      lastNetworkError instanceof Error
+        ? `Upload request failed: ${lastNetworkError.message}`
+        : "Upload request failed",
+    );
+  }
+
+  if (!res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
+    // Retry once directly if proxy route failed.
+    if (res.url.includes("/api/email-investigations/upload")) {
+      try {
+        const directRes = await postMultipart(directEndpoint);
+        if (directRes.ok) return directRes.json();
+      } catch {
+        // Keep original error path.
+      }
+    }
+  }
+
+  if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, body || res.statusText);
   }

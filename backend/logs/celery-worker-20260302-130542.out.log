@@ -1,0 +1,119 @@
+[config] Loaded .env from: C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\.env
+[config] Settings loaded — VT key: SET
+ 
+ -------------- celery-local-8000-20260302-130542@EXP-JFW2P34 v5.6.2 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-11-10.0.26200-SP0 2026-03-02 13:05:48
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         threat_intel:0x1f0ed4226c0
+- ** ---------- .> transport:   redis://127.0.0.1:6379/5
+- ** ---------- .> results:     redis://127.0.0.1:6379/6
+- *** --- * --- .> concurrency: 8 (thread)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> investigations   exchange=investigations(direct) key=investigations
+                
+
+[tasks]
+  . tasks.process_batch
+  . tasks.run_analysis
+  . tasks.run_collector
+  . tasks.run_investigation
+  . tasks.watchlist_check
+
+2026-03-02 13:05:49,528 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-03-02 13:05:49,530 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-02 13:05:49,535 INFO sqlalchemy.engine.Engine select current_schema()
+2026-03-02 13:05:49,536 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-02 13:05:49,540 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-03-02 13:05:49,541 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-03-02 13:05:49,545 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:05:49,584 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:05:49,587 INFO sqlalchemy.engine.Engine [generated in 0.00248s] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+2026-03-02 13:05:49,595 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-03-02 13:05:49,599 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:05:49,601 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:05:49,602 INFO sqlalchemy.engine.Engine [cached since 0.01749s ago] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+2026-03-02 13:05:49,609 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-03-02 13:05:49,610 INFO sqlalchemy.engine.Engine [generated in 0.00164s] {'state': 'gathering', 'updated_at': datetime.datetime(2026, 3, 2, 11, 5, 49, 607033, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+2026-03-02 13:05:49,615 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-02 13:06:27,076 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:06:27,078 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:06:27,079 INFO sqlalchemy.engine.Engine [cached since 37.49s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+2026-03-02 13:06:27,084 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-03-02 13:06:27,089 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:06:27,091 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:06:27,091 INFO sqlalchemy.engine.Engine [cached since 37.51s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+2026-03-02 13:06:27,097 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-03-02 13:06:27,098 INFO sqlalchemy.engine.Engine [cached since 37.49s ago] {'state': 'gathering', 'updated_at': datetime.datetime(2026, 3, 2, 11, 6, 27, 96196, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+2026-03-02 13:06:27,101 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-02 13:06:29,985 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:06:29,986 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:06:29,988 INFO sqlalchemy.engine.Engine [cached since 40.4s ago] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+2026-03-02 13:06:29,994 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-03-02 13:06:29,996 INFO sqlalchemy.engine.Engine [cached since 40.39s ago] {'state': 'evaluating', 'updated_at': datetime.datetime(2026, 3, 2, 11, 6, 29, 994525, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+2026-03-02 13:06:29,999 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-02 13:06:31,421 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:06:31,424 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-03-02 13:06:31,425 INFO sqlalchemy.engine.Engine [generated in 0.00076s] {'exc_id': '85e55855-5ed5-46bf-b651-192a9a01fe6a'}
+2026-03-02 13:06:31,434 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-03-02 13:06:31,435 INFO sqlalchemy.engine.Engine [cached since 0.01175s ago] {'exc_id': '85e55855-5ed5-46bf-b651-192a9a01fe6a'}
+2026-03-02 13:06:31,438 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-03-02 13:07:07,267 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:07:07,268 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-03-02 13:07:07,268 INFO sqlalchemy.engine.Engine [cached since 77.68s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+2026-03-02 13:07:07,271 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-03-02 13:07:07,271 INFO sqlalchemy.engine.Engine [cached since 77.66s ago] {'state': 'evaluating', 'updated_at': datetime.datetime(2026, 3, 2, 11, 7, 7, 271140, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+2026-03-02 13:07:07,274 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-02 13:07:08,423 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-02 13:07:08,424 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-03-02 13:07:08,425 INFO sqlalchemy.engine.Engine [cached since 37s ago] {'exc_id': '1179db9d-81d9-466d-84c1-01d8e2530c40'}
+2026-03-02 13:07:08,427 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-03-02 13:07:08,427 INFO sqlalchemy.engine.Engine [cached since 37s ago] {'exc_id': '1179db9d-81d9-466d-84c1-01d8e2530c40'}
+2026-03-02 13:07:08,429 INFO sqlalchemy.engine.Engine ROLLBACK

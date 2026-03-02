@@ -1,0 +1,120 @@
+[2026-03-02 13:05:48,325: INFO/MainProcess] Connected to redis://127.0.0.1:6379/5
+[2026-03-02 13:05:48,338: INFO/MainProcess] mingle: searching for neighbors
+[2026-03-02 13:05:49,384: INFO/MainProcess] mingle: all alone
+[2026-03-02 13:05:49,433: INFO/MainProcess] celery-local-8000-20260302-130542@EXP-JFW2P34 ready.
+[2026-03-02 13:05:49,440: INFO/MainProcess] Task tasks.run_investigation[1f036e30-ad7a-4fee-9a1d-ddc7285ee381] received
+[2026-03-02 13:05:49,489: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Starting investigation for adidas-samba.de (type=domain)
+[2026-03-02 13:05:49,528: INFO/MainProcess] select pg_catalog.version()
+[2026-03-02 13:05:49,530: INFO/MainProcess] [raw sql] {}
+[2026-03-02 13:05:49,535: INFO/MainProcess] select current_schema()
+[2026-03-02 13:05:49,536: INFO/MainProcess] [raw sql] {}
+[2026-03-02 13:05:49,540: INFO/MainProcess] show standard_conforming_strings
+[2026-03-02 13:05:49,541: INFO/MainProcess] [raw sql] {}
+[2026-03-02 13:05:49,545: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:05:49,584: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:05:49,587: INFO/MainProcess] [generated in 0.00248s] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+[2026-03-02 13:05:49,595: INFO/MainProcess] ROLLBACK
+[2026-03-02 13:05:49,599: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:05:49,601: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:05:49,602: INFO/MainProcess] [cached since 0.01749s ago] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+[2026-03-02 13:05:49,609: INFO/MainProcess] UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+[2026-03-02 13:05:49,610: INFO/MainProcess] [generated in 0.00164s] {'state': 'gathering', 'updated_at': datetime.datetime(2026, 3, 2, 11, 5, 49, 607033, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+[2026-03-02 13:05:49,615: INFO/MainProcess] COMMIT
+[2026-03-02 13:05:51,198: WARNING/MainProcess] [threat_feeds] Feed 'threatfox' failed: 401 Client Error: Unauthorized for url: https://threatfox-api.abuse.ch/api/v1/
+[2026-03-02 13:06:27,016: INFO/MainProcess] Task tasks.run_investigation[6d977203-c494-4741-803f-b1410fe29bf4] received
+[2026-03-02 13:06:27,072: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Starting investigation for adidas-samba.de (type=domain)
+[2026-03-02 13:06:27,076: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:06:27,078: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:06:27,079: INFO/MainProcess] [cached since 37.49s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+[2026-03-02 13:06:27,084: INFO/MainProcess] ROLLBACK
+[2026-03-02 13:06:27,089: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:06:27,091: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:06:27,091: INFO/MainProcess] [cached since 37.51s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+[2026-03-02 13:06:27,097: INFO/MainProcess] UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+[2026-03-02 13:06:27,098: INFO/MainProcess] [cached since 37.49s ago] {'state': 'gathering', 'updated_at': datetime.datetime(2026, 3, 2, 11, 6, 27, 96196, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+[2026-03-02 13:06:27,101: INFO/MainProcess] COMMIT
+[2026-03-02 13:06:28,563: WARNING/MainProcess] [threat_feeds] Feed 'threatfox' failed: 401 Client Error: Unauthorized for url: https://threatfox-api.abuse.ch/api/v1/
+[2026-03-02 13:06:29,983: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Collectors complete: 9/9 succeeded. Starting analysis...
+[2026-03-02 13:06:29,985: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:06:29,986: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:06:29,988: INFO/MainProcess] [cached since 40.4s ago] {'pk_1': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+[2026-03-02 13:06:29,994: INFO/MainProcess] UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+[2026-03-02 13:06:29,996: INFO/MainProcess] [cached since 40.39s ago] {'state': 'evaluating', 'updated_at': datetime.datetime(2026, 3, 2, 11, 6, 29, 994525, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('85e55855-5ed5-46bf-b651-192a9a01fe6a')}
+[2026-03-02 13:06:29,999: INFO/MainProcess] COMMIT
+[2026-03-02 13:06:30,010: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Aggregating evidence for adidas-samba.de
+[2026-03-02 13:06:30,034: INFO/MainProcess] Subdomain enumeration for adidas-samba.de: 2 discovered, 1 resolved, 0 interesting, 1 unique IPs
+[2026-03-02 13:06:30,034: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Subdomain enumeration: 1 resolved, 0 interesting
+[2026-03-02 13:06:30,178: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Email security: score=30, spoofability=high, DKIM selectors=0
+[2026-03-02 13:06:31,421: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:06:31,424: INFO/MainProcess] 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+[2026-03-02 13:06:31,425: INFO/MainProcess] [generated in 0.00076s] {'exc_id': '85e55855-5ed5-46bf-b651-192a9a01fe6a'}
+[2026-03-02 13:06:31,434: INFO/MainProcess] 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+[2026-03-02 13:06:31,435: INFO/MainProcess] [cached since 0.01175s ago] {'exc_id': '85e55855-5ed5-46bf-b651-192a9a01fe6a'}
+[2026-03-02 13:06:31,438: INFO/MainProcess] ROLLBACK
+[2026-03-02 13:06:31,443: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Infrastructure pivot: 159 related domains
+[2026-03-02 13:06:31,456: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Cert timeline: 29 certs, burst=False
+[2026-03-02 13:06:33,870: INFO/MainProcess] [85e55855-5ed5-46bf-b651-192a9a01fe6a] Calling analyst (iteration 0/1, model=gpt-5-mini, provider=openai)
+[2026-03-02 13:07:07,264: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Collectors complete: 9/9 succeeded. Starting analysis...
+[2026-03-02 13:07:07,267: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:07:07,268: INFO/MainProcess] SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+[2026-03-02 13:07:07,268: INFO/MainProcess] [cached since 77.68s ago] {'pk_1': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+[2026-03-02 13:07:07,271: INFO/MainProcess] UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+[2026-03-02 13:07:07,271: INFO/MainProcess] [cached since 77.66s ago] {'state': 'evaluating', 'updated_at': datetime.datetime(2026, 3, 2, 11, 7, 7, 271140, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('1179db9d-81d9-466d-84c1-01d8e2530c40')}
+[2026-03-02 13:07:07,274: INFO/MainProcess] COMMIT
+[2026-03-02 13:07:07,290: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Aggregating evidence for adidas-samba.de
+[2026-03-02 13:07:07,368: INFO/MainProcess] Subdomain enumeration for adidas-samba.de: 2 discovered, 1 resolved, 0 interesting, 1 unique IPs
+[2026-03-02 13:07:07,371: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Subdomain enumeration: 1 resolved, 0 interesting
+[2026-03-02 13:07:07,506: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Email security: score=30, spoofability=high, DKIM selectors=0
+[2026-03-02 13:07:08,423: INFO/MainProcess] BEGIN (implicit)
+[2026-03-02 13:07:08,424: INFO/MainProcess] 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+[2026-03-02 13:07:08,425: INFO/MainProcess] [cached since 37s ago] {'exc_id': '1179db9d-81d9-466d-84c1-01d8e2530c40'}
+[2026-03-02 13:07:08,427: INFO/MainProcess] 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+[2026-03-02 13:07:08,427: INFO/MainProcess] [cached since 37s ago] {'exc_id': '1179db9d-81d9-466d-84c1-01d8e2530c40'}
+[2026-03-02 13:07:08,429: INFO/MainProcess] ROLLBACK
+[2026-03-02 13:07:08,430: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Infrastructure pivot: 10 related domains
+[2026-03-02 13:07:08,431: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Cert timeline: 29 certs, burst=False
+[2026-03-02 13:07:08,447: INFO/MainProcess] [1179db9d-81d9-466d-84c1-01d8e2530c40] Calling analyst (iteration 0/1, model=gpt-5-mini, provider=openai)
