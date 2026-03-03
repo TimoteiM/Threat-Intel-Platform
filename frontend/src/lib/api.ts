@@ -18,10 +18,18 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
+  const doFetch = () =>
+    fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      ...options,
+    });
+
+  let res = await doFetch();
+  if (!res.ok && [502, 503, 504].includes(res.status)) {
+    // Retry once for transient proxy/backend restarts.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    res = await doFetch();
+  }
 
   if (!res.ok) {
     const body = await res.text();
@@ -102,26 +110,40 @@ export async function uploadEmailInvestigation(
   }
 
   const proxiedEndpoint = `${BASE}/email-investigations/upload`;
-  const directEndpoint = `${DIRECT_BACKEND}/api/email-investigations/upload`;
 
-  function shouldPreferDirectBackend(): boolean {
-    // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
-    // Prefer direct backend in local development; keep proxy-first behavior elsewhere.
-    if (typeof window === "undefined") return false;
-    const host = (window.location.hostname || "").toLowerCase();
-    const isLocalHost = host === "localhost" || host === "127.0.0.1";
-    const direct = directEndpoint.toLowerCase();
-    const isLocalBackend = direct.includes("127.0.0.1") || direct.includes("localhost");
-    return isLocalHost && isLocalBackend;
+  function getDirectEndpointFromBrowser(): string | null {
+    if (typeof window === "undefined") return null;
+    const configured = `${DIRECT_BACKEND}/api/email-investigations/upload`;
+    try {
+      const configuredUrl = new URL(configured);
+      const pageHost = (window.location.hostname || "").toLowerCase();
+      const configuredHost = configuredUrl.hostname.toLowerCase();
+      const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
+      const configuredIsLocal = configuredHost === "localhost" || configuredHost === "127.0.0.1";
+
+      // Remote browser + localhost backend URL will never work; use same host on :8000.
+      if (!pageIsLocal && configuredIsLocal) {
+        return `${window.location.protocol}//${window.location.hostname}:8000/api/email-investigations/upload`;
+      }
+      return configured;
+    } catch {
+      return null;
+    }
+  }
+
+  const browserDirectEndpoint = getDirectEndpointFromBrowser();
+
+  function shouldTryDirectBackendFromBrowser(): boolean {
+    return !!browserDirectEndpoint;
   }
 
   async function postMultipart(endpoint: string): Promise<Response> {
     return fetch(endpoint, { method: "POST", body: formData });
   }
 
-  const endpoints = shouldPreferDirectBackend()
-    ? [directEndpoint, proxiedEndpoint]
-    : [proxiedEndpoint, directEndpoint];
+  const endpoints = shouldTryDirectBackendFromBrowser()
+    ? [proxiedEndpoint, browserDirectEndpoint!]
+    : [proxiedEndpoint];
 
   let res: Response | null = null;
   let lastNetworkError: unknown = null;
@@ -143,11 +165,15 @@ export async function uploadEmailInvestigation(
     );
   }
 
-  if (!res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
+  if (
+    !res.ok &&
+    shouldTryDirectBackendFromBrowser() &&
+    (res.status >= 500 || res.status === 404 || res.status === 405)
+  ) {
     // Retry once directly if proxy route failed.
-    if (res.url.includes("/api/email-investigations/upload")) {
+    if (res.url.includes("/api/email-investigations/upload") && browserDirectEndpoint) {
       try {
-        const directRes = await postMultipart(directEndpoint);
+        const directRes = await postMultipart(browserDirectEndpoint);
         if (directRes.ok) return directRes.json();
       } catch {
         // Keep original error path.

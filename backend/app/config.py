@@ -11,21 +11,24 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Always resolve .env relative to this file's directory (backend/).
-# Use .resolve() to convert __file__ to an absolute path first —
-# when Celery starts workers, __file__ may be relative to CWD,
-# causing .parent.parent to resolve against the wrong directory.
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
-_ENV_FILE = str(_BACKEND_DIR / ".env")
+_ENV_CANDIDATES = [
+    _BACKEND_DIR / ".env",           # backend/.env (container /app/.env)
+    _BACKEND_DIR.parent / ".env",    # repo root .env for local runs
+]
+_ENV_FILE_PATH = next((p for p in _ENV_CANDIDATES if p.exists()), None)
+_ENV_FILE = str(_ENV_FILE_PATH) if _ENV_FILE_PATH else None
 
-# Explicitly load the .env file into OS environment variables NOW,
-# at import time. This ensures all keys are visible regardless of
-# the process CWD or how pydantic-settings resolves the env_file path.
-# override=False means OS env vars (if set manually) still take priority.
-load_dotenv(_ENV_FILE, override=False)
-print(f"[config] Loaded .env from: {_ENV_FILE}", flush=True)
+if _ENV_FILE is not None:
+    # Explicitly load the selected .env file at import time.
+    # override=False means existing OS env vars still take priority.
+    load_dotenv(_ENV_FILE, override=False)
+    print(f"[config] Loaded .env from: {_ENV_FILE}", flush=True)
+else:
+    print("[config] No .env file found; using process environment only", flush=True)
 
 
 class Settings(BaseSettings):
@@ -37,7 +40,7 @@ class Settings(BaseSettings):
     )
 
     # —— API Keys ———
-    openai_api_key: str
+    openai_api_key: str = ""
     openai_model: str = "gpt-5-mini"
     # Optional Anthropic fallback fields (used only when OpenAI fails/returns empty output)
     anthropic_api_key: str = ""
@@ -75,6 +78,14 @@ class Settings(BaseSettings):
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
 
+    @model_validator(mode="after")
+    def _validate_ai_provider_keys(self) -> "Settings":
+        if not self.openai_api_key and not self.anthropic_api_key:
+            raise ValueError(
+                "At least one AI provider key must be set: OPENAI_API_KEY or ANTHROPIC_API_KEY."
+            )
+        return self
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
@@ -91,7 +102,15 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Cached settings singleton."""
-    s = Settings()
+    try:
+        s = Settings()
+    except ValidationError as exc:
+        candidates = ", ".join(str(p) for p in _ENV_CANDIDATES)
+        raise RuntimeError(
+            "Configuration validation failed. Ensure required keys are set "
+            "(OPENAI_API_KEY or ANTHROPIC_API_KEY). "
+            f"Checked .env candidates: {candidates}"
+        ) from exc
     print(
         f"[config] Settings loaded — VT key: {'SET' if s.virustotal_api_key else 'EMPTY!'}",
         flush=True,
