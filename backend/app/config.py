@@ -7,6 +7,7 @@ All settings are validated at startup — if something is missing, the app won't
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -29,6 +30,12 @@ if _ENV_FILE is not None:
     print(f"[config] Loaded .env from: {_ENV_FILE}", flush=True)
 else:
     print("[config] No .env file found; using process environment only", flush=True)
+
+# Prefer project-local Playwright browser cache if present (useful on Windows
+# when global %LOCALAPPDATA% cache is missing or locked).
+_LOCAL_PLAYWRIGHT_DIR = _BACKEND_DIR / ".playwright"
+if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and _LOCAL_PLAYWRIGHT_DIR.exists():
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_LOCAL_PLAYWRIGHT_DIR)
 
 
 class Settings(BaseSettings):
