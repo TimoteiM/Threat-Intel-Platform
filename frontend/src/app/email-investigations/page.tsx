@@ -2,11 +2,16 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  getEmailInvestigationRun,
   getEmailInvestigationHistoryItem,
   listEmailInvestigationHistory,
   uploadEmailInvestigation,
 } from "@/lib/api";
-import type { EmailInvestigationHistoryItem, EmailInvestigationResponse } from "@/lib/types";
+import type {
+  EmailInvestigationHistoryItem,
+  EmailInvestigationResponse,
+  EmailInvestigationSubmitResponse,
+} from "@/lib/types";
 
 export default function EmailInvestigationsPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -113,14 +118,38 @@ export default function EmailInvestigationsPage() {
     setError("");
     setResult(null);
     try {
-      const res = await uploadEmailInvestigation(file, {
+      const submit = (await uploadEmailInvestigation(file, {
         context: context || undefined,
         include_url_screenshots: includeScreenshots,
         run_ai: runAiInterpretation,
         ml_phishing_score: mlScore.trim() ? Number(mlScore) : undefined,
-      });
-      setResult(res as EmailInvestigationResponse);
-      setSelectedHistoryId((res as EmailInvestigationResponse)?.history_id || null);
+      })) as EmailInvestigationSubmitResponse;
+      setSelectedHistoryId(submit.run_id || null);
+
+      const pollDeadline = Date.now() + 15 * 60 * 1000;
+      let completedRun: EmailInvestigationResponse | null = null;
+      while (Date.now() < pollDeadline) {
+        const run = (await getEmailInvestigationRun(submit.run_id)) as EmailInvestigationResponse;
+        if (run.status === "completed") {
+          completedRun = run;
+          setResult(run);
+          break;
+        }
+        if (run.status === "failed") {
+          throw new Error(run.error || "Email investigation failed");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      if (!completedRun) {
+        const latest = (await getEmailInvestigationRun(submit.run_id)) as EmailInvestigationResponse;
+        if (latest.status === "completed") {
+          setResult(latest);
+        } else {
+          throw new Error("Email investigation is still processing. Please refresh history shortly.");
+        }
+      }
+
       await refreshHistory();
     } catch (err: any) {
       setError(err?.message || "Upload failed");
@@ -191,7 +220,7 @@ export default function EmailInvestigationsPage() {
                   {h.email_subject || h.filename || "No subject"}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                  {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count}
+                  {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count} | Status: {h.status || "unknown"}
                 </div>
                 <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
                   {h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time"}

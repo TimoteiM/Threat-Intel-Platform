@@ -47,6 +47,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb",
             "ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'",
             "ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)",
+            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'queued'",
+            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS task_id VARCHAR(64)",
+            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS error TEXT",
+            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
+            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS resolution_source VARCHAR(50) NOT NULL DEFAULT 'queued'",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))

@@ -882,8 +882,12 @@ export interface EmailInvestigationResolution {
 }
 
 export interface EmailInvestigationResponse {
+  run_id?: string;
   history_id?: string;
+  status?: "queued" | "processing" | "completed" | "failed";
+  error?: string | null;
   created_at?: string;
+  completed_at?: string;
   filename: string;
   email_subject?: string;
   sender_email?: string;
@@ -908,14 +912,24 @@ export interface EmailInvestigationResponse {
 export interface EmailInvestigationHistoryItem {
   id: string;
   created_at?: string;
+  completed_at?: string;
+  status?: "queued" | "processing" | "completed" | "failed";
   filename: string;
   email_subject?: string;
   sender_email?: string;
   sender_domain?: string;
   sender_ip?: string;
   resolution_source: string;
+  error?: string | null;
   urls_count: number;
   attachments_count: number;
+}
+
+export interface EmailInvestigationSubmitResponse {
+  run_id: string;
+  history_id?: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  message: string;
 }
 
 

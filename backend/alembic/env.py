@@ -5,9 +5,16 @@ Imports our ORM Base so autogenerate can detect model changes.
 """
 
 from logging.config import fileConfig
+from pathlib import Path
+import sys
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+# Ensure backend root (which contains `app/`) is on import path.
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.models.database import Base
 from app.config import get_settings

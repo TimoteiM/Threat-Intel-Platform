@@ -94,13 +94,14 @@ export default function InvestigationPage() {
 
   useEffect(() => {
     fetchData();
-    // Poll every 5s if not concluded
+    // Poll every 5s only when SSE is disconnected (fallback mode).
     const interval = setInterval(() => {
+      if (sse.connected) return;
       if (detail?.state === "concluded" || detail?.state === "failed") return;
       fetchData();
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchData, detail?.state]);
+  }, [fetchData, detail?.state, sse.connected]);
 
   // Reset activeTab when observable type loads and the current tab isn't in the tab set
   useEffect(() => {

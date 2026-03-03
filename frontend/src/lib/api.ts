@@ -18,6 +18,8 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase();
+  const canRetry = method === "GET" || method === "HEAD";
   const doFetch = () =>
     fetch(`${BASE}${path}`, {
       headers: { "Content-Type": "application/json", ...options?.headers },
@@ -25,7 +27,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     });
 
   let res = await doFetch();
-  if (!res.ok && [502, 503, 504].includes(res.status)) {
+  if (canRetry && !res.ok && [502, 503, 504].includes(res.status)) {
     // Retry once for transient proxy/backend restarts.
     await new Promise((resolve) => setTimeout(resolve, 350));
     res = await doFetch();
@@ -141,17 +143,22 @@ export async function uploadEmailInvestigation(
     return fetch(endpoint, { method: "POST", body: formData });
   }
 
-  const endpoints = shouldTryDirectBackendFromBrowser()
-    ? [proxiedEndpoint, browserDirectEndpoint!]
-    : [proxiedEndpoint];
+  const endpoints: string[] = [proxiedEndpoint];
+  if (
+    shouldTryDirectBackendFromBrowser() &&
+    browserDirectEndpoint &&
+    browserDirectEndpoint !== proxiedEndpoint
+  ) {
+    endpoints.push(browserDirectEndpoint);
+  }
 
   let res: Response | null = null;
   let lastNetworkError: unknown = null;
   for (const endpoint of endpoints) {
     try {
       res = await postMultipart(endpoint);
-      // If we got a valid non-5xx HTTP response, stop retrying endpoint order.
-      if (res.status < 500) break;
+      // Stop on first HTTP response to avoid duplicate POST submits.
+      break;
     } catch (err) {
       lastNetworkError = err;
     }
@@ -165,27 +172,15 @@ export async function uploadEmailInvestigation(
     );
   }
 
-  if (
-    !res.ok &&
-    shouldTryDirectBackendFromBrowser() &&
-    (res.status >= 500 || res.status === 404 || res.status === 405)
-  ) {
-    // Retry once directly if proxy route failed.
-    if (res.url.includes("/api/email-investigations/upload") && browserDirectEndpoint) {
-      try {
-        const directRes = await postMultipart(browserDirectEndpoint);
-        if (directRes.ok) return directRes.json();
-      } catch {
-        // Keep original error path.
-      }
-    }
-  }
-
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, body || res.statusText);
   }
   return res.json();
+}
+
+export async function getEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}`);
 }
 
 export async function listEmailInvestigationHistory(
