@@ -864,6 +864,12 @@ export interface EmailInvestigationOutcome {
 export interface EmailInvestigationResolution {
   email_subject?: string;
   formatted_resolution: string;
+  url_assessments?: Array<{
+    url?: string;
+    where_it_points?: string;
+    legitimacy?: "legitimate" | "suspicious" | "malicious" | "unknown" | string;
+    reasoning?: string;
+  }>;
   conclusion?: {
     classification: Classification | "inconclusive";
     confidence: Confidence;

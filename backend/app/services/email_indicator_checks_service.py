@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def run_email_indicator_checks(
     extracted: dict[str, Any],
     *,
-    include_url_screenshots: bool = True,
+    include_url_screenshots: bool = False,
     max_urls: int = 5,
     max_attachment_hashes: int = 5,
 ) -> dict[str, Any]:
@@ -96,9 +96,10 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
 
 def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
+    resolved_final_url = _resolve_final_url(url)
     screenshot: dict[str, Any] = {
         "captured": False,
-        "final_url": None,
+        "final_url": resolved_final_url,
         "image_base64": None,
         "error": "Not requested",
     }
@@ -108,14 +109,14 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
             png_bytes, final_url = capture_screenshot(url, timeout=20)
             screenshot = {
                 "captured": True,
-                "final_url": final_url,
+                "final_url": final_url or resolved_final_url,
                 "image_base64": base64.b64encode(png_bytes).decode("ascii"),
                 "error": None,
             }
         except Exception as exc:
             screenshot = {
                 "captured": False,
-                "final_url": None,
+                "final_url": resolved_final_url,
                 "image_base64": None,
                 "error": str(exc),
             }
@@ -128,11 +129,14 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
 
 
 def _check_ip(ip: str) -> dict[str, Any]:
+    abuse = _abuseipdb_lookup(ip)
+    ipwhois = _ipwhois_lookup(ip)
     return {
         "present": True,
         "ip": ip,
         "vt": _vt_lookup(ip, "ip"),
-        "abuseipdb": _abuseipdb_lookup(ip),
+        "abuseipdb": abuse,
+        "ipwhois": ipwhois,
     }
 
 
@@ -239,6 +243,51 @@ def _abuseipdb_lookup(ip: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("AbuseIPDB lookup failed for %s: %s", ip, exc)
         return {"checked": False, "error": str(exc)}
+
+
+def _ipwhois_lookup(ip: str) -> dict[str, Any]:
+    """Best-effort IP enrichment fallback when AbuseIPDB is unavailable."""
+    try:
+        resp = requests.get(
+            f"https://ipwho.is/{ip}",
+            timeout=15,
+            headers={"User-Agent": "ThreatIntelEmailChecker/1.0"},
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        if not data.get("success"):
+            return {"checked": False, "error": str(data.get("message") or "lookup failed")}
+        conn = data.get("connection") or {}
+        return {
+            "checked": True,
+            "ip": data.get("ip", ip),
+            "isp": conn.get("isp"),
+            "org": conn.get("org"),
+            "asn": conn.get("asn"),
+            "domain": conn.get("domain"),
+            "country_code": data.get("country_code"),
+        }
+    except Exception as exc:
+        logger.warning("ipwho.is lookup failed for %s: %s", ip, exc)
+        return {"checked": False, "error": str(exc)}
+
+
+def _resolve_final_url(url: str) -> str | None:
+    """Resolve final destination via HTTP redirects without taking screenshots."""
+    try:
+        resp = requests.get(
+            url,
+            allow_redirects=True,
+            timeout=12,
+            stream=True,
+            headers={"User-Agent": "ThreatIntelEmailChecker/1.0"},
+        )
+        try:
+            return str(resp.url) if resp.url else None
+        finally:
+            resp.close()
+    except Exception:
+        return None
 
 
 def _pick_datetime(value: Any) -> datetime | None:

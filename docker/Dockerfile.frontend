@@ -2,6 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+ARG API_PROXY_TARGET=http://127.0.0.1:8000
+ENV API_PROXY_TARGET=${API_PROXY_TARGET}
+
 COPY package.json package-lock.json* ./
 RUN npm install
 
