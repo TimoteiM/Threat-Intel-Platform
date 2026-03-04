@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
@@ -61,6 +61,7 @@ export default function InvestigationPage() {
   const [tabError, setTabError] = useState<string | null>(null);
   const [nowTs, setNowTs] = useState(Date.now());
   const sse = useSSE(investigationId || null);
+  const completionRefreshDoneRef = useRef(false);
   const collectorRows = TIMED_COLLECTORS.map((c) => {
     const evidenceKey = c === "asn" ? "hosting" : c;
     const evidenceMeta = evidence?.[evidenceKey]?.meta || {};
@@ -102,6 +103,28 @@ export default function InvestigationPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [fetchData, detail?.state, sse.connected]);
+
+  // When SSE reports completion, force a final data refresh so report/evidence
+  // render immediately without requiring a manual browser refresh.
+  useEffect(() => {
+    if (!sse.state || !["concluded", "failed"].includes(sse.state)) return;
+    if (completionRefreshDoneRef.current) return;
+    completionRefreshDoneRef.current = true;
+
+    const run = async () => {
+      // Slight delay lets backend finish DB commit right after final SSE event.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await fetchData();
+    };
+    run();
+  }, [sse.state, fetchData]);
+
+  // Reset the one-shot completion fetch flag if a new run starts.
+  useEffect(() => {
+    if (sse.state && !["concluded", "failed"].includes(sse.state)) {
+      completionRefreshDoneRef.current = false;
+    }
+  }, [sse.state]);
 
   // Reset activeTab when observable type loads and the current tab isn't in the tab set
   useEffect(() => {

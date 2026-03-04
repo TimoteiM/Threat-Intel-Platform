@@ -24,7 +24,7 @@ export default function EmailInvestigationsPage() {
   const [result, setResult] = useState<EmailInvestigationResponse | null>(null);
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [includeScreenshots, setIncludeScreenshots] = useState(true);
+  const [includeScreenshots, setIncludeScreenshots] = useState(false);
   const [runAiInterpretation, setRunAiInterpretation] = useState(false);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());

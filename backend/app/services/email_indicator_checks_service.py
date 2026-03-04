@@ -11,6 +11,7 @@ Policy:
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -39,12 +40,36 @@ def run_email_indicator_checks(
     urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u][: max(0, max_urls)]
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
 
-    checks = {
-        "sender_domain": _check_sender_domain(sender_domain) if sender_domain else {"present": False, "message": "Not present in the provided evidence."},
-        "sender_ip": _check_ip(sender_ip) if sender_ip else {"present": False, "message": "Not present in the provided evidence."},
-        "urls": [_check_url(url, include_screenshot=include_url_screenshots) for url in urls],
-        "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes),
-    }
+    max_workers = max(2, min(8, len(urls) + 2))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        sender_domain_future = executor.submit(
+            _check_sender_domain, sender_domain
+        ) if sender_domain else None
+        sender_ip_future = executor.submit(
+            _check_ip, sender_ip
+        ) if sender_ip else None
+        url_futures = [
+            executor.submit(_check_url, url, include_screenshot=include_url_screenshots)
+            for url in urls
+        ]
+        attachments_future = executor.submit(
+            _check_attachments, attachments, max_hashes=max_attachment_hashes
+        )
+
+        checks = {
+            "sender_domain": (
+                sender_domain_future.result()
+                if sender_domain_future
+                else {"present": False, "message": "Not present in the provided evidence."}
+            ),
+            "sender_ip": (
+                sender_ip_future.result()
+                if sender_ip_future
+                else {"present": False, "message": "Not present in the provided evidence."}
+            ),
+            "urls": [future.result() for future in url_futures],
+            "attachments": attachments_future.result(),
+        }
     return checks
 
 

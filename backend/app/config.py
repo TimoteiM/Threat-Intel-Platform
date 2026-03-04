@@ -8,6 +8,7 @@ All settings are validated at startup — if something is missing, the app won't
 from __future__ import annotations
 
 import os
+import platform
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,7 +35,21 @@ else:
 # Prefer project-local Playwright browser cache if present (useful on Windows
 # when global %LOCALAPPDATA% cache is missing or locked).
 _LOCAL_PLAYWRIGHT_DIR = _BACKEND_DIR / ".playwright"
-if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and _LOCAL_PLAYWRIGHT_DIR.exists():
+def _has_local_playwright_browser_cache(path: Path) -> bool:
+    if not path.exists():
+        return False
+    # Only force a project-local cache when a browser binary is actually present.
+    # In Docker, an empty bind-mounted /app/.playwright can shadow the image cache.
+    return any(path.rglob("chrome-headless-shell*")) or any(path.rglob("chromium-*"))
+
+
+# Only force the project-local cache on Windows developer hosts.
+# In Linux containers, this path may be bind-mounted but incomplete.
+if (
+    platform.system() == "Windows"
+    and "PLAYWRIGHT_BROWSERS_PATH" not in os.environ
+    and _has_local_playwright_browser_cache(_LOCAL_PLAYWRIGHT_DIR)
+):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_LOCAL_PLAYWRIGHT_DIR)
 
 

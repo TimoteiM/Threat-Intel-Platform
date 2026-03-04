@@ -39,7 +39,7 @@ async def upload_email_investigation(
     context: str = Form(default=""),
     max_urls: int = Form(default=5),
     max_attachment_hashes: int = Form(default=5),
-    include_url_screenshots: bool = Form(default=True),
+    include_url_screenshots: bool = Form(default=False),
     run_ai: bool = Form(default=True),
     ml_phishing_score: str | None = Form(default=None),
 ) -> dict[str, Any]:
