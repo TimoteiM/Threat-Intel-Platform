@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 import base64
 import json
+from email.header import decode_header
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.services.email_ai_interpreter_service import interpret_email_results_with_ai
@@ -465,7 +466,7 @@ def _render_template_resolution(
     resolution: dict[str, Any],
     context: str,
 ) -> str:
-    email_subject = str(extracted.get("email_subject") or NOT_PRESENT)
+    email_subject = _decode_header_text(str(extracted.get("email_subject") or NOT_PRESENT))
     sender_email = str(extracted.get("sender_email") or NOT_PRESENT)
     sender_domain_analysis = resolution.get("sender_domain_analysis") or {}
     sender_classification = _normalize_sender_legitimacy(
@@ -496,7 +497,7 @@ def _render_template_resolution(
     attachment_types, attachment_verdict = _summarize_attachments(checks)
     total_urls_found = len(extracted.get("urls") or [])
     checked_urls = len((checks.get("urls") or []))
-    url_summary, final_url_assessment = _summarize_urls(checks, resolution)
+    url_summary, _ = _summarize_urls(checks, resolution)
     attachments_line = (
         "No attachments present in the email body."
         if attachment_verdict == "no_attachments"
@@ -523,7 +524,6 @@ def _render_template_resolution(
         ),
         attachments_line,
         f"URLs checked: {checked_urls}/{total_urls_found}. {url_summary}.",
-        f"Suspicious URL assessment: {final_url_assessment}.",
     ]
 
     findings = sender_domain_analysis.get("findings")
@@ -726,6 +726,22 @@ def _summarize_attachments(checks: dict[str, Any]) -> tuple[str, str]:
     if clean_like > 0 and malicious_like == 0:
         return attachment_types, "safe"
     return attachment_types, "unknown"
+
+
+def _decode_header_text(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    try:
+        parts: list[str] = []
+        for chunk, charset in decode_header(raw):
+            if isinstance(chunk, bytes):
+                parts.append(chunk.decode(charset or "utf-8", errors="replace"))
+            else:
+                parts.append(str(chunk))
+        return "".join(parts).strip()
+    except Exception:
+        return raw
 
 
 def _summarize_urls(checks: dict[str, Any], resolution: dict[str, Any]) -> tuple[str, str]:
