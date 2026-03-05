@@ -502,8 +502,6 @@ def _render_template_resolution(
     ip_summary = _summarize_ip_result(ip_result)
 
     attachment_types, attachment_verdict = _summarize_attachments(checks)
-    total_urls_found = len(extracted.get("urls") or [])
-    checked_urls = len((checks.get("urls") or []))
     url_summary, _ = _summarize_urls(checks, resolution)
     attachments_line = (
         "No attachments present in the email body."
@@ -530,7 +528,7 @@ def _render_template_resolution(
             f"was checked and {ip_summary}."
         ),
         attachments_line,
-        f"URLs checked: {checked_urls}/{total_urls_found}. {url_summary}.",
+        f"URL destinations: {url_summary}.",
     ]
 
     findings = sender_domain_analysis.get("findings")
@@ -828,33 +826,33 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     if counters["email_tracking"]:
         parts.append(
-            f"{counters['email_tracking']} URL(s) point to email tracking/campaign-routing infrastructure (j2.email)"
+            "email tracking/campaign-routing infrastructure (j2.email)"
         )
     if counters["brevo_tracking"]:
         parts.append(
-            f"{counters['brevo_tracking']} URL(s) point to Brevo/Sendinblue campaign redirect or tracking infrastructure"
+            "Brevo/Sendinblue campaign redirect or tracking infrastructure"
         )
     if counters["salesforce_tracking"]:
         parts.append(
-            f"{counters['salesforce_tracking']} URL(s) point to Salesforce Marketing Cloud campaign redirect/tracking infrastructure"
+            "Salesforce Marketing Cloud campaign redirect/tracking infrastructure"
         )
     if counters["outlook_safelinks"]:
         parts.append(
-            f"{counters['outlook_safelinks']} URL(s) point to Microsoft Defender Safe Links rewriting infrastructure"
+            "Microsoft Defender Safe Links rewriting infrastructure"
         )
     if counters["w3c_dtd"]:
         parts.append(
-            f"{counters['w3c_dtd']} URL(s) point to W3C XHTML/HTML DTD technical resources used by markup templates"
+            "W3C XHTML/HTML DTD technical resources used by markup templates"
         )
     if counters["w3c_standards"]:
         parts.append(
-            f"{counters['w3c_standards']} URL(s) point to W3C standards resources"
+            "W3C standards resources"
         )
 
     if domains_seen:
         described = []
         for domain, count in sorted(domains_seen.items(), key=lambda kv: kv[1], reverse=True)[:8]:
-            described.append(f"{count} URL(s) resolve to {domain} ({_describe_destination_domain(domain)})")
+            described.append(f"{domain} ({_describe_destination_domain(domain)})")
         parts.append("Destinations observed: " + "; ".join(described))
 
     if not parts:
