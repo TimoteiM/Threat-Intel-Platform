@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     phishtank_api_key: str = ""
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
+    url_lexical_model_path: str = ""
 
     # —— Database ———
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"

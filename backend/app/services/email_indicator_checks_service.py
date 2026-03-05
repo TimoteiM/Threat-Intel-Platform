@@ -21,6 +21,7 @@ import whois as python_whois
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
+from app.services.url_lexical_ml_service import assess_url_lexical_risk
 from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
 
 def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
+    lexical_ml = assess_url_lexical_risk(url)
     screenshot: dict[str, Any] = {
         "captured": False,
         "final_url": None,
@@ -123,6 +125,7 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     return {
         "url": url,
         "vt": vt,
+        "lexical_ml": lexical_ml,
         "screenshot": screenshot,
     }
 
