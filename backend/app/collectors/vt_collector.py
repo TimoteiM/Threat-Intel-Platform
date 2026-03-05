@@ -22,6 +22,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -32,6 +34,10 @@ from app.config import get_settings
 from app.models.schemas import CollectorMeta, VTEvidence, VTVendorResult
 
 logger = logging.getLogger(__name__)
+_VT_KEY_LOCK = threading.Lock()
+_VT_KEY_LIMITED_UNTIL: dict[str, float] = {}
+_VT_NEXT_INDEX = 0
+_VT_KEY_COOLDOWN_SECONDS = 75.0
 
 
 class VTCollector(BaseCollector):
@@ -40,19 +46,33 @@ class VTCollector(BaseCollector):
 
     def _collect(self) -> VTEvidence:
         settings = get_settings()
-        api_key = settings.virustotal_api_key
+        keys = _get_vt_keys(settings.virustotal_api_key)
+        if not keys:
+            raise ValueError("VIRUSTOTAL_API_KEY(S) not configured")
 
-        if not api_key:
-            raise ValueError("VIRUSTOTAL_API_KEY not configured")
+        last_rate_limit_error = None
+        for api_key in _ordered_vt_keys(keys):
+            try:
+                if self.observable_type == "ip":
+                    return self._collect_ip(api_key)
+                elif self.observable_type == "url":
+                    return self._collect_url(api_key)
+                elif self.observable_type in ("hash", "file"):
+                    return self._collect_hash(api_key)
+                else:
+                    return self._collect_domain(api_key)
+            except ValueError as exc:
+                if _is_rate_limit_error(str(exc)):
+                    _mark_vt_key_rate_limited(api_key)
+                    last_rate_limit_error = exc
+                    continue
+                raise
 
-        if self.observable_type == "ip":
-            return self._collect_ip(api_key)
-        elif self.observable_type == "url":
-            return self._collect_url(api_key)
-        elif self.observable_type in ("hash", "file"):
-            return self._collect_hash(api_key)
-        else:
-            return self._collect_domain(api_key)
+        if last_rate_limit_error is not None:
+            raise ValueError(
+                "VirusTotal API rate limit exceeded on all configured keys."
+            ) from last_rate_limit_error
+        raise ValueError("VirusTotal request failed for all configured keys.")
 
     # ── Domain ────────────────────────────────────────────────────────────────
 
@@ -133,6 +153,8 @@ class VTCollector(BaseCollector):
                 data=f"url={self.domain}",
                 timeout=self.timeout,
             )
+            if submit_resp.status_code == 429:
+                raise ValueError("VirusTotal API rate limit exceeded")
             if submit_resp.status_code not in (200, 201):
                 raise ValueError(f"VT URL submission failed: {submit_resp.status_code}")
 
@@ -149,6 +171,8 @@ class VTCollector(BaseCollector):
                     headers=headers,
                     timeout=self.timeout,
                 )
+                if poll_resp.status_code == 429:
+                    raise ValueError("VirusTotal API rate limit exceeded")
                 if poll_resp.status_code == 200:
                     poll_data = poll_resp.json()
                     status = poll_data.get("data", {}).get("attributes", {}).get("status")
@@ -298,3 +322,49 @@ class VTCollector(BaseCollector):
 
     def _empty_evidence(self, meta: CollectorMeta) -> VTEvidence:
         return VTEvidence(meta=meta)
+
+
+def _get_vt_keys(primary_key: str) -> list[str]:
+    """
+    Build VT key pool from:
+    - VIRUSTOTAL_API_KEY (existing)
+    - VIRUSTOTAL_API_KEYS (comma-separated, optional)
+    """
+    extra = os.getenv("VIRUSTOTAL_API_KEYS", "")
+    raw = [primary_key] + [k.strip() for k in extra.split(",") if k.strip()]
+    keys: list[str] = []
+    seen: set[str] = set()
+    for key in raw:
+        k = (key or "").strip()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        keys.append(k)
+    return keys
+
+
+def _ordered_vt_keys(keys: list[str]) -> list[str]:
+    """
+    Round-robin across available keys; deprioritize keys in cooldown.
+    """
+    global _VT_NEXT_INDEX
+    if not keys:
+        return []
+    now = time.time()
+    with _VT_KEY_LOCK:
+        start = _VT_NEXT_INDEX % len(keys)
+        _VT_NEXT_INDEX = (_VT_NEXT_INDEX + 1) % len(keys)
+        ordered = keys[start:] + keys[:start]
+        ready = [k for k in ordered if _VT_KEY_LIMITED_UNTIL.get(k, 0.0) <= now]
+        limited = [k for k in ordered if k not in ready]
+    return ready + limited
+
+
+def _mark_vt_key_rate_limited(key: str) -> None:
+    with _VT_KEY_LOCK:
+        _VT_KEY_LIMITED_UNTIL[key] = time.time() + _VT_KEY_COOLDOWN_SECONDS
+
+
+def _is_rate_limit_error(message: str) -> bool:
+    text = (message or "").lower()
+    return "rate limit" in text or "429" in text

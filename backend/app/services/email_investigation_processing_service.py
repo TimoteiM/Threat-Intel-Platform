@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 import base64
 import json
+import re
 from email.header import decode_header
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -186,6 +187,12 @@ def _build_url_reasoning(
             f"This URL resolves to {target}. VirusTotal flagged it as {verdict} "
             f"(malicious={malicious_count}, suspicious={suspicious_count}, vendors={total_vendors}); "
             "treat the destination as risky."
+        )
+
+    if verdict == "rate_limited":
+        return (
+            f"This URL resolves to {target}. VirusTotal query was rate-limited, "
+            "so verdict is temporarily unavailable."
         )
 
     if verdict == "clean":
@@ -792,9 +799,10 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
     }
     domains_seen: dict[str, int] = {}
     for item in items:
-        target = str(((item.get("screenshot") or {}).get("final_url") or item.get("url") or "")).lower()
-        if not target:
+        target_raw = str(((item.get("screenshot") or {}).get("final_url") or item.get("url") or "")).strip()
+        if not target_raw:
             continue
+        target = target_raw.lower()
         if "manage.j2.email" in target or "/t/j-" in target:
             counters["email_tracking"] += 1
         elif "sendibm3.com" in target or "sendinblue.com" in target or "brevo.com" in target:
@@ -807,8 +815,15 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
             counters["w3c_dtd"] += 1
         elif "w3.org/" in target:
             counters["w3c_standards"] += 1
-        for domain in _domains_from_target_url(target):
-            domains_seen[domain] = domains_seen.get(domain, 0) + 1
+        # Parse domains from both the original URL and final URL to capture wrapped destinations.
+        for source in {
+            str(item.get("url") or "").strip(),
+            target_raw,
+        }:
+            if not source:
+                continue
+            for domain in _domains_from_target_url(source):
+                domains_seen[domain] = domains_seen.get(domain, 0) + 1
 
     parts: list[str] = []
     if counters["email_tracking"]:

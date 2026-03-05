@@ -43,9 +43,18 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
 
     msg = BytesParser(policy=policy.default).parsebytes(raw_email)
 
-    subject = _safe_header(msg.get("Subject"))
-    raw_subject = _fallback_header_value(raw_email, "Subject")
-    decoded_raw_subject = _safe_header(raw_subject) if raw_subject else ""
+    subject_values = [str(v) for v in (msg.get_all("Subject") or []) if v is not None]
+    subject = " ".join(_safe_header(v) for v in subject_values if _safe_header(v)).strip()
+    if not subject:
+        subject = _safe_header(msg.get("Subject"))
+
+    raw_subject_values = _extract_headers_from_raw(raw_email, "Subject")
+    decoded_raw_subject = " ".join(
+        _safe_header(v) for v in raw_subject_values if _safe_header(v)
+    ).strip()
+    if not decoded_raw_subject:
+        raw_subject = _fallback_header_value(raw_email, "Subject")
+        decoded_raw_subject = _safe_header(raw_subject) if raw_subject else ""
     if decoded_raw_subject and (
         not subject
         or "=?utf-8?" in subject.lower()

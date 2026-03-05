@@ -213,6 +213,17 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
         }
     except Exception as exc:
         logger.warning("VT lookup failed for %s (%s): %s", observable_type, value, exc)
+        message = str(exc)
+        lowered = message.lower()
+        if "rate limit" in lowered or "429" in lowered:
+            return {
+                "found": False,
+                "verdict": "rate_limited",
+                "malicious_count": 0,
+                "suspicious_count": 0,
+                "total_vendors": 0,
+                "error": message,
+            }
         return {
             "found": False,
             "verdict": "unknown",
