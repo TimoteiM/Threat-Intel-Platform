@@ -1,13 +1,12 @@
-version: "3.9"
-
 services:
   # ── Database ──
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: threatintel
       POSTGRES_PASSWORD: threatintel
       POSTGRES_DB: threatintel
+      PGDATA: /var/lib/postgresql/data/18/docker
     ports:
       - "5432:5432"
     volumes:
@@ -106,10 +105,9 @@ services:
       - "3000:3000"
     environment:
       API_PROXY_TARGET: http://api:8000
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    command: npm run dev
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   pgdata:

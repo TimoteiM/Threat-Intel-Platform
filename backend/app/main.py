@@ -101,6 +101,9 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    # In development, allow direct frontend->backend calls from VM IP/hostname origins.
+    # This is needed when bypassing Next.js proxy for large multipart uploads.
+    allow_origin_regex=r"^https?://[A-Za-z0-9\.\-]+(:\d+)?$" if settings.is_development else None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization", "X-Request-ID"],

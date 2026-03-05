@@ -6,9 +6,26 @@
  */
 
 const BASE = "/api";
-const DIRECT_BACKEND =
-  (process.env.NEXT_PUBLIC_BACKEND_URL ||
-    "http://127.0.0.1:8000").replace(/\/$/, "");
+const DIRECT_BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+const DEFAULT_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+
+function resolveDirectBackendBase(): string {
+  if (DIRECT_BACKEND) return DIRECT_BACKEND;
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol || "http:";
+    const host = window.location.hostname || "127.0.0.1";
+    return `${protocol}//${host}:${DEFAULT_BACKEND_PORT}`;
+  }
+  return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}`;
+}
+
+function canUseDirectBackendFallback(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = (window.location.hostname || "").toLowerCase();
+  // Only allow browser direct-backend fallback in local development.
+  // On remote VM access, force /api proxy path to avoid CORS and split-routing issues.
+  return host === "localhost" || host === "127.0.0.1";
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -101,8 +118,11 @@ export async function uploadEmailInvestigation(
     formData.append("ml_phishing_score", String(options.ml_phishing_score));
   }
 
+  const directBackendBase = resolveDirectBackendBase();
   const proxiedEndpoint = `${BASE}/email-investigations/upload`;
-  const directEndpoint = `${DIRECT_BACKEND}/api/email-investigations/upload`;
+  const proxiedLegacyEndpoint = `${BASE}/email-investigations/upload-file`;
+  const directEndpoint = `${directBackendBase}/api/email-investigations/upload`;
+  const directLegacyEndpoint = `${directBackendBase}/api/email-investigations/upload-file`;
 
   function shouldPreferDirectBackend(): boolean {
     // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
@@ -119,17 +139,22 @@ export async function uploadEmailInvestigation(
     return fetch(endpoint, { method: "POST", body: formData });
   }
 
-  const endpoints = shouldPreferDirectBackend()
-    ? [directEndpoint, proxiedEndpoint]
-    : [proxiedEndpoint, directEndpoint];
+  const canUseDirect = canUseDirectBackendFallback();
+  const endpoints = canUseDirect
+    ? (
+      shouldPreferDirectBackend()
+        ? [directEndpoint, directLegacyEndpoint, proxiedEndpoint, proxiedLegacyEndpoint]
+        : [proxiedEndpoint, proxiedLegacyEndpoint, directEndpoint, directLegacyEndpoint]
+    )
+    : [proxiedEndpoint, proxiedLegacyEndpoint];
 
   let res: Response | null = null;
   let lastNetworkError: unknown = null;
   for (const endpoint of endpoints) {
     try {
       res = await postMultipart(endpoint);
-      // If we got a valid non-5xx HTTP response, stop retrying endpoint order.
-      if (res.status < 500) break;
+      // If endpoint exists (anything except 404/405/5xx), stop retrying.
+      if (res.status < 500 && res.status !== 404 && res.status !== 405) break;
     } catch (err) {
       lastNetworkError = err;
     }
@@ -143,14 +168,16 @@ export async function uploadEmailInvestigation(
     );
   }
 
-  if (!res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
-    // Retry once directly if proxy route failed.
-    if (res.url.includes("/api/email-investigations/upload")) {
+  if (canUseDirect && !res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
+    // Final compatibility retry for mixed environments.
+    const fallbackOrder = [directEndpoint, directLegacyEndpoint, proxiedEndpoint, proxiedLegacyEndpoint];
+    for (const endpoint of fallbackOrder) {
+      if (endpoint === res.url) continue;
       try {
-        const directRes = await postMultipart(directEndpoint);
-        if (directRes.ok) return directRes.json();
+        const retryRes = await postMultipart(endpoint);
+        if (retryRes.ok) return retryRes.json();
       } catch {
-        // Keep original error path.
+        // Try next fallback endpoint.
       }
     }
   }
