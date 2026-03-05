@@ -11,19 +11,25 @@ Policy:
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
 import whois as python_whois
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
+from app.db.session import sync_engine
+from app.models.database import LookupCache
 from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
+VT_CACHE_TTL_HOURS = 24
 
 
 def run_email_indicator_checks(
@@ -180,6 +186,13 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
             "total_vendors": 0,
             "error": "Empty indicator",
         }
+    cache_key = _vt_cache_key(value=value, observable_type=observable_type)
+    cached = _cache_get(cache_key)
+    if isinstance(cached, dict):
+        out = dict(cached)
+        out["cache_hit"] = True
+        return out
+
     try:
         collector = VTCollector(
             domain=value,
@@ -200,7 +213,7 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
         else:
             verdict = "unknown"
 
-        return {
+        result = {
             "found": bool(getattr(evidence, "found", False)),
             "status": meta.status.value,
             "error": meta.error,
@@ -210,7 +223,11 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
             "total_vendors": total,
             "reputation_score": getattr(evidence, "reputation_score", 0),
             "notes": getattr(evidence, "notes", []),
+            "cache_hit": False,
         }
+        if verdict != "rate_limited":
+            _cache_set(cache_key, result, source="virustotal", ttl_hours=VT_CACHE_TTL_HOURS)
+        return result
     except Exception as exc:
         logger.warning("VT lookup failed for %s (%s): %s", observable_type, value, exc)
         message = str(exc)
@@ -223,6 +240,7 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
                 "suspicious_count": 0,
                 "total_vendors": 0,
                 "error": message,
+                "cache_hit": False,
             }
         return {
             "found": False,
@@ -231,6 +249,7 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
             "suspicious_count": 0,
             "total_vendors": 0,
             "error": str(exc),
+            "cache_hit": False,
         }
 
 
@@ -319,6 +338,58 @@ def _ipwhois_lookup(ip: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("ipwho.is lookup failed for %s: %s", ip, exc)
         return {"checked": False, "error": str(exc)}
+
+
+def _vt_cache_key(*, value: str, observable_type: str) -> str:
+    raw = f"vt:{observable_type}:{str(value).strip()}"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
+    return f"email_vt:{observable_type}:{digest}"
+
+
+def _cache_get(key: str) -> dict[str, Any] | None:
+    try:
+        now = datetime.now(timezone.utc)
+        with Session(sync_engine) as db:
+            row = db.execute(
+                select(LookupCache).where(
+                    LookupCache.cache_key == key,
+                    LookupCache.expires_at > now,
+                )
+            ).scalar_one_or_none()
+            if not row:
+                return None
+            if isinstance(row.cache_value, dict):
+                return dict(row.cache_value)
+            return None
+    except Exception as exc:
+        logger.warning("Lookup cache read failed for key %s: %s", key, exc)
+        return None
+
+
+def _cache_set(key: str, value: dict[str, Any], *, source: str, ttl_hours: int) -> None:
+    try:
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=max(1, ttl_hours))
+        with Session(sync_engine) as db:
+            row = db.execute(
+                select(LookupCache).where(LookupCache.cache_key == key)
+            ).scalar_one_or_none()
+            if row:
+                row.cache_value = value
+                row.source = source
+                row.expires_at = expires_at
+            else:
+                db.add(
+                    LookupCache(
+                        cache_key=key,
+                        cache_value=value,
+                        source=source,
+                        expires_at=expires_at,
+                    )
+                )
+            db.commit()
+    except Exception as exc:
+        logger.warning("Lookup cache write failed for key %s: %s", key, exc)
 
 
 def _resolve_final_url(url: str) -> str | None:
