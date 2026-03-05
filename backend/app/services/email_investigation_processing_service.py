@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from urllib.parse import urlparse
+import base64
+import json
+from urllib.parse import parse_qs, unquote, urlparse
 
 from app.services.email_ai_interpreter_service import interpret_email_results_with_ai
 from app.services.email_indicator_checks_service import run_email_indicator_checks
@@ -771,9 +773,8 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
         "outlook_safelinks": 0,
         "w3c_dtd": 0,
         "w3c_standards": 0,
-        "other": 0,
     }
-    other_domains: dict[str, int] = {}
+    domains_seen: dict[str, int] = {}
     for item in items:
         target = str(((item.get("screenshot") or {}).get("final_url") or item.get("url") or "")).lower()
         if not target:
@@ -790,11 +791,8 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
             counters["w3c_dtd"] += 1
         elif "w3.org/" in target:
             counters["w3c_standards"] += 1
-        else:
-            counters["other"] += 1
-            reg_domain = _extract_registered_domain_from_url(target)
-            if reg_domain:
-                other_domains[reg_domain] = other_domains.get(reg_domain, 0) + 1
+        for domain in _domains_from_target_url(target):
+            domains_seen[domain] = domains_seen.get(domain, 0) + 1
 
     parts: list[str] = []
     if counters["email_tracking"]:
@@ -821,14 +819,12 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
         parts.append(
             f"{counters['w3c_standards']} URL(s) point to W3C standards resources"
         )
-    if counters["other"]:
-        if other_domains:
-            described = []
-            for domain, count in sorted(other_domains.items(), key=lambda kv: kv[1], reverse=True)[:4]:
-                described.append(f"{count} URL(s) point to {domain} ({_describe_destination_domain(domain)})")
-            parts.extend(described)
-        else:
-            parts.append(f"{counters['other']} URL(s) point to other web destinations")
+
+    if domains_seen:
+        described = []
+        for domain, count in sorted(domains_seen.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+            described.append(f"{count} URL(s) resolve to {domain} ({_describe_destination_domain(domain)})")
+        parts.append("Destinations observed: " + "; ".join(described))
 
     if not parts:
         return NOT_PRESENT
@@ -908,6 +904,71 @@ def _extract_registered_domain_from_url(url_text: str) -> str:
         return extract_registered_domain(host)
     except Exception:
         return ""
+
+
+def _domains_from_target_url(url_text: str) -> list[str]:
+    domains: list[str] = []
+    primary = _extract_registered_domain_from_url(url_text)
+    if primary:
+        domains.append(primary)
+
+    try:
+        parsed = urlparse(url_text)
+        query = parse_qs(parsed.query or "", keep_blank_values=True)
+        redirect_keys = {"url", "u", "target", "redirect", "redirect_url", "destination", "dest"}
+        jwt_keys = {"jwt", "correlation", "cstoken", "token"}
+        for key in redirect_keys:
+            for value in query.get(key, []):
+                if not value:
+                    continue
+                decoded = unquote(str(value))
+                nested = _extract_registered_domain_from_url(decoded)
+                if nested:
+                    domains.append(nested)
+        for key in jwt_keys:
+            for value in query.get(key, []):
+                for nested_url in _extract_urls_from_jwt_value(str(value)):
+                    nested = _extract_registered_domain_from_url(nested_url)
+                    if nested:
+                        domains.append(nested)
+    except Exception:
+        pass
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for d in domains:
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _extract_urls_from_jwt_value(token: str) -> list[str]:
+    """
+    Best-effort decode of JWT payloads used in tracking links.
+    Extracts redirect_url/url-like fields without signature validation.
+    """
+    value = (token or "").strip()
+    if value.count(".") < 2:
+        return []
+    parts = value.split(".")
+    payload_part = parts[1]
+    # Base64URL padding
+    payload_part += "=" * ((4 - len(payload_part) % 4) % 4)
+    try:
+        payload_bytes = base64.urlsafe_b64decode(payload_part.encode("ascii", errors="ignore"))
+        payload_obj = json.loads(payload_bytes.decode("utf-8", errors="ignore"))
+    except Exception:
+        return []
+
+    out: list[str] = []
+    if not isinstance(payload_obj, dict):
+        return out
+    for key in ("redirect_url", "url", "target", "destination"):
+        v = payload_obj.get(key)
+        if isinstance(v, str) and (v.startswith("http://") or v.startswith("https://")):
+            out.append(v)
+    return out
 
 
 def _describe_destination_domain(domain: str) -> str:

@@ -44,6 +44,14 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
     msg = BytesParser(policy=policy.default).parsebytes(raw_email)
 
     subject = _safe_header(msg.get("Subject"))
+    raw_subject = _fallback_header_value(raw_email, "Subject")
+    decoded_raw_subject = _safe_header(raw_subject) if raw_subject else ""
+    if decoded_raw_subject and (
+        not subject
+        or "=?utf-8?" in subject.lower()
+        or len(decoded_raw_subject) > len(subject)
+    ):
+        subject = decoded_raw_subject
     _, sender_email = parseaddr(_safe_header(msg.get("From")))
     sender_email = (sender_email or "").strip().lower()
     if not subject:
@@ -304,12 +312,10 @@ def _extract_headers(blob: str, name: str) -> list[str]:
 
 
 def _fallback_header_value(raw_email: bytes, name: str) -> str:
-    text = raw_email.decode("utf-8", errors="ignore")
-    pattern = re.compile(rf"^{re.escape(name)}\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-    m = pattern.search(text)
-    if not m:
-        return ""
-    return m.group(1).strip()
+    headers = _parse_raw_header_lines(raw_email)
+    key = name.lower()
+    values = headers.get(key) or []
+    return values[0] if values else ""
 
 
 def _fallback_sender_email(raw_email: bytes) -> str:
@@ -325,12 +331,49 @@ def _fallback_sender_email(raw_email: bytes) -> str:
 
 
 def _extract_headers_from_raw(raw_email: bytes, name: str) -> list[str]:
+    headers = _parse_raw_header_lines(raw_email)
+    return headers.get(name.lower()) or []
+
+
+def _parse_raw_header_lines(raw_email: bytes) -> dict[str, list[str]]:
+    """
+    Parse raw RFC822 headers with folded continuation lines.
+    Returns lower-cased header-name -> list of unfolded values.
+    """
     text = raw_email.decode("utf-8", errors="ignore")
-    values: list[str] = []
-    pattern = re.compile(rf"^{re.escape(name)}\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-    for match in pattern.finditer(text):
-        values.append(match.group(1).strip())
-    return values
+    # Keep only header section.
+    if "\r\n\r\n" in text:
+        head = text.split("\r\n\r\n", 1)[0]
+        lines = head.split("\r\n")
+    else:
+        head = text.split("\n\n", 1)[0]
+        lines = head.split("\n")
+
+    unfolded: list[str] = []
+    current = ""
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith((" ", "\t")) and current:
+            current += " " + line.strip()
+            continue
+        if current:
+            unfolded.append(current)
+        current = line.strip()
+    if current:
+        unfolded.append(current)
+
+    result: dict[str, list[str]] = {}
+    for line in unfolded:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        k = key.strip().lower()
+        v = value.strip()
+        if not k:
+            continue
+        result.setdefault(k, []).append(v)
+    return result
 
 
 def _preprocess_text_for_url_scan(text: str) -> str:
