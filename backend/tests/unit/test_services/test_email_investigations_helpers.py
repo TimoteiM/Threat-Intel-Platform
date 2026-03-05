@@ -1,4 +1,8 @@
-from app.api.email_investigations import _compact_checks_for_ai, _prepare_history_payload
+from app.api.email_investigations import (
+    _build_url_destination_context,
+    _compact_checks_for_ai,
+    _prepare_history_payload,
+)
 
 
 def test_compact_checks_keeps_lexical_ml_section() -> None:
@@ -40,3 +44,26 @@ def test_prepare_history_payload_keeps_lexical_ml_without_image_blob() -> None:
     url_item = stored["indicator_checks"]["urls"][0]
     assert "image_base64" not in url_item["screenshot"]
     assert url_item["lexical_ml"]["label"] == "low"
+
+
+def test_build_url_destination_context_is_specific_not_generic() -> None:
+    checks = {
+        "urls": [
+            {
+                "url": "https://58ktaz.1.tracking.e360.salesforce.com/click?jwt=x",
+                "lexical_ml": {"label": "medium"},
+                "screenshot": {
+                    "final_url": "https://www.caseware.com/resources/industry-reports/idc-report",
+                },
+            },
+            {
+                "url": "https://example.top/verify/account/login",
+                "lexical_ml": {"label": "high"},
+                "screenshot": {"final_url": None},
+            },
+        ]
+    }
+    text = _build_url_destination_context(checks)
+    assert "Caseware corporate website/resources" in text
+    assert "high-risk URL lexical pattern destination" in text
+    assert "other web destinations" not in text

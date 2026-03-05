@@ -46,6 +46,25 @@ Return ONLY a valid JSON object with this shape:
   }
 }
 
+formatted_resolution requirements:
+- Use exactly this template structure:
+  Email subject: "{email_subject}"
+
+  After our investigation, we found:
+
+  The sender's email address {sender_email_address} appears associated with {company_or_domain_context}.
+  The sender's IP address {ip_address} (ISP: {isp}, Usage Type: {usage_type}) was checked and {ip_result_summary}.
+  {Attachment sentence: either "No attachments present in the email body." OR "The attachments present in the email body ({attachment_types}) were found to be {safe/malicious/unknown}."}
+  All URLs found in the email body were checked and {url_summary}.
+  {Optional Additional Findings sentence only if meaningful evidence exists}
+
+- For the URL sentence:
+  - MUST use indicator_checks.urls[*].lexical_ml plus url_destination_context when present.
+  - MUST describe where URLs point by destination purpose and domain context.
+  - NEVER use generic wording like "other web destinations".
+  - Keep this line concise and analyst-readable.
+- Do NOT include a "Suspicious URL assessment" line in formatted_resolution.
+
 Requirements for sender_domain_analysis:
 - Must be specifically about sender domain evidence.
 - findings must include 2-6 items when enough evidence exists.

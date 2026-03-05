@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
+from urllib.parse import urlparse
 import uuid
 from typing import Any
 
@@ -94,6 +96,7 @@ async def upload_email_investigation(
         "url_domains": extracted.get("url_domains") or [],
         "attachments": extracted.get("attachments") or [],
         "indicator_checks": _compact_checks_for_ai(checks),
+        "url_destination_context": _build_url_destination_context(checks),
         "context": context or None,
         "ml_phishing_score": parsed_ml_score,
     }
@@ -148,6 +151,7 @@ async def upload_email_investigation(
         "attachments_count": len(extracted.get("attachments") or []),
         "attachments": extracted.get("attachments") or [],
         "indicator_checks": checks,
+        "url_destination_context": interpretation_payload.get("url_destination_context"),
         "resolution_source": resolution_source,
         "resolution": resolution,
     }
@@ -368,9 +372,77 @@ def _prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]
         "attachments_count": int(response_payload.get("attachments_count") or 0),
         "attachments": response_payload.get("attachments") or [],
         "indicator_checks": checks,
+        "url_destination_context": response_payload.get("url_destination_context"),
         "resolution_source": response_payload.get("resolution_source"),
         "resolution": response_payload.get("resolution") or {},
     }
+
+
+def _build_url_destination_context(checks: dict[str, Any]) -> str:
+    """
+    Build a concise destination-purpose hint for AI formatting.
+    This is deterministic and avoids vague labels like "other web destinations".
+    """
+    urls = checks.get("urls") or []
+    if not urls:
+        return "Not present in the provided evidence."
+
+    grouped_domains: dict[str, set[str]] = defaultdict(set)
+    for item in urls:
+        if not isinstance(item, dict):
+            continue
+        screenshot = item.get("screenshot") or {}
+        candidate = str(screenshot.get("final_url") or item.get("url") or "").strip()
+        if not candidate:
+            continue
+        host = (urlparse(candidate).hostname or "").lower().strip(".")
+        if not host:
+            continue
+        root = _root_domain(host)
+        purpose = _infer_domain_purpose(
+            host=host,
+            full_url=candidate.lower(),
+            lexical_ml=(item.get("lexical_ml") or {}),
+        )
+        grouped_domains[purpose].add(root or host)
+
+    if not grouped_domains:
+        return "Not present in the provided evidence."
+
+    segments: list[str] = []
+    for purpose in sorted(grouped_domains.keys()):
+        domains = ", ".join(sorted(grouped_domains[purpose]))
+        segments.append(f"{purpose} [{domains}]")
+    return "; ".join(segments)
+
+
+def _infer_domain_purpose(*, host: str, full_url: str, lexical_ml: dict[str, Any]) -> str:
+    if "salesforce.com" in host and any(t in full_url for t in ("/click", "/open", "/unsubscribe", "tracking")):
+        return "Salesforce Marketing Cloud campaign redirect/tracking infrastructure"
+    if "safelinks.protection.outlook.com" in host:
+        return "Microsoft Defender/Outlook Safe Links rewrite gateway"
+    if host.endswith("outlook.com"):
+        return "Microsoft Outlook-related destination"
+    if host.endswith("salesforce-experience.com"):
+        return "Salesforce Experience Cloud hosted content"
+    if host.endswith("caseware.com"):
+        return "Caseware corporate website/resources"
+    if host.endswith("w3.org"):
+        return "W3C standards/DTD technical resource"
+
+    label = str((lexical_ml or {}).get("label") or "").lower()
+    if label == "high":
+        return "high-risk URL lexical pattern destination"
+    if label == "medium":
+        return "medium-risk URL lexical pattern destination"
+    return "web destination with low-risk lexical pattern"
+
+
+def _root_domain(host: str) -> str:
+    parts = [p for p in (host or "").split(".") if p]
+    if len(parts) >= 2:
+        return ".".join(parts[-2:])
+    return host
 
 
 def _sender_domain_fallback(
