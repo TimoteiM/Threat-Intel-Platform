@@ -19,7 +19,7 @@ async def process_email_investigation(
     payload: bytes,
     filename: str,
     context: str = "",
-    max_urls: int = 5,
+    max_urls: int = 20,
     max_attachment_hashes: int = 5,
     include_url_screenshots: bool = False,
     run_ai: bool = True,
@@ -492,6 +492,8 @@ def _render_template_resolution(
     ip_summary = _summarize_ip_result(ip_result)
 
     attachment_types, attachment_verdict = _summarize_attachments(checks)
+    total_urls_found = len(extracted.get("urls") or [])
+    checked_urls = len((checks.get("urls") or []))
     url_summary, final_url_assessment = _summarize_urls(checks, resolution)
     attachments_line = (
         "No attachments present in the email body."
@@ -518,7 +520,7 @@ def _render_template_resolution(
             f"was checked and {ip_summary}."
         ),
         attachments_line,
-        f"All URLs found in the email body were checked and {url_summary}.",
+        f"URLs checked: {checked_urls}/{total_urls_found}. {url_summary}.",
         f"Suspicious URL assessment: {final_url_assessment}.",
     ]
 
@@ -665,6 +667,14 @@ def _known_company_profile(domain: str) -> tuple[str, str]:
             "World Wide Web Consortium (W3C)",
             "standards organization domain used for web specifications and technical resources",
         ),
+        "caseware.com": (
+            "Caseware",
+            "legitimate software company focused on audit, financial reporting, and analytics solutions",
+        ),
+        "em.caseware.com": (
+            "Caseware",
+            "email campaign/sending infrastructure associated with Caseware communications",
+        ),
     }
     for suffix, value in profiles.items():
         if lowered == suffix or lowered.endswith(f".{suffix}"):
@@ -757,6 +767,8 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
     counters = {
         "email_tracking": 0,
         "brevo_tracking": 0,
+        "salesforce_tracking": 0,
+        "outlook_safelinks": 0,
         "w3c_dtd": 0,
         "w3c_standards": 0,
         "other": 0,
@@ -770,6 +782,10 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
             counters["email_tracking"] += 1
         elif "sendibm3.com" in target or "sendinblue.com" in target or "brevo.com" in target:
             counters["brevo_tracking"] += 1
+        elif "tracking.e360.salesforce.com" in target or ".salesforce.com/" in target:
+            counters["salesforce_tracking"] += 1
+        elif "safelinks.protection.outlook.com" in target:
+            counters["outlook_safelinks"] += 1
         elif "w3.org/tr/" in target and ("dtd" in target or "xhtml1-transitional.dtd" in target):
             counters["w3c_dtd"] += 1
         elif "w3.org/" in target:
@@ -788,6 +804,14 @@ def _summarize_url_destinations(items: list[dict[str, Any]]) -> str:
     if counters["brevo_tracking"]:
         parts.append(
             f"{counters['brevo_tracking']} URL(s) point to Brevo/Sendinblue campaign redirect or tracking infrastructure"
+        )
+    if counters["salesforce_tracking"]:
+        parts.append(
+            f"{counters['salesforce_tracking']} URL(s) point to Salesforce Marketing Cloud campaign redirect/tracking infrastructure"
+        )
+    if counters["outlook_safelinks"]:
+        parts.append(
+            f"{counters['outlook_safelinks']} URL(s) point to Microsoft Defender Safe Links rewriting infrastructure"
         )
     if counters["w3c_dtd"]:
         parts.append(
@@ -879,6 +903,7 @@ def _extract_registered_domain_from_url(url_text: str) -> str:
             host = host.split(":", 1)[0]
         if not host:
             return ""
+        host = re.sub(r"[^a-z0-9.\-]", "", host)
         host = normalize_domain(host)
         return extract_registered_domain(host)
     except Exception:
@@ -891,6 +916,12 @@ def _describe_destination_domain(domain: str) -> str:
         "sendibm3.com": "Brevo/Sendinblue email campaign infrastructure",
         "sendinblue.com": "Brevo/Sendinblue email campaign infrastructure",
         "brevo.com": "Brevo email marketing platform",
+        "salesforce.com": "Salesforce cloud and marketing infrastructure",
+        "salesforce-experience.com": "Salesforce Experience Cloud hosted content",
+        "e360.salesforce.com": "Salesforce Marketing Cloud tracking infrastructure",
+        "outlook.com": "Microsoft Outlook-related destination",
+        "protection.outlook.com": "Microsoft Defender Safe Links rewriting infrastructure",
+        "caseware.com": "Caseware corporate website and resources",
         "w3.org": "W3C standards and technical documentation resources",
         "j2.email": "email routing/tracking infrastructure tied to j2 campaigns",
     }

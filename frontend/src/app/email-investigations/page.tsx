@@ -124,6 +124,7 @@ export default function EmailInvestigationsPage() {
     try {
       const submit = (await uploadEmailInvestigation(file, {
         context: context || undefined,
+        max_urls: 20,
         include_url_screenshots: includeScreenshots,
         run_ai: runAiInterpretation,
         ml_phishing_score: mlScore.trim() ? Number(mlScore) : undefined,

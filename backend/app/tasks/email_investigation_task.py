@@ -37,7 +37,7 @@ def run_email_investigation(
     file_path: str,
     *,
     context: str = "",
-    max_urls: int = 5,
+    max_urls: int = 20,
     max_attachment_hashes: int = 5,
     include_url_screenshots: bool = False,
     run_ai: bool = True,

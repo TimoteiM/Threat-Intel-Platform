@@ -30,7 +30,7 @@ def run_email_indicator_checks(
     extracted: dict[str, Any],
     *,
     include_url_screenshots: bool = False,
-    max_urls: int = 5,
+    max_urls: int = 20,
     max_attachment_hashes: int = 5,
 ) -> dict[str, Any]:
     """Run deterministic checks for extracted email indicators."""
@@ -97,6 +97,12 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
 def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
+    final_vt_used = False
+    if _should_retry_vt_on_final(vt, url=url, final_url=resolved_final_url):
+        vt_final = _vt_lookup(str(resolved_final_url), "url")
+        if _is_better_vt_result(vt_final, vt):
+            vt = vt_final
+            final_vt_used = True
     screenshot: dict[str, Any] = {
         "captured": False,
         "final_url": resolved_final_url,
@@ -124,6 +130,7 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     return {
         "url": url,
         "vt": vt,
+        "vt_checked_on_final_url": final_vt_used,
         "screenshot": screenshot,
     }
 
@@ -243,6 +250,37 @@ def _abuseipdb_lookup(ip: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("AbuseIPDB lookup failed for %s: %s", ip, exc)
         return {"checked": False, "error": str(exc)}
+
+
+def _should_retry_vt_on_final(vt_result: dict[str, Any], *, url: str, final_url: str | None) -> bool:
+    if not final_url:
+        return False
+    if str(final_url).strip() == str(url).strip():
+        return False
+    verdict = str(vt_result.get("verdict") or "unknown").lower()
+    total = int(vt_result.get("total_vendors") or 0)
+    # Retry when current VT signal is weak/inconclusive.
+    return verdict == "unknown" or total == 0
+
+
+def _is_better_vt_result(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    c_score = _vt_strength_score(candidate)
+    cur_score = _vt_strength_score(current)
+    return c_score > cur_score
+
+
+def _vt_strength_score(v: dict[str, Any]) -> int:
+    verdict = str(v.get("verdict") or "unknown").lower()
+    malicious = int(v.get("malicious_count") or 0)
+    suspicious = int(v.get("suspicious_count") or 0)
+    total = int(v.get("total_vendors") or 0)
+    base = {
+        "malicious": 3000,
+        "suspicious": 2000,
+        "clean": 1000,
+        "unknown": 0,
+    }.get(verdict, 0)
+    return base + (malicious * 20) + (suspicious * 5) + min(total, 500)
 
 
 def _ipwhois_lookup(ip: str) -> dict[str, Any]:
