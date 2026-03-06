@@ -437,7 +437,10 @@ def generate_signals(evidence: dict) -> list[Signal]:
 
     # ── Intel signals ──
     intel = evidence.get("intel", {})
-    blocklist_hits = intel.get("blocklist_hits", [])
+    blocklist_hits = [
+        h for h in intel.get("blocklist_hits", [])
+        if str(h.get("source", "")).strip().lower() != "uribl"
+    ]
     if blocklist_hits:
         sources = list(set(h.get("source", "unknown") for h in blocklist_hits))
         signals.append(Signal(

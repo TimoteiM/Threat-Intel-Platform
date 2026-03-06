@@ -629,7 +629,10 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         vt_total = vt.get("total_vendors", 0)
 
         intel = evidence_data.get("intel") or {}
-        intel_hits = intel.get("blocklist_hits") or []
+        intel_hits = [
+            hit for hit in (intel.get("blocklist_hits") or [])
+            if str(hit.get("source") or "").strip().lower() != "uribl"
+        ]
 
         tf_matches = threat_feeds.get("threatfox_matches") or []
         openphish_listed = bool(threat_feeds.get("openphish_listed"))

@@ -142,8 +142,8 @@
 
     /* ─── Finding Cards ─── */
     .finding {
-      padding: 8px 12px;
-      margin-bottom: 6px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
       border-left: 3px solid #e2e8f0;
       border-radius: 0 4px 4px 0;
       background: #f8fafc;
@@ -161,7 +161,7 @@
       margin-bottom: 3px;
     }
 
-    .finding-desc { font-size: 11px; color: #475569; }
+    .finding-desc { font-size: 12px; color: #334155; line-height: 1.6; }
 
     .finding-ttp {
       font-size: 10px;
@@ -345,63 +345,22 @@
   <!-- Primary Reasoning -->
   <div class="section">
     <div class="section-title">Analyst Assessment</div>
-    <p>{{ report.get("primary_reasoning", "No reasoning provided.") }}</p>
-
-    {% if report.get("key_evidence") %}
-    <div style="margin-top: 8px;">
-      <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">Key Evidence</div>
-      <ul>
-        {% for item in report.key_evidence %}
-        <li>{{ item }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-
-    {% if report.get("contradicting_evidence") %}
-    <div style="margin-top: 8px;">
-      <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;">Contradicting Evidence</div>
-      <ul>
-        {% for item in report.contradicting_evidence %}
-        <li>{{ item }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-  </div>
-
-  <!-- Hypothesis Comparison -->
-  <div class="section">
-    <div class="section-title">Hypothesis Comparison</div>
-    <div class="hypothesis">
-      <div class="hyp-card hyp-legit">
-        <div class="hyp-label">Legitimate Hypothesis</div>
-        {{ report.get("legitimate_explanation", "N/A") }}
-      </div>
-      <div class="hyp-card hyp-malicious">
-        <div class="hyp-label">Malicious Hypothesis</div>
-        {{ report.get("malicious_explanation", "N/A") }}
-      </div>
-    </div>
-  </div>
-
-  <!-- Recommendations -->
-  {% if report.get("recommended_steps") %}
-  <div class="section">
-    <div class="section-title">Recommended Steps</div>
-    <ol>
-      {% for step in report.recommended_steps %}
-      <li>{{ step }}</li>
+    {% if assessment_points and assessment_points|length > 1 %}
+    <ul style="margin: 0; padding-left: 18px;">
+      {% for point in assessment_points %}
+      <li style="margin-bottom: 6px; color: #334155; line-height: 1.6;">{{ point }}</li>
       {% endfor %}
-    </ol>
+    </ul>
+    {% else %}
+    <p style="line-height: 1.7;">{{ report.get("primary_reasoning", "No reasoning provided.") }}</p>
+    {% endif %}
   </div>
-  {% endif %}
 
   <!-- Findings -->
-  {% if report.get("findings") %}
+  {% if detailed_findings %}
   <div class="section">
-    <div class="section-title">Findings ({{ report.findings|length }})</div>
-    {% for f in report.findings %}
+    <div class="section-title">Findings ({{ detailed_findings|length }})</div>
+    {% for f in detailed_findings %}
     <div class="finding {{ f.get('severity', 'info') }}">
       <div class="finding-title">
         <span class="sev-badge sev-{{ f.get('severity', 'info') }}">{{ f.get('severity', 'info')|upper }}</span>
@@ -410,6 +369,25 @@
       <div class="finding-desc">{{ f.get("description", "") }}</div>
       {% if f.get("ttp") %}
       <div class="finding-ttp">{{ f.ttp }}{% if f.get("ttp_name") %} — {{ f.ttp_name }}{% endif %}</div>
+      {% endif %}
+      {% if f.get("evidence_arguments") %}
+      <div style="margin-top: 8px; padding: 8px 10px; background: #eef2ff; border: 1px solid #cbd5e1; border-radius: 6px;">
+        <div style="font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">
+          Technical Evidence Arguments
+        </div>
+        <ul style="margin: 0; padding-left: 16px;">
+          {% for arg in f.evidence_arguments %}
+          <li style="font-size: 11px; color: #1e293b; margin-bottom: 4px; line-height: 1.5;">
+            <span class="mono">{{ arg.ref }}</span>: {{ arg.argument }}
+            {% if arg.supports_classification %}
+            <span style="color:#166534;">(supports classification)</span>
+            {% elif arg.contradicts_classification %}
+            <span style="color:#92400e;">(contradicts classification)</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
       {% endif %}
     </div>
     {% endfor %}

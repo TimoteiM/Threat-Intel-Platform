@@ -38,7 +38,13 @@ async def export_investigation_pdf(investigation_id: str, session: DBSession):
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
     }
 
-    pdf_bytes = export_pdf(evidence, report, detail_dict)
+    try:
+        pdf_bytes = export_pdf(evidence, report, detail_dict)
+    except RuntimeError as exc:
+        raise HTTPException(500, f"PDF export failed: {exc}") from exc
+
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise HTTPException(500, "PDF export produced an invalid file payload.")
 
     return Response(
         content=pdf_bytes,

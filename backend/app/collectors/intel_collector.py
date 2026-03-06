@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 DNSBL_LISTS = [
     ("multi.surbl.org", "SURBL"),
     ("dbl.spamhaus.org", "Spamhaus DBL"),
-    ("black.uribl.com", "URIBL"),
 ]
 
 

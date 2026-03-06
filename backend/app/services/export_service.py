@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ def export_json(evidence: dict, report: dict, detail: dict) -> bytes:
 
 def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     """Export investigation as Markdown report."""
+    evidence = _sanitize_evidence_for_export(evidence)
+    report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
     classification = (report.get("classification") or "inconclusive").upper()
     confidence = report.get("confidence", "?")
@@ -51,20 +54,7 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
         "",
         report.get("primary_reasoning", "No reasoning provided."),
         "",
-        "## Hypothesis Comparison",
-        "",
-        "### Legitimate Hypothesis",
-        report.get("legitimate_explanation", "N/A"),
-        "",
-        "### Malicious Hypothesis",
-        report.get("malicious_explanation", "N/A"),
-        "",
-        "## Recommended Steps",
-        "",
     ]
-
-    for i, step in enumerate(report.get("recommended_steps", []), 1):
-        lines.append(f"{i}. {step}")
 
     lines.extend(["", "## Findings", ""])
     for f in report.get("findings", []):
@@ -118,13 +108,12 @@ def export_pdf(evidence: dict, report: dict, detail: dict) -> bytes:
         from weasyprint import HTML
         pdf_bytes = HTML(string=html).write_pdf()
         return pdf_bytes
-    except ImportError:
-        logger.warning("WeasyPrint not installed — returning HTML instead of PDF")
-        return html.encode("utf-8")
+    except ImportError as exc:
+        logger.error("WeasyPrint not installed; cannot generate PDF")
+        raise RuntimeError("PDF generator dependency is missing") from exc
     except Exception as e:
         logger.error(f"PDF generation failed: {e}")
-        # Fallback: return HTML
-        return html.encode("utf-8")
+        raise RuntimeError("PDF generation failed") from e
 
 
 _CLASSIFICATION_COLORS = {
@@ -139,11 +128,15 @@ _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
 
 def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
     """Build HTML for PDF rendering using Jinja2 template."""
+    evidence = _sanitize_evidence_for_export(evidence)
+    report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
     classification = (report.get("classification") or "inconclusive").upper()
     cls_color = _CLASSIFICATION_COLORS.get(classification, "#64748b")
     investigation_id = detail.get("id", "")
     generated_at = datetime.now(timezone.utc).isoformat()
+    detailed_findings = _build_detailed_findings(report=report, evidence=evidence)
+    assessment_points = _build_assessment_points(report.get("primary_reasoning", ""))
 
     try:
         from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -161,6 +154,8 @@ def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
             detail=detail,
             evidence=evidence,
             report=report,
+            detailed_findings=detailed_findings,
+            assessment_points=assessment_points,
         )
     except Exception as e:
         logger.warning(f"Jinja2 template rendering failed ({e}), falling back to basic HTML")
@@ -171,7 +166,6 @@ def _build_fallback_html(
     domain: str, classification: str, cls_color: str, report: dict, generated_at: str
 ) -> str:
     """Minimal fallback HTML if Jinja2 template fails."""
-    steps = "".join(f"<li>{s}</li>" for s in report.get("recommended_steps", []))
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>body{{font-family:sans-serif;color:#1e293b;margin:40px;font-size:13px;line-height:1.6}}
@@ -181,6 +175,283 @@ h1{{font-size:20px}}h2{{font-size:15px;color:#3b82f6;margin-top:20px}}</style>
 <p><strong>Classification:</strong> <span style="color:{cls_color}">{classification}</span> &nbsp;
 <strong>Risk:</strong> {report.get('risk_score','?')}/100</p>
 <h2>Primary Reasoning</h2><p>{report.get('primary_reasoning','N/A')}</p>
-<h2>Recommended Steps</h2><ol>{steps}</ol>
 <p style="color:#94a3b8;font-size:10px">Generated {generated_at[:19]} UTC</p>
 </body></html>"""
+
+
+def _build_detailed_findings(report: dict[str, Any], evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    findings = report.get("findings") or []
+    if not isinstance(findings, list):
+        return []
+
+    key_evidence = {
+        str(item).strip()
+        for item in (report.get("key_evidence") or [])
+        if str(item).strip()
+    }
+    contradicting_evidence = {
+        str(item).strip()
+        for item in (report.get("contradicting_evidence") or [])
+        if str(item).strip()
+    }
+
+    detailed: list[dict[str, Any]] = []
+    for idx, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        finding_id = str(finding.get("id") or f"finding_{idx + 1}")
+        finding_refs = finding.get("evidence_refs") or []
+        refs = [
+            str(ref).strip()
+            for ref in finding_refs
+            if str(ref).strip() and str(ref).strip().lower() != "intel.blocklist_hits"
+        ]
+
+        # If the model omitted finding-level refs, at least include top key evidence.
+        if not refs:
+            refs = list(key_evidence)[:3]
+
+        evidence_arguments = []
+        for ref in refs:
+            evidence_arguments.append(
+                {
+                    "ref": ref,
+                    "argument": _evidence_argument_from_ref(ref, evidence),
+                    "supports_classification": ref in key_evidence,
+                    "contradicts_classification": ref in contradicting_evidence,
+                }
+            )
+
+        detailed.append(
+            {
+                **finding,
+                "id": finding_id,
+                "evidence_arguments": evidence_arguments,
+            }
+        )
+    return detailed
+
+
+def _evidence_argument_from_ref(ref: str, evidence: dict[str, Any]) -> str:
+    value = _resolve_evidence_ref(ref=ref, evidence=evidence)
+    if value is None:
+        return "No value was available for this evidence reference in the collected dataset."
+    return _compact_evidence_value(value)
+
+
+def _resolve_evidence_ref(ref: str, evidence: dict[str, Any]) -> Any:
+    text = (ref or "").strip()
+    if not text:
+        return None
+    if text.startswith("evidence."):
+        text = text[len("evidence.") :]
+
+    current: Any = evidence
+    for segment in text.split("."):
+        segment = segment.strip()
+        if not segment:
+            return None
+
+        key, idx = _parse_path_segment(segment)
+
+        if key:
+            if not isinstance(current, dict) or key not in current:
+                return None
+            current = current.get(key)
+
+        if idx is not None:
+            if not isinstance(current, list):
+                return None
+            if idx < 0 or idx >= len(current):
+                return None
+            current = current[idx]
+    return current
+
+
+def _parse_path_segment(segment: str) -> tuple[str, int | None]:
+    if "[" not in segment or not segment.endswith("]"):
+        return segment, None
+    key, _, idx_raw = segment.partition("[")
+    idx_text = idx_raw[:-1].strip()
+    if not idx_text.isdigit():
+        return key, None
+    return key, int(idx_text)
+
+
+def _compact_evidence_value(value: Any) -> str:
+    if value is None:
+        return "No evidence value was returned."
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if "whoisdomainnotfounderror" in text.lower():
+            return "Domain not found in registry WHOIS records."
+        return text if len(text) <= 240 else text[:237] + "..."
+    if isinstance(value, list):
+        if not value:
+            return "No entries."
+        scalar_items = [item for item in value if isinstance(item, (str, int, float, bool))]
+        if len(scalar_items) == len(value):
+            joined = ", ".join(str(item) for item in scalar_items[:6])
+            if len(value) > 6:
+                joined += f" (+{len(value) - 6} more)"
+            return joined
+        return f"{len(value)} structured item(s) collected."
+    if isinstance(value, dict):
+        important = [
+            "status",
+            "verdict",
+            "malicious_count",
+            "suspicious_count",
+            "found",
+            "present",
+            "registrar",
+            "registrant_org",
+            "issuer_org",
+            "asn_org",
+            "country",
+            "risk_score",
+        ]
+        pairs = []
+        for key in important:
+            if key in value and isinstance(value[key], (str, int, float, bool)):
+                pairs.append(f"{key}={value[key]}")
+        if pairs:
+            return "; ".join(pairs[:6])
+        return "Structured object with keys: " + ", ".join(list(value.keys())[:8])
+    return str(value)
+
+
+def _sanitize_report_for_export(report: dict[str, Any]) -> dict[str, Any]:
+    sanitized = json.loads(json.dumps(report or {}, default=str))
+
+    for key in (
+        "primary_reasoning",
+        "executive_summary",
+        "technical_narrative",
+        "legitimate_explanation",
+        "malicious_explanation",
+        "risk_rationale",
+    ):
+        value = sanitized.get(key)
+        if isinstance(value, str):
+            sanitized[key] = _strip_unwanted_sections(_strip_uribl_terms(value))
+
+    findings = sanitized.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            title = finding.get("title")
+            if isinstance(title, str):
+                finding["title"] = _strip_uribl_terms(title)
+            description = finding.get("description")
+            if isinstance(description, str):
+                finding["description"] = _strip_uribl_terms(description)
+            refs = finding.get("evidence_refs")
+            if isinstance(refs, list):
+                finding["evidence_refs"] = [
+                    ref
+                    for ref in refs
+                    if str(ref).strip().lower() != "intel.blocklist_hits"
+                ]
+
+    for list_key in ("key_evidence", "contradicting_evidence", "data_needed"):
+        values = sanitized.get(list_key)
+        if isinstance(values, list):
+            cleaned = []
+            for item in values:
+                text = _strip_unwanted_sections(_strip_uribl_terms(str(item)))
+                if text:
+                    cleaned.append(text)
+            sanitized[list_key] = cleaned
+
+    sanitized["legitimate_explanation"] = ""
+    sanitized["malicious_explanation"] = ""
+    sanitized["recommended_steps"] = []
+    return sanitized
+
+
+def _sanitize_evidence_for_export(evidence: dict[str, Any]) -> dict[str, Any]:
+    sanitized = json.loads(json.dumps(evidence or {}, default=str))
+
+    intel = sanitized.get("intel")
+    if isinstance(intel, dict):
+        hits = intel.get("blocklist_hits")
+        if isinstance(hits, list):
+            intel["blocklist_hits"] = [
+                hit
+                for hit in hits
+                if str((hit or {}).get("source") or "").strip().lower() != "uribl"
+            ]
+
+    signals = sanitized.get("signals")
+    if isinstance(signals, list):
+        sanitized["signals"] = [
+            signal
+            for signal in signals
+            if isinstance(signal, dict)
+            and "uribl" not in str(signal.get("description") or "").lower()
+        ]
+    return sanitized
+
+
+def _strip_uribl_terms(text: str) -> str:
+    lowered = (text or "")
+    for needle in ("URIBL", "uribl"):
+        lowered = lowered.replace(needle, "")
+    lowered = lowered.replace("intel.blocklist_hits", "")
+    lowered = lowered.replace("()", "")
+    while "  " in lowered:
+        lowered = lowered.replace("  ", " ")
+    return lowered.strip(" ,;:-")
+
+
+def _strip_unwanted_sections(text: str) -> str:
+    if not text:
+        return text
+    blocked_markers = (
+        "hypothesis comparison",
+        "legitimate hypothesis",
+        "malicious hypothesis",
+        "recommended steps",
+    )
+    out: list[str] = []
+    skipping = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        marker = line.lower().rstrip(":")
+        if marker in blocked_markers:
+            skipping = True
+            continue
+        if skipping and line.startswith(("## ", "### ")):
+            skipping = False
+        if not skipping:
+            out.append(raw_line)
+    return "\n".join(out).strip()
+
+
+def _build_assessment_points(primary_reasoning: str) -> list[str]:
+    text = " ".join((primary_reasoning or "").split())
+    if not text:
+        return []
+
+    # Prefer explicit dash-delimited analytical claims when present.
+    if " - " in text:
+        parts = [p.strip(" .;:-") for p in text.split(" - ") if p.strip(" .;:-")]
+        if len(parts) > 1:
+            return parts[:8]
+
+    # Fall back to sentence segmentation.
+    sentences = [
+        s.strip(" .;:-")
+        for s in re.split(r"(?<=[.!?])\s+", text)
+        if s.strip(" .;:-")
+    ]
+    if len(sentences) > 1:
+        return sentences[:8]
+
+    return [text]
