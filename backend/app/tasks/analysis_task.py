@@ -13,6 +13,7 @@ It:
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -103,6 +104,7 @@ def run_analysis(
     }
 
     all_artifact_hashes = {}
+    artifact_ids: dict[str, str] = {}
     collector_statuses = {}
 
     def _time_phase(name: str, started_at: float) -> None:
@@ -113,12 +115,31 @@ def run_analysis(
         field_name = COLLECTOR_FIELD_MAP.get(name, name)
         collector_statuses[name] = result["status"]
         evidence_data[field_name] = result["evidence"]
-        # Track artifact hashes
+        # Track artifact hashes and persist collector raw artifacts.
         for artifact_name, hex_data in result.get("artifacts", {}).items():
             import hashlib
             raw = bytes.fromhex(hex_data)
             all_artifact_hashes[artifact_name] = hashlib.sha256(raw).hexdigest()
-            # TODO: Persist raw artifacts to storage via ArtifactRepository
+            content_type = _guess_content_type(artifact_name)
+            art_id = _save_artifact_sync(
+                investigation_id=investigation_id,
+                collector_name=name,
+                artifact_name=artifact_name,
+                data=raw,
+                content_type=content_type,
+            )
+            if art_id:
+                artifact_ids[artifact_name] = art_id
+
+        # Normalize known artifact id fields to true DB UUID ids.
+        if name == "urlscan":
+            urlscan_ev = evidence_data.get("urlscan") or {}
+            if isinstance(urlscan_ev, dict):
+                real_id = artifact_ids.get("urlscan_screenshot_png")
+                if real_id:
+                    urlscan_ev["screenshot_artifact_id"] = real_id
+                elif not artifact_ids.get("urlscan_screenshot_png"):
+                    urlscan_ev["screenshot_artifact_id"] = None
 
     evidence_data["artifact_hashes"] = all_artifact_hashes
 
@@ -203,6 +224,17 @@ def run_analysis(
             74,
         )
         browser_phase_start = time.monotonic()
+        reuse_urlscan_screenshot = _should_reuse_urlscan_screenshot(evidence_data, observable_type)
+        if reuse_urlscan_screenshot:
+            evidence_data["screenshot"] = _build_reused_screenshot_payload(
+                evidence_data,
+                investigated_url=investigated_url,
+                domain=domain,
+            )
+            logger.info(
+                f"[{investigation_id}] Reusing URLScan screenshot artifact "
+                f"{evidence_data['screenshot'].get('artifact_id')} and skipping local capture"
+            )
 
         def _run_screenshot() -> tuple[str, dict]:
             from app.collectors.visual_comparison import capture_screenshot
@@ -245,11 +277,13 @@ def run_analysis(
             )
             return "js_analysis", js_result
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            future_map = {
-                pool.submit(_run_screenshot): "screenshot",
+        max_workers = 1 if reuse_urlscan_screenshot else 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_map: dict[concurrent.futures.Future, str] = {
                 pool.submit(_run_js_analysis): "js_analysis",
             }
+            if not reuse_urlscan_screenshot:
+                future_map[pool.submit(_run_screenshot)] = "screenshot"
             for future in concurrent.futures.as_completed(future_map):
                 name = future_map[future]
                 try:
@@ -441,8 +475,9 @@ def run_analysis(
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
                           "Evidence collected. Running analyst...", 90)
         try:
+            analyst_input = _build_analyst_input_evidence(evidence_data)
             report_data = _run_analyst_sync(
-                evidence_data,
+                analyst_input,
                 max_iterations,
                 timeout_seconds=settings.analyst_timeout_seconds,
             )
@@ -1294,6 +1329,108 @@ def _save_artifact_sync(
     except Exception as e:
         logger.warning(f"[{investigation_id}] Failed to save artifact {artifact_name}: {e}")
         return None
+
+
+def _guess_content_type(artifact_name: str) -> str:
+    name = str(artifact_name or "").lower()
+    if name.endswith(".png") or name.endswith("_png"):
+        return "image/png"
+    if name.endswith(".jpg") or name.endswith(".jpeg") or name.endswith("_jpg") or name.endswith("_jpeg"):
+        return "image/jpeg"
+    if name.endswith(".har") or name.endswith(".json") or name.endswith("_json"):
+        return "application/json"
+    if name.endswith(".html") or name.endswith("_html"):
+        return "text/html"
+    if name.endswith(".txt") or name.endswith(".log") or name.endswith("_txt") or name.endswith("_log"):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def _build_analyst_input_evidence(evidence_data: dict) -> dict:
+    """
+    Build a compact evidence payload for LLM analysis while preserving the full
+    evidence object for persistence and UI rendering.
+    """
+    compact = copy.deepcopy(evidence_data or {})
+
+    _trim_list(compact, ["intel", "related_subdomains"], 40)
+    _trim_list(compact, ["intel", "related_urls"], 30)
+    _trim_list(compact, ["intel", "historical_ip_addresses"], 20)
+    _trim_list(compact, ["intel", "certificates"], 20)
+
+    _trim_list(compact, ["js_analysis", "captured_requests"], 25)
+    _trim_list(compact, ["js_analysis", "request_domains"], 20)
+    _trim_list(compact, ["js_analysis", "tracking_pixels"], 20)
+    _trim_list(compact, ["js_analysis", "suspicious_scripts"], 20)
+    _trim_list(compact, ["js_analysis", "data_exfil_indicators"], 20)
+    _trim_list(compact, ["js_analysis", "console_errors"], 10)
+
+    _trim_list(compact, ["subdomains", "resolved"], 40)
+    _trim_list(compact, ["subdomains", "unresolved"], 40)
+    _trim_list(compact, ["subdomains", "interesting_subdomains"], 30)
+
+    _trim_list(compact, ["threat_feeds", "threatfox_matches"], 20)
+    _trim_list(compact, ["threat_feeds", "recent_reports"], 20)
+
+    _trim_list(compact, ["cert_timeline", "entries"], 40)
+    _trim_list(compact, ["favicon_intel", "hosts"], 30)
+    _trim_list(compact, ["infrastructure_pivot", "related_ips"], 25)
+    _trim_list(compact, ["signals"], 40)
+    _trim_list(compact, ["data_gaps"], 20)
+    _trim_list(compact, ["artifact_hashes"], 50)
+
+    _trim_nested_text(compact, max_chars=2000)
+    return compact
+
+
+def _trim_list(payload: dict, path: list[str], limit: int) -> None:
+    node = payload
+    for key in path[:-1]:
+        if not isinstance(node, dict):
+            return
+        node = node.get(key)
+        if node is None:
+            return
+    if not isinstance(node, dict):
+        return
+    leaf = path[-1]
+    value = node.get(leaf)
+    if isinstance(value, list) and len(value) > limit:
+        node[leaf] = value[:limit]
+    elif isinstance(value, dict) and len(value) > limit:
+        node[leaf] = dict(list(value.items())[:limit])
+
+
+def _trim_nested_text(value, *, max_chars: int):
+    if isinstance(value, dict):
+        for k, v in list(value.items()):
+            value[k] = _trim_nested_text(v, max_chars=max_chars)
+        return value
+    if isinstance(value, list):
+        return [_trim_nested_text(v, max_chars=max_chars) for v in value]
+    if isinstance(value, str) and len(value) > max_chars:
+        return value[:max_chars] + "...[truncated]"
+    return value
+
+
+def _should_reuse_urlscan_screenshot(evidence_data: dict, observable_type: str) -> bool:
+    if observable_type not in ("domain", "url"):
+        return False
+    urlscan = evidence_data.get("urlscan") or {}
+    return bool(urlscan.get("screenshot_artifact_id"))
+
+
+def _build_reused_screenshot_payload(
+    evidence_data: dict,
+    *,
+    investigated_url: str | None,
+    domain: str,
+) -> dict:
+    urlscan = evidence_data.get("urlscan") or {}
+    return {
+        "artifact_id": urlscan.get("screenshot_artifact_id"),
+        "final_url": urlscan.get("page_url") or investigated_url or domain,
+    }
 
 
 def _publish_progress(

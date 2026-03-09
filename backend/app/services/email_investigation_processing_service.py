@@ -281,6 +281,8 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "url": item.get("url"),
                 "vt": item.get("vt") or {},
+                "effective_verdict": item.get("effective_verdict"),
+                "urlscan": item.get("urlscan") or {},
                 "screenshot": ss,
             }
         )
@@ -322,6 +324,8 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "total_vendors": vt.get("total_vendors"),
                     "error": vt.get("error"),
                 },
+                "effective_verdict": item.get("effective_verdict"),
+                "urlscan": item.get("urlscan") or {},
                 "screenshot": {
                     "captured": ss.get("captured"),
                     "final_url": ss.get("final_url"),

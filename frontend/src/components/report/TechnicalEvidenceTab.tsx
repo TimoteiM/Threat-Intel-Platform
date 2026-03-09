@@ -24,6 +24,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const hosting = evidence?.hosting || ({} as any);
   const intel = evidence?.intel || ({} as any);
   const vt = evidence?.vt || ({} as any);
+  const urlscan = evidence?.urlscan || ({} as any);
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
 
   const type = observableType || (evidence as any)?.observable_type || "domain";
@@ -1454,6 +1455,59 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         )}
       </Section>
 
+      {/* URLSCAN */}
+      <Section title="URLScan Reputation">
+        {!urlscan || Object.keys(urlscan).length === 0 ? (
+          <EmptyNote>URLScan data not available (collector not run)</EmptyNote>
+        ) : urlscan?.meta?.status === "failed" ? (
+          <EmptyNote>URLScan lookup failed: {urlscan?.meta?.error || "unknown error"}</EmptyNote>
+        ) : (
+          <>
+            <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+              UI build marker: URLSCAN-TECH-EVIDENCE-2026-03-09
+            </div>
+            <EvidenceTable
+              title="URLScan Summary"
+              data={[
+                { field: "Verdict", value: String(urlscan?.verdict || "unknown").toUpperCase() },
+                { field: "Score", value: urlscan?.score ?? "—" },
+                { field: "Page URL", value: urlscan?.page_url || "—" },
+                { field: "Page IP", value: urlscan?.page_ip || "—" },
+                { field: "Page Title", value: urlscan?.page_title || "—" },
+                { field: "Country", value: urlscan?.page_country || "—" },
+                { field: "Server", value: urlscan?.page_server || "—" },
+                { field: "Requests", value: urlscan?.requests_count ?? "—" },
+                { field: "Scan ID", value: urlscan?.scan_id || "—" },
+                { field: "Tags", value: arr(urlscan?.tags).join(", ") || "—" },
+              ]}
+              columns={[{ key: "field" }, { key: "value", wrap: true }]}
+            />
+
+            {arr(urlscan?.notes).length > 0 && (
+              <EvidenceTable
+                title="URLScan Notes"
+                data={arr(urlscan.notes).map((n: string) => ({ note: n }))}
+                columns={[{ key: "note", wrap: true }]}
+              />
+            )}
+
+            {urlscan?.screenshot_artifact_id && (
+              <div style={{ marginTop: 10, fontSize: 12 }}>
+                Screenshot artifact:{" "}
+                <a
+                  href={getArtifactUrl(urlscan.screenshot_artifact_id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "var(--accent)" }}
+                >
+                  {urlscan.screenshot_artifact_id}
+                </a>
+              </div>
+            )}
+          </>
+        )}
+      </Section>
+
       {/* INTEL / REPUTATION */}
       <Section title="Threat Intelligence">
         {intel.meta?.status === "failed" ? (
@@ -1556,6 +1610,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             metaRow("ASN", hosting.meta),
             metaRow("INTEL", intel.meta),
             metaRow("VT", vt.meta),
+            metaRow("URLSCAN", urlscan.meta),
             ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),
           ].filter(Boolean) as any[]}
           columns={[

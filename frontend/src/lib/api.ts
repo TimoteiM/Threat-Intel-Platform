@@ -6,9 +6,39 @@
  */
 
 const BASE = "/api";
-const DIRECT_BACKEND =
-  (process.env.NEXT_PUBLIC_BACKEND_URL ||
-    "http://127.0.0.1:8000").replace(/\/$/, "");
+const DIRECT_BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+const DEFAULT_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+
+function resolveDirectBackendBase(): string {
+  if (DIRECT_BACKEND) return DIRECT_BACKEND;
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol || "http:";
+    const host = window.location.hostname || "127.0.0.1";
+    return `${protocol}//${host}:${DEFAULT_BACKEND_PORT}`;
+  }
+  return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}`;
+}
+
+function canUseDirectBackendFallback(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = (window.location.hostname || "").toLowerCase();
+  // Allow direct backend fallback for local/private hosts to mitigate
+  // intermittent proxy/rewrite failures for large multipart uploads.
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const octets = host.split(".").map((x) => Number(x));
+    const [a, b] = octets;
+    if (
+      a === 10 ||
+      a === 127 ||
+      (a === 192 && b === 168) ||
+      (a === 172 && b >= 16 && b <= 31)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -18,20 +48,10 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const method = (options?.method || "GET").toUpperCase();
-  const canRetry = method === "GET" || method === "HEAD";
-  const doFetch = () =>
-    fetch(`${BASE}${path}`, {
-      headers: { "Content-Type": "application/json", ...options?.headers },
-      ...options,
-    });
-
-  let res = await doFetch();
-  if (canRetry && !res.ok && [502, 503, 504].includes(res.status)) {
-    // Retry once for transient proxy/backend restarts.
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    res = await doFetch();
-  }
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
 
   if (!res.ok) {
     const body = await res.text();
@@ -111,54 +131,41 @@ export async function uploadEmailInvestigation(
     formData.append("ml_phishing_score", String(options.ml_phishing_score));
   }
 
+  const directBackendBase = resolveDirectBackendBase();
   const proxiedEndpoint = `${BASE}/email-investigations/upload`;
+  const directEndpoint = `${directBackendBase}/api/email-investigations/upload`;
 
-  function getDirectEndpointFromBrowser(): string | null {
-    if (typeof window === "undefined") return null;
-    const configured = `${DIRECT_BACKEND}/api/email-investigations/upload`;
-    try {
-      const configuredUrl = new URL(configured);
-      const pageHost = (window.location.hostname || "").toLowerCase();
-      const configuredHost = configuredUrl.hostname.toLowerCase();
-      const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
-      const configuredIsLocal = configuredHost === "localhost" || configuredHost === "127.0.0.1";
-
-      // Remote browser + localhost backend URL will never work; use same host on :8000.
-      if (!pageIsLocal && configuredIsLocal) {
-        return `${window.location.protocol}//${window.location.hostname}:8000/api/email-investigations/upload`;
-      }
-      return configured;
-    } catch {
-      return null;
-    }
-  }
-
-  const browserDirectEndpoint = getDirectEndpointFromBrowser();
-
-  function shouldTryDirectBackendFromBrowser(): boolean {
-    return !!browserDirectEndpoint;
+  function shouldPreferDirectBackend(): boolean {
+    // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
+    // Prefer direct backend in local development; keep proxy-first behavior elsewhere.
+    if (typeof window === "undefined") return false;
+    const host = (window.location.hostname || "").toLowerCase();
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    const direct = directEndpoint.toLowerCase();
+    const isLocalBackend = direct.includes("127.0.0.1") || direct.includes("localhost");
+    return isLocalHost && isLocalBackend;
   }
 
   async function postMultipart(endpoint: string): Promise<Response> {
     return fetch(endpoint, { method: "POST", body: formData });
   }
 
-  const endpoints: string[] = [proxiedEndpoint];
-  if (
-    shouldTryDirectBackendFromBrowser() &&
-    browserDirectEndpoint &&
-    browserDirectEndpoint !== proxiedEndpoint
-  ) {
-    endpoints.push(browserDirectEndpoint);
-  }
+  const canUseDirect = canUseDirectBackendFallback();
+  const endpoints = canUseDirect
+    ? (
+      shouldPreferDirectBackend()
+        ? [directEndpoint, proxiedEndpoint]
+        : [proxiedEndpoint, directEndpoint]
+    )
+    : [proxiedEndpoint];
 
   let res: Response | null = null;
   let lastNetworkError: unknown = null;
   for (const endpoint of endpoints) {
     try {
       res = await postMultipart(endpoint);
-      // Stop on first HTTP response to avoid duplicate POST submits.
-      break;
+      // If endpoint exists (anything except 404/405/5xx), stop retrying.
+      if (res.status < 500 && res.status !== 404 && res.status !== 405) break;
     } catch (err) {
       lastNetworkError = err;
     }
@@ -172,15 +179,25 @@ export async function uploadEmailInvestigation(
     );
   }
 
+  if (canUseDirect && !res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
+    // Final compatibility retry for mixed environments.
+    const fallbackOrder = [directEndpoint, proxiedEndpoint];
+    for (const endpoint of fallbackOrder) {
+      if (endpoint === res.url) continue;
+      try {
+        const retryRes = await postMultipart(endpoint);
+        if (retryRes.ok) return retryRes.json();
+      } catch {
+        // Try next fallback endpoint.
+      }
+    }
+  }
+
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, body || res.statusText);
   }
   return res.json();
-}
-
-export async function getEmailInvestigationRun(runId: string): Promise<any> {
-  return request<any>(`/email-investigations/${runId}`);
 }
 
 export async function listEmailInvestigationHistory(
@@ -197,6 +214,10 @@ export async function listEmailInvestigationHistory(
 
 export async function getEmailInvestigationHistoryItem(historyId: string): Promise<any> {
   return request<any>(`/email-investigations/history/${historyId}`);
+}
+
+export async function getEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}`);
 }
 
 export interface PaginatedResponse<T> {

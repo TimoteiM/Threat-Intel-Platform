@@ -57,9 +57,8 @@ async def upload_email_investigation(
 
     run = EmailInvestigationRun(
         filename=Path(name).name,
-        status="queued",
         resolution_source="queued",
-        result_json={},
+        result_json={"status": "queued", "error": None},
     )
     db.add(run)
     await db.commit()
@@ -69,8 +68,11 @@ async def upload_email_investigation(
     try:
         file_path.write_bytes(payload)
     except OSError as exc:
-        run.status = "failed"
-        run.error = f"Could not persist uploaded file: {exc}"
+        run.result_json = {
+            **(run.result_json or {}),
+            "status": "failed",
+            "error": f"Could not persist uploaded file: {exc}",
+        }
         await db.commit()
         raise HTTPException(status_code=500, detail="Failed to stage uploaded file.") from exc
 
@@ -85,11 +87,18 @@ async def upload_email_investigation(
             run_ai=run_ai,
             ml_phishing_score=ml_phishing_score,
         )
-        run.task_id = task.id
+        run.result_json = {
+            **(run.result_json or {}),
+            "status": "queued",
+            "task_id": task.id,
+        }
         await db.commit()
     except Exception as exc:
-        run.status = "failed"
-        run.error = f"Queue dispatch failed: {type(exc).__name__}: {exc}"
+        run.result_json = {
+            **(run.result_json or {}),
+            "status": "failed",
+            "error": f"Queue dispatch failed: {type(exc).__name__}: {exc}",
+        }
         await db.commit()
         logger.exception("Failed to queue email investigation %s", run.id)
         raise HTTPException(status_code=500, detail="Failed to enqueue email investigation.") from exc
@@ -97,7 +106,7 @@ async def upload_email_investigation(
     return {
         "run_id": str(run.id),
         "history_id": str(run.id),
-        "status": run.status,
+        "status": str((run.result_json or {}).get("status") or "queued"),
         "message": "Email investigation queued.",
     }
 
@@ -128,15 +137,15 @@ async def list_email_investigation_history(
         {
             "id": str(r.id),
             "created_at": r.created_at.isoformat() if r.created_at else None,
-            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-            "status": r.status,
+            "completed_at": (r.result_json or {}).get("completed_at"),
+            "status": str((r.result_json or {}).get("status") or "queued"),
             "filename": r.filename,
             "email_subject": r.email_subject,
             "sender_email": r.sender_email,
             "sender_domain": r.sender_domain,
             "sender_ip": r.sender_ip,
             "resolution_source": r.resolution_source,
-            "error": r.error,
+            "error": (r.result_json or {}).get("error"),
             "urls_count": int((r.result_json or {}).get("urls_count") or 0),
             "attachments_count": int((r.result_json or {}).get("attachments_count") or 0),
         }
@@ -175,23 +184,25 @@ async def get_email_investigation_run(
     if not row:
         raise HTTPException(status_code=404, detail="Email investigation run not found.")
 
+    row_result = dict(row.result_json or {})
+    run_status = str(row_result.get("status") or "queued")
     base = {
         "run_id": str(row.id),
         "history_id": str(row.id),
-        "status": row.status,
+        "status": run_status,
         "created_at": row.created_at.isoformat() if row.created_at else None,
-        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "completed_at": row_result.get("completed_at"),
         "filename": row.filename,
         "email_subject": row.email_subject,
         "sender_email": row.sender_email,
         "sender_domain": row.sender_domain,
         "sender_ip": row.sender_ip,
         "resolution_source": row.resolution_source,
-        "error": row.error,
+        "error": row_result.get("error"),
     }
 
-    if row.status == "completed":
-        payload = dict(row.result_json or {})
+    if run_status == "completed":
+        payload = row_result
         payload.update(base)
         return payload
 

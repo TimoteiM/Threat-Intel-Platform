@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     phishtank_api_key: str = ""
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
+    google_safe_browsing_api_key: str = ""
+    url_lexical_model_path: str = ""
 
     # —— Database ———
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"
@@ -81,7 +83,7 @@ class Settings(BaseSettings):
 
     # —— Investigation Defaults ———
     max_analyst_iterations: int = 1
-    analyst_timeout_seconds: int = 120
+    analyst_timeout_seconds: int = 75
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
 

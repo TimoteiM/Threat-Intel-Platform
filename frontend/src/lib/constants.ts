@@ -65,13 +65,17 @@ export const IOC_TYPE_COLORS: Record<string, string> = {
 // ─── Collector display names ───
 
 export const COLLECTOR_NAMES: Record<string, string> = {
-  dns:   "DNS",
-  http:  "HTTP",
-  tls:   "TLS",
-  whois: "WHOIS",
-  asn:   "ASN",
-  intel: "INTEL",
-  vt:    "VT",
+  dns:           "DNS",
+  http:          "HTTP",
+  tls:           "TLS",
+  whois:         "WHOIS",
+  asn:           "ASN",
+  intel:         "INTEL",
+  vt:            "VT",
+  threat_feeds:  "THREAT FEEDS",
+  urlscan:       "URLSCAN",
+  screenshot:    "SCREENSHOT",
+  js_analysis:   "JS ANALYSIS",
 };
 
 // ─── Tabs ───

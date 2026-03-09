@@ -667,25 +667,36 @@ export default function EmailInvestigationsPage() {
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 8 }}>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(96,165,250,0.08)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-                          VT verdict
+                          URL verdict
                         </div>
+                        {(() => {
+                          const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
+                          return (
                         <div style={{
                           fontSize: 12,
                           fontWeight: 700,
                           color:
-                            (u?.vt?.verdict || "unknown") === "malicious"
+                            verdict === "malicious"
                               ? "#ef4444"
-                              : (u?.vt?.verdict || "unknown") === "suspicious"
+                              : verdict === "suspicious"
                                 ? "#f59e0b"
-                                : (u?.vt?.verdict || "unknown") === "clean"
+                                : verdict === "clean"
                                   ? "#34d399"
                                   : "var(--text)",
                         }}>
-                          {(u?.vt?.verdict || "unknown").toUpperCase()}
+                          {verdict.toUpperCase()}
                         </div>
+                          );
+                        })()}
                         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
                           m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, total={u?.vt?.total_vendors ?? 0}
                         </div>
+                        {u?.urlscan?.checked && (
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                            URLScan: {String(u?.urlscan?.verdict || "unknown")}
+                            {typeof u?.urlscan?.score === "number" ? ` (score ${u.urlscan.score})` : ""}
+                          </div>
+                        )}
                       </div>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.05)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
@@ -694,6 +705,13 @@ export default function EmailInvestigationsPage() {
                         <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>
                           {finalUrl}
                         </div>
+                        {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
+                          <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
+                            {u?.urlscan?.page_title ? `title: ${u.urlscan.page_title}` : ""}
+                            {u?.urlscan?.page_title && u?.urlscan?.page_ip ? " | " : ""}
+                            {u?.urlscan?.page_ip ? `ip: ${u.urlscan.page_ip}` : ""}
+                          </div>
+                        )}
                       </div>
                     </div>
                     {u?.screenshot?.image_base64 ? (

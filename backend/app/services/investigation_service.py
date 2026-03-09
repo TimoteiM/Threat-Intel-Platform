@@ -33,6 +33,34 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _ensure_baseline_collectors(
+    collectors: list[str],
+    *,
+    supported_for_type: set[str],
+    explicit_request: bool,
+) -> list[str]:
+    """
+    Ensure baseline intel collectors are present when caller did not explicitly
+    choose collectors (e.g., client profile/default flow).
+    """
+    if explicit_request:
+        return collectors
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for name in collectors:
+        if name not in seen:
+            normalized.append(name)
+            seen.add(name)
+
+    for baseline in ("threat_feeds", "urlscan"):
+        if baseline in supported_for_type and baseline not in seen:
+            normalized.append(baseline)
+            seen.add(baseline)
+
+    return normalized
+
+
 class InvestigationService:
 
     def __init__(self, session: AsyncSession):
@@ -97,6 +125,7 @@ class InvestigationService:
         # Always intersect with collectors that support this observable_type.
         supported_for_type = set(get_collectors_for_type(observable_type))
 
+        explicit_collectors_requested = bool(request.requested_collectors)
         effective_collectors = request.requested_collectors
         if not effective_collectors and matched_clients:
             for client in matched_clients:
@@ -117,6 +146,18 @@ class InvestigationService:
                 c for c in settings.default_collectors_list
                 if c in supported_for_type
             ]
+
+        effective_collectors = _ensure_baseline_collectors(
+            list(effective_collectors),
+            supported_for_type=supported_for_type,
+            explicit_request=explicit_collectors_requested,
+        )
+        logger.info(
+            "Final collectors for %s (%s): %s",
+            domain,
+            observable_type,
+            effective_collectors,
+        )
 
         # Create DB record
         inv = await self.repo.create(

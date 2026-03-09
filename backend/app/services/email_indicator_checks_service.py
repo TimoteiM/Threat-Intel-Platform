@@ -21,6 +21,7 @@ import whois as python_whois
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.collectors.urlscan_collector import URLScanCollector
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
@@ -44,11 +45,19 @@ def run_email_indicator_checks(
     sender_domain = extracted.get("sender_domain")
     urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u][: max(0, max_urls)]
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
+    max_urlscan_urls = min(len(urls), 5)
 
     checks = {
         "sender_domain": _check_sender_domain(sender_domain) if sender_domain else {"present": False, "message": "Not present in the provided evidence."},
         "sender_ip": _check_ip(sender_ip) if sender_ip else {"present": False, "message": "Not present in the provided evidence."},
-        "urls": [_check_url(url, include_screenshot=include_url_screenshots) for url in urls],
+        "urls": [
+            _check_url(
+                url,
+                include_screenshot=include_url_screenshots,
+                include_urlscan=(idx < max_urlscan_urls),
+            )
+            for idx, url in enumerate(urls)
+        ],
         "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes),
     }
     return checks
@@ -100,7 +109,7 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
         }
 
 
-def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
+def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
     final_vt_used = False
@@ -109,6 +118,11 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
         if _is_better_vt_result(vt_final, vt):
             vt = vt_final
             final_vt_used = True
+    urlscan = _urlscan_lookup(str(resolved_final_url or url)) if include_urlscan else {
+        "checked": False,
+        "verdict": "unknown",
+        "error": "Skipped for quota control",
+    }
     screenshot: dict[str, Any] = {
         "captured": False,
         "final_url": resolved_final_url,
@@ -136,9 +150,56 @@ def _check_url(url: str, *, include_screenshot: bool) -> dict[str, Any]:
     return {
         "url": url,
         "vt": vt,
+        "effective_verdict": _effective_url_verdict(vt=vt, urlscan=urlscan),
+        "urlscan": urlscan,
         "vt_checked_on_final_url": final_vt_used,
         "screenshot": screenshot,
     }
+
+
+def _urlscan_lookup(url: str) -> dict[str, Any]:
+    try:
+        collector = URLScanCollector(
+            domain=url,
+            investigation_id="email-indicator-check",
+            observable_type="url",
+            timeout=20,
+        )
+        evidence, meta, _ = collector.run()
+        verdict = str(getattr(evidence, "verdict", "") or "").lower() or "unknown"
+        if verdict == "benign":
+            verdict = "clean"
+        if verdict not in {"clean", "suspicious", "malicious"}:
+            verdict = "unknown"
+        return {
+            "checked": True,
+            "status": meta.status.value,
+            "error": meta.error,
+            "scan_id": getattr(evidence, "scan_id", None),
+            "verdict": verdict,
+            "score": getattr(evidence, "score", None),
+            "page_url": getattr(evidence, "page_url", None),
+            "page_ip": getattr(evidence, "page_ip", None),
+            "page_country": getattr(evidence, "page_country", None),
+            "page_server": getattr(evidence, "page_server", None),
+            "page_title": getattr(evidence, "page_title", None),
+            "requests_count": getattr(evidence, "requests_count", None),
+            "tags": getattr(evidence, "tags", []) or [],
+            "notes": getattr(evidence, "notes", []) or [],
+        }
+    except Exception as exc:
+        logger.warning("URLScan lookup failed for URL %s: %s", url, exc)
+        return {"checked": False, "verdict": "unknown", "error": str(exc)}
+
+
+def _effective_url_verdict(*, vt: dict[str, Any], urlscan: dict[str, Any]) -> str:
+    vt_verdict = str(vt.get("verdict") or "unknown").lower()
+    if vt_verdict in {"malicious", "suspicious", "clean"}:
+        return vt_verdict
+    urlscan_verdict = str((urlscan or {}).get("verdict") or "unknown").lower()
+    if urlscan_verdict in {"malicious", "suspicious", "clean"}:
+        return urlscan_verdict
+    return "unknown"
 
 
 def _check_ip(ip: str) -> dict[str, Any]:

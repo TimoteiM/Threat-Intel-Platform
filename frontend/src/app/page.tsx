@@ -833,7 +833,7 @@ export default function HomePage() {
           margin: "0 auto 24px",
           lineHeight: 1.6,
         }}>
-          Submit a domain and get a full analyst-grade report in under 90 seconds —
+          Submit a domain and get a full analyst-grade report in under 2 minutes —
           classification, IOCs, findings, and actionable SOC steps.
         </p>
 

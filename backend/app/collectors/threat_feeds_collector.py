@@ -24,6 +24,7 @@ from app.config import get_settings
 from app.models.schemas import (
     AbuseIPDBResult,
     CollectorMeta,
+    GoogleSafeBrowsingResult,
     PhishTankResult,
     ThreatFeedEvidence,
     ThreatFoxResult,
@@ -83,6 +84,7 @@ class ThreatFeedsCollector(BaseCollector):
                 "abuseipdb (not applicable for hash)",
                 "phishtank (not applicable for hash)",
                 "openphish (not applicable for hash)",
+                "google_safe_browsing (not applicable for hash)",
             ])
             with ThreadPoolExecutor(max_workers=1) as executor:
                 futures = {executor.submit(self._query_threatfox, self.domain): "threatfox"}
@@ -129,6 +131,7 @@ class ThreatFeedsCollector(BaseCollector):
                 evidence.feeds_skipped.extend([
                     "phishtank (not applicable for IP)",
                     "openphish (not applicable for IP)",
+                    "google_safe_browsing (not applicable for IP)",
                 ])
             else:
                 # domain or url: all feeds apply
@@ -142,6 +145,17 @@ class ThreatFeedsCollector(BaseCollector):
 
                 futures[executor.submit(self._query_phishtank, query_domain)] = "phishtank"
                 futures[executor.submit(self._query_openphish, query_domain)] = "openphish"
+                if settings.google_safe_browsing_api_key:
+                    gsb_url = self.domain if obs_type == "url" else f"https://{query_domain}"
+                    futures[
+                        executor.submit(
+                            self._query_google_safe_browsing,
+                            gsb_url,
+                            settings.google_safe_browsing_api_key,
+                        )
+                    ] = "google_safe_browsing"
+                else:
+                    evidence.feeds_skipped.append("google_safe_browsing (no API key)")
 
             futures[executor.submit(self._query_threatfox, self.domain)] = "threatfox"
 
@@ -161,6 +175,9 @@ class ThreatFeedsCollector(BaseCollector):
                     elif feed_name == "openphish":
                         evidence.openphish_listed = result
                         evidence.feeds_checked.append("openphish")
+                    elif feed_name == "google_safe_browsing":
+                        evidence.google_safe_browsing = result
+                        evidence.feeds_checked.append("google_safe_browsing")
                 except Exception as e:
                     logger.warning(f"[{self.name}] Feed '{feed_name}' failed: {e}")
                     evidence.feeds_skipped.append(f"{feed_name} (error: {type(e).__name__})")
@@ -292,3 +309,41 @@ class ThreatFeedsCollector(BaseCollector):
         except Exception as e:
             logger.debug(f"[{self.name}] OpenPhish query failed: {e}")
             return False
+
+    def _query_google_safe_browsing(self, url: str, api_key: str) -> GoogleSafeBrowsingResult:
+        try:
+            resp = requests.post(
+                f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={api_key}",
+                json={
+                    "client": {"clientId": "threat-intel-platform", "clientVersion": "1.0"},
+                    "threatInfo": {
+                        "threatTypes": [
+                            "MALWARE",
+                            "SOCIAL_ENGINEERING",
+                            "UNWANTED_SOFTWARE",
+                            "POTENTIALLY_HARMFUL_APPLICATION",
+                        ],
+                        "platformTypes": ["ANY_PLATFORM"],
+                        "threatEntryTypes": ["URL"],
+                        "threatEntries": [{"url": url}],
+                    },
+                },
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+            matches = data.get("matches") or []
+            return GoogleSafeBrowsingResult(
+                checked=True,
+                listed=bool(matches),
+                matches_count=len(matches),
+                threat_types=sorted({str(m.get("threatType") or "") for m in matches if m.get("threatType")}),
+                platform_types=sorted({str(m.get("platformType") or "") for m in matches if m.get("platformType")}),
+                cache_durations=sorted({str(m.get("cacheDuration") or "") for m in matches if m.get("cacheDuration")}),
+            )
+        except Exception as e:
+            return GoogleSafeBrowsingResult(
+                checked=False,
+                listed=False,
+                error=str(e),
+            )

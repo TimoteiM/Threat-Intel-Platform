@@ -47,11 +47,6 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb",
             "ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'",
             "ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)",
-            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'queued'",
-            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS task_id VARCHAR(64)",
-            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS error TEXT",
-            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
-            "ALTER TABLE email_investigation_runs ADD COLUMN IF NOT EXISTS resolution_source VARCHAR(50) NOT NULL DEFAULT 'queued'",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))
@@ -106,17 +101,9 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    # Allow direct-browser fallback from LAN devices in development.
-    allow_origin_regex=(
-        r"^https?://("
-        r"localhost|127\.0\.0\.1|"
-        r"10(?:\.\d{1,3}){3}|"
-        r"192\.168(?:\.\d{1,3}){2}|"
-        r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
-        r")(?::\d+)?$"
-        if settings.is_development
-        else None
-    ),
+    # In development, allow direct frontend->backend calls from VM IP/hostname origins.
+    # This is needed when bypassing Next.js proxy for large multipart uploads.
+    allow_origin_regex=r"^https?://[A-Za-z0-9\.\-]+(:\d+)?$" if settings.is_development else None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization", "X-Request-ID"],

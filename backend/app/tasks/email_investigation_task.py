@@ -19,11 +19,15 @@ from app.tasks.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-def _update_run(run_uuid: uuid.UUID, **fields) -> bool:
+def _update_run(run_uuid: uuid.UUID, *, result_json_patch: dict | None = None, **fields) -> bool:
     with Session(sync_engine) as db:
         run = db.get(EmailInvestigationRun, run_uuid)
         if not run:
             return False
+        if result_json_patch:
+            merged = dict(run.result_json or {})
+            merged.update(result_json_patch)
+            run.result_json = merged
         for key, value in fields.items():
             setattr(run, key, value)
         db.commit()
@@ -56,7 +60,13 @@ def run_email_investigation(
             return run_id
         run_filename = run.filename
 
-    _update_run(parsed_id, status="processing", error=None)
+    _update_run(
+        parsed_id,
+        result_json_patch={
+            "status": "processing",
+            "error": None,
+        },
+    )
 
     try:
         with open(file_path, "rb") as fh:
@@ -82,16 +92,21 @@ def run_email_investigation(
             sender_domain=response_payload.get("sender_domain"),
             sender_ip=response_payload.get("sender_ip"),
             resolution_source=str(response_payload.get("resolution_source") or "unknown"),
-            result_json=prepare_history_payload(response_payload),
-            status="completed",
-            completed_at=datetime.now(timezone.utc),
+            result_json_patch={
+                **prepare_history_payload(response_payload),
+                "status": "completed",
+                "error": None,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
     except Exception as exc:
         _update_run(
             parsed_id,
-            status="failed",
-            error=f"{type(exc).__name__}: {exc}",
-            completed_at=datetime.now(timezone.utc),
+            result_json_patch={
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
         logger.exception("Email investigation run failed: %s", run_id)
     finally:
