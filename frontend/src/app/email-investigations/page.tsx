@@ -2,11 +2,16 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  getEmailInvestigationRun,
   getEmailInvestigationHistoryItem,
   listEmailInvestigationHistory,
   uploadEmailInvestigation,
 } from "@/lib/api";
-import type { EmailInvestigationHistoryItem, EmailInvestigationResponse } from "@/lib/types";
+import type {
+  EmailInvestigationHistoryItem,
+  EmailInvestigationResponse,
+  EmailInvestigationSubmitResponse,
+} from "@/lib/types";
 
 export default function EmailInvestigationsPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -19,7 +24,7 @@ export default function EmailInvestigationsPage() {
   const [result, setResult] = useState<EmailInvestigationResponse | null>(null);
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [includeScreenshots, setIncludeScreenshots] = useState(true);
+  const [includeScreenshots, setIncludeScreenshots] = useState(false);
   const [runAiInterpretation, setRunAiInterpretation] = useState(false);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());
@@ -74,6 +79,10 @@ export default function EmailInvestigationsPage() {
     () => buildSenderDomainFindings(result),
     [result],
   );
+  const urlSummary = useMemo(
+    () => buildUrlSummary(result),
+    [result],
+  );
 
   async function refreshHistory() {
     setLoadingHistory(true);
@@ -113,14 +122,39 @@ export default function EmailInvestigationsPage() {
     setError("");
     setResult(null);
     try {
-      const res = await uploadEmailInvestigation(file, {
+      const submit = (await uploadEmailInvestigation(file, {
         context: context || undefined,
+        max_urls: 20,
         include_url_screenshots: includeScreenshots,
         run_ai: runAiInterpretation,
         ml_phishing_score: mlScore.trim() ? Number(mlScore) : undefined,
-      });
-      setResult(res as EmailInvestigationResponse);
-      setSelectedHistoryId((res as EmailInvestigationResponse)?.history_id || null);
+      })) as EmailInvestigationSubmitResponse;
+      setSelectedHistoryId(submit.run_id || null);
+
+      const pollDeadline = Date.now() + 15 * 60 * 1000;
+      let completedRun: EmailInvestigationResponse | null = null;
+      while (Date.now() < pollDeadline) {
+        const run = (await getEmailInvestigationRun(submit.run_id)) as EmailInvestigationResponse;
+        if (run.status === "completed") {
+          completedRun = run;
+          setResult(run);
+          break;
+        }
+        if (run.status === "failed") {
+          throw new Error(run.error || "Email investigation failed");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      if (!completedRun) {
+        const latest = (await getEmailInvestigationRun(submit.run_id)) as EmailInvestigationResponse;
+        if (latest.status === "completed") {
+          setResult(latest);
+        } else {
+          throw new Error("Email investigation is still processing. Please refresh history shortly.");
+        }
+      }
+
       await refreshHistory();
     } catch (err: any) {
       setError(err?.message || "Upload failed");
@@ -135,9 +169,6 @@ export default function EmailInvestigationsPage() {
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
         Email Investigation
       </h1>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
-        UI build marker: EMAIL-TEMPLATE-V3-2026-03-05
-      </div>
       <p style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 20 }}>
         Upload an <code>.eml</code> or <code>.msg</code> file to extract indicators, run investigations, and generate a structured SOC resolution.
       </p>
@@ -194,7 +225,7 @@ export default function EmailInvestigationsPage() {
                   {h.email_subject || h.filename || "No subject"}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                  {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count}
+                  {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count} | Status: {h.status || "unknown"}
                 </div>
                 <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
                   {h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time"}
@@ -262,7 +293,7 @@ export default function EmailInvestigationsPage() {
             checked={includeScreenshots}
             onChange={(e) => setIncludeScreenshots(e.target.checked)}
           />
-          Capture screenshot for each URL destination
+          Capture screenshot for each URL destination (slower)
         </label>
         <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
           <input
@@ -368,36 +399,6 @@ export default function EmailInvestigationsPage() {
             </div>
           </div>
 
-          <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-lg)",
-              padding: 16,
-            }}
-          >
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
-              Template Resolution
-            </div>
-            <pre
-              style={{
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontSize: 12,
-                lineHeight: 1.6,
-                color: "var(--text)",
-                fontFamily: "var(--font-mono)",
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                padding: 12,
-              }}
-            >
-              {result?.resolution?.formatted_resolution || "Not present in the provided evidence."}
-            </pre>
-          </div>
-
           <div style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border)",
@@ -485,7 +486,25 @@ export default function EmailInvestigationsPage() {
               paddingBottom: 8,
               borderBottom: "1px solid var(--border)",
             }}>
-              Analyst Findings (Sender Domain)
+              Analyst Findings (Template Output)
+            </div>
+            <div
+              style={{
+                marginBottom: 12,
+                padding: "12px 14px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                fontSize: 12,
+                lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {result?.resolution?.formatted_resolution || "Not present in the provided evidence."}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>
+              Supporting evidence details
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
               <span
@@ -554,6 +573,77 @@ export default function EmailInvestigationsPage() {
                 ))}
               </div>
             )}
+            <div
+              style={{
+                marginTop: 10,
+                padding: "12px 14px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+              }}
+            >
+              <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>
+                URL Summary
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
+                    Overview
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                    {urlSummary.overview}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
+                    Likely Purpose
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                    {urlSummary.purpose.length ? (
+                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                        {urlSummary.purpose.map((p, i) => (
+                          <li key={i}>{p}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      "Not present in the provided evidence."
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
+                    Destinations
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                    {urlSummary.destinations.length ? (
+                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                        {urlSummary.destinations.map((d, i) => (
+                          <li key={i} style={{ fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      "Not present in the provided evidence."
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
+                    Caution
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                    {urlSummary.caution.length ? (
+                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                        {urlSummary.caution.map((d, i) => (
+                          <li key={i} style={{ fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      "No suspicious or malicious URL destinations identified by VirusTotal."
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div style={{
@@ -562,12 +652,14 @@ export default function EmailInvestigationsPage() {
             borderRadius: "var(--radius-lg)",
             padding: 16,
           }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>URL Destination Screenshots</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>URL Reputation and Destination</div>
             {!result?.indicator_checks?.urls?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No URLs found.</div>
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
-                {result.indicator_checks.urls.map((u: any, idx: number) => (
+                {result.indicator_checks.urls.map((u: any, idx: number) => {
+                  const finalUrl = u?.screenshot?.final_url || "Not present in the provided evidence.";
+                  return (
                   <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 10 }}>
                     <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
                       URL: {u.url}
@@ -580,7 +672,6 @@ export default function EmailInvestigationsPage() {
                         {(() => {
                           const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
                           return (
-                            <>
                         <div style={{
                           fontSize: 12,
                           fontWeight: 700,
@@ -595,28 +686,14 @@ export default function EmailInvestigationsPage() {
                         }}>
                           {verdict.toUpperCase()}
                         </div>
-                            </>
                           );
                         })()}
                         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
                           m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, total={u?.vt?.total_vendors ?? 0}
                         </div>
-                        {(u?.fallback_feeds?.verdict || "unknown") !== "unknown" && (
-                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                            fallback: {String(u?.fallback_feeds?.verdict || "unknown")}
-                          </div>
-                        )}
-                        {u?.google_safe_browsing?.checked && (
-                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                            google safe browsing: {String(u?.google_safe_browsing?.verdict || "unknown")}
-                            {typeof u?.google_safe_browsing?.matches_count === "number"
-                              ? ` (matches ${u.google_safe_browsing.matches_count})`
-                              : ""}
-                          </div>
-                        )}
                         {u?.urlscan?.checked && (
                           <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                            urlscan: {String(u?.urlscan?.verdict || "unknown")}
+                            URLScan: {String(u?.urlscan?.verdict || "unknown")}
                             {typeof u?.urlscan?.score === "number" ? ` (score ${u.urlscan.score})` : ""}
                           </div>
                         )}
@@ -626,7 +703,7 @@ export default function EmailInvestigationsPage() {
                           Final URL
                         </div>
                         <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>
-                          {u?.screenshot?.final_url || "Not present in the provided evidence."}
+                          {finalUrl}
                         </div>
                         {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
                           <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
@@ -649,7 +726,7 @@ export default function EmailInvestigationsPage() {
                       </div>
                     )}
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
@@ -703,4 +780,105 @@ function buildSenderDomainFindings(
     },
   ];
   return fallback;
+}
+
+function buildUrlSummary(result: EmailInvestigationResponse | null): {
+  overview: string;
+  purpose: string[];
+  destinations: string[];
+  caution: string[];
+} {
+  const urls = result?.indicator_checks?.urls || [];
+  if (!urls.length) {
+    return {
+      overview: "No URLs were found in this email.",
+      purpose: [],
+      destinations: [],
+      caution: [],
+    };
+  }
+
+  const risky = urls.filter((u: any) => ["malicious", "suspicious"].includes(String(u?.vt?.verdict || "").toLowerCase()));
+  const clean = urls.filter((u: any) => String(u?.vt?.verdict || "").toLowerCase() === "clean");
+  const enriched = urls.map((u: any) => {
+    const original = String(u?.url || "").trim();
+    const finalUrl = String(u?.screenshot?.final_url || original).trim();
+    const verdict = String(u?.vt?.verdict || "unknown").toLowerCase();
+    return {
+      original,
+      finalUrl,
+      verdict,
+      purpose: inferUrlPurpose(original, finalUrl),
+    };
+  });
+
+  const purposeCounts = new Map<string, number>();
+  for (const item of enriched) {
+    purposeCounts.set(item.purpose, (purposeCounts.get(item.purpose) || 0) + 1);
+  }
+
+  const purposeList = Array.from(purposeCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([purpose, count]) => `${count} ${count === 1 ? "URL appears to be" : "URLs appear to be"} ${purpose}.`);
+
+  const topPoints = enriched
+    .slice(0, 3)
+    .map((u) => u.finalUrl)
+    .filter(Boolean);
+
+  const riskyList = enriched
+    .filter((u) => u.verdict === "malicious" || u.verdict === "suspicious")
+    .slice(0, 2)
+    .map((u) => u.finalUrl)
+    .filter(Boolean);
+
+  return {
+    overview: `Analyzed ${urls.length} URL(s): ${clean.length} clean and ${risky.length} suspicious/malicious by VirusTotal.`,
+    purpose: purposeList,
+    destinations: topPoints,
+    caution: riskyList,
+  };
+}
+
+function inferUrlPurpose(originalUrl: string, finalUrl: string): string {
+  const info = parseUrlInfo(finalUrl || originalUrl);
+  const host = info.host.toLowerCase();
+  const path = info.path.toLowerCase();
+
+  if (host.endsWith("j2.email")) {
+    if (path.includes("/unsubscribe") || path.includes("unsubscribe")) {
+      return "an email unsubscribe / recipient-preference link (j2.email infrastructure)";
+    }
+    if (path.startsWith("/t/")) {
+      return "an email tracking or campaign-routing link (j2.email infrastructure)";
+    }
+    return "an email campaign infrastructure link (j2.email)";
+  }
+
+  if (host.endsWith("w3.org")) {
+    if (path.endsWith(".dtd") || path.includes("/dtd/")) {
+      return "a W3C XHTML/HTML DTD technical resource used by markup templates";
+    }
+    if (path.includes("/tr/")) {
+      return "a W3C standards/specification reference page";
+    }
+    return "a W3C standards resource";
+  }
+
+  if (path.endsWith(".pdf")) return "a document/PDF download URL";
+  if (path.endsWith(".xml")) return "an XML data/resource URL";
+  if (path.includes("login") || path.includes("signin") || path.includes("auth")) {
+    return "an authentication or account-access page";
+  }
+  return "a general web destination";
+}
+
+function parseUrlInfo(raw: string): { host: string; path: string } {
+  try {
+    const url = new URL(raw);
+    return { host: url.hostname || "", path: url.pathname || "" };
+  } catch {
+    return { host: "", path: "" };
+  }
 }

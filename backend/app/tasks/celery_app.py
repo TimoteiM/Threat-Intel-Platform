@@ -59,5 +59,6 @@ celery_app.autodiscover_tasks([
     "app.tasks.investigation_task",
     "app.tasks.analysis_task",
     "app.tasks.batch_task",
+    "app.tasks.email_investigation_task",
     "app.tasks.watchlist_task",
 ])

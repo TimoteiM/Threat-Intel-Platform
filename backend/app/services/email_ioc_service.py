@@ -13,14 +13,13 @@ Parses raw .eml/.msg messages and extracts deterministic indicators:
 from __future__ import annotations
 
 import hashlib
-import html
 import ipaddress
 import os
 import quopri
 import re
 import tempfile
-from email.header import decode_header, make_header
 from email import policy
+from email.header import decode_header
 from email.parser import BytesParser
 from email.utils import parseaddr
 from typing import Any
@@ -28,14 +27,12 @@ from urllib.parse import urlparse
 
 URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-BRACKET_IP_RE = re.compile(r"\[([0-9a-fA-F:.]+)\]")
-HEADER_IP_TOKEN_RE = re.compile(
-    r"(?:client-ip|source-ip|smtp\.remote-ip)\s*=\s*\[?([0-9a-fA-F:.]+)\]?",
-    re.IGNORECASE,
-)
 SPF_RE = re.compile(r"\bspf=(pass|fail|softfail|neutral|none|temperror|permerror)\b", re.IGNORECASE)
 DKIM_RE = re.compile(r"\bdkim=(pass|fail|none|temperror|permerror)\b", re.IGNORECASE)
 DMARC_RE = re.compile(r"\bdmarc=(pass|fail|none|temperror|permerror)\b", re.IGNORECASE)
+URL_SAFE_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&'()*+,;=%"
+)
 
 
 def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[str, Any]:
@@ -46,10 +43,30 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
 
     msg = BytesParser(policy=policy.default).parsebytes(raw_email)
 
-    subject = _safe_header(msg.get("Subject")) or _extract_header_value_from_raw(raw_email, "Subject")
-    sender_email = _extract_sender_email_from_headers(msg)
+    subject_values = [str(v) for v in (msg.get_all("Subject") or []) if v is not None]
+    subject = " ".join(_safe_header(v) for v in subject_values if _safe_header(v)).strip()
+    if not subject:
+        subject = _safe_header(msg.get("Subject"))
+
+    raw_subject_values = _extract_headers_from_raw(raw_email, "Subject")
+    decoded_raw_subject = " ".join(
+        _safe_header(v) for v in raw_subject_values if _safe_header(v)
+    ).strip()
+    if not decoded_raw_subject:
+        raw_subject = _fallback_header_value(raw_email, "Subject")
+        decoded_raw_subject = _safe_header(raw_subject) if raw_subject else ""
+    if decoded_raw_subject and (
+        not subject
+        or "=?utf-8?" in subject.lower()
+        or len(decoded_raw_subject) > len(subject)
+    ):
+        subject = decoded_raw_subject
+    _, sender_email = parseaddr(_safe_header(msg.get("From")))
+    sender_email = (sender_email or "").strip().lower()
+    if not subject:
+        subject = _fallback_header_value(raw_email, "Subject")
     if not sender_email:
-        sender_email = _extract_sender_email_from_raw(raw_email)
+        sender_email = _fallback_sender_email(raw_email)
     sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else None
 
     auth_blob = " ".join((msg.get_all("Authentication-Results") or [])).strip()
@@ -57,7 +74,10 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
     dkim_result = _extract_token(DKIM_RE, auth_blob) or "none"
     dmarc_result = _extract_token(DMARC_RE, auth_blob) or "none"
 
-    sender_ip = _extract_sender_ip_from_message(msg, auth_blob)
+    received_headers = msg.get_all("Received") or []
+    if not received_headers:
+        received_headers = _extract_headers_from_raw(raw_email, "Received")
+    sender_ip = _extract_sender_ip(received_headers)
 
     urls = _extract_urls(msg, raw_email)
     url_domains = sorted({d for d in (_url_domain(u) for u in urls) if d})
@@ -102,18 +122,13 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
         subject = _safe_header(getattr(msg_obj, "subject", ""))
         sender_raw = _safe_header(getattr(msg_obj, "sender", ""))
         _, sender_email = parseaddr(sender_raw)
-        sender_email = (sender_email or "").strip().lower() or _extract_sender_email_from_header_blob(
-            _safe_header(getattr(msg_obj, "header", ""))
-        )
-        if not subject:
-            subject = _extract_header_value_from_raw(raw_email, "Subject")
-        if not sender_email:
-            sender_email = _extract_sender_email_from_raw(raw_email)
+        sender_email = (sender_email or "").strip().lower()
         sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else None
 
         headers_blob = _safe_header(getattr(msg_obj, "header", ""))
         auth_blob = " ".join(_extract_headers(headers_blob, "Authentication-Results")).strip()
-        sender_ip = _extract_sender_ip_from_header_blob(headers_blob, auth_blob)
+        received_headers = _extract_headers(headers_blob, "Received")
+        sender_ip = _extract_sender_ip(received_headers)
 
         spf_result = _extract_token(SPF_RE, auth_blob) or "none"
         dkim_result = _extract_token(DKIM_RE, auth_blob) or "none"
@@ -165,48 +180,34 @@ def _extract_urls(msg: Any, raw_email: bytes) -> list[str]:
             except Exception:
                 payload = b""
         text = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-        values.extend(_extract_urls_from_text(text))
+        values.extend(URL_RE.findall(_preprocess_text_for_url_scan(text)))
 
-    # Always add URLs extracted from raw message text as a secondary source.
-    # This recovers links that can be truncated by body-part decoding quirks.
-    values.extend(_extract_urls_from_text(raw_email.decode("utf-8", errors="ignore")))
+    if not values:
+        raw_text = raw_email.decode("utf-8", errors="ignore")
+        values.extend(URL_RE.findall(_preprocess_text_for_url_scan(raw_text)))
+        # Quoted-printable fallback for malformed/marketing MIME payloads.
+        qp_text = quopri.decodestring(raw_email).decode("utf-8", errors="ignore")
+        values.extend(URL_RE.findall(_preprocess_text_for_url_scan(qp_text)))
 
     return _normalize_urls(values)
 
 
 def _extract_urls_from_text(text: str) -> list[str]:
-    prepared = _prepare_text_for_url_extraction(text or "")
-    found = URL_RE.findall(prepared)
-    # For HTML parts, href extraction often recovers links missed by free-text regex.
-    found.extend(HREF_RE.findall(prepared))
-    return _normalize_urls(found)
+    return _normalize_urls(URL_RE.findall(text or ""))
 
 
 def _normalize_urls(values: list[str]) -> list[str]:
     clean: list[str] = []
     seen: set[str] = set()
     for url in values:
-        normalized = (url or "").rstrip(").,;]}>\"'=")
+        normalized = (url or "")
+        # Handle quoted-printable artifacts commonly seen in HTML emails.
+        normalized = normalized.replace("=3D", "=").replace("=\r\n", "").replace("=\n", "")
+        normalized = normalized.rstrip(").,;]}>\"'")
         if normalized and normalized not in seen:
             seen.add(normalized)
             clean.append(normalized)
     return clean
-
-
-def _prepare_text_for_url_extraction(text: str) -> str:
-    if not text:
-        return ""
-    # Join quoted-printable soft line wraps used in many marketing emails.
-    t = re.sub(r"=\r?\n", "", text)
-    # Decode quoted-printable residues present in already-decoded bodies.
-    try:
-        t = quopri.decodestring(t.encode("utf-8", errors="ignore")).decode("utf-8", errors="ignore")
-    except Exception:
-        pass
-    t = html.unescape(t)
-    # Normalize escaped delimiters often seen in templated links.
-    t = t.replace("\\u003d", "=").replace("\\x3d", "=")
-    return t
 
 
 def _extract_attachments(msg: Any) -> list[dict[str, Any]]:
@@ -263,81 +264,15 @@ def _attachment_bytes(att: Any) -> bytes:
 
 def _extract_sender_ip(received_headers: list[str]) -> str | None:
     # Received headers are top-down; earliest sender-side hops are usually near the end.
-    fallback_ip: str | None = None
     for header in reversed(received_headers):
-        for candidate in _extract_ip_candidates(header or ""):
+        for candidate in IPV4_RE.findall(header or ""):
             try:
                 ip = ipaddress.ip_address(candidate)
             except ValueError:
                 continue
             if getattr(ip, "is_global", False):
                 return str(ip)
-            # Keep first non-loopback candidate as fallback for environments that
-            # only expose internal relay hops in email headers.
-            if not getattr(ip, "is_loopback", False) and fallback_ip is None:
-                fallback_ip = str(ip)
-    return fallback_ip
-
-
-def _extract_sender_ip_from_message(msg: Any, auth_blob: str = "") -> str | None:
-    received_headers = [str(v) for v in (msg.get_all("Received") or [])]
-    direct_header_values: list[str] = []
-    for header in (
-        "X-Originating-IP",
-        "X-Client-IP",
-        "X-Sender-IP",
-        "X-MS-Exchange-Organization-OriginalClientIPAddress",
-        "Received-SPF",
-        "Authentication-Results",
-    ):
-        direct_header_values.extend(str(v) for v in (msg.get_all(header) or []))
-    if auth_blob:
-        direct_header_values.append(auth_blob)
-    return _extract_sender_ip_from_sources(received_headers, direct_header_values)
-
-
-def _extract_sender_ip_from_header_blob(headers_blob: str, auth_blob: str = "") -> str | None:
-    received_headers = _extract_headers(headers_blob, "Received")
-    direct_header_values: list[str] = []
-    for header in (
-        "X-Originating-IP",
-        "X-Client-IP",
-        "X-Sender-IP",
-        "X-MS-Exchange-Organization-OriginalClientIPAddress",
-        "Received-SPF",
-        "Authentication-Results",
-    ):
-        direct_header_values.extend(_extract_headers(headers_blob, header))
-    if auth_blob:
-        direct_header_values.append(auth_blob)
-    return _extract_sender_ip_from_sources(received_headers, direct_header_values)
-
-
-def _extract_sender_ip_from_sources(received_headers: list[str], direct_header_values: list[str]) -> str | None:
-    # Prefer routing-chain extraction, then explicit source-IP style headers/tokens.
-    from_received = _extract_sender_ip(received_headers)
-    if from_received:
-        return from_received
-    fallback_ip: str | None = None
-    for text in direct_header_values:
-        for candidate in _extract_ip_candidates(text or ""):
-            try:
-                ip = ipaddress.ip_address(candidate)
-            except ValueError:
-                continue
-            if getattr(ip, "is_global", False):
-                return str(ip)
-            if not getattr(ip, "is_loopback", False) and fallback_ip is None:
-                fallback_ip = str(ip)
-    return fallback_ip
-
-
-def _extract_ip_candidates(text: str) -> list[str]:
-    candidates: list[str] = []
-    candidates.extend(IPV4_RE.findall(text or ""))
-    candidates.extend(BRACKET_IP_RE.findall(text or ""))
-    candidates.extend(HEADER_IP_TOKEN_RE.findall(text or ""))
-    return candidates
+    return None
 
 
 def _extract_token(pattern: re.Pattern[str], blob: str) -> str | None:
@@ -358,13 +293,19 @@ def _url_domain(url: str) -> str | None:
 def _safe_header(value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
-    if not text:
+    raw = str(value).strip()
+    if not raw:
         return ""
     try:
-        return str(make_header(decode_header(text))).strip()
+        parts: list[str] = []
+        for chunk, charset in decode_header(raw):
+            if isinstance(chunk, bytes):
+                parts.append(chunk.decode(charset or "utf-8", errors="replace"))
+            else:
+                parts.append(str(chunk))
+        return "".join(parts).strip()
     except Exception:
-        return text
+        return raw
 
 
 def _extract_headers(blob: str, name: str) -> list[str]:
@@ -379,50 +320,101 @@ def _extract_headers(blob: str, name: str) -> list[str]:
         return []
 
 
-def _extract_sender_email_from_headers(msg: Any) -> str:
-    for header in ("From", "Sender", "Reply-To", "Return-Path", "X-Envelope-From"):
-        _, sender = parseaddr(_safe_header(msg.get(header)))
-        sender = (sender or "").strip().lower()
-        if "@" in sender:
-            return sender
+def _fallback_header_value(raw_email: bytes, name: str) -> str:
+    headers = _parse_raw_header_lines(raw_email)
+    key = name.lower()
+    values = headers.get(key) or []
+    return values[0] if values else ""
+
+
+def _fallback_sender_email(raw_email: bytes) -> str:
+    for header in ("From", "Return-Path", "Sender", "Reply-To"):
+        value = _fallback_header_value(raw_email, header)
+        if not value:
+            continue
+        _, email = parseaddr(value)
+        email = (email or "").strip().lower()
+        if email:
+            return email
     return ""
 
 
-def _extract_sender_email_from_header_blob(blob: str) -> str:
-    if not blob.strip():
-        return ""
-    for header in ("From", "Sender", "Reply-To", "Return-Path", "X-Envelope-From"):
-        vals = _extract_headers(blob, header)
-        for v in vals:
-            _, sender = parseaddr(_safe_header(v))
-            sender = (sender or "").strip().lower()
-            if "@" in sender:
-                return sender
-    return ""
+def _extract_headers_from_raw(raw_email: bytes, name: str) -> list[str]:
+    headers = _parse_raw_header_lines(raw_email)
+    return headers.get(name.lower()) or []
 
 
-def _extract_header_value_from_raw(raw_email: bytes, header_name: str) -> str:
+def _parse_raw_header_lines(raw_email: bytes) -> dict[str, list[str]]:
+    """
+    Parse raw RFC822 headers with folded continuation lines.
+    Returns lower-cased header-name -> list of unfolded values.
+    """
     text = raw_email.decode("utf-8", errors="ignore")
-    # Capture header line plus folded continuation lines.
-    pattern = re.compile(
-        rf"^{re.escape(header_name)}:\s*([^\r\n]*(?:\r?\n[ \t][^\r\n]*)*)",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    match = pattern.search(text)
-    if not match:
+    # Keep only header section.
+    if "\r\n\r\n" in text:
+        head = text.split("\r\n\r\n", 1)[0]
+        lines = head.split("\r\n")
+    else:
+        head = text.split("\n\n", 1)[0]
+        lines = head.split("\n")
+
+    unfolded: list[str] = []
+    current = ""
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith((" ", "\t")) and current:
+            current += " " + line.strip()
+            continue
+        if current:
+            unfolded.append(current)
+        current = line.strip()
+    if current:
+        unfolded.append(current)
+
+    result: dict[str, list[str]] = {}
+    for line in unfolded:
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        k = key.strip().lower()
+        v = value.strip()
+        if not k:
+            continue
+        result.setdefault(k, []).append(v)
+    return result
+
+
+def _preprocess_text_for_url_scan(text: str) -> str:
+    if not text:
         return ""
-    raw_value = re.sub(r"\r?\n[ \t]+", " ", match.group(1)).strip()
-    return _safe_header(raw_value)
+    # Decode common quoted-printable URL escapes before matching.
+    normalized = text.replace("=3D", "=")
+    # Join hard-wrapped URLs split by quoted-printable soft breaks.
+    normalized = normalized.replace("=\r\n", "").replace("=\n", "")
+    return _join_wrapped_url_lines(normalized)
 
 
-def _extract_sender_email_from_raw(raw_email: bytes) -> str:
-    for header in ("From", "Sender", "Reply-To", "Return-Path", "X-Envelope-From"):
-        val = _extract_header_value_from_raw(raw_email, header)
-        _, sender = parseaddr(val)
-        sender = (sender or "").strip().lower()
-        if "@" in sender:
-            return sender
-    return ""
-
-
-HREF_RE = re.compile(r"""href\s*=\s*["'](https?://[^"']+)["']""", re.IGNORECASE)
+def _join_wrapped_url_lines(text: str) -> str:
+    """
+    Re-join URLs wrapped across lines in email bodies.
+    Keeps normal paragraph breaks, but removes line breaks when the
+    break occurs between URL-safe characters.
+    """
+    out: list[str] = []
+    i = 0
+    length = len(text)
+    while i < length:
+        ch = text[i]
+        if ch in "\r\n":
+            prev_ch = out[-1] if out else ""
+            j = i + 1
+            while j < length and text[j] in "\r\n \t":
+                j += 1
+            next_ch = text[j] if j < length else ""
+            if prev_ch in URL_SAFE_CHARS and next_ch in URL_SAFE_CHARS:
+                i = j
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)

@@ -216,6 +216,10 @@ export async function getEmailInvestigationHistoryItem(historyId: string): Promi
   return request<any>(`/email-investigations/history/${historyId}`);
 }
 
+export async function getEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}`);
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
