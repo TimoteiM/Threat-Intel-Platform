@@ -135,6 +135,9 @@ export default function EmailInvestigationsPage() {
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
         Email Investigation
       </h1>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+        UI build marker: EMAIL-TEMPLATE-V3-2026-03-05
+      </div>
       <p style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 20 }}>
         Upload an <code>.eml</code> or <code>.msg</code> file to extract indicators, run investigations, and generate a structured SOC resolution.
       </p>
@@ -365,6 +368,36 @@ export default function EmailInvestigationsPage() {
             </div>
           </div>
 
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)",
+              padding: 16,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+              Template Resolution
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: "var(--text)",
+                fontFamily: "var(--font-mono)",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                padding: 12,
+              }}
+            >
+              {result?.resolution?.formatted_resolution || "Not present in the provided evidence."}
+            </pre>
+          </div>
+
           <div style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border)",
@@ -542,25 +575,51 @@ export default function EmailInvestigationsPage() {
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 8 }}>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(96,165,250,0.08)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-                          VT verdict
+                          URL verdict
                         </div>
+                        {(() => {
+                          const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
+                          return (
+                            <>
                         <div style={{
                           fontSize: 12,
                           fontWeight: 700,
                           color:
-                            (u?.vt?.verdict || "unknown") === "malicious"
+                            verdict === "malicious"
                               ? "#ef4444"
-                              : (u?.vt?.verdict || "unknown") === "suspicious"
+                              : verdict === "suspicious"
                                 ? "#f59e0b"
-                                : (u?.vt?.verdict || "unknown") === "clean"
+                                : verdict === "clean"
                                   ? "#34d399"
                                   : "var(--text)",
                         }}>
-                          {(u?.vt?.verdict || "unknown").toUpperCase()}
+                          {verdict.toUpperCase()}
                         </div>
+                            </>
+                          );
+                        })()}
                         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
                           m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, total={u?.vt?.total_vendors ?? 0}
                         </div>
+                        {(u?.fallback_feeds?.verdict || "unknown") !== "unknown" && (
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                            fallback: {String(u?.fallback_feeds?.verdict || "unknown")}
+                          </div>
+                        )}
+                        {u?.google_safe_browsing?.checked && (
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                            google safe browsing: {String(u?.google_safe_browsing?.verdict || "unknown")}
+                            {typeof u?.google_safe_browsing?.matches_count === "number"
+                              ? ` (matches ${u.google_safe_browsing.matches_count})`
+                              : ""}
+                          </div>
+                        )}
+                        {u?.urlscan?.checked && (
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                            urlscan: {String(u?.urlscan?.verdict || "unknown")}
+                            {typeof u?.urlscan?.score === "number" ? ` (score ${u.urlscan.score})` : ""}
+                          </div>
+                        )}
                       </div>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.05)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
@@ -569,6 +628,13 @@ export default function EmailInvestigationsPage() {
                         <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>
                           {u?.screenshot?.final_url || "Not present in the provided evidence."}
                         </div>
+                        {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
+                          <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
+                            {u?.urlscan?.page_title ? `title: ${u.urlscan.page_title}` : ""}
+                            {u?.urlscan?.page_title && u?.urlscan?.page_ip ? " | " : ""}
+                            {u?.urlscan?.page_ip ? `ip: ${u.urlscan.page_ip}` : ""}
+                          </div>
+                        )}
                       </div>
                     </div>
                     {u?.screenshot?.image_base64 ? (

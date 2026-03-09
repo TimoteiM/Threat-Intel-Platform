@@ -30,6 +30,7 @@ from app.services.email_ioc_service import extract_email_iocs
 
 router = APIRouter(prefix="/api/email-investigations", tags=["email-investigations"])
 logger = logging.getLogger(__name__)
+NOT_PRESENT = "Not present in the provided evidence."
 
 
 @router.get("/upload")
@@ -46,7 +47,7 @@ async def upload_email_investigation(
     db: DBSession,
     file: UploadFile = File(...),
     context: str = Form(default=""),
-    max_urls: int = Form(default=5),
+    max_urls: int = Form(default=20),
     max_attachment_hashes: int = Form(default=5),
     include_url_screenshots: bool = Form(default=True),
     run_ai: bool = Form(default=True),
@@ -111,6 +112,12 @@ async def upload_email_investigation(
                     reason="AI response did not include sender-domain analysis.",
                     classification="unknown",
                 )
+            resolution["formatted_resolution"] = _render_email_template_resolution(
+                extracted=extracted,
+                checks=checks,
+                url_destination_context=interpretation_payload.get("url_destination_context"),
+                resolution=resolution,
+            )
             resolution_source = "ai"
         except Exception as exc:
             resolution = {
@@ -125,6 +132,12 @@ async def upload_email_investigation(
                     classification="unknown",
                 ),
             }
+            resolution["formatted_resolution"] = _render_email_template_resolution(
+                extracted=extracted,
+                checks=checks,
+                url_destination_context=interpretation_payload.get("url_destination_context"),
+                resolution=resolution,
+            )
             resolution_source = "fallback_error"
     else:
         resolution = {
@@ -136,6 +149,12 @@ async def upload_email_investigation(
                 classification="unknown",
             ),
         }
+        resolution["formatted_resolution"] = _render_email_template_resolution(
+            extracted=extracted,
+            checks=checks,
+            url_destination_context=interpretation_payload.get("url_destination_context"),
+            resolution=resolution,
+        )
         resolution_source = "disabled"
 
     response_payload = {
@@ -269,6 +288,10 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "total_vendors": vt.get("total_vendors"),
                     "error": vt.get("error"),
                 },
+                "effective_verdict": item.get("effective_verdict"),
+                "fallback_feeds": item.get("fallback_feeds") or {},
+                "google_safe_browsing": item.get("google_safe_browsing") or {},
+                "urlscan": item.get("urlscan") or {},
                 "lexical_ml": item.get("lexical_ml") or {},
                 "screenshot": {
                     "captured": ss.get("captured"),
@@ -353,6 +376,10 @@ def _prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]
             {
                 "url": item.get("url"),
                 "vt": item.get("vt") or {},
+                "effective_verdict": item.get("effective_verdict"),
+                "fallback_feeds": item.get("fallback_feeds") or {},
+                "google_safe_browsing": item.get("google_safe_browsing") or {},
+                "urlscan": item.get("urlscan") or {},
                 "lexical_ml": item.get("lexical_ml") or {},
                 "screenshot": ss,
             }
@@ -388,11 +415,18 @@ def _build_url_destination_context(checks: dict[str, Any]) -> str:
         return "Not present in the provided evidence."
 
     grouped_domains: dict[str, set[str]] = defaultdict(set)
+    domain_descriptions: dict[str, str] = {}
     for item in urls:
         if not isinstance(item, dict):
             continue
         screenshot = item.get("screenshot") or {}
-        candidate = str(screenshot.get("final_url") or item.get("url") or "").strip()
+        urlscan = item.get("urlscan") or {}
+        candidate = str(
+            screenshot.get("final_url")
+            or urlscan.get("page_url")
+            or item.get("url")
+            or ""
+        ).strip()
         if not candidate:
             continue
         host = (urlparse(candidate).hostname or "").lower().strip(".")
@@ -404,19 +438,30 @@ def _build_url_destination_context(checks: dict[str, Any]) -> str:
             full_url=candidate.lower(),
             lexical_ml=(item.get("lexical_ml") or {}),
         )
-        grouped_domains[purpose].add(root or host)
+        domain_key = root or host
+        grouped_domains[purpose].add(domain_key)
+        domain_descriptions[domain_key] = _destination_domain_description(
+            domain=domain_key,
+            host=host,
+            purpose=purpose,
+            full_url=candidate.lower(),
+        )
 
     if not grouped_domains:
         return "Not present in the provided evidence."
 
-    segments: list[str] = []
-    for purpose in sorted(grouped_domains.keys()):
-        domains = ", ".join(sorted(grouped_domains[purpose]))
-        segments.append(f"{purpose} [{domains}]")
-    return "; ".join(segments)
+    purpose_text = "; ".join(sorted(grouped_domains.keys()))
+    observed_domains = sorted({d for ds in grouped_domains.values() for d in ds})
+    observed_text = "; ".join(
+        f"{domain} ({domain_descriptions.get(domain) or 'general web destination'})"
+        for domain in observed_domains
+    )
+    return f"{purpose_text}; Destinations observed: {observed_text}"
 
 
 def _infer_domain_purpose(*, host: str, full_url: str, lexical_ml: dict[str, Any]) -> str:
+    if "sendibm3.com" in host or "sendinblue.com" in host or "brevo.com" in host:
+        return "Brevo/Sendinblue campaign redirect or tracking infrastructure"
     if "salesforce.com" in host and any(t in full_url for t in ("/click", "/open", "/unsubscribe", "tracking")):
         return "Salesforce Marketing Cloud campaign redirect/tracking infrastructure"
     if "safelinks.protection.outlook.com" in host:
@@ -427,6 +472,10 @@ def _infer_domain_purpose(*, host: str, full_url: str, lexical_ml: dict[str, Any
         return "Salesforce Experience Cloud hosted content"
     if host.endswith("caseware.com"):
         return "Caseware corporate website/resources"
+    if host.endswith("aka.ms"):
+        return "Microsoft short-link redirection service"
+    if host.endswith("microsoft.com"):
+        return "Microsoft web destination"
     if host.endswith("w3.org"):
         return "W3C standards/DTD technical resource"
 
@@ -436,6 +485,36 @@ def _infer_domain_purpose(*, host: str, full_url: str, lexical_ml: dict[str, Any
     if label == "medium":
         return "medium-risk URL lexical pattern destination"
     return "web destination with low-risk lexical pattern"
+
+
+def _destination_domain_description(*, domain: str, host: str, purpose: str, full_url: str) -> str:
+    d = (domain or "").lower()
+    h = (host or "").lower()
+    if "sendibm3.com" in d or "sendinblue.com" in d or "brevo.com" in d:
+        return "Brevo/Sendinblue email campaign infrastructure"
+    if "salesforce.com" in d:
+        return "Salesforce cloud and marketing infrastructure"
+    if "salesforce-experience.com" in d:
+        return "Salesforce Experience Cloud hosted content"
+    if "caseware.com" in d:
+        return "Caseware corporate website and resources"
+    if "outlook.com" in d:
+        return "Microsoft Outlook-related destination"
+    if "aka.ms" in d:
+        return "Microsoft short-link redirection service"
+    if "microsoft.com" in d:
+        return "Microsoft web destination"
+    if "w3.org" in d:
+        if "/dtd/" in (full_url or ""):
+            return "W3C XHTML/HTML DTD technical resources used by markup templates"
+        return "W3C standards and technical documentation resources"
+    if "googleapis.com" in d:
+        return "Google APIs and hosted web resources"
+    if "high-risk URL lexical pattern" in purpose:
+        return "high-risk destination pattern"
+    if "medium-risk URL lexical pattern" in purpose:
+        return "medium-risk destination pattern"
+    return "general web destination"
 
 
 def _root_domain(host: str) -> str:
@@ -516,3 +595,142 @@ def _sender_domain_fallback(
         "primary_reasoning": reasoning,
         "findings": findings,
     }
+
+
+def _render_email_template_resolution(
+    *,
+    extracted: dict[str, Any],
+    checks: dict[str, Any],
+    url_destination_context: str | None,
+    resolution: dict[str, Any],
+) -> str:
+    subject = str(extracted.get("email_subject") or "").strip() or NOT_PRESENT
+    sender_email = str(extracted.get("sender_email") or "").strip() or NOT_PRESENT
+
+    sender_line_context = _sender_domain_context_text(extracted, checks, resolution)
+    sender_ip_line = _sender_ip_summary_text(extracted, checks)
+    attachment_line = _attachment_summary_text(extracted, checks)
+    url_line = _url_summary_text(extracted, checks, url_destination_context)
+
+    additional = _additional_findings_text(resolution, sender_line_context)
+    lines = [
+        f'Email subject: "{subject}"',
+        "",
+        "After our investigation, we found:",
+        "",
+        f"The sender's email address {sender_email} appears associated with {sender_line_context}.",
+        sender_ip_line,
+        attachment_line,
+        f"All URLs found in the email body were checked and {url_line}.",
+    ]
+    if additional and additional != NOT_PRESENT:
+        lines.extend(["", f"Additional findings: {additional}."])
+    return "\n".join(lines)
+
+
+def _sender_domain_context_text(
+    extracted: dict[str, Any],
+    checks: dict[str, Any],
+    resolution: dict[str, Any],
+) -> str:
+    sender_domain = str(extracted.get("sender_domain") or "").strip()
+    if sender_domain:
+        mapped = _known_domain_context(sender_domain)
+        if mapped:
+            return mapped
+
+    whois = ((checks.get("sender_domain") or {}).get("whois") or {})
+    registrant_org = _clean_text(whois.get("registrant_org"))
+    registrar = _clean_text(whois.get("registrar"))
+    if registrant_org:
+        return f"{registrant_org} (organization indicated by WHOIS)"
+    if sender_domain and registrar:
+        return f"{sender_domain} (registrar: {registrar})"
+    return sender_domain or NOT_PRESENT
+
+
+def _sender_ip_summary_text(extracted: dict[str, Any], checks: dict[str, Any]) -> str:
+    sender_ip = str(extracted.get("sender_ip") or "").strip() or NOT_PRESENT
+    if sender_ip == NOT_PRESENT:
+        return "No sender IP address was extracted from the provided headers."
+    sender_ip_check = checks.get("sender_ip") or {}
+    abuse = sender_ip_check.get("abuseipdb") or {}
+    vt = sender_ip_check.get("vt") or {}
+    isp = _clean_text(abuse.get("isp")) or NOT_PRESENT
+    usage = _clean_text(abuse.get("usage_type")) or NOT_PRESENT
+    verdict = str(vt.get("verdict") or "").lower()
+    m = int(vt.get("malicious_count") or 0)
+    s = int(vt.get("suspicious_count") or 0)
+    t = int(vt.get("total_vendors") or 0)
+    if verdict in {"clean", "suspicious", "malicious"}:
+        rep = f"VirusTotal marked it {verdict} ({m} malicious, {s} suspicious out of {t} engines)"
+    else:
+        rep = "its reputation could not be confidently established by VirusTotal"
+    return (
+        f"The sender's IP address {sender_ip} (ISP: {isp}, Usage Type: {usage}) "
+        f"was checked and {rep}."
+    )
+
+
+def _attachment_summary_text(extracted: dict[str, Any], checks: dict[str, Any]) -> str:
+    attachments = extracted.get("attachments") or []
+    if not attachments:
+        return "No attachments present in the email body."
+    types: list[str] = []
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        f = str(att.get("filename") or "").lower()
+        if "." in f:
+            types.append(f.rsplit(".", 1)[-1])
+    attachment_types = ", ".join(sorted(set(types))) if types else "unknown type"
+    items = ((checks.get("attachments") or {}).get("items") or [])
+    verdicts = [str(((i.get("vt") or {}).get("verdict") or "")).lower() for i in items if isinstance(i, dict)]
+    if any(v == "malicious" for v in verdicts):
+        status = "malicious"
+    elif any(v == "suspicious" for v in verdicts):
+        status = "suspicious"
+    elif any(v == "clean" for v in verdicts):
+        status = "safe"
+    else:
+        status = "unknown"
+    return f"The attachments present in the email body ({attachment_types}) were found to be {status}."
+
+
+def _url_summary_text(
+    extracted: dict[str, Any],
+    checks: dict[str, Any],
+    url_destination_context: str | None,
+) -> str:
+    urls = extracted.get("urls") or []
+    checked = checks.get("urls") or []
+    context = _clean_text(url_destination_context) or NOT_PRESENT
+    return f"URLs checked: {len(checked)}/{len(urls)}. {context}"
+
+
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _known_domain_context(sender_domain: str) -> str | None:
+    d = sender_domain.lower()
+    if d.endswith("caseware.com") or d.endswith("em.caseware.com"):
+        return "Caseware (legitimate software company focused on audit, financial reporting, and analytics solutions)"
+    if d.endswith("j2.net"):
+        return "j2 Global (Ziff Davis) (legitimate corporate domain associated with cloud communications and digital services)"
+    return None
+
+
+def _additional_findings_text(resolution: dict[str, Any], sender_line_context: str) -> str | None:
+    sda = resolution.get("sender_domain_analysis") or {}
+    reasoning = _clean_text(sda.get("primary_reasoning"))
+    if not reasoning or reasoning == NOT_PRESENT:
+        return None
+    if sender_line_context and reasoning.lower() in sender_line_context.lower():
+        return None
+    if len(reasoning) > 260:
+        return None
+    return reasoning.rstrip(".")

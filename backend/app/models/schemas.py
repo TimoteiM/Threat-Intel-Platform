@@ -276,12 +276,23 @@ class ThreatFoxResult(BaseModel):
     tags: list[str] = []
 
 
+class GoogleSafeBrowsingResult(BaseModel):
+    checked: bool = False
+    listed: bool = False
+    matches_count: int = 0
+    threat_types: list[str] = []
+    platform_types: list[str] = []
+    cache_durations: list[str] = []
+    error: Optional[str] = None
+
+
 class ThreatFeedEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="threat_feeds"))
     abuseipdb: Optional[AbuseIPDBResult] = None
     phishtank: Optional[PhishTankResult] = None
     threatfox_matches: list[ThreatFoxResult] = []
     openphish_listed: bool = False
+    google_safe_browsing: Optional[GoogleSafeBrowsingResult] = None
     feeds_checked: list[str] = []
     feeds_skipped: list[str] = []
 

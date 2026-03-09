@@ -103,6 +103,7 @@ def run_analysis(
     }
 
     all_artifact_hashes = {}
+    artifact_ids: dict[str, str] = {}
     collector_statuses = {}
 
     def _time_phase(name: str, started_at: float) -> None:
@@ -113,12 +114,31 @@ def run_analysis(
         field_name = COLLECTOR_FIELD_MAP.get(name, name)
         collector_statuses[name] = result["status"]
         evidence_data[field_name] = result["evidence"]
-        # Track artifact hashes
+        # Track artifact hashes and persist collector raw artifacts.
         for artifact_name, hex_data in result.get("artifacts", {}).items():
             import hashlib
             raw = bytes.fromhex(hex_data)
             all_artifact_hashes[artifact_name] = hashlib.sha256(raw).hexdigest()
-            # TODO: Persist raw artifacts to storage via ArtifactRepository
+            content_type = _guess_content_type(artifact_name)
+            art_id = _save_artifact_sync(
+                investigation_id=investigation_id,
+                collector_name=name,
+                artifact_name=artifact_name,
+                data=raw,
+                content_type=content_type,
+            )
+            if art_id:
+                artifact_ids[artifact_name] = art_id
+
+        # Normalize known artifact id fields to true DB UUID ids.
+        if name == "urlscan":
+            urlscan_ev = evidence_data.get("urlscan") or {}
+            if isinstance(urlscan_ev, dict):
+                real_id = artifact_ids.get("urlscan_screenshot_png")
+                if real_id:
+                    urlscan_ev["screenshot_artifact_id"] = real_id
+                elif not artifact_ids.get("urlscan_screenshot_png"):
+                    urlscan_ev["screenshot_artifact_id"] = None
 
     evidence_data["artifact_hashes"] = all_artifact_hashes
 
@@ -203,6 +223,17 @@ def run_analysis(
             74,
         )
         browser_phase_start = time.monotonic()
+        reuse_urlscan_screenshot = _should_reuse_urlscan_screenshot(evidence_data, observable_type)
+        if reuse_urlscan_screenshot:
+            evidence_data["screenshot"] = _build_reused_screenshot_payload(
+                evidence_data,
+                investigated_url=investigated_url,
+                domain=domain,
+            )
+            logger.info(
+                f"[{investigation_id}] Reusing URLScan screenshot artifact "
+                f"{evidence_data['screenshot'].get('artifact_id')} and skipping local capture"
+            )
 
         def _run_screenshot() -> tuple[str, dict]:
             from app.collectors.visual_comparison import capture_screenshot
@@ -245,11 +276,13 @@ def run_analysis(
             )
             return "js_analysis", js_result
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            future_map = {
-                pool.submit(_run_screenshot): "screenshot",
+        max_workers = 1 if reuse_urlscan_screenshot else 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_map: dict[concurrent.futures.Future, str] = {
                 pool.submit(_run_js_analysis): "js_analysis",
             }
+            if not reuse_urlscan_screenshot:
+                future_map[pool.submit(_run_screenshot)] = "screenshot"
             for future in concurrent.futures.as_completed(future_map):
                 name = future_map[future]
                 try:
@@ -1291,6 +1324,41 @@ def _save_artifact_sync(
     except Exception as e:
         logger.warning(f"[{investigation_id}] Failed to save artifact {artifact_name}: {e}")
         return None
+
+
+def _guess_content_type(artifact_name: str) -> str:
+    name = str(artifact_name or "").lower()
+    if name.endswith(".png") or name.endswith("_png"):
+        return "image/png"
+    if name.endswith(".jpg") or name.endswith(".jpeg") or name.endswith("_jpg") or name.endswith("_jpeg"):
+        return "image/jpeg"
+    if name.endswith(".har") or name.endswith(".json") or name.endswith("_json"):
+        return "application/json"
+    if name.endswith(".html") or name.endswith("_html"):
+        return "text/html"
+    if name.endswith(".txt") or name.endswith(".log") or name.endswith("_txt") or name.endswith("_log"):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def _should_reuse_urlscan_screenshot(evidence_data: dict, observable_type: str) -> bool:
+    if observable_type not in ("domain", "url"):
+        return False
+    urlscan = evidence_data.get("urlscan") or {}
+    return bool(urlscan.get("screenshot_artifact_id"))
+
+
+def _build_reused_screenshot_payload(
+    evidence_data: dict,
+    *,
+    investigated_url: str | None,
+    domain: str,
+) -> dict:
+    urlscan = evidence_data.get("urlscan") or {}
+    return {
+        "artifact_id": urlscan.get("screenshot_artifact_id"),
+        "final_url": urlscan.get("page_url") or investigated_url or domain,
+    }
 
 
 def _publish_progress(

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     phishtank_api_key: str = ""
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
+    google_safe_browsing_api_key: str = ""
     url_lexical_model_path: str = ""
 
     # —— Database ———

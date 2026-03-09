@@ -7,14 +7,14 @@ import Badge from "@/components/shared/Badge";
 
 interface Props {
   report: AnalystReport;
+  evidence?: Record<string, any> | null;
 }
 
-export default function FindingsTab({ report }: Props) {
+export default function FindingsTab({ report, evidence }: Props) {
   const findings = Array.isArray(report?.findings) ? report.findings : [];
   const keyEvidence = Array.isArray(report?.key_evidence) ? report.key_evidence : [];
   const contradicting = Array.isArray(report?.contradicting_evidence) ? report.contradicting_evidence : [];
 
-  // Build ATT&CK coverage from findings
   const tacticMap: Record<string, { id: string; name: string; finding: string }[]> = {};
   for (const f of findings) {
     if (f?.ttp && f?.ttp_tactic) {
@@ -59,17 +59,15 @@ export default function FindingsTab({ report }: Props) {
                     {f?.description || ""}
                   </div>
                   {f?.ttp && (
-                    <div style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      marginTop: 10, flexWrap: "wrap",
-                    }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                       {f.ttp_url ? (
                         <a
                           href={f.ttp_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{
-                            fontSize: 11, fontWeight: 600,
+                            fontSize: 11,
+                            fontWeight: 600,
                             color: "#a78bfa",
                             textDecoration: "none",
                             padding: "3px 8px",
@@ -78,39 +76,39 @@ export default function FindingsTab({ report }: Props) {
                             border: "1px solid rgba(167,139,250,0.25)",
                             fontFamily: "var(--font-mono)",
                           }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.20)"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(167,139,250,0.10)"; }}
                         >
                           {f.ttp}
                         </a>
                       ) : (
-                        <span style={{
-                          fontSize: 11, fontWeight: 600,
-                          color: "#a78bfa",
-                          padding: "3px 8px",
-                          background: "rgba(167,139,250,0.10)",
-                          borderRadius: "var(--radius-sm)",
-                          fontFamily: "var(--font-mono)",
-                        }}>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "#a78bfa",
+                            padding: "3px 8px",
+                            background: "rgba(167,139,250,0.10)",
+                            borderRadius: "var(--radius-sm)",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
                           {f.ttp}
                         </span>
                       )}
-                      {f.ttp_name && (
-                        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                          {f.ttp_name}
-                        </span>
-                      )}
+                      {f.ttp_name && <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{f.ttp_name}</span>}
                       {f.ttp_tactic && (
-                        <span style={{
-                          fontSize: 9, fontWeight: 600,
-                          color: "var(--text-muted)",
-                          padding: "2px 6px",
-                          background: "var(--bg-elevated)",
-                          borderRadius: "var(--radius-sm)",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                          fontFamily: "var(--font-sans)",
-                        }}>
+                        <span
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 600,
+                            color: "var(--text-muted)",
+                            padding: "2px 6px",
+                            background: "var(--bg-elevated)",
+                            borderRadius: "var(--radius-sm)",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.04em",
+                            fontFamily: "var(--font-sans)",
+                          }}
+                        >
                           {f.ttp_tactic}
                         </span>
                       )}
@@ -124,54 +122,49 @@ export default function FindingsTab({ report }: Props) {
       </Section>
 
       <Section title="Key Evidence">
-        <RefList items={keyEvidence} color="var(--green)" />
+        <RefList items={keyEvidence} color="var(--green)" report={report} evidence={evidence || undefined} />
       </Section>
 
       {contradicting.length > 0 && (
         <Section title="Contradicting Evidence">
-          <RefList items={contradicting} color="var(--yellow)" />
+          <RefList items={contradicting} color="var(--yellow)" report={report} evidence={evidence || undefined} />
         </Section>
       )}
 
-      {/* ATT&CK Coverage */}
       {Object.keys(tacticMap).length > 0 && (
         <Section title="MITRE ATT&CK Coverage">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {Object.entries(tacticMap).map(([tactic, techniques]) => (
-              <div key={tactic} style={{
-                padding: "12px 16px",
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-              }}>
-                <div style={{
-                  fontSize: 11, fontWeight: 700, color: "#a78bfa",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                  marginBottom: 8, fontFamily: "var(--font-sans)",
-                }}>
+              <div
+                key={tactic}
+                style={{
+                  padding: "12px 16px",
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#a78bfa",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    marginBottom: 8,
+                    fontFamily: "var(--font-sans)",
+                  }}
+                >
                   {tactic}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {techniques.map((t, i) => (
-                    <div key={i} style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      fontSize: 11,
-                    }}>
-                      <span style={{
-                        fontWeight: 600, color: "#a78bfa",
-                        fontFamily: "var(--font-mono)", minWidth: 80,
-                      }}>
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+                      <span style={{ fontWeight: 600, color: "#a78bfa", fontFamily: "var(--font-mono)", minWidth: 80 }}>
                         {t.id}
                       </span>
-                      <span style={{ color: "var(--text-secondary)" }}>
-                        {t.name}
-                      </span>
-                      <span style={{
-                        fontSize: 10, color: "var(--text-muted)",
-                        marginLeft: "auto",
-                      }}>
-                        {t.finding}
-                      </span>
+                      <span style={{ color: "var(--text-secondary)" }}>{t.name}</span>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: "auto" }}>{t.finding}</span>
                     </div>
                   ))}
                 </div>
@@ -187,12 +180,18 @@ export default function FindingsTab({ report }: Props) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
-      <div style={{
-        fontSize: 13, fontWeight: 600, color: "var(--accent)",
-        letterSpacing: "0.01em", marginBottom: 14,
-        paddingBottom: 8, borderBottom: "1px solid var(--border)",
-        fontFamily: "var(--font-sans)",
-      }}>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: "var(--accent)",
+          letterSpacing: "0.01em",
+          marginBottom: 14,
+          paddingBottom: 8,
+          borderBottom: "1px solid var(--border)",
+          fontFamily: "var(--font-sans)",
+        }}
+      >
         {title}
       </div>
       {children}
@@ -200,27 +199,125 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function RefList({ items, color }: { items: any[]; color: string }) {
+function RefList({
+  items,
+  color,
+  report,
+  evidence,
+}: {
+  items: any[];
+  color: string;
+  report: AnalystReport;
+  evidence?: Record<string, any>;
+}) {
+  const [openIdx, setOpenIdx] = React.useState<number | null>(null);
   if (!items || items.length === 0) {
     return <div style={{ fontSize: 12, color: "var(--text-dim)" }}>None</div>;
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {items.map((item: any, i: number) => (
-        <div
-          key={i}
-          style={{
-            padding: "6px 12px",
-            background: "var(--bg-input)",
-            borderRadius: "var(--radius-sm)",
-            fontSize: 12,
-            color,
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          ▸ {typeof item === "string" ? item : JSON.stringify(item)}
+        <div key={i}>
+          <button
+            type="button"
+            onClick={() => setOpenIdx((prev) => (prev === i ? null : i))}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              padding: "6px 12px",
+              background: "var(--bg-input)",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              fontSize: 12,
+              color,
+              fontFamily: "var(--font-mono)",
+              cursor: "pointer",
+            }}
+          >
+            ? {typeof item === "string" ? item : JSON.stringify(item)}
+          </button>
+          {openIdx === i && <EvidenceDetail item={item} report={report} evidence={evidence} />}
         </div>
       ))}
     </div>
   );
+}
+
+function EvidenceDetail({
+  item,
+  report,
+  evidence,
+}: {
+  item: any;
+  report: AnalystReport;
+  evidence?: Record<string, any>;
+}) {
+  const text = typeof item === "string" ? item : JSON.stringify(item);
+  const extractedPath = extractEvidencePath(text);
+  const resolvedValue = extractedPath && evidence ? resolveByPath(evidence, extractedPath) : undefined;
+  const linkedFindings = (Array.isArray(report.findings) ? report.findings : []).filter((f: any) => {
+    const refs = Array.isArray(f?.evidence_refs) ? f.evidence_refs : [];
+    return refs.includes(extractedPath || text);
+  });
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        padding: "10px 12px",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: 11,
+        color: "var(--text-secondary)",
+      }}
+    >
+      <div style={{ marginBottom: 6, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+        Reference: {extractedPath || "free-text evidence item"}
+      </div>
+      {resolvedValue !== undefined ? (
+        <pre
+          style={{
+            margin: 0,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontFamily: "var(--font-mono)",
+            color: "var(--text)",
+          }}
+        >
+          {typeof resolvedValue === "string" ? resolvedValue : JSON.stringify(resolvedValue, null, 2)}
+        </pre>
+      ) : (
+        <div style={{ color: "var(--text-dim)" }}>No direct evidence path mapping available for this entry.</div>
+      )}
+      {linkedFindings.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: "var(--accent)", marginBottom: 4 }}>Linked findings:</div>
+          {linkedFindings.map((f: any, idx: number) => (
+            <div key={idx} style={{ fontSize: 11 }}>
+              - {f?.title || "Untitled finding"}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function extractEvidencePath(text: string): string | null {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/[a-z_]+(?:\.[a-z0-9_]+){1,}/i);
+  return m ? m[0] : null;
+}
+
+function resolveByPath(obj: any, path: string): any {
+  if (!obj || !path) return undefined;
+  const parts = path.split(".");
+  let cur: any = obj;
+  for (const part of parts) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = cur[part];
+  }
+  return cur;
 }

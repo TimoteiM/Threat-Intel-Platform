@@ -39,7 +39,19 @@ const FAST_PATH_TABS = [
 ] as const;
 
 const FAST_PATH_TYPES = new Set(["hash", "ip", "file"]);
-const TIMED_COLLECTORS = ["dns", "tls", "http", "whois", "asn", "intel", "vt"] as const;
+const DEFAULT_COLLECTOR_ORDER = [
+  "dns",
+  "tls",
+  "http",
+  "whois",
+  "asn",
+  "intel",
+  "vt",
+  "threat_feeds",
+  "urlscan",
+  "screenshot",
+  "js_analysis",
+] as const;
 
 type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "raw";
 
@@ -61,10 +73,35 @@ export default function InvestigationPage() {
   const [tabError, setTabError] = useState<string | null>(null);
   const [nowTs, setNowTs] = useState(Date.now());
   const sse = useSSE(investigationId || null);
-  const collectorRows = TIMED_COLLECTORS.map((c) => {
+  const collectorKeys = React.useMemo(() => {
+    const keys = new Set<string>(DEFAULT_COLLECTOR_ORDER as unknown as string[]);
+    Object.keys((detail?.collector_statuses || {}) as Record<string, string>).forEach((k) => keys.add(k));
+    Object.keys((sse?.collectors || {}) as Record<string, string>).forEach((k) => keys.add(k));
+    if (evidence && typeof evidence === "object") {
+      if (evidence.dns?.meta) keys.add("dns");
+      if (evidence.tls?.meta) keys.add("tls");
+      if (evidence.http?.meta) keys.add("http");
+      if (evidence.whois?.meta) keys.add("whois");
+      if (evidence.hosting?.meta) keys.add("asn");
+      if (evidence.intel?.meta) keys.add("intel");
+      if (evidence.vt?.meta) keys.add("vt");
+      if (evidence.threat_feeds?.meta) keys.add("threat_feeds");
+      if (evidence.urlscan?.meta) keys.add("urlscan");
+    }
+    const known = [...DEFAULT_COLLECTOR_ORDER].filter((k) => keys.has(k));
+    const extra = Array.from(keys).filter((k) => !DEFAULT_COLLECTOR_ORDER.includes(k as any)).sort();
+    return [...known, ...extra];
+  }, [detail?.collector_statuses, sse?.collectors, evidence]);
+
+  const collectorRows = collectorKeys.map((c) => {
     const evidenceKey = c === "asn" ? "hosting" : c;
     const evidenceMeta = evidence?.[evidenceKey]?.meta || {};
-    const status = (sse.collectors[c] || evidenceMeta.status || "pending") as CollectorStatus;
+    const status = (
+      sse.collectors[c]
+      || detail?.collector_statuses?.[c]
+      || evidenceMeta.status
+      || "pending"
+    ) as CollectorStatus;
     const durationMs = sse.collectorDurations[c] ?? evidenceMeta.duration_ms;
     return { collector: c, status, durationMs };
   });
@@ -255,7 +292,7 @@ export default function InvestigationPage() {
         case "evidence":
           return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} /> : <NoData label="evidence" />;
         case "findings":
-          return report ? <FindingsTab report={report} /> : <NoData label="report" />;
+          return report ? <FindingsTab report={report} evidence={evidence} /> : <NoData label="report" />;
         case "indicators":
           return report ? <IndicatorsTab report={report} investigationId={investigationId} /> : <NoData label="report" />;
         case "signals":
@@ -375,7 +412,7 @@ export default function InvestigationPage() {
         <>
           <ProgressTimeline
             collectors={Object.fromEntries(
-              TIMED_COLLECTORS
+              collectorKeys
                 .map((c) => {
                   const evidenceKey = c === "asn" ? "hosting" : c;
                   const collectorData = evidence?.[evidenceKey];

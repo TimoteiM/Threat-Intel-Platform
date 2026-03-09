@@ -12,20 +12,22 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
   const phishtank = threatFeeds.phishtank;
   const threatfox = threatFeeds.threatfox_matches || [];
   const openphish = threatFeeds.openphish_listed;
+  const gsb = threatFeeds.google_safe_browsing;
 
   const abuseScore = abuseipdb?.abuse_confidence_score ?? 0;
   const hasAnyHit =
     abuseScore >= 25 ||
     phishtank?.in_database ||
     threatfox.length > 0 ||
-    openphish;
+    openphish ||
+    !!gsb?.listed;
 
   return (
     <div>
       {/* Status Grid */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
+        gridTemplateColumns: "repeat(5, 1fr)",
         gap: 8,
         marginBottom: 16,
       }}>
@@ -98,6 +100,23 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
               ? openphish
                 ? "Listed in feed"
                 : "Not in feed"
+              : "Not checked"
+          }
+        />
+        <FeedStatusBox
+          label="Google Safe Browsing"
+          status={
+            threatFeeds.feeds_checked.includes("google_safe_browsing")
+              ? gsb?.listed
+                ? "danger"
+                : "clean"
+              : "skipped"
+          }
+          detail={
+            threatFeeds.feeds_checked.includes("google_safe_browsing")
+              ? gsb?.listed
+                ? `Matched (${gsb?.matches_count || 0})`
+                : "No match"
               : "Not checked"
           }
         />
@@ -220,6 +239,24 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
             fontWeight: 500,
           }}>
             Domain found in OpenPhish active phishing feed
+          </div>
+        </div>
+      )}
+
+      {/* Google Safe Browsing */}
+      {threatFeeds.feeds_checked.includes("google_safe_browsing") && (
+        <div style={{ marginBottom: 14 }}>
+          <SectionLabel color={gsb?.listed ? "var(--red)" : "var(--green)"}>
+            Google Safe Browsing — {gsb?.listed ? "Matched threat list" : "No matches"}
+          </SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <DetailRow label="Checked" value={gsb?.checked ? "Yes" : "No"} />
+            <DetailRow label="Listed" value={gsb?.listed ? "Yes" : "No"} highlight={!!gsb?.listed} />
+            <DetailRow label="Matches" value={String(gsb?.matches_count ?? 0)} />
+            {gsb?.threat_types?.length ? <DetailRow label="Threat Types" value={gsb.threat_types.join(", ")} /> : null}
+            {gsb?.platform_types?.length ? <DetailRow label="Platform Types" value={gsb.platform_types.join(", ")} /> : null}
+            {gsb?.cache_durations?.length ? <DetailRow label="Cache Durations" value={gsb.cache_durations.join(", ")} /> : null}
+            {gsb?.error ? <DetailRow label="Error" value={gsb.error} /> : null}
           </div>
         </div>
       )}

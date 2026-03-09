@@ -2,6 +2,7 @@ from app.api.email_investigations import (
     _build_url_destination_context,
     _compact_checks_for_ai,
     _prepare_history_payload,
+    _render_email_template_resolution,
 )
 
 
@@ -66,4 +67,39 @@ def test_build_url_destination_context_is_specific_not_generic() -> None:
     text = _build_url_destination_context(checks)
     assert "Caseware corporate website/resources" in text
     assert "high-risk URL lexical pattern destination" in text
+    assert "Destinations observed:" in text
+    assert "caseware.com (Caseware corporate website and resources)" in text
     assert "other web destinations" not in text
+
+
+def test_render_email_template_resolution_enforces_expected_layout() -> None:
+    extracted = {
+        "email_subject": "Quarterly Update",
+        "sender_email": "noreply@example.com",
+        "sender_domain": "example.com",
+        "sender_ip": "1.2.3.4",
+        "urls": ["https://a.example.com"],
+        "attachments": [],
+    }
+    checks = {
+        "sender_domain": {"whois": {"registrar": "Namecheap"}},
+        "sender_ip": {
+            "abuseipdb": {"isp": "Example ISP", "usage_type": "Data Center"},
+            "vt": {"verdict": "clean", "malicious_count": 0, "suspicious_count": 0, "total_vendors": 94},
+        },
+        "attachments": {"items": []},
+        "urls": [{"url": "https://a.example.com"}],
+    }
+    resolution = {
+        "sender_domain_analysis": {"primary_reasoning": "example.com is a known corporate domain."}
+    }
+    text = _render_email_template_resolution(
+        extracted=extracted,
+        checks=checks,
+        url_destination_context="web destination with low-risk lexical pattern [example.com]",
+        resolution=resolution,
+    )
+    assert text.startswith('Email subject: "Quarterly Update"')
+    assert "After our investigation, we found:" in text
+    assert "All URLs found in the email body were checked and URLs checked: 1/1." in text
+    assert "Suspicious URL assessment" not in text

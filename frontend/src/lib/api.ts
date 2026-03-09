@@ -22,9 +22,22 @@ function resolveDirectBackendBase(): string {
 function canUseDirectBackendFallback(): boolean {
   if (typeof window === "undefined") return false;
   const host = (window.location.hostname || "").toLowerCase();
-  // Only allow browser direct-backend fallback in local development.
-  // On remote VM access, force /api proxy path to avoid CORS and split-routing issues.
-  return host === "localhost" || host === "127.0.0.1";
+  // Allow direct backend fallback for local/private hosts to mitigate
+  // intermittent proxy/rewrite failures for large multipart uploads.
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const octets = host.split(".").map((x) => Number(x));
+    const [a, b] = octets;
+    if (
+      a === 10 ||
+      a === 127 ||
+      (a === 192 && b === 168) ||
+      (a === 172 && b >= 16 && b <= 31)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 class ApiError extends Error {
@@ -120,9 +133,7 @@ export async function uploadEmailInvestigation(
 
   const directBackendBase = resolveDirectBackendBase();
   const proxiedEndpoint = `${BASE}/email-investigations/upload`;
-  const proxiedLegacyEndpoint = `${BASE}/email-investigations/upload-file`;
   const directEndpoint = `${directBackendBase}/api/email-investigations/upload`;
-  const directLegacyEndpoint = `${directBackendBase}/api/email-investigations/upload-file`;
 
   function shouldPreferDirectBackend(): boolean {
     // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
@@ -143,10 +154,10 @@ export async function uploadEmailInvestigation(
   const endpoints = canUseDirect
     ? (
       shouldPreferDirectBackend()
-        ? [directEndpoint, directLegacyEndpoint, proxiedEndpoint, proxiedLegacyEndpoint]
-        : [proxiedEndpoint, proxiedLegacyEndpoint, directEndpoint, directLegacyEndpoint]
+        ? [directEndpoint, proxiedEndpoint]
+        : [proxiedEndpoint, directEndpoint]
     )
-    : [proxiedEndpoint, proxiedLegacyEndpoint];
+    : [proxiedEndpoint];
 
   let res: Response | null = null;
   let lastNetworkError: unknown = null;
@@ -170,7 +181,7 @@ export async function uploadEmailInvestigation(
 
   if (canUseDirect && !res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
     // Final compatibility retry for mixed environments.
-    const fallbackOrder = [directEndpoint, directLegacyEndpoint, proxiedEndpoint, proxiedLegacyEndpoint];
+    const fallbackOrder = [directEndpoint, proxiedEndpoint];
     for (const endpoint of fallbackOrder) {
       if (endpoint === res.url) continue;
       try {

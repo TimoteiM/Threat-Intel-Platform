@@ -271,7 +271,51 @@ def _run_collectors_inline(
                 f"[{investigation_id}] Collector phase timed out after {timeout + 30}s; "
                 "continuing with completed collector results only"
             )
+            timed_out = [name for name, status in collector_statuses.items() if status == "running"]
+            if timed_out:
+                for name in timed_out:
+                    collector_statuses[name] = "failed"
+                    results.append(_build_timeout_result(name))
+                _publish_progress(
+                    investigation_id,
+                    InvestigationState.GATHERING,
+                    f"Collector timeout: {', '.join(n.upper() for n in timed_out)}",
+                    55,
+                    collectors=collector_statuses,
+                    total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                )
     return results, collector_statuses
+
+
+def _build_timeout_result(name: str) -> dict:
+    """Build a synthetic collector result for collectors that timed out."""
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "collector": name,
+        "status": "failed",
+        "evidence": {
+            "meta": {
+                "collector": name,
+                "version": "1.0.0",
+                "status": "failed",
+                "started_at": now,
+                "completed_at": now,
+                "duration_ms": None,
+                "error": "Collector timed out before completion",
+            }
+        },
+        "meta": {
+            "collector": name,
+            "version": "1.0.0",
+            "status": "failed",
+            "started_at": now,
+            "completed_at": now,
+            "duration_ms": None,
+            "error": "Collector timed out before completion",
+        },
+        "artifacts": {},
+        "duration_ms": None,
+    }
 
 
 def _update_state(investigation_id: str, state: InvestigationState) -> None:

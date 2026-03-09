@@ -509,12 +509,23 @@ export interface ThreatFoxResult {
   tags: string[];
 }
 
+export interface GoogleSafeBrowsingResult {
+  checked: boolean;
+  listed: boolean;
+  matches_count: number;
+  threat_types: string[];
+  platform_types: string[];
+  cache_durations: string[];
+  error?: string;
+}
+
 export interface ThreatFeedEvidence {
   meta: CollectorMeta;
   abuseipdb?: AbuseIPDBResult;
   phishtank?: PhishTankResult;
   threatfox_matches: ThreatFoxResult[];
   openphish_listed: boolean;
+  google_safe_browsing?: GoogleSafeBrowsingResult;
   feeds_checked: string[];
   feeds_skipped: string[];
 }
