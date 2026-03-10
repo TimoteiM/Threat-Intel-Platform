@@ -574,6 +574,17 @@ class URLScanEvidence(BaseModel):
     notes: list[str] = []
 
 
+class URLLexicalMLEvidence(BaseModel):
+    model_source: str = "built_in"
+    score: float = 0.0
+    label: str = "low"
+    top_features: list[str] = []
+    feature_contributions: dict[str, float] = {}
+    thresholds: dict[str, float] = {"low_max": 0.30, "medium_max": 0.65}
+    weights: dict[str, float] = {"lexical_weight": 0.25}
+    error: Optional[str] = None
+
+
 # —— Signals & Gaps â”€â”€â”€
 
 class Signal(BaseModel):
@@ -662,6 +673,8 @@ class CollectedEvidence(BaseModel):
 
     # URLScan.io full page scan (domain, ip, url types)
     urlscan: Optional[URLScanEvidence] = None
+    # URL lexical ML scoring (domain/url target)
+    url_lexical_ml: Optional[URLLexicalMLEvidence] = None
 
     # Observable type that was investigated
     observable_type: str = "domain"

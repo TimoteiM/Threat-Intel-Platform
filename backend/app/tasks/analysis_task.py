@@ -36,6 +36,23 @@ COLLECTOR_FIELD_MAP = {
 }
 
 
+def _build_lexical_target(*, observable_type: str, domain: str, evidence_data: dict) -> str:
+    """
+    Build the URL-like target string passed to lexical scoring.
+    Domain investigations prefer HTTP final URL when available.
+    """
+    if observable_type == "url":
+        return str(domain or "")
+    http_data = evidence_data.get("http") or {}
+    final_url = str(http_data.get("final_url") or "").strip()
+    if final_url:
+        return final_url
+    base = str(domain or "").strip()
+    if base.startswith("http://") or base.startswith("https://"):
+        return base
+    return f"https://{base}" if base else ""
+
+
 @celery_app.task(
     bind=True,
     name="tasks.run_analysis",
@@ -446,7 +463,34 @@ def run_analysis(
             logger.warning(f"[{investigation_id}] Favicon intel failed: {e}")
         _time_phase("infrastructure_correlation", infra_phase_start)
 
-    # -- 3. Generate signals and detect gaps --
+    # -- 3. URL lexical ML scoring (domain/url) --
+    if observable_type in ("domain", "url"):
+        lexical_phase_start = time.monotonic()
+        try:
+            from app.services.url_lexical_ml_service import assess_url_lexical_risk
+
+            lexical_target = _build_lexical_target(
+                observable_type=observable_type,
+                domain=domain,
+                evidence_data=evidence_data,
+            )
+            if lexical_target:
+                evidence_data["url_lexical_ml"] = assess_url_lexical_risk(lexical_target)
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] URL lexical ML scoring failed: {e}")
+            evidence_data["url_lexical_ml"] = {
+                "model_source": "built_in",
+                "score": 0.0,
+                "label": "low",
+                "top_features": [],
+                "feature_contributions": {},
+                "thresholds": {"low_max": 0.30, "medium_max": 0.65},
+                "weights": {"lexical_weight": 0.25},
+                "error": str(e),
+            }
+        _time_phase("url_lexical_ml", lexical_phase_start)
+
+    # -- 4. Generate signals and detect gaps --
     signal_phase_start = time.monotonic()
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)
@@ -481,6 +525,20 @@ def run_analysis(
                 max_iterations,
                 timeout_seconds=settings.analyst_timeout_seconds,
             )
+            if _is_parser_fallback_report(report_data):
+                logger.warning(
+                    f"[{investigation_id}] Analyst output parse fallback detected. "
+                    "Using automated report synthesis for structured fields."
+                )
+                auto_report = _generate_automated_report(evidence_data, observable_type)
+                raw_summary = str(report_data.get("executive_summary") or "")[:3000]
+                auto_report["primary_reasoning"] = (
+                    "Analyst response parse fallback applied. "
+                    + str(auto_report.get("primary_reasoning") or "")
+                ).strip()
+                if raw_summary:
+                    auto_report["executive_summary"] = raw_summary
+                report_data = auto_report
         except TimeoutError as e:
             logger.warning(
                 f"[{investigation_id}] Analyst timed out after "
@@ -512,6 +570,7 @@ def run_analysis(
                 "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
                 "risk_score": None,
             }
+        _inject_lexical_contribution(report_data, evidence_data)
         _time_phase("report_generation", report_phase_start)
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
@@ -941,7 +1000,15 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
         })
 
     observable = (evidence_data.get("domain") or "").strip()
-    if observable_type == "ip":
+    if observable_type == "domain":
+        add_ioc("domain", observable, "Investigated domain", "high")
+        http = evidence_data.get("http") or {}
+        final_url = str(http.get("final_url") or "").strip()
+        if final_url:
+            add_ioc("url", final_url, "HTTP final URL", "medium")
+    elif observable_type == "url":
+        add_ioc("url", observable, "Investigated URL", "high")
+    elif observable_type == "ip":
         add_ioc("ip", observable, "Investigated IP", "high")
     elif observable_type in ("hash", "file"):
         # Keep the investigated hash/file identifier as a primary pivot IOC.
@@ -960,6 +1027,85 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
         add_ioc("ip", abuse["ip"], "AbuseIPDB lookup target", "medium")
 
     return iocs
+
+
+def _is_parser_fallback_report(report_data: dict) -> bool:
+    if not isinstance(report_data, dict):
+        return False
+    reason = str(report_data.get("primary_reasoning") or "").strip().lower()
+    findings = report_data.get("findings") or []
+    iocs = report_data.get("iocs") or []
+    classification = str(report_data.get("classification") or "").strip().lower()
+    return (
+        "could not be parsed into structured format" in reason
+        and not findings
+        and not iocs
+        and classification in {"", "inconclusive"}
+    )
+
+
+def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None:
+    """
+    Ensure lexical ML appears in Findings and contributes 20-30% to final risk score.
+    """
+    if not isinstance(report_data, dict):
+        return
+    lexical = evidence_data.get("url_lexical_ml") or {}
+    if not isinstance(lexical, dict) or not lexical:
+        return
+
+    lexical_score = float(lexical.get("score") or 0.0)
+    lexical_raw = float(lexical.get("raw_score") or lexical_score)
+    lexical_label = str(lexical.get("label") or "unknown").lower()
+    top = [str(x) for x in (lexical.get("top_features") or []) if str(x).strip()]
+    model_source = str(lexical.get("model_source") or "unknown")
+    calibrated = bool(lexical.get("calibration_applied"))
+    lexical_weight = 0.25
+
+    rep_score = report_data.get("risk_score")
+    rep_norm = 0.5 if rep_score is None else max(0.0, min(1.0, float(rep_score) / 100.0))
+    blended = (1.0 - lexical_weight) * rep_norm + lexical_weight * lexical_score
+    blended_score = int(round(blended * 100))
+
+    existing = report_data.get("findings")
+    findings = existing if isinstance(existing, list) else []
+    if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
+        sev = "high" if lexical_label == "high" else ("medium" if lexical_label == "medium" else "low")
+        findings.append(
+            {
+                "id": "lexical_ml_contribution",
+                "title": "URL lexical ML risk contribution",
+                "description": (
+                    f"Lexical model ({model_source}) scored this target as {lexical_label.upper()} "
+                    f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}, weight={lexical_weight:.2f}). "
+                    f"Top features: {', '.join(top[:5]) if top else 'not available'}."
+                ),
+                "severity": sev,
+                "evidence_refs": ["url_lexical_ml.score", "url_lexical_ml.top_features"],
+            }
+        )
+        report_data["findings"] = findings
+
+    key = report_data.get("key_evidence")
+    key_evidence = key if isinstance(key, list) else []
+    lexical_line = (
+        f"Lexical ML ({model_source}) {lexical_label} risk "
+        f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}"
+        + (", calibration=on" if calibrated else ", calibration=off")
+        + ")"
+    )
+    if lexical_line not in key_evidence:
+        key_evidence.append(lexical_line)
+        report_data["key_evidence"] = key_evidence
+
+    # Apply blended score only when a numeric score exists or can be inferred.
+    report_data["risk_score"] = blended_score
+    rationale = str(report_data.get("risk_rationale") or "").strip()
+    blend_note = (
+        f"Final risk uses blended scoring: reputation_weight=0.75, lexical_weight=0.25, "
+        f"reputation_component={rep_norm:.4f}, lexical_component={lexical_score:.4f}, final={blended:.4f}."
+    )
+    report_data["risk_rationale"] = (rationale + " " + blend_note).strip()
 
 
 def _looks_like_ip(value: str) -> bool:

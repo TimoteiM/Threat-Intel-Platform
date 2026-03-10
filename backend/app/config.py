@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     analyst_timeout_seconds: int = 75
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
+    intel_crtsh_timeout_seconds: int = 8
+    intel_urlhaus_timeout_seconds: int = 6
+    intel_cache_ttl_hours: int = 24
 
     @property
     def cors_origins_list(self) -> list[str]:
