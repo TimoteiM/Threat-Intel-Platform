@@ -290,7 +290,7 @@ SECTION 1 â€” JSON:
   "classification": "benign | suspicious | malicious | inconclusive",
   "confidence": "low | medium | high",
   "investigation_state": "evaluating | insufficient_data | concluded",
-  "primary_reasoning": "Core analytical argument (one paragraph)",
+  "primary_reasoning": "1-2 concise SOC-style sentences (max ~220 chars) summarizing conclusion + strongest evidence; avoid numbered lists, methodology labels, and parenthetical evidence dumps",
   "legitimate_explanation": "Best legitimate scenario for ALL evidence",
   "malicious_explanation": "Best malicious scenario for ALL evidence",
   "key_evidence": ["evidence.field references supporting classification"],

@@ -78,3 +78,32 @@ def test_build_iocs_from_evidence_includes_domain_url_and_ip_pivots():
     assert ("domain", "example.com") in ioc_pairs
     assert ("url", "https://example.com/login") in ioc_pairs
     assert ("ip", "93.184.216.34") in ioc_pairs
+
+
+def test_ensure_report_completeness_simplifies_overly_verbose_reasoning():
+    evidence = {
+        "domain": "adidas-samba.de",
+        "vt": {"found": True, "malicious_count": 15, "suspicious_count": 1, "total_vendors": 94},
+    }
+    verbose_reasoning = (
+        "Multiple independent signals indicate maliciousness: (1) signal one; "
+        "(2) signal two; (3) signal three; satisfying the attacker-necessity test."
+    )
+    report = {
+        "classification": "malicious",
+        "confidence": "high",
+        "investigation_state": "concluded",
+        "primary_reasoning": verbose_reasoning,
+        "legitimate_explanation": "",
+        "malicious_explanation": "",
+        "findings": [{"id": "f1", "title": "x", "description": "y", "severity": "high", "evidence_refs": []}],
+        "iocs": [{"type": "domain", "value": "adidas-samba.de", "context": "Investigated domain", "confidence": "high"}],
+        "recommended_action": "block",
+        "recommended_steps": ["Block immediately"],
+        "risk_score": 90,
+    }
+
+    normalized = _ensure_report_completeness(report, evidence, "domain")
+
+    assert "attacker-necessity" not in normalized["primary_reasoning"].lower()
+    assert normalized["primary_reasoning"].startswith("Automated analysis for DOMAIN")

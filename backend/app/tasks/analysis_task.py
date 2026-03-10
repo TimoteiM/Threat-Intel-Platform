@@ -1040,7 +1040,29 @@ def _ensure_report_completeness(report_data: dict, evidence_data: dict, observab
         if _blank(normalized.get(key)):
             normalized[key] = fallback.get(key)
 
+    # Keep primary reasoning short and SOC-usable even when model output is verbose.
+    reasoning_text = str(normalized.get("primary_reasoning") or "")
+    if _should_simplify_primary_reasoning(reasoning_text):
+        normalized["primary_reasoning"] = str(fallback.get("primary_reasoning") or reasoning_text).strip()
+
     return normalized
+
+
+def _should_simplify_primary_reasoning(text: str) -> bool:
+    if not text:
+        return False
+    compact = " ".join(text.split()).lower()
+    if len(compact) > 420:
+        return True
+    noisy_markers = (
+        "attacker-necessity",
+        "satisfying the",
+        "hypothesis comparison",
+        "(1)",
+        "(2)",
+        "(3)",
+    )
+    return any(marker in compact for marker in noisy_markers)
 
 
 def _looks_like_ip(value: str) -> bool:
