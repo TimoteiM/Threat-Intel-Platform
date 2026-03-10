@@ -25,6 +25,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const intel = evidence?.intel || ({} as any);
   const vt = evidence?.vt || ({} as any);
   const urlscan = evidence?.urlscan || ({} as any);
+  const urlLexical = evidence?.url_lexical_ml || ({} as any);
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
 
   const type = observableType || (evidence as any)?.observable_type || "domain";
@@ -1507,6 +1508,36 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
           </>
         )}
       </Section>
+
+      {/* URL LEXICAL ML */}
+      {(type === "url" || type === "domain") && (
+        <Section title="URL Lexical ML">
+          {!urlLexical || Object.keys(urlLexical).length === 0 ? (
+            <EmptyNote>URL lexical ML data not available (collector not run)</EmptyNote>
+          ) : (
+            <EvidenceTable
+              title="Lexical Risk Summary"
+              data={[
+                { field: "Model Source", value: urlLexical?.model_source || "built_in" },
+                {
+                  field: "Phishing Probability",
+                  value: typeof urlLexical?.score === "number" ? urlLexical.score.toFixed(4) : "—",
+                },
+                { field: "Risk Label", value: String(urlLexical?.label || "unknown").toUpperCase() },
+                { field: "Thresholds", value: "<0.3 low | 0.3-0.65 medium | >0.65 high" },
+                {
+                  field: "Top Features",
+                  value: arr(urlLexical?.top_features).length
+                    ? arr(urlLexical?.top_features).slice(0, 5).join(", ")
+                    : "—",
+                },
+                { field: "Error", value: urlLexical?.error || "—" },
+              ]}
+              columns={[{ key: "field" }, { key: "value", wrap: true }]}
+            />
+          )}
+        </Section>
+      )}
 
       {/* INTEL / REPUTATION */}
       <Section title="Threat Intelligence">

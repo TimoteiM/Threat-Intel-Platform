@@ -22,6 +22,8 @@ requests>=2.32.0
 cryptography>=44.0.0
 python-whois>=0.9.4
 tldextract>=5.1.0
+lightgbm>=4.5.0
+numpy>=1.26.0
 
 # â”€â”€â”€ Visual Comparison â”€â”€â”€
 playwright>=1.40.0

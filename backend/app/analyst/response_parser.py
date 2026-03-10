@@ -109,14 +109,26 @@ def _build_report(data: dict, narrative: dict[str, str]) -> AnalystReport:
     # Parse findings
     findings = []
     for f in data.get("findings", []):
-        findings.append(AnalystFinding(
-            id=f.get("id", "unknown"),
-            title=f.get("title", ""),
-            description=f.get("description", ""),
-            severity=f.get("severity", "info"),
-            evidence_refs=f.get("evidence_refs", []),
-            ttp=f.get("ttp"),
-        ))
+        if not isinstance(f, dict):
+            continue
+        refs = f.get("evidence_refs", [])
+        if isinstance(refs, str):
+            refs = [refs]
+        if not isinstance(refs, list):
+            refs = []
+        refs = [str(r) for r in refs if str(r).strip()]
+        try:
+            findings.append(AnalystFinding(
+                id=str(f.get("id", "unknown")),
+                title=str(f.get("title", "")),
+                description=str(f.get("description", "")),
+                severity=str(f.get("severity", "info")),
+                evidence_refs=refs,
+                ttp=str(f.get("ttp")) if f.get("ttp") is not None else None,
+            ))
+        except Exception:
+            # Skip malformed finding records instead of discarding the whole report.
+            continue
 
     # Parse IOCs
     iocs = []
@@ -131,12 +143,31 @@ def _build_report(data: dict, narrative: dict[str, str]) -> AnalystReport:
         except ValueError:
             pass
 
+    classification_raw = str(data.get("classification", "inconclusive")).lower()
+    confidence_raw = str(data.get("confidence", "low")).lower()
+    state_raw = str(data.get("investigation_state", "concluded")).lower()
+    action_raw = str(data.get("recommended_action", "monitor")).lower()
+    try:
+        classification = Classification(classification_raw)
+    except Exception:
+        classification = Classification.INCONCLUSIVE
+    try:
+        confidence = Confidence(confidence_raw)
+    except Exception:
+        confidence = Confidence.LOW
+    try:
+        investigation_state = InvestigationState(state_raw)
+    except Exception:
+        investigation_state = InvestigationState.CONCLUDED
+    try:
+        recommended_action = SOCAction(action_raw)
+    except Exception:
+        recommended_action = SOCAction.INVESTIGATE
+
     return AnalystReport(
-        classification=Classification(data.get("classification", "inconclusive")),
-        confidence=Confidence(data.get("confidence", "low")),
-        investigation_state=InvestigationState(
-            data.get("investigation_state", "concluded")
-        ),
+        classification=classification,
+        confidence=confidence,
+        investigation_state=investigation_state,
         primary_reasoning=data.get("primary_reasoning", ""),
         legitimate_explanation=data.get("legitimate_explanation", ""),
         malicious_explanation=data.get("malicious_explanation", ""),
@@ -145,13 +176,13 @@ def _build_report(data: dict, narrative: dict[str, str]) -> AnalystReport:
         data_needed=data.get("data_needed", []),
         findings=findings,
         iocs=iocs,
-        recommended_action=SOCAction(data.get("recommended_action", "monitor")),
+        recommended_action=recommended_action,
         recommended_steps=data.get("recommended_steps", []),
         risk_score=data.get("risk_score"),
         risk_rationale=data.get("risk_rationale"),
-        executive_summary=narrative.get("Executive Summary"),
-        technical_narrative=narrative.get("Technical Evidence Analysis"),
-        recommendations_narrative=narrative.get("Recommended Actions"),
+        executive_summary=(data.get("executive_summary") or narrative.get("Executive Summary")),
+        technical_narrative=(data.get("technical_narrative") or narrative.get("Technical Evidence Analysis")),
+        recommendations_narrative=(data.get("recommendations_narrative") or narrative.get("Recommended Actions")),
     )
 
 

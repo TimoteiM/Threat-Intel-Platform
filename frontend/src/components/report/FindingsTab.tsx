@@ -234,7 +234,7 @@ function RefList({
               cursor: "pointer",
             }}
           >
-            ? {typeof item === "string" ? item : JSON.stringify(item)}
+            {'>'} {typeof item === "string" ? item : JSON.stringify(item)}
           </button>
           {openIdx === i && <EvidenceDetail item={item} report={report} evidence={evidence} />}
         </div>

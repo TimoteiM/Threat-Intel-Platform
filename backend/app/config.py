@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     analyst_timeout_seconds: int = 75
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
+    intel_crtsh_timeout_seconds: int = 8
+    intel_urlhaus_timeout_seconds: int = 6
+    intel_cache_ttl_hours: int = 24
 
     @model_validator(mode="after")
     def _validate_ai_provider_keys(self) -> "Settings":

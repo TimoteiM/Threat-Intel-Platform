@@ -476,6 +476,17 @@ export interface URLScanEvidence {
   notes: string[];
 }
 
+export interface URLLexicalMLEvidence {
+  model_source?: string;
+  score?: number;
+  label?: "low" | "medium" | "high" | string;
+  top_features?: string[];
+  feature_contributions?: Record<string, number>;
+  thresholds?: Record<string, number>;
+  weights?: Record<string, number>;
+  error?: string;
+}
+
 
 // --- Threat Feed Intelligence ---
 
@@ -545,6 +556,7 @@ export interface CollectedEvidence {
   intel?: IntelEvidence;
   vt?: VTEvidence;
   urlscan?: URLScanEvidence;
+  url_lexical_ml?: URLLexicalMLEvidence;
   threat_feeds?: ThreatFeedEvidence;
   domain_similarity?: DomainSimilarityEvidence;
   visual_comparison?: VisualComparisonEvidence;

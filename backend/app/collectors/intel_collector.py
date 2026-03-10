@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from app.collectors.base import BaseCollector
+from app.config import get_settings
 from app.models.schemas import CollectorMeta, IntelEvidence, IntelHit, CertTimelineEntry, CertTimelineEvidence
 
 logger = logging.getLogger(__name__)
@@ -38,16 +39,33 @@ class IntelCollector(BaseCollector):
         evidence = IntelEvidence()
         # For URL type, all intel queries target the extracted hostname
         target = self.target_domain
+        settings = get_settings()
+        cached = self._load_cached_intel(target)
+
+        if cached:
+            evidence.related_certs = list(cached.get("related_certs") or [])[:50]
+            evidence.related_subdomains = list(cached.get("related_subdomains") or [])[:100]
+            evidence.cert_entries_raw = list(cached.get("cert_entries_raw") or [])[:200]
+            for raw_hit in (cached.get("urlhaus_hits") or []):
+                try:
+                    evidence.blocklist_hits.append(IntelHit(**raw_hit))
+                except Exception:
+                    continue
+            evidence.notes.append("Reused cached intel (crt.sh + URLhaus)")
 
         # ── 1. Certificate Transparency via crt.sh ──
-        try:
-            certs, subdomains, raw_entries = self._query_crtsh(target)
-            evidence.related_certs = certs[:50]  # Cap at 50
-            evidence.related_subdomains = subdomains[:100]
-            evidence.cert_entries_raw = raw_entries[:200]  # Store for timeline analysis
-        except Exception as e:
-            logger.warning(f"crt.sh query failed for {target}: {e}")
-            evidence.notes.append(f"crt.sh lookup failed: {e}")
+        if not cached:
+            try:
+                certs, subdomains, raw_entries = self._query_crtsh(
+                    target,
+                    timeout=min(self.timeout, settings.intel_crtsh_timeout_seconds),
+                )
+                evidence.related_certs = certs[:50]  # Cap at 50
+                evidence.related_subdomains = subdomains[:100]
+                evidence.cert_entries_raw = raw_entries[:200]  # Store for timeline analysis
+            except Exception as e:
+                logger.warning(f"crt.sh query failed for {target}: {e}")
+                evidence.notes.append(f"crt.sh lookup failed: {e}")
 
         # ── 2. DNS Blocklist checks ──
         try:
@@ -58,12 +76,25 @@ class IntelCollector(BaseCollector):
             evidence.notes.append(f"DNSBL check failed: {e}")
 
         # ── 3. URLhaus lookup ──
-        try:
-            urlhaus_hits = self._check_urlhaus(target)
-            evidence.blocklist_hits.extend(urlhaus_hits)
-        except Exception as e:
-            logger.warning(f"URLhaus lookup failed for {target}: {e}")
-            evidence.notes.append(f"URLhaus lookup failed: {e}")
+        urlhaus_hits: list[IntelHit] = []
+        if not cached:
+            try:
+                urlhaus_hits = self._check_urlhaus(
+                    target,
+                    timeout=min(self.timeout, settings.intel_urlhaus_timeout_seconds),
+                )
+                evidence.blocklist_hits.extend(urlhaus_hits)
+            except Exception as e:
+                logger.warning(f"URLhaus lookup failed for {target}: {e}")
+                evidence.notes.append(f"URLhaus lookup failed: {e}")
+            self._save_cached_intel(
+                target,
+                related_certs=evidence.related_certs,
+                related_subdomains=evidence.related_subdomains,
+                cert_entries_raw=evidence.cert_entries_raw,
+                urlhaus_hits=urlhaus_hits,
+                ttl_hours=settings.intel_cache_ttl_hours,
+            )
 
         # ── Store artifact ──
         self._store_artifact("raw_intel", json.dumps({
@@ -75,7 +106,7 @@ class IntelCollector(BaseCollector):
 
         return evidence
 
-    def _query_crtsh(self, target: str) -> tuple[list[str], list[str], list[dict]]:
+    def _query_crtsh(self, target: str, *, timeout: int) -> tuple[list[str], list[str], list[dict]]:
         """
         Query crt.sh Certificate Transparency logs.
         Returns (cert_identities, unique_subdomains, raw_entries).
@@ -83,7 +114,7 @@ class IntelCollector(BaseCollector):
         resp = requests.get(
             "https://crt.sh/",
             params={"q": f"%.{target}", "output": "json"},
-            timeout=self.timeout,
+            timeout=timeout,
             headers={"User-Agent": "ThreatInvestigator/1.0"},
         )
 
@@ -155,7 +186,7 @@ class IntelCollector(BaseCollector):
 
         return hits
 
-    def _check_urlhaus(self, target: str) -> list[IntelHit]:
+    def _check_urlhaus(self, target: str, *, timeout: int) -> list[IntelHit]:
         """
         Check domain against abuse.ch URLhaus.
         Free API, no key needed.
@@ -163,7 +194,7 @@ class IntelCollector(BaseCollector):
         resp = requests.post(
             "https://urlhaus-api.abuse.ch/v1/host/",
             data={"host": target},
-            timeout=self.timeout,
+            timeout=timeout,
         )
 
         if resp.status_code != 200:
@@ -216,6 +247,72 @@ class IntelCollector(BaseCollector):
             )
         except (ValueError, TypeError):
             return None
+
+    def _load_cached_intel(self, target: str) -> dict | None:
+        key = f"intel:{target.lower()}"
+        try:
+            from sqlalchemy import select
+            from sqlalchemy.orm import Session
+            from app.db.session import sync_engine
+            from app.models.database import LookupCache
+
+            with Session(sync_engine) as session:
+                row = session.execute(
+                    select(LookupCache).where(
+                        LookupCache.cache_key == key,
+                        LookupCache.expires_at > datetime.now(timezone.utc),
+                    )
+                ).scalar_one_or_none()
+                if row and isinstance(row.cache_value, dict):
+                    return row.cache_value
+        except Exception as e:
+            logger.debug("Intel cache lookup failed for %s: %s", target, e)
+        return None
+
+    def _save_cached_intel(
+        self,
+        target: str,
+        *,
+        related_certs: list[str],
+        related_subdomains: list[str],
+        cert_entries_raw: list[dict],
+        urlhaus_hits: list[IntelHit],
+        ttl_hours: int,
+    ) -> None:
+        key = f"intel:{target.lower()}"
+        payload = {
+            "related_certs": list(related_certs or [])[:50],
+            "related_subdomains": list(related_subdomains or [])[:100],
+            "cert_entries_raw": list(cert_entries_raw or [])[:200],
+            "urlhaus_hits": [h.model_dump(mode="json") for h in (urlhaus_hits or [])[:20]],
+        }
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=max(1, int(ttl_hours or 24)))
+        try:
+            from sqlalchemy import select
+            from sqlalchemy.orm import Session
+            from app.db.session import sync_engine
+            from app.models.database import LookupCache
+
+            with Session(sync_engine) as session:
+                row = session.execute(
+                    select(LookupCache).where(LookupCache.cache_key == key)
+                ).scalar_one_or_none()
+                if row:
+                    row.cache_value = payload
+                    row.expires_at = expires_at
+                    row.source = "intel"
+                else:
+                    session.add(
+                        LookupCache(
+                            cache_key=key,
+                            cache_value=payload,
+                            source="intel",
+                            expires_at=expires_at,
+                        )
+                    )
+                session.commit()
+        except Exception as e:
+            logger.debug("Intel cache save failed for %s: %s", target, e)
 
     def _empty_evidence(self, meta: CollectorMeta) -> IntelEvidence:
         return IntelEvidence(meta=meta)
