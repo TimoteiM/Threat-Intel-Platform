@@ -514,6 +514,8 @@ def run_analysis(
             }
         _time_phase("report_generation", report_phase_start)
 
+    report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
+
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
     phase_timings_ms["analysis_total"] = int((time.monotonic() - analysis_started) * 1000)
     evidence_data["pipeline_timings_ms"] = phase_timings_ms
@@ -921,7 +923,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
 
 def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list[dict]:
     """
-    Build IOC list directly from collected technical evidence for non-domain types.
+    Build IOC list directly from collected technical evidence.
     """
     iocs: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -949,6 +951,42 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
     elif observable_type in ("hash", "file"):
         # Keep the investigated hash/file identifier as a primary pivot IOC.
         add_ioc("hash", observable, "Investigated sample/hash", "high")
+    elif observable_type == "domain":
+        add_ioc("domain", observable, "Investigated domain", "high")
+    elif observable_type == "url":
+        add_ioc("url", observable, "Investigated URL", "high")
+        try:
+            from urllib.parse import urlparse
+            hostname = (urlparse(observable).hostname or "").strip()
+            if hostname:
+                add_ioc("domain", hostname, "Hostname extracted from investigated URL", "high")
+        except Exception:
+            pass
+
+    http = evidence_data.get("http") or {}
+    final_url = (http.get("final_url") or "").strip()
+    if final_url:
+        add_ioc("url", final_url, "Final URL observed during HTTP probing", "medium")
+    for hop in (http.get("redirect_chain") or [])[:5]:
+        hop_url = (hop.get("url") if isinstance(hop, dict) else None) or ""
+        if hop_url:
+            add_ioc("url", str(hop_url), "HTTP redirect chain", "low")
+
+    dns = evidence_data.get("dns") or {}
+    for ipv4 in (dns.get("a") or [])[:10]:
+        add_ioc("ip", str(ipv4), "Resolved A record", "medium")
+    for ipv6 in (dns.get("aaaa") or [])[:10]:
+        add_ioc("ip", str(ipv6), "Resolved AAAA record", "low")
+
+    hosting = evidence_data.get("hosting") or {}
+    if hosting.get("ip"):
+        add_ioc("ip", str(hosting.get("ip")), "Hosting IP", "medium")
+
+    urlscan = evidence_data.get("urlscan") or {}
+    if urlscan.get("page_url"):
+        add_ioc("url", str(urlscan.get("page_url")), "URLScan observed page URL", "medium")
+    if urlscan.get("page_ip"):
+        add_ioc("ip", str(urlscan.get("page_ip")), "URLScan observed page IP", "medium")
 
     # ThreatFox IOC matches from threat_feeds collector.
     threat_feeds = evidence_data.get("threat_feeds") or {}
@@ -963,6 +1001,46 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
         add_ioc("ip", abuse["ip"], "AbuseIPDB lookup target", "medium")
 
     return iocs
+
+
+def _ensure_report_completeness(report_data: dict, evidence_data: dict, observable_type: str) -> dict:
+    """
+    Ensure report always has baseline analyst content even if AI output is sparse.
+    """
+    if not isinstance(report_data, dict):
+        report_data = {}
+
+    normalized = dict(report_data)
+    fallback = _generate_automated_report(evidence_data, observable_type)
+
+    def _blank(value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, (list, dict, tuple, set)):
+            return len(value) == 0
+        return False
+
+    # Always guarantee required keys exist.
+    for key, value in fallback.items():
+        normalized.setdefault(key, value)
+
+    # Backfill commonly missing sections that power UI/PDF tabs.
+    for key in (
+        "primary_reasoning",
+        "findings",
+        "iocs",
+        "key_evidence",
+        "recommended_steps",
+        "executive_summary",
+        "technical_narrative",
+        "recommendations_narrative",
+    ):
+        if _blank(normalized.get(key)):
+            normalized[key] = fallback.get(key)
+
+    return normalized
 
 
 def _looks_like_ip(value: str) -> bool:
