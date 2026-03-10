@@ -487,6 +487,68 @@ export interface URLLexicalMLEvidence {
   error?: string;
 }
 
+export interface RedirectDestinationWhoisEvidence {
+  status?: string;
+  error?: string;
+  registrar?: string;
+  domain_age_days?: number;
+  created_date?: string;
+  expiry_date?: string;
+  name_servers?: string[];
+  registrant_org?: string;
+  registrant_country?: string;
+}
+
+export interface RedirectDestinationVTEvidence {
+  status?: string;
+  error?: string;
+  found?: boolean;
+  malicious_count?: number;
+  suspicious_count?: number;
+  total_vendors?: number;
+  reputation_score?: number;
+  categories?: Record<string, string>;
+}
+
+export interface RedirectDestinationDNSEvidence {
+  status?: string;
+  error?: string;
+  a?: string[];
+  aaaa?: string[];
+  mx?: string[];
+  ns?: string[];
+}
+
+export interface RedirectDestinationHostingEvidence {
+  status?: string;
+  error?: string;
+  ip?: string;
+  asn?: number;
+  asn_org?: string;
+  country?: string;
+  is_cdn?: boolean;
+  is_cloud?: boolean;
+}
+
+export interface RedirectDestinationComparisonEvidence {
+  source_age_days?: number;
+  destination_age_days?: number;
+  source_vs_destination_root?: string;
+}
+
+export interface RedirectDestinationIntelEvidence {
+  final_url?: string;
+  investigated_host?: string;
+  investigated_root?: string;
+  destination_host?: string;
+  destination_root?: string;
+  whois?: RedirectDestinationWhoisEvidence;
+  vt?: RedirectDestinationVTEvidence;
+  dns?: RedirectDestinationDNSEvidence;
+  hosting?: RedirectDestinationHostingEvidence;
+  comparison?: RedirectDestinationComparisonEvidence;
+}
+
 
 // --- Threat Feed Intelligence ---
 
@@ -557,6 +619,7 @@ export interface CollectedEvidence {
   vt?: VTEvidence;
   urlscan?: URLScanEvidence;
   url_lexical_ml?: URLLexicalMLEvidence;
+  redirect_destination_intel?: RedirectDestinationIntelEvidence;
   threat_feeds?: ThreatFeedEvidence;
   domain_similarity?: DomainSimilarityEvidence;
   visual_comparison?: VisualComparisonEvidence;

@@ -26,6 +26,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const vt = evidence?.vt || ({} as any);
   const urlscan = evidence?.urlscan || ({} as any);
   const urlLexical = evidence?.url_lexical_ml || ({} as any);
+  const redirectDestinationIntel = evidence?.redirect_destination_intel || ({} as any);
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
 
   const type = observableType || (evidence as any)?.observable_type || "domain";
@@ -1535,6 +1536,105 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
             />
+          )}
+        </Section>
+      )}
+
+      {/* REDIRECT DESTINATION INTELLIGENCE */}
+      {(type === "url" || type === "domain") && (
+        <Section title="Redirect Destination Intelligence">
+          {!redirectDestinationIntel || Object.keys(redirectDestinationIntel).length === 0 ? (
+            <EmptyNote>No cross-domain redirect destination intel available</EmptyNote>
+          ) : (
+            <>
+              <EvidenceTable
+                title="Redirect Comparison"
+                data={[
+                  {
+                    field: "Source vs Destination Root",
+                    value: redirectDestinationIntel?.comparison?.source_vs_destination_root || "—",
+                  },
+                  { field: "Final URL", value: redirectDestinationIntel?.final_url || "—" },
+                  { field: "Source Host", value: redirectDestinationIntel?.investigated_host || "—" },
+                  { field: "Destination Host", value: redirectDestinationIntel?.destination_host || "—" },
+                  {
+                    field: "Source Domain Age (days)",
+                    value: redirectDestinationIntel?.comparison?.source_age_days ?? "—",
+                  },
+                  {
+                    field: "Destination Domain Age (days)",
+                    value: redirectDestinationIntel?.comparison?.destination_age_days ?? "—",
+                  },
+                ]}
+                columns={[{ key: "field" }, { key: "value", wrap: true }]}
+              />
+
+              {redirectDestinationIntel?.whois && (
+                <EvidenceTable
+                  title="Destination WHOIS"
+                  data={[
+                    { field: "Collector Status", value: redirectDestinationIntel.whois.status || "—" },
+                    { field: "Registrar", value: redirectDestinationIntel.whois.registrar || "—" },
+                    { field: "Domain Age (days)", value: redirectDestinationIntel.whois.domain_age_days ?? "—" },
+                    { field: "Created Date", value: fmtDate(redirectDestinationIntel.whois.created_date) },
+                    { field: "Expiry Date", value: fmtDate(redirectDestinationIntel.whois.expiry_date) },
+                    {
+                      field: "Registrant",
+                      value: redirectDestinationIntel.whois.registrant_org || redirectDestinationIntel.whois.registrant_country || "—",
+                    },
+                    {
+                      field: "Name Servers",
+                      value: arr(redirectDestinationIntel.whois.name_servers).join(", ") || "—",
+                    },
+                    { field: "Error", value: redirectDestinationIntel.whois.error || "—" },
+                  ]}
+                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
+                />
+              )}
+
+              {redirectDestinationIntel?.vt && (
+                <EvidenceTable
+                  title="Destination VirusTotal"
+                  data={[
+                    { field: "Collector Status", value: redirectDestinationIntel.vt.status || "—" },
+                    { field: "Found in VT", value: redirectDestinationIntel.vt.found ? "Yes" : "No" },
+                    { field: "Malicious", value: redirectDestinationIntel.vt.malicious_count ?? 0 },
+                    { field: "Suspicious", value: redirectDestinationIntel.vt.suspicious_count ?? 0 },
+                    { field: "Total Vendors", value: redirectDestinationIntel.vt.total_vendors ?? 0 },
+                    { field: "Reputation Score", value: redirectDestinationIntel.vt.reputation_score ?? "—" },
+                    {
+                      field: "Categories",
+                      value: redirectDestinationIntel.vt.categories
+                        ? Object.entries(redirectDestinationIntel.vt.categories)
+                            .map(([k, v]) => `${k}:${v}`)
+                            .join(", ") || "—"
+                        : "—",
+                    },
+                    { field: "Error", value: redirectDestinationIntel.vt.error || "—" },
+                  ]}
+                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
+                />
+              )}
+
+              {(redirectDestinationIntel?.dns || redirectDestinationIntel?.hosting) && (
+                <EvidenceTable
+                  title="Destination Infrastructure"
+                  data={[
+                    { field: "DNS Status", value: redirectDestinationIntel?.dns?.status || "—" },
+                    { field: "A / AAAA", value: [...arr(redirectDestinationIntel?.dns?.a), ...arr(redirectDestinationIntel?.dns?.aaaa)].join(", ") || "—" },
+                    { field: "MX", value: arr(redirectDestinationIntel?.dns?.mx).join(", ") || "—" },
+                    { field: "NS", value: arr(redirectDestinationIntel?.dns?.ns).join(", ") || "—" },
+                    { field: "Hosting Status", value: redirectDestinationIntel?.hosting?.status || "—" },
+                    { field: "IP", value: redirectDestinationIntel?.hosting?.ip || "—" },
+                    { field: "ASN", value: redirectDestinationIntel?.hosting?.asn ?? "—" },
+                    { field: "ASN Org", value: redirectDestinationIntel?.hosting?.asn_org || "—" },
+                    { field: "Country", value: redirectDestinationIntel?.hosting?.country || "—" },
+                    { field: "CDN / Cloud", value: `${redirectDestinationIntel?.hosting?.is_cdn ? "CDN" : "no CDN"} | ${redirectDestinationIntel?.hosting?.is_cloud ? "cloud" : "non-cloud"}` },
+                  ]}
+                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
+                />
+              )}
+            </>
           )}
         </Section>
       )}

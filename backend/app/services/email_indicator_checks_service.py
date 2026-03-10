@@ -27,6 +27,7 @@ from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import LookupCache
+from app.services.url_lexical_ml_service import assess_url_lexical_risk
 from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,21 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
 def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
+    lexical_target = str(resolved_final_url or url)
+    try:
+        lexical_ml = assess_url_lexical_risk(lexical_target)
+    except Exception as exc:
+        logger.warning("URL lexical ML failed for URL %s: %s", lexical_target, exc)
+        lexical_ml = {
+            "enabled": False,
+            "model_source": "built_in",
+            "score": 0.0,
+            "label": "unknown",
+            "top_features": [],
+            "feature_contributions": {},
+            "error": str(exc),
+        }
+    lexical_ml["target_url"] = lexical_target
     final_vt_used = False
     if _should_retry_vt_on_final(vt, url=url, final_url=resolved_final_url):
         vt_final = _vt_lookup(str(resolved_final_url), "url")
@@ -152,6 +168,7 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> 
         "vt": vt,
         "effective_verdict": _effective_url_verdict(vt=vt, urlscan=urlscan),
         "urlscan": urlscan,
+        "lexical_ml": lexical_ml,
         "vt_checked_on_final_url": final_vt_used,
         "screenshot": screenshot,
     }

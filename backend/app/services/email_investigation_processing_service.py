@@ -135,6 +135,7 @@ def _build_url_assessments_fallback(checks: dict[str, Any]) -> list[dict[str, st
             continue
         url = str(item.get("url") or "Not present in the provided evidence.")
         vt = item.get("vt") or {}
+        lexical = item.get("lexical_ml") or {}
         ss = item.get("screenshot") or {}
         final_url = str(ss.get("final_url") or "Not present in the provided evidence.")
         verdict = str(vt.get("verdict") or "unknown").lower()
@@ -151,6 +152,8 @@ def _build_url_assessments_fallback(checks: dict[str, Any]) -> list[dict[str, st
             malicious_count=int(vt.get("malicious_count") or 0),
             suspicious_count=int(vt.get("suspicious_count") or 0),
             total_vendors=int(vt.get("total_vendors") or 0),
+            lexical_label=str(lexical.get("label") or "unknown").lower(),
+            lexical_score=float(lexical.get("score") or 0.0),
         )
         out.append(
             {
@@ -171,6 +174,8 @@ def _build_url_reasoning(
     malicious_count: int,
     suspicious_count: int,
     total_vendors: int,
+    lexical_label: str,
+    lexical_score: float,
 ) -> str:
     target = final_url if final_url != "Not present in the provided evidence." else url
     host = ""
@@ -197,6 +202,12 @@ def _build_url_reasoning(
 
     if verdict == "clean":
         if host:
+            if lexical_label in {"high", "medium"}:
+                return (
+                    f"This URL points to {host}{path if path else ''}. VirusTotal is clean, "
+                    f"but lexical ML is {lexical_label} risk (score={lexical_score:.3f}); "
+                    "treat as potentially deceptive until validated."
+                )
             if host.lower().endswith("w3.org"):
                 return (
                     f"This URL points to a W3C-hosted standards resource "
@@ -313,6 +324,7 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
     for item in checks.get("urls") or []:
         vt = item.get("vt") or {}
         ss = item.get("screenshot") or {}
+        lexical = item.get("lexical_ml") or {}
         urls_compact.append(
             {
                 "url": item.get("url"),
@@ -326,6 +338,14 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                 },
                 "effective_verdict": item.get("effective_verdict"),
                 "urlscan": item.get("urlscan") or {},
+                "lexical_ml": {
+                    "target_url": lexical.get("target_url"),
+                    "model_source": lexical.get("model_source"),
+                    "score": lexical.get("score"),
+                    "label": lexical.get("label"),
+                    "top_features": lexical.get("top_features") or [],
+                    "error": lexical.get("error"),
+                },
                 "screenshot": {
                     "captured": ss.get("captured"),
                     "final_url": ss.get("final_url"),
@@ -764,12 +784,14 @@ def _summarize_urls(checks: dict[str, Any], resolution: dict[str, Any]) -> tuple
         if not isinstance(item, dict):
             continue
         vt = item.get("vt") or {}
+        lexical = item.get("lexical_ml") or {}
         ss = item.get("screenshot") or {}
         verdict = str(vt.get("verdict") or "unknown").lower()
+        lexical_label = str(lexical.get("label") or "unknown").lower()
         final_url = str(ss.get("final_url") or item.get("url") or NOT_PRESENT)
         if final_url and final_url != NOT_PRESENT:
             destinations.append(final_url)
-        if verdict in {"suspicious", "malicious"}:
+        if verdict in {"suspicious", "malicious"} or lexical_label in {"high", "medium"}:
             suspicious_urls.append(str(item.get("url") or final_url))
 
     summary = _summarize_url_destinations(items)

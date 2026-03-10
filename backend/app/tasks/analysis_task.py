@@ -19,6 +19,7 @@ import logging
 import time
 import concurrent.futures
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -26,6 +27,7 @@ from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
 from app.config import get_settings
+from app.utils.domain_utils import extract_registered_domain
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -51,6 +53,154 @@ def _build_lexical_target(*, observable_type: str, domain: str, evidence_data: d
     if base.startswith("http://") or base.startswith("https://"):
         return base
     return f"https://{base}" if base else ""
+
+
+def _collect_redirect_destination_intel(
+    *,
+    domain: str,
+    investigation_id: str,
+    observable_type: str,
+    evidence_data: dict,
+) -> dict | None:
+    """
+    Enrich cross-domain redirect destinations to support impersonation comparisons.
+    """
+    http = evidence_data.get("http") or {}
+    final_url = str(http.get("final_url") or "").strip()
+    if not final_url:
+        return None
+
+    try:
+        destination_host = (urlparse(final_url).hostname or "").strip().lower()
+    except Exception:
+        destination_host = ""
+    if not destination_host:
+        return None
+
+    investigated_host = str(domain or "").strip().lower()
+    if observable_type == "url":
+        try:
+            investigated_host = (urlparse(investigated_host).hostname or investigated_host).strip().lower()
+        except Exception:
+            pass
+
+    investigated_root = extract_registered_domain(investigated_host) or investigated_host
+    destination_root = extract_registered_domain(destination_host) or destination_host
+    if not investigated_root or not destination_root or investigated_root == destination_root:
+        return None
+
+    out: dict[str, object] = {
+        "final_url": final_url,
+        "investigated_host": investigated_host,
+        "investigated_root": investigated_root,
+        "destination_host": destination_host,
+        "destination_root": destination_root,
+    }
+
+    # WHOIS comparison
+    try:
+        from app.collectors.whois_collector import WHOISCollector
+
+        whois_collector = WHOISCollector(
+            domain=destination_root,
+            investigation_id=investigation_id,
+            observable_type="domain",
+            timeout=min(settings.collector_timeout, 20),
+        )
+        whois_ev, whois_meta, _ = whois_collector.run()
+        out["whois"] = {
+            "status": whois_meta.status.value,
+            "error": whois_meta.error,
+            "registrar": whois_ev.registrar,
+            "domain_age_days": whois_ev.domain_age_days,
+            "created_date": whois_ev.created_date.isoformat() if whois_ev.created_date else None,
+            "expiry_date": whois_ev.expiry_date.isoformat() if whois_ev.expiry_date else None,
+            "name_servers": whois_ev.name_servers,
+            "registrant_org": whois_ev.registrant_org,
+            "registrant_country": whois_ev.registrant_country,
+        }
+    except Exception as exc:
+        out["whois"] = {"status": "failed", "error": str(exc)}
+
+    # VT comparison
+    try:
+        from app.collectors.vt_collector import VTCollector
+
+        vt_collector = VTCollector(
+            domain=destination_root,
+            investigation_id=investigation_id,
+            observable_type="domain",
+            timeout=min(settings.collector_timeout, 25),
+        )
+        vt_ev, vt_meta, _ = vt_collector.run()
+        out["vt"] = {
+            "status": vt_meta.status.value,
+            "error": vt_meta.error,
+            "found": vt_ev.found,
+            "malicious_count": vt_ev.malicious_count,
+            "suspicious_count": vt_ev.suspicious_count,
+            "total_vendors": vt_ev.total_vendors,
+            "reputation_score": vt_ev.reputation_score,
+            "categories": vt_ev.categories,
+        }
+    except Exception as exc:
+        out["vt"] = {"status": "failed", "error": str(exc)}
+
+    # DNS context
+    try:
+        from app.collectors.dns_collector import DNSCollector
+
+        dns_collector = DNSCollector(
+            domain=destination_root,
+            investigation_id=investigation_id,
+            observable_type="domain",
+            timeout=min(settings.collector_timeout, 20),
+        )
+        dns_ev, dns_meta, _ = dns_collector.run()
+        out["dns"] = {
+            "status": dns_meta.status.value,
+            "error": dns_meta.error,
+            "a": dns_ev.a,
+            "aaaa": dns_ev.aaaa,
+            "mx": dns_ev.mx,
+            "ns": dns_ev.ns,
+        }
+    except Exception as exc:
+        out["dns"] = {"status": "failed", "error": str(exc)}
+
+    # Hosting/ASN context
+    try:
+        from app.collectors.asn_collector import ASNCollector
+
+        asn_collector = ASNCollector(
+            domain=destination_root,
+            investigation_id=investigation_id,
+            observable_type="domain",
+            timeout=min(settings.collector_timeout, 20),
+        )
+        asn_ev, asn_meta, _ = asn_collector.run()
+        out["hosting"] = {
+            "status": asn_meta.status.value,
+            "error": asn_meta.error,
+            "ip": asn_ev.ip,
+            "asn": asn_ev.asn,
+            "asn_org": asn_ev.asn_org,
+            "country": asn_ev.country,
+            "is_cdn": asn_ev.is_cdn,
+            "is_cloud": asn_ev.is_cloud,
+        }
+    except Exception as exc:
+        out["hosting"] = {"status": "failed", "error": str(exc)}
+
+    # Compact comparison summary
+    src_age = (evidence_data.get("whois") or {}).get("domain_age_days")
+    dst_age = ((out.get("whois") or {}).get("domain_age_days") if isinstance(out.get("whois"), dict) else None)
+    out["comparison"] = {
+        "source_age_days": src_age,
+        "destination_age_days": dst_age,
+        "source_vs_destination_root": f"{investigated_root} -> {destination_root}",
+    }
+    return out
 
 
 @celery_app.task(
@@ -490,6 +640,22 @@ def run_analysis(
             }
         _time_phase("url_lexical_ml", lexical_phase_start)
 
+    # -- 3b. Redirect destination enrichment (cross-domain redirect intelligence) --
+    if observable_type in ("domain", "url"):
+        redirect_dest_phase_start = time.monotonic()
+        try:
+            redirect_dest = _collect_redirect_destination_intel(
+                domain=domain,
+                investigation_id=investigation_id,
+                observable_type=observable_type,
+                evidence_data=evidence_data,
+            )
+            if redirect_dest:
+                evidence_data["redirect_destination_intel"] = redirect_dest
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Redirect destination enrichment failed: {e}")
+        _time_phase("redirect_destination_enrichment", redirect_dest_phase_start)
+
     # -- 4. Generate signals and detect gaps --
     signal_phase_start = time.monotonic()
     signals = generate_signals(evidence_data)
@@ -571,6 +737,7 @@ def run_analysis(
                 "risk_score": None,
             }
         _inject_lexical_contribution(report_data, evidence_data)
+        _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
         _time_phase("report_generation", report_phase_start)
 
     report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
@@ -1130,6 +1297,96 @@ def _should_simplify_primary_reasoning(text: str) -> bool:
         "(3)",
     )
     return any(marker in compact for marker in noisy_markers)
+
+
+def _apply_phishing_redirect_risk_floor(report_data: dict, evidence_data: dict, observable_type: str) -> None:
+    """
+    Raise risk when a newly created domain redirects cross-domain to an established destination,
+    a common phishing lure pattern.
+    """
+    if observable_type not in {"domain", "url"} or not isinstance(report_data, dict):
+        return
+
+    whois = evidence_data.get("whois") or {}
+    http = evidence_data.get("http") or {}
+    investigated = str(evidence_data.get("domain") or "").strip().lower()
+    final_url = str(http.get("final_url") or "").strip()
+    domain_age_days = whois.get("domain_age_days")
+
+    if not investigated or not final_url:
+        return
+    if not isinstance(domain_age_days, int) or domain_age_days < 0:
+        return
+
+    try:
+        final_host = (urlparse(final_url).hostname or "").strip().lower()
+    except Exception:
+        final_host = ""
+    if not final_host:
+        return
+
+    investigated_host = investigated
+    if "://" in investigated:
+        try:
+            investigated_host = (urlparse(investigated).hostname or investigated).strip().lower()
+        except Exception:
+            investigated_host = investigated
+
+    investigated_root = extract_registered_domain(investigated_host) or investigated_host
+    final_root = extract_registered_domain(final_host) or final_host
+    if investigated_root == final_root:
+        return
+
+    if domain_age_days > 120:
+        return
+
+    # Suspicious redirect pattern confirmed: young domain + cross-domain redirect.
+    current_score = report_data.get("risk_score")
+    try:
+        numeric_score = int(current_score) if current_score is not None else 0
+    except Exception:
+        numeric_score = 0
+    report_data["risk_score"] = max(65, numeric_score)
+
+    classification = str(report_data.get("classification") or "").lower()
+    if classification in {"benign", "inconclusive", ""}:
+        report_data["classification"] = "suspicious"
+    confidence = str(report_data.get("confidence") or "").lower()
+    if confidence in {"low", ""}:
+        report_data["confidence"] = "medium"
+    action = str(report_data.get("recommended_action") or "").lower()
+    if action in {"monitor", "", "allow"}:
+        report_data["recommended_action"] = "investigate"
+
+    findings = report_data.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    if not any(isinstance(f, dict) and str(f.get("id")) == "young_cross_domain_redirect" for f in findings):
+        findings.append(
+            {
+                "id": "young_cross_domain_redirect",
+                "title": "Young domain redirects to different root domain",
+                "description": (
+                    f"WHOIS age is {domain_age_days} days and HTTP final URL resolves to "
+                    f"{final_root} (different from investigated root {investigated_root}). "
+                    "This redirect-lure pattern is consistent with phishing pretext infrastructure."
+                ),
+                "severity": "high" if domain_age_days <= 45 else "medium",
+                "evidence_refs": ["whois.domain_age_days", "http.final_url"],
+            }
+        )
+    report_data["findings"] = findings
+
+    key_evidence = report_data.get("key_evidence")
+    if not isinstance(key_evidence, list):
+        key_evidence = []
+    redirect_line = (
+        f"Young domain ({domain_age_days} days) redirects to different root: "
+        f"{investigated_root} -> {final_root}"
+    )
+    if redirect_line not in key_evidence:
+        key_evidence.append(redirect_line)
+    report_data["key_evidence"] = key_evidence
 
 
 def _is_parser_fallback_report(report_data: dict) -> bool:

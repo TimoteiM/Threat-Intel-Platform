@@ -585,6 +585,68 @@ class URLLexicalMLEvidence(BaseModel):
     error: Optional[str] = None
 
 
+class RedirectDestinationWhoisEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    registrar: Optional[str] = None
+    domain_age_days: Optional[int] = None
+    created_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+    name_servers: list[str] = []
+    registrant_org: Optional[str] = None
+    registrant_country: Optional[str] = None
+
+
+class RedirectDestinationVTEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    found: bool = False
+    malicious_count: int = 0
+    suspicious_count: int = 0
+    total_vendors: int = 0
+    reputation_score: int = 0
+    categories: dict[str, str] = {}
+
+
+class RedirectDestinationDNSEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    a: list[str] = []
+    aaaa: list[str] = []
+    mx: list[str] = []
+    ns: list[str] = []
+
+
+class RedirectDestinationHostingEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    ip: Optional[str] = None
+    asn: Optional[int] = None
+    asn_org: Optional[str] = None
+    country: Optional[str] = None
+    is_cdn: Optional[bool] = None
+    is_cloud: Optional[bool] = None
+
+
+class RedirectDestinationComparisonEvidence(BaseModel):
+    source_age_days: Optional[int] = None
+    destination_age_days: Optional[int] = None
+    source_vs_destination_root: Optional[str] = None
+
+
+class RedirectDestinationIntelEvidence(BaseModel):
+    final_url: Optional[str] = None
+    investigated_host: Optional[str] = None
+    investigated_root: Optional[str] = None
+    destination_host: Optional[str] = None
+    destination_root: Optional[str] = None
+    whois: Optional[RedirectDestinationWhoisEvidence] = None
+    vt: Optional[RedirectDestinationVTEvidence] = None
+    dns: Optional[RedirectDestinationDNSEvidence] = None
+    hosting: Optional[RedirectDestinationHostingEvidence] = None
+    comparison: Optional[RedirectDestinationComparisonEvidence] = None
+
+
 # —— Signals & Gaps â”€â”€â”€
 
 class Signal(BaseModel):
@@ -675,6 +737,8 @@ class CollectedEvidence(BaseModel):
     urlscan: Optional[URLScanEvidence] = None
     # URL lexical ML scoring (domain/url target)
     url_lexical_ml: Optional[URLLexicalMLEvidence] = None
+    # Redirect destination enrichment (cross-domain redirect context)
+    redirect_destination_intel: Optional[RedirectDestinationIntelEvidence] = None
 
     # Observable type that was investigated
     observable_type: str = "domain"
