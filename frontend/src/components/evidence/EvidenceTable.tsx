@@ -8,6 +8,7 @@ interface Row {
 
 interface Column {
   key: string;
+  label?: string;
   wrap?: boolean;
 }
 
@@ -15,9 +16,10 @@ interface Props {
   title?: string;
   data: Row[];
   columns: Column[];
+  showHeader?: boolean;
 }
 
-export default function EvidenceTable({ title, data, columns }: Props) {
+export default function EvidenceTable({ title, data, columns, showHeader = false }: Props) {
   if (data.length === 0) return null;
 
   return (
@@ -39,14 +41,41 @@ export default function EvidenceTable({ title, data, columns }: Props) {
         </div>
       )}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        {showHeader && (
+          <thead>
+            <tr>
+              {columns.map((col, idx) => (
+                <th
+                  key={col.key}
+                  style={{
+                    textAlign: "left",
+                    padding: "6px 12px",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--text-muted)",
+                    borderBottom: "1px solid var(--border-dim)",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--font-mono)",
+                    width: idx === 0 ? "30%" : "auto",
+                  }}
+                >
+                  {col.label || col.key.toUpperCase()}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
         <tbody>
           {data.map((row, i) => (
             <tr key={i} style={{ borderBottom: "1px solid var(--bg-root)" }}>
               {columns.map((col, j) => {
                 const val = row[col.key];
-                const display =
+                const display: React.ReactNode =
                   val === null || val === undefined
-                    ? "—"
+                    ? "-"
+                    : React.isValidElement(val)
+                    ? val
                     : typeof val === "boolean"
                     ? val
                       ? "Yes"

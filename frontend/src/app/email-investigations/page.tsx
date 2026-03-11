@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  cancelEmailInvestigationRun,
   getEmailInvestigationRun,
   getEmailInvestigationHistoryItem,
   listEmailInvestigationHistory,
@@ -20,12 +21,14 @@ export default function EmailInvestigationsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingHistoryItemId, setLoadingHistoryItemId] = useState<string | null>(null);
+  const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<EmailInvestigationResponse | null>(null);
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [includeScreenshots, setIncludeScreenshots] = useState(false);
   const [runAiInterpretation, setRunAiInterpretation] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());
 
@@ -129,6 +132,7 @@ export default function EmailInvestigationsPage() {
         run_ai: runAiInterpretation,
         ml_phishing_score: mlScore.trim() ? Number(mlScore) : undefined,
       })) as EmailInvestigationSubmitResponse;
+      setActiveRunId(submit.run_id || null);
       setSelectedHistoryId(submit.run_id || null);
 
       const pollDeadline = Date.now() + 15 * 60 * 1000;
@@ -143,12 +147,17 @@ export default function EmailInvestigationsPage() {
         if (run.status === "failed") {
           throw new Error(run.error || "Email investigation failed");
         }
+        if (run.status === "cancelled") {
+          setResult(run);
+          completedRun = run;
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
 
       if (!completedRun) {
         const latest = (await getEmailInvestigationRun(submit.run_id)) as EmailInvestigationResponse;
-        if (latest.status === "completed") {
+        if (latest.status === "completed" || latest.status === "cancelled") {
           setResult(latest);
         } else {
           throw new Error("Email investigation is still processing. Please refresh history shortly.");
@@ -161,6 +170,30 @@ export default function EmailInvestigationsPage() {
     } finally {
       setLoading(false);
       setLoadingStartedAt(null);
+      setActiveRunId(null);
+    }
+  }
+
+  async function cancelRun(runId: string) {
+    if (!runId || cancelingRunId) return;
+    setCancelingRunId(runId);
+    setError("");
+    try {
+      await cancelEmailInvestigationRun(runId);
+      if (activeRunId === runId) {
+        setLoading(false);
+        setLoadingStartedAt(null);
+        setActiveRunId(null);
+      }
+      await refreshHistory();
+      if (selectedHistoryId === runId) {
+        const item = await getEmailInvestigationRun(runId);
+        setResult(item as EmailInvestigationResponse);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to cancel investigation");
+    } finally {
+      setCancelingRunId(null);
     }
   }
 
@@ -207,30 +240,60 @@ export default function EmailInvestigationsPage() {
         ) : (
           <div style={{ display: "grid", gap: 8, maxHeight: 220, overflowY: "auto", paddingRight: 4 }}>
             {historyItems.map((h) => (
-              <button
+              <div
                 key={h.id}
-                type="button"
-                onClick={() => openHistoryItem(h.id)}
-                disabled={!!loadingHistoryItemId}
                 style={{
                   textAlign: "left",
                   background: selectedHistoryId === h.id ? "rgba(96,165,250,0.12)" : "var(--bg-card)",
                   border: selectedHistoryId === h.id ? "1px solid rgba(96,165,250,0.35)" : "1px solid var(--border)",
                   borderRadius: "var(--radius)",
                   padding: 10,
-                  cursor: "pointer",
                 }}
               >
-                <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600, marginBottom: 3 }}>
-                  {h.email_subject || h.filename || "No subject"}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                  {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count} | Status: {h.status || "unknown"}
-                </div>
-                <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
-                  {h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time"}
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => openHistoryItem(h.id)}
+                  disabled={!!loadingHistoryItemId}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600, marginBottom: 3 }}>
+                    {h.email_subject || h.filename || "No subject"}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                    {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count} | Status: {h.status || "unknown"}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
+                    {h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time"}
+                  </div>
+                </button>
+                {["queued", "processing", "running"].includes(String(h.status || "").toLowerCase()) && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => cancelRun(h.id)}
+                      disabled={cancelingRunId === h.id}
+                      style={{
+                        background: "rgba(239,68,68,0.12)",
+                        border: "1px solid rgba(239,68,68,0.35)",
+                        color: "#fca5a5",
+                        borderRadius: "var(--radius)",
+                        fontSize: 11,
+                        padding: "4px 8px",
+                        cursor: cancelingRunId === h.id ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {cancelingRunId === h.id ? "Cancelling..." : "Cancel"}
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -368,6 +431,27 @@ export default function EmailInvestigationsPage() {
               </div>
             ))}
           </div>
+          {activeRunId && (
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={() => cancelRun(activeRunId)}
+                disabled={cancelingRunId === activeRunId}
+                style={{
+                  background: "rgba(239,68,68,0.12)",
+                  border: "1px solid rgba(239,68,68,0.35)",
+                  color: "#fca5a5",
+                  borderRadius: "var(--radius)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "6px 10px",
+                  cursor: cancelingRunId === activeRunId ? "not-allowed" : "pointer",
+                }}
+              >
+                {cancelingRunId === activeRunId ? "Cancelling..." : "Cancel Investigation"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -432,6 +516,13 @@ export default function EmailInvestigationsPage() {
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                 URLs checked: {result?.indicator_checks?.urls?.length || 0}
               </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Final Risk: {(result as any)?.indicator_checks?.final_risk?.risk_level || "unknown"}
+                {" | "}
+                Score: {(result as any)?.indicator_checks?.final_risk?.risk_score ?? "N/A"}
+                {" | "}
+                Confidence: {(result as any)?.indicator_checks?.final_risk?.confidence || "N/A"}
+              </div>
             </div>
           </div>
 
@@ -459,6 +550,19 @@ export default function EmailInvestigationsPage() {
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
                       VT verdict: {a?.vt?.verdict || "unknown"} (m={a?.vt?.malicious_count ?? 0}, s={a?.vt?.suspicious_count ?? 0}, total={a?.vt?.total_vendors ?? 0})
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                      Hybrid Analysis: {String(a?.hybrid_analysis?.verdict || "unknown")}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                      Static ML: {
+                        (() => {
+                          const items = (result as any)?.indicator_checks?.attachment_analysis?.items || [];
+                          const found = items.find((i: any) => String(i?.hash || "").toLowerCase() === String(a?.sha256 || "").toLowerCase());
+                          if (!found) return "not available";
+                          return `${String(found.risk_level || "unknown").toUpperCase()} (score=${Number(found.static_risk_score || 0).toFixed(3)})`;
+                        })()
+                      }
                     </div>
                     {a?.vt?.error && (
                       <div style={{ fontSize: 11, color: "#f87171", marginTop: 4 }}>
@@ -697,6 +801,17 @@ export default function EmailInvestigationsPage() {
                             {typeof u?.urlscan?.score === "number" ? ` (score ${u.urlscan.score})` : ""}
                           </div>
                         )}
+                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                          Lexical ML: {String(u?.ml_url_score?.risk_level || u?.lexical_ml?.label || "unknown").toUpperCase()}
+                          {typeof u?.ml_url_score?.phishing_probability === "number"
+                            ? ` (${u.ml_url_score.phishing_probability.toFixed(3)})`
+                            : typeof u?.lexical_ml?.score === "number"
+                              ? ` (${u.lexical_ml.score.toFixed(3)})`
+                              : ""}
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
+                          Hybrid Analysis: {String(u?.hybrid_analysis?.verdict || "unknown").toUpperCase()}
+                        </div>
                       </div>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.05)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
@@ -712,6 +827,13 @@ export default function EmailInvestigationsPage() {
                             {u?.urlscan?.page_ip ? `ip: ${u.urlscan.page_ip}` : ""}
                           </div>
                         )}
+                        <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
+                          Redirects: {u?.url_behavior?.redirect_count ?? "N/A"}
+                          {" | "}
+                          Credential form: {u?.url_behavior?.credential_form_present ? "Yes" : "No"}
+                          {" | "}
+                          UA cloaking: {u?.url_behavior?.ua_cloaking_detected ? "Yes" : "No"}
+                        </div>
                       </div>
                     </div>
                     {u?.screenshot?.image_base64 ? (

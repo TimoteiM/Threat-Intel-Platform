@@ -24,6 +24,9 @@ def _update_run(run_uuid: uuid.UUID, *, result_json_patch: dict | None = None, *
         run = db.get(EmailInvestigationRun, run_uuid)
         if not run:
             return False
+        current_status = str((run.result_json or {}).get("status") or "").lower()
+        if current_status == "cancelled":
+            return False
         if result_json_patch:
             merged = dict(run.result_json or {})
             merged.update(result_json_patch)
@@ -57,6 +60,9 @@ def run_email_investigation(
         run = db.get(EmailInvestigationRun, parsed_id)
         if not run:
             logger.error("Email investigation run not found: %s", run_id)
+            return run_id
+        if str((run.result_json or {}).get("status") or "").lower() == "cancelled":
+            logger.info("Email investigation already cancelled before start: %s", run_id)
             return run_id
         run_filename = run.filename
 

@@ -11,13 +11,22 @@ GET  /api/investigations/{id}/report   → Get analyst report
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from datetime import datetime, timezone
+import uuid
 
+import redis as redis_lib
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from sqlalchemy import select
+
+from app.config import get_settings
 from app.dependencies import DBSession
+from app.models.database import Investigation
 from app.models.schemas import InvestigationCreate
 from app.services.investigation_service import InvestigationService
+from app.tasks.cancellation import find_task_ids, revoke_task_ids
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations"])
+settings = get_settings()
 
 
 @router.post("")
@@ -135,7 +144,7 @@ async def upload_file_investigation(
         domain=sha256,
         observable_type="hash",
         context=context or None,
-        requested_collectors=["vt"],
+        requested_collectors=["vt", "hybrid_analysis"],
     )
 
     service = InvestigationService(session)
@@ -144,3 +153,57 @@ async def upload_file_investigation(
         return result
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/{investigation_id}/cancel")
+async def cancel_investigation(investigation_id: str, session: DBSession):
+    try:
+        parsed_id = uuid.UUID(investigation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid investigation id format.") from exc
+
+    inv = (
+        (
+            await session.execute(
+                select(Investigation).where(Investigation.id == parsed_id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+
+    state = str(inv.state or "").lower()
+    if state not in {"created", "gathering", "evaluating"}:
+        raise HTTPException(status_code=409, detail="Only queued or running investigations can be cancelled.")
+
+    task_ids: list[str] = []
+    try:
+        r = redis_lib.Redis.from_url(settings.redis_url)
+        tracked = r.get(f"investigation-task:{investigation_id}")
+        if tracked:
+            task_ids.append(tracked.decode("utf-8", errors="ignore"))
+    except Exception:
+        pass
+
+    discovered = find_task_ids(
+        task_name="tasks.run_investigation",
+        kwarg_key="investigation_id",
+        kwarg_value=investigation_id,
+    )
+    for tid in discovered:
+        if tid not in task_ids:
+            task_ids.append(tid)
+    revoked = revoke_task_ids(task_ids)
+
+    inv.state = "cancelled"
+    inv.updated_at = datetime.now(timezone.utc)
+    inv.concluded_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    return {
+        "investigation_id": investigation_id,
+        "status": "cancelled",
+        "revoked_task_ids": revoked,
+    }

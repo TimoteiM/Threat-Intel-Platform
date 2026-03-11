@@ -27,7 +27,13 @@ from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import LookupCache
+from app.services.content_ml_service import classify_email_content_locally
+from app.services.hybrid_analysis_service import lookup_hybrid_analysis
+from app.services.ml_attachment_analyzer import analyze_attachments_static
+from app.services.ml_url_model import score_url
+from app.services.risk_aggregator import aggregate_risk
 from app.services.url_lexical_ml_service import assess_url_lexical_risk
+from app.services.url_behavior_analyzer import analyze_url_behavior
 from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 logger = logging.getLogger(__name__)
@@ -48,7 +54,7 @@ def run_email_indicator_checks(
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
     max_urlscan_urls = min(len(urls), 5)
 
-    checks = {
+    checks: dict[str, Any] = {
         "sender_domain": _check_sender_domain(sender_domain) if sender_domain else {"present": False, "message": "Not present in the provided evidence."},
         "sender_ip": _check_ip(sender_ip) if sender_ip else {"present": False, "message": "Not present in the provided evidence."},
         "urls": [
@@ -61,6 +67,45 @@ def run_email_indicator_checks(
         ],
         "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes),
     }
+    checks["content_ml"] = classify_email_content_locally(extracted)
+
+    attachment_items = (checks.get("attachments") or {}).get("items") or []
+    vt_by_sha: dict[str, dict[str, Any]] = {}
+    for item in attachment_items:
+        if not isinstance(item, dict):
+            continue
+        sha = str(item.get("sha256") or "").strip().lower()
+        if sha:
+            vt_by_sha[sha] = item
+    checks["attachment_analysis"] = analyze_attachments_static(attachments, vt_items_by_sha256=vt_by_sha)
+
+    hybrid_items: list[dict[str, Any]] = []
+    for url_item in checks.get("urls") or []:
+        if not isinstance(url_item, dict):
+            continue
+        hy = url_item.get("hybrid_analysis")
+        if isinstance(hy, dict):
+            hybrid_items.append(hy)
+    for item in attachment_items:
+        if not isinstance(item, dict):
+            continue
+        hy = item.get("hybrid_analysis")
+        if isinstance(hy, dict):
+            hybrid_items.append(hy)
+    checks["hybrid_analysis"] = {"items": hybrid_items}
+
+    first_url = next((u for u in checks.get("urls") or [] if isinstance(u, dict)), {}) or {}
+    risk_input = {
+        "url_lexical_ml": (first_url.get("lexical_ml") or {}),
+        "url_behavior": (first_url.get("url_behavior") or {}),
+        "content_ml": checks.get("content_ml") or {},
+        "attachment_analysis": checks.get("attachment_analysis") or {},
+        "hybrid_analysis": checks.get("hybrid_analysis") or {},
+        "vt": ((checks.get("sender_ip") or {}).get("vt") or {}),
+        "threat_feeds": {"abuseipdb": ((checks.get("sender_ip") or {}).get("abuseipdb") or {})},
+        "whois": ((checks.get("sender_domain") or {}).get("whois") or {}),
+    }
+    checks["final_risk"] = aggregate_risk(risk_input)
     return checks
 
 
@@ -128,6 +173,35 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> 
             "error": str(exc),
         }
     lexical_ml["target_url"] = lexical_target
+    try:
+        ml_url_score = score_url(lexical_target)
+    except Exception as exc:
+        logger.warning("URL ML model facade failed for URL %s: %s", lexical_target, exc)
+        ml_url_score = {
+            "url": lexical_target,
+            "phishing_probability": 0.0,
+            "risk_level": "unknown",
+            "model_version": "lgbm-url-v1.0",
+            "top_features": [],
+            "error": str(exc),
+        }
+    try:
+        url_behavior = analyze_url_behavior(lexical_target, timeout=12, max_hops=5)
+    except Exception as exc:
+        logger.warning("URL behavior analysis failed for URL %s: %s", lexical_target, exc)
+        url_behavior = {
+            "checked": False,
+            "redirect_count": 0,
+            "ua_cloaking_detected": False,
+            "credential_form_present": False,
+            "suspicious_post_endpoints": [],
+            "multiple_domain_hops": False,
+            "unique_domains_in_chain": [],
+            "final_url": resolved_final_url,
+            "chains": [],
+            "behavior_score": 0.0,
+            "error": str(exc),
+        }
     final_vt_used = False
     if _should_retry_vt_on_final(vt, url=url, final_url=resolved_final_url):
         vt_final = _vt_lookup(str(resolved_final_url), "url")
@@ -163,12 +237,22 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> 
                 "error": str(exc),
             }
 
+    hybrid_target = str(resolved_final_url or url).strip()
+    hybrid = lookup_hybrid_analysis(indicator=hybrid_target, indicator_type="url") if hybrid_target else {
+        "checked": False,
+        "verdict": "unknown",
+        "error": "Empty indicator",
+    }
+
     return {
         "url": url,
         "vt": vt,
         "effective_verdict": _effective_url_verdict(vt=vt, urlscan=urlscan),
         "urlscan": urlscan,
         "lexical_ml": lexical_ml,
+        "ml_url_score": ml_url_score,
+        "url_behavior": url_behavior,
+        "hybrid_analysis": hybrid,
         "vt_checked_on_final_url": final_vt_used,
         "screenshot": screenshot,
     }
@@ -249,6 +333,11 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int) ->
                 "md5": att.get("md5"),
                 "size_bytes": att.get("size_bytes"),
                 "vt": _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"},
+                "hybrid_analysis": (
+                    lookup_hybrid_analysis(indicator=sha256, indicator_type="hash")
+                    if sha256
+                    else {"checked": False, "verdict": "unknown", "error": "Missing SHA256 hash"}
+                ),
             }
         )
     return {"present": True, "items": items}

@@ -26,7 +26,22 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const vt = evidence?.vt || ({} as any);
   const urlscan = evidence?.urlscan || ({} as any);
   const urlLexical = evidence?.url_lexical_ml || ({} as any);
-  const redirectDestinationIntel = evidence?.redirect_destination_intel || ({} as any);
+  const urlMlScore = evidence?.ml_url_score || ({} as any);
+  const urlBehavior = evidence?.url_behavior || ({} as any);
+  const contentMl = evidence?.content_ml || ({} as any);
+  const attachmentAnalysis = evidence?.attachment_analysis || ({} as any);
+  const hybridAnalysis = evidence?.hybrid_analysis || ({} as any);
+  const finalRisk = evidence?.final_risk || ({} as any);
+  const redirectDestinationIntel =
+    evidence?.redirect_destination_intel ||
+    (evidence as any)?.redirect_destination_intelligence ||
+    (evidence as any)?.redirect_destination ||
+    ({} as any);
+  const hasRedirectDestinationIntel = !!(
+    redirectDestinationIntel &&
+    typeof redirectDestinationIntel === "object" &&
+    Object.keys(redirectDestinationIntel).length > 0
+  );
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
 
   const type = observableType || (evidence as any)?.observable_type || "domain";
@@ -351,6 +366,20 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                 { field: "Title", value: http.title || "—" },
                 { field: "Login Form", value: http.has_login_form ? "⚠ Yes" : "No" },
                 { field: "Redirects", value: arr(http.redirect_chain).length },
+                {
+                  field: "Redirect Destination Intel",
+                  value: hasRedirectDestinationIntel
+                    ? (
+                        redirectDestinationIntel?.comparison?.source_vs_destination_root
+                        || (
+                          redirectDestinationIntel?.investigated_root &&
+                          redirectDestinationIntel?.destination_root
+                            ? `${redirectDestinationIntel.investigated_root} -> ${redirectDestinationIntel.destination_root}`
+                            : "Available"
+                        )
+                      )
+                    : "Not available",
+                },
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
             />
@@ -1522,9 +1551,14 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                 { field: "Model Source", value: urlLexical?.model_source || "built_in" },
                 {
                   field: "Phishing Probability",
-                  value: typeof urlLexical?.score === "number" ? urlLexical.score.toFixed(4) : "—",
+                  value: typeof urlMlScore?.phishing_probability === "number"
+                    ? urlMlScore.phishing_probability.toFixed(4)
+                    : typeof urlLexical?.score === "number"
+                      ? urlLexical.score.toFixed(4)
+                      : "—",
                 },
-                { field: "Risk Label", value: String(urlLexical?.label || "unknown").toUpperCase() },
+                { field: "Risk Label", value: String(urlMlScore?.risk_level || urlLexical?.label || "unknown").toUpperCase() },
+                { field: "Model Version", value: urlMlScore?.model_version || "—" },
                 { field: "Thresholds", value: "<0.3 low | 0.3-0.65 medium | >0.65 high" },
                 {
                   field: "Top Features",
@@ -1540,10 +1574,145 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         </Section>
       )}
 
+      <Section title="Content ML Signals">
+        {!contentMl || Object.keys(contentMl).length === 0 ? (
+          <EmptyNote>Content ML data not available</EmptyNote>
+        ) : (
+          <EvidenceTable
+            title="Header/Metadata Risk Signals"
+            data={[
+              { field: "Social Engineering", value: typeof contentMl?.social_engineering_probability === "number" ? contentMl.social_engineering_probability.toFixed(4) : "—" },
+              { field: "Urgency", value: typeof contentMl?.urgency_probability === "number" ? contentMl.urgency_probability.toFixed(4) : "—" },
+              { field: "Impersonation", value: typeof contentMl?.impersonation_probability === "number" ? contentMl.impersonation_probability.toFixed(4) : "—" },
+              { field: "BEC", value: typeof contentMl?.bec_probability === "number" ? contentMl.bec_probability.toFixed(4) : "—" },
+              { field: "Top Terms", value: arr(contentMl?.top_content_terms).join(", ") || "—" },
+              { field: "Model Source", value: contentMl?.model_source || "—" },
+            ]}
+            columns={[{ key: "field" }, { key: "value", wrap: true }]}
+          />
+        )}
+      </Section>
+
+      <Section title="Attachment Static Analysis">
+        {!attachmentAnalysis?.items?.length ? (
+          <EmptyNote>No attachment static analysis available</EmptyNote>
+        ) : (
+          <EvidenceTable
+            title="Attachment Risk"
+            data={arr(attachmentAnalysis.items).map((item: any, idx: number) => ({
+              index: idx + 1,
+              filename: item?.filename || "—",
+              hash: item?.hash ? (
+                <span
+                  title={String(item.hash)}
+                  style={{
+                    display: "inline-block",
+                    maxWidth: 360,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    verticalAlign: "bottom",
+                  }}
+                >
+                  {String(item.hash)}
+                </span>
+              ) : "-",
+              risk: `Risk: ${String(item?.risk_level || "unknown").toUpperCase()}`,
+              score: `Static score: ${typeof item?.static_risk_score === "number" ? item.static_risk_score.toFixed(4) : "-"}`,
+              macro: `Macro: ${item?.macro_detected ? "Yes" : "No"}`,
+              entropy: `Entropy: ${typeof item?.entropy === "number" ? item.entropy.toFixed(4) : "-"}`,
+            }))}
+            columns={[
+              { key: "index", label: "#" },
+              { key: "filename", label: "Filename" },
+              { key: "hash", label: "SHA256 Hash" },
+              { key: "risk", label: "Risk Level" },
+              { key: "score", label: "Static Risk Score (0-1)" },
+              { key: "macro", label: "Macro Detected" },
+              { key: "entropy", label: "Entropy (0-1)" },
+            ]}
+            showHeader
+          />
+        )}
+      </Section>
+
+      {(type === "url" || type === "domain") && (
+        <Section title="URL Behavior Analysis">
+          {!urlBehavior || Object.keys(urlBehavior).length === 0 ? (
+            <EmptyNote>URL behavior data not available</EmptyNote>
+          ) : (
+            <EvidenceTable
+              title="Behavior Summary"
+              data={[
+                { field: "Redirect Count", value: urlBehavior?.redirect_count ?? 0 },
+                { field: "UA Cloaking", value: urlBehavior?.ua_cloaking_detected ? "Yes" : "No" },
+                { field: "Credential Form", value: urlBehavior?.credential_form_present ? "Yes" : "No" },
+                { field: "Multiple Domain Hops", value: urlBehavior?.multiple_domain_hops ? "Yes" : "No" },
+                { field: "Behavior Score", value: typeof urlBehavior?.behavior_score === "number" ? urlBehavior.behavior_score.toFixed(4) : "—" },
+                { field: "Final URL", value: urlBehavior?.final_url || "—" },
+              ]}
+              columns={[{ key: "field" }, { key: "value", wrap: true }]}
+            />
+          )}
+        </Section>
+      )}
+
+      <Section title="Hybrid Analysis">
+        {!hybridAnalysis?.items?.length ? (
+          <EmptyNote>Hybrid Analysis data not available (collector not run)</EmptyNote>
+        ) : (
+          <EvidenceTable
+            title="Sandbox Verdicts"
+            data={arr(hybridAnalysis.items).map((item: any, idx: number) => ({
+              index: idx + 1,
+              type: item?.indicator_type || "unknown",
+              verdict: String(item?.verdict || "unknown").toUpperCase(),
+              threat_score: item?.threat_score ?? "—",
+              analysis_id: item?.analysis_id || "—",
+              error: item?.error || "—",
+            }))}
+            columns={[
+              { key: "index", label: "#" },
+              { key: "type", label: "Indicator Type" },
+              { key: "verdict", label: "Verdict" },
+              { key: "threat_score", label: "Threat Score" },
+              { key: "analysis_id", label: "Analysis ID", wrap: true },
+              { key: "error", label: "Status/Error", wrap: true },
+            ]}
+            showHeader
+          />
+        )}
+      </Section>
+
+      <Section title="Final Risk Aggregation">
+        {!finalRisk || Object.keys(finalRisk).length === 0 ? (
+          <EmptyNote>Final risk data not available</EmptyNote>
+        ) : (
+          <>
+            <EvidenceTable
+              title="Risk Summary"
+              data={[
+                { field: "Risk Score", value: finalRisk?.risk_score ?? "—" },
+                { field: "Risk Level", value: String(finalRisk?.risk_level || "unknown").toUpperCase() },
+                { field: "Confidence", value: String(finalRisk?.confidence || "unknown").toUpperCase() },
+              ]}
+              columns={[{ key: "field" }, { key: "value", wrap: true }]}
+            />
+            {arr(finalRisk?.rationale).length > 0 && (
+              <EvidenceTable
+                title="Rationale"
+                data={arr(finalRisk.rationale).map((r: string) => ({ rationale: r }))}
+                columns={[{ key: "rationale", wrap: true }]}
+              />
+            )}
+          </>
+        )}
+      </Section>
+
       {/* REDIRECT DESTINATION INTELLIGENCE */}
       {(type === "url" || type === "domain") && (
         <Section title="Redirect Destination Intelligence">
-          {!redirectDestinationIntel || Object.keys(redirectDestinationIntel).length === 0 ? (
+          {!hasRedirectDestinationIntel ? (
             <EmptyNote>No cross-domain redirect destination intel available</EmptyNote>
           ) : (
             <>
@@ -1742,6 +1911,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             metaRow("INTEL", intel.meta),
             metaRow("VT", vt.meta),
             metaRow("URLSCAN", urlscan.meta),
+            ...(evidence?.hybrid_analysis ? [metaRow("HYBRID_ANALYSIS", (evidence as any).hybrid_analysis?.meta)] : []),
             ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),
           ].filter(Boolean) as any[]}
           columns={[
@@ -1911,6 +2081,7 @@ function VTStatBox({ label, count, total, color, highlight }: {
     </div>
   );
 }
+
 
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.dependencies import DBSession
 from app.models.database import EmailInvestigationRun
+from app.tasks.cancellation import find_task_ids, revoke_task_ids
 from app.tasks.email_investigation_task import run_email_investigation
 
 router = APIRouter(prefix="/api/email-investigations", tags=["email-investigations"])
@@ -207,3 +209,59 @@ async def get_email_investigation_run(
         return payload
 
     return base
+
+
+@router.post("/{run_id}/cancel")
+async def cancel_email_investigation_run(
+    db: DBSession,
+    run_id: str = FastAPIPath(...),
+) -> dict[str, Any]:
+    try:
+        parsed_id = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid run id format.") from exc
+
+    row = (
+        (
+            await db.execute(
+                select(EmailInvestigationRun).where(EmailInvestigationRun.id == parsed_id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Email investigation run not found.")
+
+    row_result = dict(row.result_json or {})
+    status = str(row_result.get("status") or "queued").lower()
+    if status not in {"queued", "processing", "running"}:
+        raise HTTPException(status_code=409, detail="Only queued or running investigations can be cancelled.")
+
+    task_ids: list[str] = []
+    known = str(row_result.get("task_id") or "").strip()
+    if known:
+        task_ids.append(known)
+
+    discovered = find_task_ids(
+        task_name="tasks.run_email_investigation",
+        first_arg_value=run_id,
+    )
+    for tid in discovered:
+        if tid not in task_ids:
+            task_ids.append(tid)
+    revoked = revoke_task_ids(task_ids)
+
+    row.result_json = {
+        **row_result,
+        "status": "cancelled",
+        "error": "Cancelled by user",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.commit()
+
+    return {
+        "run_id": str(row.id),
+        "status": "cancelled",
+        "revoked_task_ids": revoked,
+    }

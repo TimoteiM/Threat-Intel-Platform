@@ -57,8 +57,12 @@ class Settings(BaseSettings):
     phishtank_api_key: str = ""
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
+    hybrid_analysis_api_key: str = ""
+    hybrid_analysis_base_url: str = "https://hybrid-analysis.com/api/v2"
+    hybrid_analysis_environment_id: int = 160
     google_safe_browsing_api_key: str = ""
     url_lexical_model_path: str = ""
+    url_lexical_use_lightgbm: bool = False
 
     # —— Database ———
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"
@@ -85,7 +89,7 @@ class Settings(BaseSettings):
     max_analyst_iterations: int = 1
     analyst_timeout_seconds: int = 75
     collector_timeout: int = 20
-    default_collectors: str = "dns,http,tls,whois,asn,intel,vt"
+    default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,urlscan,hybrid_analysis"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24

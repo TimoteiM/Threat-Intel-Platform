@@ -471,19 +471,12 @@ class EmailInvestigationRun(Base):
     sender_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sender_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
-    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_source: Mapped[str] = mapped_column(String(50), nullable=False, default="queued")
     result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     __table_args__ = (
         Index("idx_email_runs_created", "created_at"),
-        Index("idx_email_runs_status", "status"),
     )

@@ -18,6 +18,7 @@ import json
 import logging
 import time
 import concurrent.futures
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -67,6 +68,30 @@ def _collect_redirect_destination_intel(
     """
     http = evidence_data.get("http") or {}
     final_url = str(http.get("final_url") or "").strip()
+    if not final_url:
+        # Fallback 1: redirect-analysis browser probe final URL.
+        redirect_analysis = evidence_data.get("redirect_analysis") or {}
+        probes = redirect_analysis.get("probes") or []
+        if isinstance(probes, list):
+            browser_probe = next(
+                (
+                    p for p in probes
+                    if isinstance(p, dict) and str(p.get("user_agent_type") or "").lower() in {"browser", "default"}
+                ),
+                None,
+            )
+            if isinstance(browser_probe, dict):
+                final_url = str(browser_probe.get("final_url") or "").strip()
+            elif probes and isinstance(probes[0], dict):
+                final_url = str(probes[0].get("final_url") or "").strip()
+    if not final_url:
+        # Fallback 2: URLScan page URL (often available even when HTTP probe fails).
+        urlscan = evidence_data.get("urlscan") or {}
+        final_url = str(urlscan.get("page_url") or "").strip()
+    if not final_url:
+        # Fallback 3: captured screenshot final URL.
+        screenshot = evidence_data.get("screenshot") or {}
+        final_url = str(screenshot.get("final_url") or "").strip()
     if not final_url:
         return None
 
@@ -201,6 +226,81 @@ def _collect_redirect_destination_intel(
         "source_vs_destination_root": f"{investigated_root} -> {destination_root}",
     }
     return out
+
+
+_HEX_RE = re.compile(r"^[a-fA-F0-9]+$")
+
+
+def _build_attachment_analysis_for_file_hash(*, investigation_id: str, domain: str, evidence_data: dict) -> dict | None:
+    """
+    Build static attachment analysis for file/hash observables.
+    Uses uploaded artifact metadata when present; falls back to submitted hash.
+    """
+    from sqlalchemy.orm import Session
+    from uuid import UUID
+    from app.db.session import sync_engine
+    from app.models.database import Artifact, Investigation
+    from app.services.ml_attachment_analyzer import analyze_attachments_static
+
+    attachments: list[dict] = []
+    submitted = str(domain or "").strip().lower()
+    with Session(sync_engine) as db:
+        try:
+            inv = db.get(Investigation, UUID(investigation_id))
+        except Exception:
+            inv = None
+        if inv is not None:
+            artifact = (
+                db.query(Artifact)
+                .filter(Artifact.investigation_id == inv.id, Artifact.collector_name == "upload")
+                .order_by(Artifact.created_at.desc())
+                .first()
+            )
+            if artifact:
+                attachments.append(
+                    {
+                        "filename": artifact.artifact_name or "uploaded_sample.bin",
+                        "sha256": (artifact.sha256_hash or "").lower(),
+                    }
+                )
+    if not attachments and submitted and _HEX_RE.match(submitted):
+        if len(submitted) == 64:
+            attachments.append({"filename": "submitted_hash.bin", "sha256": submitted})
+        elif len(submitted) == 40:
+            attachments.append({"filename": "submitted_hash.bin", "sha1": submitted})
+        elif len(submitted) == 32:
+            attachments.append({"filename": "submitted_hash.bin", "md5": submitted})
+
+    if not attachments:
+        return None
+
+    vt = evidence_data.get("vt") or {}
+    vt_verdict = "unknown"
+    try:
+        malicious = int(vt.get("malicious_count") or 0)
+        suspicious = int(vt.get("suspicious_count") or 0)
+        if malicious > 0:
+            vt_verdict = "malicious"
+        elif suspicious > 0:
+            vt_verdict = "suspicious"
+        elif vt.get("found"):
+            vt_verdict = "clean"
+    except Exception:
+        vt_verdict = "unknown"
+
+    vt_by_sha: dict[str, dict] = {}
+    for item in attachments:
+        sha = str(item.get("sha256") or "").lower()
+        if not sha:
+            continue
+        vt_by_sha[sha] = {
+            "vt": {
+                "verdict": vt_verdict,
+                "malicious_count": int(vt.get("malicious_count") or 0),
+                "suspicious_count": int(vt.get("suspicious_count") or 0),
+            }
+        }
+    return analyze_attachments_static(attachments, vt_items_by_sha256=vt_by_sha)
 
 
 @celery_app.task(
@@ -656,6 +756,21 @@ def run_analysis(
             logger.warning(f"[{investigation_id}] Redirect destination enrichment failed: {e}")
         _time_phase("redirect_destination_enrichment", redirect_dest_phase_start)
 
+    # -- 3c. Attachment static analysis for file/hash observables --
+    if observable_type in ("file", "hash"):
+        attachment_phase_start = time.monotonic()
+        try:
+            attachment_analysis = _build_attachment_analysis_for_file_hash(
+                investigation_id=investigation_id,
+                domain=domain,
+                evidence_data=evidence_data,
+            )
+            if attachment_analysis:
+                evidence_data["attachment_analysis"] = attachment_analysis
+        except Exception as e:
+            logger.warning(f"[{investigation_id}] Attachment static analysis failed: {e}")
+        _time_phase("attachment_static_analysis", attachment_phase_start)
+
     # -- 4. Generate signals and detect gaps --
     signal_phase_start = time.monotonic()
     signals = generate_signals(evidence_data)
@@ -664,6 +779,40 @@ def run_analysis(
 
     evidence_data["signals"] = [s.model_dump() for s in signals]
     evidence_data["data_gaps"] = [g.model_dump() for g in gaps]
+
+    # Normalize next-gen ML/behavior evidence fields and compute final composite risk.
+    try:
+        if "url_lexical_ml" in evidence_data and "ml_url_score" not in evidence_data:
+            from app.services.ml_url_model import score_url
+
+            lexical_target = _build_lexical_target(
+                observable_type=observable_type,
+                domain=domain,
+                evidence_data=evidence_data,
+            )
+            if lexical_target:
+                evidence_data["ml_url_score"] = score_url(lexical_target)
+        if "redirect_analysis" in evidence_data and "url_behavior" not in evidence_data:
+            ra = evidence_data.get("redirect_analysis") or {}
+            probes = ra.get("probes") or []
+            final_url = probes[0].get("final_url") if probes and isinstance(probes[0], dict) else None
+            evidence_data["url_behavior"] = {
+                "checked": True,
+                "redirect_count": int(ra.get("max_chain_length") or 0),
+                "ua_cloaking_detected": bool(ra.get("cloaking_detected")),
+                "credential_form_present": False,
+                "suspicious_post_endpoints": [],
+                "multiple_domain_hops": bool(ra.get("intermediate_domains")),
+                "unique_domains_in_chain": [str(x.get("domain")) for x in (ra.get("intermediate_domains") or []) if isinstance(x, dict) and x.get("domain")],
+                "final_url": final_url,
+                "behavior_score": 0.55 if ra.get("cloaking_detected") else (0.25 if int(ra.get("max_chain_length") or 0) >= 3 else 0.05),
+                "chains": [],
+            }
+        from app.services.risk_aggregator import aggregate_risk
+
+        evidence_data["final_risk"] = aggregate_risk(evidence_data)
+    except Exception as e:
+        logger.warning(f"[{investigation_id}] ML/risk aggregation failed: {e}")
 
     if external_context:
         evidence_data["external_context"] = external_context
@@ -1540,6 +1689,9 @@ def _persist_results(
                     "This task may be a stale re-queue for a deleted/reset investigation."
                 )
                 return
+            if str(inv.state or "").lower() == "cancelled":
+                logger.info("[%s] Skip persist because investigation is cancelled.", investigation_id)
+                return
 
             inv.state = "concluded"
             inv.concluded_at = datetime.now(timezone.utc)
@@ -1749,6 +1901,8 @@ def _mark_failed(investigation_id: str, reason: str) -> None:
         with Session(sync_engine) as session:
             inv = session.get(Investigation, inv_id)
             if inv:
+                if str(inv.state or "").lower() == "cancelled":
+                    return
                 inv.state = "failed"
                 session.commit()
     except Exception as e:

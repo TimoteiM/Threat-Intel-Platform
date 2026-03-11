@@ -48,6 +48,7 @@ const DEFAULT_COLLECTOR_ORDER = [
   "intel",
   "vt",
   "threat_feeds",
+  "hybrid_analysis",
   "urlscan",
   "screenshot",
   "js_analysis",
@@ -71,6 +72,8 @@ export default function InvestigationPage() {
   const defaultTab: TabId = isFastPath ? "evidence" : "summary";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabError, setTabError] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [nowTs, setNowTs] = useState(Date.now());
   const sse = useSSE(investigationId || null);
   const collectorKeys = React.useMemo(() => {
@@ -86,6 +89,7 @@ export default function InvestigationPage() {
       if (evidence.intel?.meta) keys.add("intel");
       if (evidence.vt?.meta) keys.add("vt");
       if (evidence.threat_feeds?.meta) keys.add("threat_feeds");
+      if (evidence.hybrid_analysis?.meta) keys.add("hybrid_analysis");
       if (evidence.urlscan?.meta) keys.add("urlscan");
     }
     const known = [...DEFAULT_COLLECTOR_ORDER].filter((k) => keys.has(k));
@@ -105,6 +109,7 @@ export default function InvestigationPage() {
     const durationMs = sse.collectorDurations[c] ?? evidenceMeta.duration_ms;
     return { collector: c, status, durationMs };
   });
+  const isCancellable = ["created", "gathering", "evaluating"].includes(String(detail?.state || "").toLowerCase());
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -167,13 +172,27 @@ export default function InvestigationPage() {
     }
   }, [investigationId]);
 
+  const handleCancel = useCallback(async () => {
+    if (!investigationId || canceling || !isCancellable) return;
+    setCancelError(null);
+    setCanceling(true);
+    try {
+      await api.cancelInvestigation(investigationId);
+      await fetchData();
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to cancel investigation");
+    } finally {
+      setCanceling(false);
+    }
+  }, [investigationId, canceling, isCancellable, fetchData]);
+
   // ─── Loading state ───
   if (loading && !evidence && !report) {
     return <Spinner message="Loading investigation..." />;
   }
 
   // ─── Waiting for results ───
-  if (!report && detail?.state !== "concluded" && detail?.state !== "failed") {
+  if (!report && detail?.state !== "concluded" && detail?.state !== "failed" && detail?.state !== "cancelled") {
     const liveState = sse.state || detail?.state || "created";
     const fallbackPercent =
       liveState === "created" ? 2 :
@@ -267,6 +286,9 @@ export default function InvestigationPage() {
           title="Collector Timings"
         />
         <div style={{ textAlign: "center", marginTop: 16 }}>
+          {cancelError && (
+            <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{cancelError}</div>
+          )}
           <button
             onClick={fetchData}
             style={{
@@ -279,6 +301,26 @@ export default function InvestigationPage() {
           >
             Refresh
           </button>
+          {isCancellable && (
+            <button
+              onClick={handleCancel}
+              disabled={canceling}
+              style={{
+                marginLeft: 10,
+                padding: "8px 20px",
+                background: "rgba(239,68,68,0.12)",
+                border: "1px solid rgba(239,68,68,0.35)",
+                borderRadius: "var(--radius-sm)",
+                color: "#fca5a5",
+                fontSize: 12,
+                cursor: canceling ? "not-allowed" : "pointer",
+                fontFamily: "var(--font-sans)",
+                fontWeight: 600,
+              }}
+            >
+              {canceling ? "Cancelling..." : "Cancel Investigation"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -380,6 +422,11 @@ export default function InvestigationPage() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <HeaderButton onClick={() => router.push("/")}>New Investigation</HeaderButton>
+          {isCancellable && (
+            <HeaderButton onClick={handleCancel}>
+              {canceling ? "Cancelling..." : "Cancel"}
+            </HeaderButton>
+          )}
           <HeaderButton onClick={() => {
             window.open(`/api/investigations/${investigationId}/export/pdf`, "_blank");
           }}>
@@ -407,6 +454,9 @@ export default function InvestigationPage() {
           <HeaderButton onClick={fetchData}>Refresh</HeaderButton>
         </div>
       </div>
+      {cancelError && (
+        <div style={{ color: "#f87171", fontSize: 12, marginBottom: 10 }}>{cancelError}</div>
+      )}
 
       {/* Collector progress */}
       {evidence && (

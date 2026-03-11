@@ -83,6 +83,10 @@ def run_investigation(
         f"(type={observable_type})"
     )
 
+    if _is_cancelled(investigation_id):
+        logger.info("[%s] Investigation was cancelled before execution.", investigation_id)
+        return investigation_id
+
     # ── Guard: verify investigation exists in DB before doing any work ──
     # Protects against stale re-queued tasks where the investigation row was
     # never committed (race condition from before the commit-before-dispatch fix).
@@ -147,6 +151,10 @@ def run_investigation(
             f"{len(safe_results)}/{len(collectors_to_run)} succeeded. Starting analysis..."
         )
 
+        if _is_cancelled(investigation_id):
+            logger.info("[%s] Investigation cancelled during collector phase.", investigation_id)
+            return investigation_id
+
         _update_state(investigation_id, InvestigationState.EVALUATING)
         _publish_progress(
             investigation_id,
@@ -170,6 +178,9 @@ def run_investigation(
         )
     except Exception as exc:
         logger.exception(f"[{investigation_id}] Investigation task failed: {exc}")
+        if _is_cancelled(investigation_id):
+            logger.info("[%s] Task exception after cancellation ignored.", investigation_id)
+            return investigation_id
         _update_state(investigation_id, InvestigationState.FAILED)
         _publish_progress(
             investigation_id,
@@ -325,11 +336,24 @@ def _update_state(investigation_id: str, state: InvestigationState) -> None:
         with Session(sync_engine) as session:
             inv = session.get(Investigation, inv_id)
             if inv:
+                current = str(inv.state or "").lower()
+                if current == "cancelled" and state.value != "cancelled":
+                    return
                 inv.state = state.value
                 inv.updated_at = datetime.now(timezone.utc)
                 session.commit()
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to update state: {e}")
+
+
+def _is_cancelled(investigation_id: str) -> bool:
+    try:
+        inv_id = uuid.UUID(investigation_id)
+        with Session(sync_engine) as session:
+            inv = session.get(Investigation, inv_id)
+            return bool(inv and str(inv.state or "").lower() == "cancelled")
+    except Exception:
+        return False
 
 
 def _publish_progress(

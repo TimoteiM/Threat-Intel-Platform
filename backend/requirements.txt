@@ -24,6 +24,10 @@ python-whois>=0.9.4
 tldextract>=5.1.0
 lightgbm>=4.5.0
 numpy>=1.26.0
+scikit-learn>=1.5.0
+shap>=0.46.0
+joblib>=1.4.0
+transformers>=4.47.0
 
 # â”€â”€â”€ Visual Comparison â”€â”€â”€
 playwright>=1.40.0

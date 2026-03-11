@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
+import redis as redis_lib
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,17 @@ from app.collectors.registry import get_collectors_for_type
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+def _store_investigation_task_id(investigation_id: str, task_id: str | None) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    try:
+        r = redis_lib.Redis.from_url(settings.redis_url)
+        r.setex(f"investigation-task:{investigation_id}", 7 * 24 * 3600, tid)
+    except Exception as exc:
+        logger.warning("Could not persist investigation task id for %s: %s", investigation_id, exc)
 
 
 def _ensure_baseline_collectors(
@@ -179,7 +191,7 @@ class InvestigationService:
 
         # Dispatch async pipeline
         try:
-            run_investigation.delay(
+            task = run_investigation.delay(
                 investigation_id=investigation_id,
                 domain=domain,
                 observable_type=observable_type,
@@ -193,6 +205,7 @@ class InvestigationService:
                 ),
                 requested_collectors=effective_collectors,
             )
+            _store_investigation_task_id(investigation_id, getattr(task, "id", None))
         except Exception as exc:
             await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
             await self.session.commit()
@@ -274,14 +287,23 @@ class InvestigationService:
 
         # Dispatch pipeline with file_artifact_id
         try:
-            run_investigation.delay(
+            supported_for_type = set(get_collectors_for_type(observable_type))
+            default_file_collectors = [
+                c for c in ("vt", "hybrid_analysis") if c in supported_for_type
+            ]
+            effective_collectors = (
+                [c for c in (request.requested_collectors or []) if c in supported_for_type]
+                or default_file_collectors
+            )
+            task = run_investigation.delay(
                 investigation_id=investigation_id,
                 domain=request.domain,
                 observable_type=observable_type,
                 context=request.context,
-                requested_collectors=request.requested_collectors or ["vt"],
+                requested_collectors=effective_collectors,
                 file_artifact_id=file_artifact_id,
             )
+            _store_investigation_task_id(investigation_id, getattr(task, "id", None))
         except Exception as exc:
             await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
             await self.session.commit()

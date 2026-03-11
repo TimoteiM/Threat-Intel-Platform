@@ -230,6 +230,16 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
 
 
 def _infer_score(features: dict[str, float], *, model_path_override: str | None = None) -> LexicalInferenceResult:
+    if not _should_use_lightgbm():
+        score, contribs = _score_built_in(features)
+        return LexicalInferenceResult(
+            score=score,
+            model_source="built_in",
+            top_features=_top_features_from_contribs(contribs, 5),
+            feature_contributions=contribs,
+            raw_score=score,
+        )
+
     custom_path = model_path_override or _configured_model_path()
     if custom_path:
         lgbm, load_error = _load_lightgbm_model(custom_path)
@@ -265,6 +275,13 @@ def _infer_score(features: dict[str, float], *, model_path_override: str | None 
 def _configured_model_path() -> str | None:
     path = (get_settings().url_lexical_model_path or "").strip()
     return path or None
+
+
+def _should_use_lightgbm() -> bool:
+    try:
+        return bool(get_settings().url_lexical_use_lightgbm)
+    except Exception:
+        return False
 
 
 @lru_cache(maxsize=4)

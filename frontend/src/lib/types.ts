@@ -487,6 +487,87 @@ export interface URLLexicalMLEvidence {
   error?: string;
 }
 
+export interface URLMLFeatureImpact {
+  name: string;
+  impact: number;
+}
+
+export interface URLMLScoreEvidence {
+  url?: string;
+  phishing_probability: number;
+  risk_level: string;
+  model_version: string;
+  top_features: URLMLFeatureImpact[];
+  raw?: Record<string, any>;
+}
+
+export interface URLBehaviorEvidence {
+  checked: boolean;
+  redirect_count: number;
+  ua_cloaking_detected: boolean;
+  credential_form_present: boolean;
+  suspicious_post_endpoints: string[];
+  multiple_domain_hops: boolean;
+  unique_domains_in_chain: string[];
+  final_url?: string;
+  behavior_score: number;
+  chains: any[];
+  error?: string;
+}
+
+export interface ContentMLEvidence {
+  social_engineering_probability: number;
+  urgency_probability: number;
+  impersonation_probability: number;
+  bec_probability: number;
+  top_content_terms: string[];
+  model_source?: string;
+  feature_hash?: string;
+}
+
+export interface AttachmentAnalysisItem {
+  hash?: string;
+  filename?: string;
+  file_type: string;
+  macro_detected: boolean;
+  embedded_objects: boolean;
+  entropy: number;
+  suspicious_import_count: number;
+  static_risk_score: number;
+  risk_level: string;
+}
+
+export interface AttachmentAnalysisEvidence {
+  checked: boolean;
+  items: AttachmentAnalysisItem[];
+  summary: Record<string, number>;
+}
+
+export interface HybridAnalysisItem {
+  checked: boolean;
+  indicator_type?: string;
+  verdict: string;
+  analysis_id?: string;
+  threat_score?: number;
+  error?: string;
+  cache_hit?: boolean;
+  dynamic_io_summary?: Record<string, any>;
+  raw_summary?: Record<string, any>;
+}
+
+export interface HybridAnalysisEvidence {
+  items: HybridAnalysisItem[];
+}
+
+export interface FinalRiskEvidence {
+  risk_score: number;
+  risk_level: string;
+  confidence: string;
+  components: Record<string, number>;
+  weights: Record<string, number>;
+  rationale: string[];
+}
+
 export interface RedirectDestinationWhoisEvidence {
   status?: string;
   error?: string;
@@ -619,6 +700,12 @@ export interface CollectedEvidence {
   vt?: VTEvidence;
   urlscan?: URLScanEvidence;
   url_lexical_ml?: URLLexicalMLEvidence;
+  ml_url_score?: URLMLScoreEvidence;
+  url_behavior?: URLBehaviorEvidence;
+  content_ml?: ContentMLEvidence;
+  attachment_analysis?: AttachmentAnalysisEvidence;
+  hybrid_analysis?: HybridAnalysisEvidence;
+  final_risk?: FinalRiskEvidence;
   redirect_destination_intel?: RedirectDestinationIntelEvidence;
   threat_feeds?: ThreatFeedEvidence;
   domain_similarity?: DomainSimilarityEvidence;
@@ -976,7 +1063,7 @@ export interface EmailInvestigationResolution {
 export interface EmailInvestigationResponse {
   run_id?: string;
   history_id?: string;
-  status?: "queued" | "processing" | "completed" | "failed";
+  status?: "queued" | "processing" | "completed" | "failed" | "cancelled";
   error?: string | null;
   created_at?: string;
   completed_at?: string;
@@ -996,6 +1083,10 @@ export interface EmailInvestigationResponse {
     sender_ip: Record<string, any>;
     urls: Array<Record<string, any>>;
     attachments: Record<string, any>;
+    content_ml?: Record<string, any>;
+    attachment_analysis?: Record<string, any>;
+    hybrid_analysis?: Record<string, any>;
+    final_risk?: Record<string, any>;
   };
   resolution_source: string;
   resolution: EmailInvestigationResolution;
@@ -1005,7 +1096,7 @@ export interface EmailInvestigationHistoryItem {
   id: string;
   created_at?: string;
   completed_at?: string;
-  status?: "queued" | "processing" | "completed" | "failed";
+  status?: "queued" | "processing" | "completed" | "failed" | "cancelled";
   filename: string;
   email_subject?: string;
   sender_email?: string;
@@ -1020,7 +1111,7 @@ export interface EmailInvestigationHistoryItem {
 export interface EmailInvestigationSubmitResponse {
   run_id: string;
   history_id?: string;
-  status: "queued" | "processing" | "completed" | "failed";
+  status: "queued" | "processing" | "completed" | "failed" | "cancelled";
   message: string;
 }
 

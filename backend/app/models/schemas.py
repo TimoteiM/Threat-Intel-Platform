@@ -585,6 +585,88 @@ class URLLexicalMLEvidence(BaseModel):
     error: Optional[str] = None
 
 
+class URLMLFeatureImpact(BaseModel):
+    name: str
+    impact: float = 0.0
+
+
+class URLMLScoreEvidence(BaseModel):
+    url: Optional[str] = None
+    phishing_probability: float = 0.0
+    risk_level: str = "low"
+    model_version: str = "lgbm-url-v1.0"
+    top_features: list[URLMLFeatureImpact] = []
+    raw: dict[str, Any] = {}
+
+
+class URLBehaviorEvidence(BaseModel):
+    checked: bool = False
+    redirect_count: int = 0
+    ua_cloaking_detected: bool = False
+    credential_form_present: bool = False
+    suspicious_post_endpoints: list[str] = []
+    multiple_domain_hops: bool = False
+    unique_domains_in_chain: list[str] = []
+    final_url: Optional[str] = None
+    behavior_score: float = 0.0
+    chains: list[dict[str, Any]] = []
+    error: Optional[str] = None
+
+
+class ContentMLEvidence(BaseModel):
+    social_engineering_probability: float = 0.0
+    urgency_probability: float = 0.0
+    impersonation_probability: float = 0.0
+    bec_probability: float = 0.0
+    top_content_terms: list[str] = []
+    model_source: Optional[str] = None
+    feature_hash: Optional[str] = None
+
+
+class AttachmentAnalysisItem(BaseModel):
+    hash: Optional[str] = None
+    filename: Optional[str] = None
+    file_type: str = "unknown"
+    macro_detected: bool = False
+    embedded_objects: bool = False
+    entropy: float = 0.0
+    suspicious_import_count: int = 0
+    static_risk_score: float = 0.0
+    risk_level: str = "low"
+
+
+class AttachmentAnalysisEvidence(BaseModel):
+    checked: bool = False
+    items: list[AttachmentAnalysisItem] = []
+    summary: dict[str, int] = {}
+
+
+class HybridAnalysisItem(BaseModel):
+    checked: bool = False
+    indicator_type: Optional[str] = None
+    verdict: str = "unknown"
+    analysis_id: Optional[str] = None
+    threat_score: Optional[float] = None
+    error: Optional[str] = None
+    cache_hit: Optional[bool] = None
+    dynamic_io_summary: dict[str, Any] = {}
+    raw_summary: dict[str, Any] = {}
+
+
+class HybridAnalysisEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="hybrid_analysis"))
+    items: list[HybridAnalysisItem] = []
+
+
+class FinalRiskEvidence(BaseModel):
+    risk_score: int = 0
+    risk_level: str = "low"
+    confidence: str = "low"
+    components: dict[str, float] = {}
+    weights: dict[str, float] = {}
+    rationale: list[str] = []
+
+
 class RedirectDestinationWhoisEvidence(BaseModel):
     status: str = "pending"
     error: Optional[str] = None
@@ -737,6 +819,18 @@ class CollectedEvidence(BaseModel):
     urlscan: Optional[URLScanEvidence] = None
     # URL lexical ML scoring (domain/url target)
     url_lexical_ml: Optional[URLLexicalMLEvidence] = None
+    # URL lexical model normalized output
+    ml_url_score: Optional[URLMLScoreEvidence] = None
+    # URL redirect/page behavior analysis
+    url_behavior: Optional[URLBehaviorEvidence] = None
+    # Email/header-only content ML signals
+    content_ml: Optional[ContentMLEvidence] = None
+    # Attachment static analysis (no execution)
+    attachment_analysis: Optional[AttachmentAnalysisEvidence] = None
+    # Hybrid Analysis sandbox verdicts
+    hybrid_analysis: Optional[HybridAnalysisEvidence] = None
+    # Composite risk aggregation output
+    final_risk: Optional[FinalRiskEvidence] = None
     # Redirect destination enrichment (cross-domain redirect context)
     redirect_destination_intel: Optional[RedirectDestinationIntelEvidence] = None
 

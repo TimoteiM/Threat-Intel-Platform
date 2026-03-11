@@ -35,15 +35,16 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "vt",           label: "VirusTotal",   desc: "Multi-engine AV scan" },
   { id: "threat_feeds", label: "Threat Feeds", desc: "AbuseIPDB, PhishTank, ThreatFox" },
   { id: "urlscan",      label: "URLScan",      desc: "Full page scan, screenshot, network map" },
+  { id: "hybrid_analysis", label: "Hybrid Analysis", desc: "Sandbox verdict cache (URL/hash)" },
 ];
 
 // Which collectors support each observable type
 const COLLECTORS_PER_TYPE: Record<ObservableType, string[]> = {
-  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan"],
+  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "hybrid_analysis"],
   ip:     ["asn", "vt", "threat_feeds", "urlscan"],
-  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan"],
-  hash:   ["vt", "threat_feeds"],
-  file:   ["vt"],
+  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "hybrid_analysis"],
+  hash:   ["vt", "threat_feeds", "hybrid_analysis"],
+  file:   ["vt", "hybrid_analysis"],
 };
 
 export default function InvestigationInput({ onSubmit, loading }: Props) {

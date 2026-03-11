@@ -220,6 +220,12 @@ export async function getEmailInvestigationRun(runId: string): Promise<any> {
   return request<any>(`/email-investigations/${runId}`);
 }
 
+export async function cancelEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -242,6 +248,12 @@ export function listInvestigations(params?: {
 
 export function getInvestigation(id: string) {
   return request<any>(`/investigations/${id}`);
+}
+
+export function cancelInvestigation(id: string) {
+  return request<any>(`/investigations/${id}/cancel`, {
+    method: "POST",
+  });
 }
 
 export function getEvidence(id: string) {

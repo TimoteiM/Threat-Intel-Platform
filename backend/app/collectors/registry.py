@@ -21,6 +21,7 @@ from app.collectors.intel_collector import IntelCollector
 from app.collectors.vt_collector import VTCollector
 from app.collectors.threat_feeds_collector import ThreatFeedsCollector
 from app.collectors.urlscan_collector import URLScanCollector
+from app.collectors.hybrid_analysis_collector import HybridAnalysisCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
@@ -33,6 +34,7 @@ COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
     "vt":           VTCollector,
     "threat_feeds": ThreatFeedsCollector,
     "urlscan":      URLScanCollector,
+    "hybrid_analysis": HybridAnalysisCollector,
 }
 
 

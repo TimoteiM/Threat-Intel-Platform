@@ -294,10 +294,18 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
                 "vt": item.get("vt") or {},
                 "effective_verdict": item.get("effective_verdict"),
                 "urlscan": item.get("urlscan") or {},
+                "lexical_ml": item.get("lexical_ml") or {},
+                "ml_url_score": item.get("ml_url_score") or {},
+                "url_behavior": item.get("url_behavior") or {},
+                "hybrid_analysis": item.get("hybrid_analysis") or {},
                 "screenshot": ss,
             }
         )
     checks["urls"] = urls
+    checks["content_ml"] = checks.get("content_ml") or {}
+    checks["attachment_analysis"] = checks.get("attachment_analysis") or {}
+    checks["hybrid_analysis"] = checks.get("hybrid_analysis") or {}
+    checks["final_risk"] = checks.get("final_risk") or {}
 
     return {
         "filename": response_payload.get("filename"),
@@ -346,6 +354,9 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "top_features": lexical.get("top_features") or [],
                     "error": lexical.get("error"),
                 },
+                "ml_url_score": item.get("ml_url_score") or {},
+                "url_behavior": item.get("url_behavior") or {},
+                "hybrid_analysis": item.get("hybrid_analysis") or {},
                 "screenshot": {
                     "captured": ss.get("captured"),
                     "final_url": ss.get("final_url"),
@@ -414,6 +425,10 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
             "items": att_items,
             "message": attachments.get("message"),
         },
+        "content_ml": checks.get("content_ml") or {},
+        "attachment_analysis": checks.get("attachment_analysis") or {},
+        "hybrid_analysis": checks.get("hybrid_analysis") or {},
+        "final_risk": checks.get("final_risk") or {},
     }
 
 

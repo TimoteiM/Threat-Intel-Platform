@@ -14,6 +14,7 @@ class InvestigationState(str, enum.Enum):
     EVALUATING = "evaluating"         # Claude analyzing evidence
     INSUFFICIENT_DATA = "insufficient_data"  # Claude needs more evidence
     CONCLUDED = "concluded"           # Analysis complete
+    CANCELLED = "cancelled"           # Cancelled by analyst
     FAILED = "failed"                 # Unrecoverable error
 
 
