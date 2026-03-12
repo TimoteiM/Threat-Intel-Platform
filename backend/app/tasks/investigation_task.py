@@ -223,7 +223,7 @@ def _run_collectors_inline(
         collector = collector_cls(
             domain=domain,
             investigation_id=investigation_id,
-            timeout=timeout,
+            timeout=_collector_timeout(name),
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
         )
@@ -245,13 +245,21 @@ def _run_collectors_inline(
     total_collectors = max(1, len(collectors_to_run))
     max_workers = max(4, len(collectors_to_run))
 
+    def _collector_timeout(name: str) -> int:
+        # Sandbox collectors need a longer window than lightweight infra collectors.
+        if name == "hybrid_analysis":
+            return max(timeout, 180)
+        return timeout
+
+    overall_timeout = max((_collector_timeout(name) for name in collectors_to_run), default=timeout) + 30
+
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=max_workers,
         thread_name_prefix=f"collector-{investigation_id[:8]}",
     ) as pool:
         future_to_name = {pool.submit(_run_one, name): name for name in collectors_to_run}
         try:
-            for future in concurrent.futures.as_completed(future_to_name, timeout=timeout + 30):
+            for future in concurrent.futures.as_completed(future_to_name, timeout=overall_timeout):
                 name = future_to_name[future]
                 try:
                     result = future.result()
@@ -279,7 +287,7 @@ def _run_collectors_inline(
                 )
         except concurrent.futures.TimeoutError:
             logger.error(
-                f"[{investigation_id}] Collector phase timed out after {timeout + 30}s; "
+                f"[{investigation_id}] Collector phase timed out after {overall_timeout}s; "
                 "continuing with completed collector results only"
             )
             timed_out = [name for name, status in collector_statuses.items() if status == "running"]

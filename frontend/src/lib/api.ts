@@ -112,6 +112,7 @@ export async function uploadEmailInvestigation(
     max_urls?: number;
     max_attachment_hashes?: number;
     include_url_screenshots?: boolean;
+    run_anyrun?: boolean;
     run_ai?: boolean;
     ml_phishing_score?: number;
   },
@@ -126,6 +127,7 @@ export async function uploadEmailInvestigation(
   if (options?.include_url_screenshots !== undefined) {
     formData.append("include_url_screenshots", String(options.include_url_screenshots));
   }
+  if (options?.run_anyrun !== undefined) formData.append("run_anyrun", String(options.run_anyrun));
   if (options?.run_ai !== undefined) formData.append("run_ai", String(options.run_ai));
   if (options?.ml_phishing_score !== undefined) {
     formData.append("ml_phishing_score", String(options.ml_phishing_score));

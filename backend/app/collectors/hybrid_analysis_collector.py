@@ -38,6 +38,9 @@ class HybridAnalysisCollector(BaseCollector):
         elif self.observable_type == "domain":
             indicator_type = "url"
             indicator = f"https://{self.domain}"
+            submit_on_not_found = True
+        elif self.observable_type == "url":
+            submit_on_not_found = True
 
         result = lookup_hybrid_analysis(
             indicator=indicator,

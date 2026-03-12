@@ -26,6 +26,7 @@ async def process_email_investigation(
     max_urls: int = 20,
     max_attachment_hashes: int = 5,
     include_url_screenshots: bool = False,
+    run_anyrun: bool = False,
     run_ai: bool = True,
     ml_phishing_score: str | None = None,
 ) -> dict[str, Any]:
@@ -35,6 +36,7 @@ async def process_email_investigation(
         run_email_indicator_checks,
         extracted,
         include_url_screenshots=include_url_screenshots,
+        run_anyrun=run_anyrun,
         max_urls=max_urls,
         max_attachment_hashes=max_attachment_hashes,
     )

@@ -2,6 +2,8 @@
 
 import React from "react";
 
+const APP_MAX_WIDTH = 1920;
+
 export default function Header() {
   return (
     <header
@@ -16,9 +18,9 @@ export default function Header() {
       }}
     >
       <div style={{
-        maxWidth: 1320,
+        maxWidth: APP_MAX_WIDTH,
         margin: "0 auto",
-        padding: "0 24px",
+        padding: "0 16px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",

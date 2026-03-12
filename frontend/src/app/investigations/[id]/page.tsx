@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
 import EnrichmentPanel from "@/components/investigation/EnrichmentPanel";
@@ -59,6 +59,7 @@ type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "i
 export default function InvestigationPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const investigationId = params?.id as string;
 
   const [detail, setDetail] = useState<any>(null);
@@ -162,6 +163,15 @@ export default function InvestigationPage() {
     const timer = setInterval(() => setNowTs(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const qTab = String(searchParams?.get("tab") || "").trim();
+    if (!qTab) return;
+    const validIds = tabs.map((t) => t.id);
+    if (validIds.includes(qTab as any)) {
+      setActiveTab(qTab as TabId);
+    }
+  }, [searchParams, tabs]);
 
   const handleEnrich = useCallback(async (text: string) => {
     try {

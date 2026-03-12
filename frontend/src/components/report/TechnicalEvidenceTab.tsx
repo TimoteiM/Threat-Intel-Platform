@@ -9,12 +9,15 @@ import WHOISHistorySection from "@/components/report/WHOISHistorySection";
 import ThreatFeedsSection from "@/components/report/ThreatFeedsSection";
 import FaviconIntelSection from "@/components/report/FaviconIntelSection";
 import CertTimelineSection from "@/components/report/CertTimelineSection";
+import AnyRunInteractiveEvidence from "@/components/report/AnyRunInteractiveEvidence";
 
 interface Props {
   evidence: CollectedEvidence;
   domain?: string;
   observableType?: string;
 }
+
+const EvidenceSplitContext = React.createContext<{ activeTitle: string | null } | null>(null);
 
 export default function TechnicalEvidenceTab({ evidence, domain, observableType }: Props) {
   const dns = evidence?.dns || ({} as any);
@@ -43,12 +46,242 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
     Object.keys(redirectDestinationIntel).length > 0
   );
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
+  const [isNarrow, setIsNarrow] = React.useState(false);
 
   const type = observableType || (evidence as any)?.observable_type || "domain";
   const isFileHash = type === "file" || type === "hash";
+  const sectionDefs = React.useMemo(
+    () => [
+      {
+        title: "DNS Records",
+        visible: !isFileHash,
+        hasData: arr(dns.a).length > 0 || arr(dns.aaaa).length > 0 || arr(dns.ns).length > 0 || arr(dns.mx).length > 0 || !!dns.spf || !!dns.dmarc,
+      },
+      {
+        title: "Email Security",
+        visible: !isFileHash && !!evidence?.email_security,
+        hasData: !!(evidence?.email_security && (
+          evidence.email_security.email_security_score != null ||
+          evidence.email_security.dmarc_record ||
+          evidence.email_security.spf_record
+        )),
+      },
+      {
+        title: "TLS Certificate",
+        visible: !isFileHash,
+        hasData: !!(tls && (tls.present || tls.issuer || tls.subject || arr(tls.sans).length)),
+      },
+      {
+        title: "HTTP Response",
+        visible: !isFileHash,
+        hasData: !!(http && (http.reachable || http.final_url || http.final_status_code)),
+      },
+      {
+        title: "Redirect Analysis",
+        visible: !isFileHash && !!evidence?.redirect_analysis,
+        hasData: !!(evidence?.redirect_analysis && arr(evidence.redirect_analysis.probes).length > 0),
+      },
+      { title: "Content Analysis", visible: !isFileHash && !!(
+        arr(http.phishing_indicators).length > 0 ||
+        arr(http.external_resources).length > 0 ||
+        http.favicon_hash
+      ), hasData: true },
+      {
+        title: "JavaScript Analysis",
+        visible: !isFileHash && !!evidence?.js_analysis,
+        hasData: !!(evidence?.js_analysis && (
+          arr(evidence.js_analysis.captured_requests).length ||
+          arr(evidence.js_analysis.suspicious_scripts).length ||
+          arr(evidence.js_analysis.request_domains).length
+        )),
+      },
+      {
+        title: "WHOIS Registration",
+        visible: !isFileHash,
+        hasData: !!(whois && (whois.registrar || whois.created_date || whois.domain_age_days != null)),
+      },
+      {
+        title: "Hosting / ASN",
+        visible: !isFileHash,
+        hasData: !!(hosting && (hosting.ip || hosting.asn || hosting.asn_org)),
+      },
+      {
+        title: "Visual Comparison",
+        visible: !isFileHash && !!evidence?.visual_comparison,
+        hasData: !!(evidence?.visual_comparison && evidence.visual_comparison.overall_visual_similarity != null),
+      },
+      {
+        title: "Domain Screenshot",
+        visible: !isFileHash && !!evidence?.screenshot,
+        hasData: !!(evidence?.screenshot && (evidence.screenshot.artifact_id || evidence.screenshot.final_url || evidence.screenshot.capture_error)),
+      },
+      {
+        title: "Subdomain Enumeration",
+        visible: !isFileHash && !!(evidence?.subdomains && evidence.subdomains.discovered_count > 0),
+        hasData: !!(evidence?.subdomains && evidence.subdomains.discovered_count > 0),
+      },
+      {
+        title: "VirusTotal Reputation",
+        visible: true,
+        hasData: !!(vt && (vt.found || vt.total_vendors || vt.meta?.status === "completed")),
+      },
+      {
+        title: "URLScan Reputation",
+        visible: true,
+        hasData: !!(urlscan && (urlscan.scan_id || urlscan.page_url || urlscan.meta?.status === "completed")),
+      },
+      {
+        title: "URL Lexical ML",
+        visible: (type === "url" || type === "domain"),
+        hasData: !!(urlLexical && Object.keys(urlLexical).length > 0),
+      },
+      {
+        title: "Content ML Signals",
+        visible: true,
+        hasData: !!(contentMl && Object.keys(contentMl).length > 0),
+      },
+      {
+        title: "Attachment Static Analysis",
+        visible: true,
+        hasData: !!(attachmentAnalysis?.items?.length),
+      },
+      {
+        title: "URL Behavior Analysis",
+        visible: (type === "url" || type === "domain"),
+        hasData: !!(urlBehavior && Object.keys(urlBehavior).length > 0),
+      },
+      {
+        title: "AnyRun Analysis",
+        visible: true,
+        hasData: !!(hybridAnalysis?.items?.length) || !!hybridAnalysis?.meta?.status,
+      },
+      {
+        title: "Final Risk Aggregation",
+        visible: true,
+        hasData: !!(finalRisk && Object.keys(finalRisk).length > 0),
+      },
+      {
+        title: "Redirect Destination Intelligence",
+        visible: (type === "url" || type === "domain"),
+        hasData: hasRedirectDestinationIntel,
+      },
+      {
+        title: "Threat Intelligence",
+        visible: true,
+        hasData: !!(intel && (
+          arr(intel.blocklist_hits).length ||
+          arr(intel.related_subdomains).length ||
+          arr(intel.notes).length
+        )),
+      },
+      {
+        title: "Threat Feed Intelligence",
+        visible: !!evidence?.threat_feeds,
+        hasData: !!(evidence?.threat_feeds && Object.keys(evidence.threat_feeds).length > 0),
+      },
+      {
+        title: "Favicon Hash Intelligence",
+        visible: !isFileHash && !!evidence?.favicon_intel,
+        hasData: !!(evidence?.favicon_intel && Object.keys(evidence.favicon_intel).length > 0),
+      },
+      {
+        title: "Certificate Transparency Timeline",
+        visible: !isFileHash && !!(evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0),
+        hasData: !!(evidence?.cert_timeline && evidence.cert_timeline.total_certs > 0),
+      },
+      {
+        title: "Collector Metadata",
+        visible: true,
+        hasData: true,
+      },
+    ],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, finalRisk, hasRedirectDestinationIntel, intel, type],
+  );
+  const availableSections = React.useMemo(
+    () => sectionDefs.filter((s) => s.visible),
+    [sectionDefs],
+  );
+  const [activeSectionTitle, setActiveSectionTitle] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!availableSections.length) {
+      setActiveSectionTitle(null);
+      return;
+    }
+    if (!activeSectionTitle || !availableSections.some((s) => s.title === activeSectionTitle)) {
+      setActiveSectionTitle(availableSections[0].title);
+    }
+  }, [availableSections, activeSectionTitle]);
+
+  React.useEffect(() => {
+    const update = () => setIsNarrow(typeof window !== "undefined" && window.innerWidth < 1100);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   return (
-    <div>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isNarrow ? "1fr" : "250px minmax(0,1fr)",
+        gap: 18,
+        alignItems: "start",
+      }}
+    >
+      <div
+        style={{
+          position: isNarrow ? "static" : "sticky",
+          top: 82,
+          alignSelf: "start",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: 10,
+          maxHeight: isNarrow ? "none" : "72vh",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8, letterSpacing: "0.03em" }}>
+          TECHNICAL EVIDENCE
+        </div>
+        <div style={{ display: "grid", gap: 6 }}>
+          {availableSections.map(({ title, hasData }) => (
+            <button
+              key={title}
+              type="button"
+              onClick={() => setActiveSectionTitle(title)}
+              style={{
+                textAlign: "left",
+                fontSize: 12,
+                padding: "8px 10px",
+                borderRadius: "var(--radius-sm)",
+                border: activeSectionTitle === title
+                  ? "1px solid rgba(96,165,250,0.45)"
+                  : hasData
+                  ? "1px solid rgba(52,211,153,0.25)"
+                  : "1px solid var(--border)",
+                background: activeSectionTitle === title
+                  ? "rgba(96,165,250,0.12)"
+                  : hasData
+                  ? "rgba(52,211,153,0.08)"
+                  : "var(--bg-elevated)",
+                color: activeSectionTitle === title ? "var(--accent)" : hasData ? "var(--green)" : "var(--text-secondary)",
+                cursor: "pointer",
+                fontWeight: activeSectionTitle === title ? 700 : 500,
+              }}
+            >
+              <span style={{ marginRight: 6, color: hasData ? "var(--green)" : "var(--text-muted)" }}>
+                {hasData ? "●" : "○"}
+              </span>
+              {title}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+      <EvidenceSplitContext.Provider value={{ activeTitle: activeSectionTitle }}>
 
       {/* —— DOMAIN/URL/IP sections — hidden for file/hash investigations —— */}
       {!isFileHash && <>
@@ -1105,16 +1338,17 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             columns={[{ key: "field" }, { key: "value", wrap: true }]}
           />
         )}
+        {whois.meta?.status !== "failed" && domain && (() => {
+          let historyDomain = domain;
+          if (type === "url") {
+            try { historyDomain = new URL(domain).hostname; } catch {}
+          }
+          return <WHOISHistorySection domain={historyDomain} />;
+        })()}
       </Section>
 
       {/* WHOIS History — for URL type use extracted hostname, not full URL */}
-      {domain && (() => {
-        let historyDomain = domain;
-        if (type === "url") {
-          try { historyDomain = new URL(domain).hostname; } catch {}
-        }
-        return <WHOISHistorySection domain={historyDomain} />;
-      })()}
+      
 
       {/* Hosting */}
       <Section title="Hosting / ASN">
@@ -1657,31 +1891,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         </Section>
       )}
 
-      <Section title="Hybrid Analysis">
-        {!hybridAnalysis?.items?.length ? (
-          <EmptyNote>Hybrid Analysis data not available (collector not run)</EmptyNote>
-        ) : (
-          <EvidenceTable
-            title="Sandbox Verdicts"
-            data={arr(hybridAnalysis.items).map((item: any, idx: number) => ({
-              index: idx + 1,
-              type: item?.indicator_type || "unknown",
-              verdict: String(item?.verdict || "unknown").toUpperCase(),
-              threat_score: item?.threat_score ?? "—",
-              analysis_id: item?.analysis_id || "—",
-              error: item?.error || "—",
-            }))}
-            columns={[
-              { key: "index", label: "#" },
-              { key: "type", label: "Indicator Type" },
-              { key: "verdict", label: "Verdict" },
-              { key: "threat_score", label: "Threat Score" },
-              { key: "analysis_id", label: "Analysis ID", wrap: true },
-              { key: "error", label: "Status/Error", wrap: true },
-            ]}
-            showHeader
-          />
-        )}
+      <Section title="AnyRun Analysis">
+        <AnyRunInteractiveEvidence hybridAnalysis={hybridAnalysis} />
       </Section>
 
       <Section title="Final Risk Aggregation">
@@ -1911,7 +2122,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             metaRow("INTEL", intel.meta),
             metaRow("VT", vt.meta),
             metaRow("URLSCAN", urlscan.meta),
-            ...(evidence?.hybrid_analysis ? [metaRow("HYBRID_ANALYSIS", (evidence as any).hybrid_analysis?.meta)] : []),
+            ...(evidence?.hybrid_analysis ? [metaRow("SANDBOX (ANY.RUN/HYBRID)", (evidence as any).hybrid_analysis?.meta)] : []),
             ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),
           ].filter(Boolean) as any[]}
           columns={[
@@ -1922,6 +2133,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
           ]}
         />
       </Section>
+      </EvidenceSplitContext.Provider>
+      </div>
     </div>
   );
 }
@@ -1960,6 +2173,8 @@ function metaRow(name: string, meta: any) {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const split = React.useContext(EvidenceSplitContext);
+  if (split?.activeTitle && split.activeTitle !== title) return null;
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
@@ -2081,6 +2296,9 @@ function VTStatBox({ label, count, total, color, highlight }: {
     </div>
   );
 }
+
+
+
 
 
 

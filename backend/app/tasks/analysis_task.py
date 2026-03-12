@@ -1576,6 +1576,21 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     blended = (1.0 - lexical_weight) * rep_norm + lexical_weight * lexical_score
     blended_score = int(round(blended * 100))
 
+    floor_score, floor_reasons = _trusted_external_risk_floor(evidence_data)
+    if floor_score and blended_score < floor_score:
+        blended_score = floor_score
+        cls = str(report_data.get("classification") or "").lower()
+        if floor_score >= 85:
+            report_data["classification"] = "malicious"
+            report_data["confidence"] = "high"
+            report_data["recommended_action"] = "block"
+        elif cls in {"", "benign", "inconclusive"}:
+            report_data["classification"] = "suspicious"
+            if str(report_data.get("confidence") or "").lower() in {"", "low"}:
+                report_data["confidence"] = "medium"
+            if str(report_data.get("recommended_action") or "").lower() in {"", "allow", "monitor"}:
+                report_data["recommended_action"] = "investigate"
+
     existing = report_data.get("findings")
     findings = existing if isinstance(existing, list) else []
     if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
@@ -1605,6 +1620,13 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     )
     if lexical_line not in key_evidence:
         key_evidence.append(lexical_line)
+    if floor_reasons:
+        floor_line = (
+            f"Trusted external intelligence floor applied at {blended_score}/100 due to: "
+            + "; ".join(floor_reasons)
+        )
+        if floor_line not in key_evidence:
+            key_evidence.append(floor_line)
         report_data["key_evidence"] = key_evidence
 
     # Apply blended score only when a numeric score exists or can be inferred.
@@ -1614,7 +1636,78 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         f"Final risk uses blended scoring: reputation_weight=0.75, lexical_weight=0.25, "
         f"reputation_component={rep_norm:.4f}, lexical_component={lexical_score:.4f}, final={blended:.4f}."
     )
+    if floor_reasons:
+        blend_note += f" External intelligence floor enforced at {blended_score}/100."
     report_data["risk_rationale"] = (rationale + " " + blend_note).strip()
+
+
+def _trusted_external_risk_floor(evidence_data: dict) -> tuple[int, list[str]]:
+    """
+    Determine minimum risk score floor from trusted external sources
+    (VirusTotal, URLScan, Hybrid Analysis) to avoid over-dilution by lexical ML.
+    """
+    strong_hits = 0
+    medium_hits = 0
+    reasons: list[str] = []
+
+    vt = evidence_data.get("vt") or {}
+    vt_malicious = int(vt.get("malicious_count") or 0)
+    vt_suspicious = int(vt.get("suspicious_count") or 0)
+    if vt_malicious >= 10:
+        strong_hits += 1
+        reasons.append(f"VirusTotal high malicious detections ({vt_malicious})")
+    elif vt_malicious >= 5 or vt_suspicious >= 10:
+        medium_hits += 1
+        reasons.append(f"VirusTotal elevated detections (m={vt_malicious}, s={vt_suspicious})")
+
+    urlscan = evidence_data.get("urlscan") or {}
+    urlscan_verdict = str(urlscan.get("verdict") or "").strip().lower()
+    try:
+        urlscan_score = float(urlscan.get("score") or 0.0)
+    except Exception:
+        urlscan_score = 0.0
+    if urlscan_verdict == "malicious" and urlscan_score >= 70:
+        strong_hits += 1
+        reasons.append(f"URLScan malicious verdict ({urlscan_score:.0f}/100)")
+    elif urlscan_verdict in {"malicious", "suspicious"} or urlscan_score >= 40:
+        medium_hits += 1
+        reasons.append(f"URLScan risk signal ({urlscan_verdict or 'score-only'} {urlscan_score:.0f}/100)")
+
+    hybrid = evidence_data.get("hybrid_analysis") or {}
+    hybrid_verdict = str(hybrid.get("verdict") or "").strip().lower()
+    try:
+        hybrid_score = float(hybrid.get("score") or 0.0)
+    except Exception:
+        hybrid_score = 0.0
+    items = hybrid.get("items") if isinstance(hybrid, dict) else None
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            v = str(item.get("verdict") or "").strip().lower()
+            try:
+                s = float(item.get("score") or 0.0)
+            except Exception:
+                s = 0.0
+            if not hybrid_verdict and v:
+                hybrid_verdict = v
+            if s > hybrid_score:
+                hybrid_score = s
+
+    if hybrid_verdict == "malicious" or hybrid_score >= 70:
+        strong_hits += 1
+        reasons.append(f"Hybrid Analysis malicious/high score ({hybrid_score:.0f}/100)")
+    elif hybrid_verdict in {"suspicious"} or hybrid_score >= 40:
+        medium_hits += 1
+        reasons.append(f"Hybrid Analysis suspicious signal ({hybrid_score:.0f}/100)")
+
+    if strong_hits >= 2:
+        return 90, reasons
+    if strong_hits >= 1:
+        return 80, reasons
+    if medium_hits >= 2:
+        return 70, reasons
+    return 0, []
 
 
 def _looks_like_ip(value: str) -> bool:

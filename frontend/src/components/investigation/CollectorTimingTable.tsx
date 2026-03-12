@@ -31,6 +31,13 @@ export default function CollectorTimingTable({
   live = false,
   title = "Collector Timings",
 }: Props) {
+  const displayCollectorName = (name: string) => {
+    const raw = String(name || "");
+    const key = raw.toLowerCase().replace(/\s+/g, "_");
+    if (key === "hybrid_analysis") return "ANYRUN ANALYSIS";
+    return COLLECTOR_NAMES[key] || COLLECTOR_NAMES[raw] || raw.toUpperCase();
+  };
+
   const visibleRows = rows.filter((r) => r.status !== "pending" || live);
   if (visibleRows.length === 0) return null;
 
@@ -65,7 +72,7 @@ export default function CollectorTimingTable({
         {visibleRows.map((row) => (
           <React.Fragment key={row.collector}>
             <div style={{ fontSize: 11, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-              {COLLECTOR_NAMES[row.collector] || row.collector.toUpperCase()}
+              {displayCollectorName(row.collector)}
             </div>
             <div style={{ fontSize: 11, color: STATUS_COLOR[row.status], fontFamily: "var(--font-mono)" }}>
               {row.status}
@@ -79,4 +86,3 @@ export default function CollectorTimingTable({
     </div>
   );
 }
-

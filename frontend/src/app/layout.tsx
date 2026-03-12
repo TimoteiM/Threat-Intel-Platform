@@ -7,12 +7,14 @@ export const metadata = {
   description: "Domain threat investigation platform",
 };
 
+const APP_MAX_WIDTH = 1920;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
         <Header />
-        <main style={{ flex: 1, maxWidth: 1320, margin: "0 auto", padding: "0 24px", width: "100%" }}>
+        <main style={{ flex: 1, maxWidth: APP_MAX_WIDTH, margin: "0 auto", padding: "0 16px", width: "100%" }}>
           {children}
         </main>
         <Footer />
@@ -20,7 +22,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
-
 
 
 

@@ -27,6 +27,7 @@ export default function EmailInvestigationsPage() {
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [includeScreenshots, setIncludeScreenshots] = useState(false);
+  const [runAnyRun, setRunAnyRun] = useState(false);
   const [runAiInterpretation, setRunAiInterpretation] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
@@ -50,6 +51,7 @@ export default function EmailInvestigationsPage() {
       { key: "ip", label: "Checking sender IP in VT and AbuseIPDB", weight: 2 },
       { key: "url", label: "Checking URLs in VirusTotal", weight: 3 },
       { key: "attachment", label: "Checking attachment hashes in VirusTotal", weight: 3 },
+      ...(runAnyRun ? [{ key: "sandbox", label: "Checking Any.Run intelligence/sandbox", weight: 4 }] : []),
       ...(includeScreenshots ? [{ key: "screenshot", label: "Capturing URL destination screenshots", weight: 5 }] : []),
       ...(runAiInterpretation ? [{ key: "ai", label: "Generating final AI interpretation", weight: 6 }] : []),
       { key: "finalize", label: "Finalizing investigation results", weight: 1 },
@@ -76,7 +78,7 @@ export default function EmailInvestigationsPage() {
       activeIndex,
       stageText: steps[activeIndex]?.label || "Running investigation",
     };
-  }, [includeScreenshots, runAiInterpretation, loadingElapsedSec]);
+  }, [includeScreenshots, runAnyRun, runAiInterpretation, loadingElapsedSec]);
 
   const domainFindings = useMemo(
     () => buildSenderDomainFindings(result),
@@ -129,6 +131,7 @@ export default function EmailInvestigationsPage() {
         context: context || undefined,
         max_urls: 20,
         include_url_screenshots: includeScreenshots,
+        run_anyrun: runAnyRun,
         run_ai: runAiInterpretation,
         ml_phishing_score: mlScore.trim() ? Number(mlScore) : undefined,
       })) as EmailInvestigationSubmitResponse;
@@ -361,6 +364,14 @@ export default function EmailInvestigationsPage() {
         <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
           <input
             type="checkbox"
+            checked={runAnyRun}
+            onChange={(e) => setRunAnyRun(e.target.checked)}
+          />
+          Run Any.Run checks (URLs + attachment hashes)
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
+          <input
+            type="checkbox"
             checked={runAiInterpretation}
             onChange={(e) => setRunAiInterpretation(e.target.checked)}
           />
@@ -552,7 +563,7 @@ export default function EmailInvestigationsPage() {
                       VT verdict: {a?.vt?.verdict || "unknown"} (m={a?.vt?.malicious_count ?? 0}, s={a?.vt?.suspicious_count ?? 0}, total={a?.vt?.total_vendors ?? 0})
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
-                      Hybrid Analysis: {String(a?.hybrid_analysis?.verdict || "unknown")}
+                      Sandbox: {String(a?.hybrid_analysis?.verdict || "unknown")}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
                       Static ML: {
@@ -810,7 +821,7 @@ export default function EmailInvestigationsPage() {
                               : ""}
                         </div>
                         <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                          Hybrid Analysis: {String(u?.hybrid_analysis?.verdict || "unknown").toUpperCase()}
+                          Sandbox: {String(u?.hybrid_analysis?.verdict || "unknown").toUpperCase()}
                         </div>
                       </div>
                       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.05)" }}>

@@ -35,7 +35,7 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "vt",           label: "VirusTotal",   desc: "Multi-engine AV scan" },
   { id: "threat_feeds", label: "Threat Feeds", desc: "AbuseIPDB, PhishTank, ThreatFox" },
   { id: "urlscan",      label: "URLScan",      desc: "Full page scan, screenshot, network map" },
-  { id: "hybrid_analysis", label: "Hybrid Analysis", desc: "Sandbox verdict cache (URL/hash)" },
+  { id: "hybrid_analysis", label: "AnyRun Analysis", desc: "Any.Run evidence (Hybrid fallback if needed)" },
 ];
 
 // Which collectors support each observable type

@@ -81,6 +81,7 @@ export default function EvidenceTable({ title, data, columns, showHeader = false
                       ? "Yes"
                       : "No"
                     : String(val);
+                const empty = isEmptyDisplay(display);
 
                 return (
                   <td
@@ -88,11 +89,27 @@ export default function EvidenceTable({ title, data, columns, showHeader = false
                     style={{
                       padding: "7px 12px",
                       fontSize: 11,
-                      color: j === 0 ? "var(--text-dim)" : "var(--text)",
+                      color: (() => {
+                        if (j === 0) return "var(--text-dim)";
+                        if (empty) return "var(--text-muted)";
+                        const sev = classifySeverity(display, col.key);
+                        if (sev === "malicious") return "var(--red)";
+                        if (sev === "suspicious") return "var(--yellow)";
+                        if (sev === "legit") return "var(--green)";
+                        return "var(--text-primary)";
+                      })(),
                       fontWeight: j === 0 ? 600 : 400,
                       width: j === 0 ? "30%" : "auto",
-                      background:
-                        i % 2 === 0 ? "transparent" : "rgba(15,23,42,0.4)",
+                      background: (() => {
+                        if (j > 0 && !empty) {
+                          const sev = classifySeverity(display, col.key);
+                          if (sev === "malicious") return "rgba(239,68,68,0.14)";
+                          if (sev === "suspicious") return "rgba(245,158,11,0.14)";
+                          if (sev === "legit") return "rgba(52,211,153,0.10)";
+                          return "transparent";
+                        }
+                        return i % 2 === 0 ? "transparent" : "rgba(15,23,42,0.4)";
+                      })(),
                       whiteSpace: col.wrap ? "normal" : "nowrap",
                       wordBreak: col.wrap ? "break-all" : "normal",
                       fontFamily: "var(--font-mono)",
@@ -108,4 +125,52 @@ export default function EvidenceTable({ title, data, columns, showHeader = false
       </table>
     </div>
   );
+}
+
+function isEmptyDisplay(value: React.ReactNode): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== "string") return false;
+  const text = value.trim().toLowerCase();
+  return (
+    text === "" ||
+    text === "-" ||
+    text === "—" ||
+    text === "n/a" ||
+    text === "none" ||
+    text === "unknown" ||
+    text === "not present in the provided evidence."
+  );
+}
+
+function classifySeverity(value: React.ReactNode, key: string): "malicious" | "suspicious" | "legit" | "neutral" {
+  if (value === null || value === undefined) return "neutral";
+  const text = String(value).toLowerCase();
+  const k = String(key || "").toLowerCase();
+  if (
+    text.includes("malicious") ||
+    text.includes("phishing") ||
+    text.includes("critical") ||
+    text.includes("high risk") ||
+    (k.includes("threat_level") && /\b([2-9]|[1-9]\d+)\b/.test(text))
+  ) {
+    return "malicious";
+  }
+  if (
+    text.includes("suspicious") ||
+    text.includes("warning") ||
+    text.includes("medium") ||
+    text.includes("inconclusive")
+  ) {
+    return "suspicious";
+  }
+  if (
+    text.includes("whitelisted") ||
+    text.includes("legitimate") ||
+    text.includes("trusted") ||
+    text.includes("clean") ||
+    text.includes("benign")
+  ) {
+    return "legit";
+  }
+  return "neutral";
 }

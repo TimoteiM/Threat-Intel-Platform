@@ -3,6 +3,7 @@
 import React from "react";
 
 const YEAR = 2026;
+const APP_MAX_WIDTH = 1920;
 
 export default function Footer() {
   return (
@@ -15,9 +16,9 @@ export default function Footer() {
     >
       <div
         style={{
-          maxWidth: 1320,
+          maxWidth: APP_MAX_WIDTH,
           margin: "0 auto",
-          padding: "32px 24px",
+          padding: "32px 16px",
         }}
       >
         {/* Top row: brand + nav links */}

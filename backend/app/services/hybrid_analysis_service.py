@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import LookupCache
+from app.services.anyrun_service import lookup_anyrun
 
 HYBRID_CACHE_TTL_HOURS = 24
 DEFAULT_BASE_URL = "https://hybrid-analysis.com/api/v2"
@@ -28,12 +29,49 @@ def lookup_hybrid_analysis(
     file_bytes: bytes | None = None,
     file_name: str | None = None,
     submit_on_not_found: bool = False,
+    prefer_anyrun: bool = True,
 ) -> dict[str, Any]:
     """
     indicator_type: "url" | "hash"
     """
+    settings = get_settings()
+    anyrun_key = (getattr(settings, "anyrun_api_key", "") or "").strip()
+    api_key = (getattr(settings, "hybrid_analysis_api_key", "") or "").strip()
+
     key = _cache_key(indicator=indicator, indicator_type=indicator_type)
     cached = _cache_get(key)
+    if cached and prefer_anyrun and anyrun_key and indicator_type in {"url", "hash"}:
+        cached_source = str(((cached.get("raw_summary") or {}).get("source") or "")).strip().lower()
+        if "anyrun" not in cached_source:
+            cached = None
+        elif indicator_type == "url" and submit_on_not_found and _is_sparse_anyrun_cache(cached):
+            # Do not reuse minimal Any.Run lookup cache for URL/domain when sandbox enrichment is allowed.
+            cached = None
+        elif indicator_type == "url" and submit_on_not_found:
+            cached_analysis_id = str(cached.get("analysis_id") or "").strip()
+            cached_mode = str(((cached.get("raw_summary") or {}).get("mode") or "")).strip().lower()
+            if not cached_analysis_id:
+                # Lookup-only Any.Run cache (no task/report id) cannot provide process graph/details.
+                cached = None
+            elif cached_mode != "sandbox":
+                # URL/domain investigations with enrichment enabled require sandbox-detail payloads.
+                cached = None
+            elif _is_stale_anyrun_sandbox_cache(cached):
+                # Sandbox cache from older mapper versions may include only counters but no detail rows.
+                cached = None
+        elif indicator_type == "hash" and submit_on_not_found and file_bytes:
+            cached_analysis_id = str(cached.get("analysis_id") or "").strip()
+            cached_mode = str(((cached.get("raw_summary") or {}).get("mode") or "")).strip().lower()
+            if not cached_analysis_id:
+                # Uploaded-file investigations require sandbox-quality AnyRun data.
+                # Do not reuse lookup-only hash cache.
+                cached = None
+            elif cached_mode != "sandbox":
+                # Hash lookups can return TI summaries with analysis ids but no rich behavior/process data.
+                # For uploaded files, require sandbox-mode AnyRun evidence.
+                cached = None
+            elif _is_stale_anyrun_sandbox_cache(cached):
+                cached = None
     if cached:
         # Avoid persisting stale "checked but unknown" hash results for full TTL.
         # Hybrid hash search response formats changed, and older cached entries may
@@ -50,10 +88,32 @@ def lookup_hybrid_analysis(
         out["cache_hit"] = True
         return out
 
-    settings = get_settings()
-    api_key = (getattr(settings, "hybrid_analysis_api_key", "") or "").strip()
     base_url = _normalize_base_url((getattr(settings, "hybrid_analysis_base_url", "") or "").strip() or DEFAULT_BASE_URL)
+    # Primary sandbox: Any.Run, then fallback to Hybrid.
+    anyrun_error = ""
+    if prefer_anyrun and indicator_type in {"url", "hash"} and anyrun_key:
+        anyrun_result = lookup_anyrun(
+            indicator=indicator,
+            indicator_type=indicator_type,
+            file_bytes=file_bytes,
+            file_name=file_name,
+            submit_on_not_found=submit_on_not_found,
+        )
+        if anyrun_result.get("checked"):
+            anyrun_result = dict(anyrun_result)
+            anyrun_result["cache_hit"] = False
+            raw = anyrun_result.get("raw_summary")
+            anyrun_result["raw_summary"] = {
+                **(raw if isinstance(raw, dict) else {}),
+                "source": "anyrun",
+            }
+            _cache_set(key, anyrun_result, source="anyrun", ttl_hours=HYBRID_CACHE_TTL_HOURS)
+            return anyrun_result
+        anyrun_error = str(anyrun_result.get("error") or "").strip()
+
     if not api_key:
+        if anyrun_error:
+            return {"checked": False, "verdict": "unknown", "error": anyrun_error, "cache_hit": False}
         return {"checked": False, "verdict": "unknown", "error": "HYBRID_ANALYSIS_API_KEY not configured", "cache_hit": False}
 
     headers = {
@@ -102,6 +162,12 @@ def lookup_hybrid_analysis(
                 },
             }
     result["cache_hit"] = False
+    raw_summary = result.get("raw_summary")
+    result["raw_summary"] = {
+        **(raw_summary if isinstance(raw_summary, dict) else {}),
+        "source": "hybrid",
+        **({"anyrun_error": anyrun_error} if anyrun_error else {}),
+    }
     if result.get("checked"):
         _cache_set(key, result, source="hybrid_analysis", ttl_hours=HYBRID_CACHE_TTL_HOURS)
     return result
@@ -457,7 +523,13 @@ def _cache_get(key: str) -> dict[str, Any] | None:
         ).scalar_one_or_none()
         if not row or not isinstance(row.cache_value, dict):
             return None
-        return dict(row.cache_value)
+        cached = dict(row.cache_value)
+        raw = cached.get("raw_summary")
+        cached["raw_summary"] = {
+            **(raw if isinstance(raw, dict) else {}),
+            "source": str(row.source or (raw or {}).get("source") or "hybrid"),
+        }
+        return cached
 
 
 def _cache_set(key: str, value: dict[str, Any], *, source: str, ttl_hours: int) -> None:
@@ -492,3 +564,52 @@ def _normalize_base_url(base_url: str) -> str:
     if "://www.hybrid-analysis.com" in base:
         base = base.replace("://www.hybrid-analysis.com", "://hybrid-analysis.com")
     return base
+
+
+def _is_sparse_anyrun_cache(cached: dict[str, Any]) -> bool:
+    raw = cached.get("raw_summary") or {}
+    if str(raw.get("source") or "").strip().lower() != "anyrun":
+        return False
+    summary = raw.get("summary") or {}
+    details = summary.get("details") if isinstance(summary, dict) else None
+    details_count = len(details) if isinstance(details, list) else 0
+    io = cached.get("dynamic_io_summary") or {}
+    domains = io.get("domains") if isinstance(io, dict) else None
+    hosts = io.get("hosts") if isinstance(io, dict) else None
+    domains_count = len(domains) if isinstance(domains, list) else 0
+    hosts_count = len(hosts) if isinstance(hosts, list) else 0
+    analysis_id = str(cached.get("analysis_id") or "").strip()
+    return not analysis_id and details_count == 0 and domains_count == 0 and hosts_count == 0
+
+
+def _is_stale_anyrun_sandbox_cache(cached: dict[str, Any]) -> bool:
+    raw = cached.get("raw_summary") or {}
+    if str(raw.get("source") or "").strip().lower() != "anyrun":
+        return False
+    if str(raw.get("mode") or "").strip().lower() != "sandbox":
+        return False
+    analysis_id = str(cached.get("analysis_id") or "").strip()
+    if not analysis_id:
+        return False
+    details = raw.get("behavior_details") or {}
+    if not isinstance(details, dict):
+        return True
+    keys = ("dns_requests", "http_requests", "connections", "network_threats", "processes")
+    has_any = False
+    for k in keys:
+        v = details.get(k)
+        if isinstance(v, list) and len(v) > 0:
+            has_any = True
+            break
+    if not has_any:
+        return True
+
+    # Newer mapper versions provide process_details. If process rows exist but
+    # process_details are absent (or implausibly small), force refresh.
+    processes = details.get("processes")
+    process_details = details.get("process_details")
+    p_count = len(processes) if isinstance(processes, list) else 0
+    pd_count = len(process_details) if isinstance(process_details, list) else 0
+    if p_count > 1 and pd_count <= 1:
+        return True
+    return False

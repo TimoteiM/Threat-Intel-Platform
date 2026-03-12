@@ -2,6 +2,7 @@ from app.tasks.analysis_task import (
     _build_analyst_input_evidence,
     _build_iocs_from_evidence,
     _ensure_report_completeness,
+    _inject_lexical_contribution,
 )
 
 
@@ -107,3 +108,33 @@ def test_ensure_report_completeness_simplifies_overly_verbose_reasoning():
 
     assert "attacker-necessity" not in normalized["primary_reasoning"].lower()
     assert normalized["primary_reasoning"].startswith("Automated analysis for DOMAIN")
+
+
+def test_lexical_contribution_applies_trusted_external_floor():
+    report = {
+        "classification": "suspicious",
+        "confidence": "medium",
+        "recommended_action": "investigate",
+        "risk_score": 60,
+        "findings": [],
+        "key_evidence": [],
+        "risk_rationale": "",
+    }
+    evidence = {
+        "url_lexical_ml": {
+            "score": 0.01,
+            "raw_score": 0.01,
+            "label": "low",
+            "top_features": ["url_length"],
+            "model_source": "lightgbm",
+            "calibration_applied": True,
+        },
+        "vt": {"malicious_count": 15, "suspicious_count": 1},
+        "urlscan": {"verdict": "benign", "score": 0},
+        "hybrid_analysis": {"verdict": "malicious", "score": 76},
+    }
+
+    _inject_lexical_contribution(report, evidence)
+
+    assert report["risk_score"] >= 80
+    assert any("Trusted external intelligence floor applied" in line for line in report["key_evidence"])

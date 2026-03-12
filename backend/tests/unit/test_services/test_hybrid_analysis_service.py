@@ -55,19 +55,24 @@ def test_lookup_url_falls_back_to_quick_scan_when_search_empty(monkeypatch):
         calls.append(url)
         if url.endswith("/search/terms"):
             return _DummyResponse([])
-        if url.endswith("/quick-scan/url"):
-            assert (data or {}).get("scan_type") == "all"
+        if url.endswith("/submit/url"):
+            assert (data or {}).get("url") == "https://example.test"
             return _DummyResponse({"id": "qs-1", "finished": True, "sha256": "s1", "verdict": "suspicious"}, status_code=201)
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(svc.requests, "post", fake_post)
+    monkeypatch.setattr(
+        svc.requests,
+        "get",
+        lambda *args, **kwargs: _DummyResponse({"state": "SUCCESS"}) if str(args[0]).endswith("/state") else _DummyResponse({"id": "qs-1", "verdict": "suspicious"}),
+    )
 
     out = svc._lookup_url("https://hybrid-analysis.com/api/v2", {"api-key": "k"}, "https://example.test")
     assert out["checked"] is True
     assert out["analysis_id"] == "qs-1"
     assert out["verdict"] == "suspicious"
     assert calls[0].endswith("/search/terms")
-    assert calls[1].endswith("/quick-scan/url")
+    assert calls[1].endswith("/submit/url")
 
 
 def test_hash_lookup_bypasses_stale_unknown_cache(monkeypatch):
@@ -99,3 +104,69 @@ def test_hash_lookup_bypasses_stale_unknown_cache(monkeypatch):
     assert out["checked"] is True
     assert out["verdict"] == "malicious"
     assert out["cache_hit"] is False
+
+
+def test_lookup_prefers_anyrun_for_url(monkeypatch):
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        svc,
+        "lookup_anyrun",
+        lambda **kwargs: {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "ar-1",
+            "raw_summary": {"source": "anyrun"},
+        },
+    )
+
+    called = {"retry": False}
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: called.__setitem__("retry", True) or {"checked": False, "verdict": "unknown"},
+    )
+
+    out = svc.lookup_hybrid_analysis(indicator="https://example.test", indicator_type="url")
+    assert out["checked"] is True
+    assert out["verdict"] == "malicious"
+    assert out["raw_summary"]["source"] == "anyrun"
+    assert called["retry"] is False
+
+
+def test_lookup_falls_back_to_hybrid_when_anyrun_fails(monkeypatch):
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        svc,
+        "lookup_anyrun",
+        lambda **kwargs: {"checked": False, "verdict": "unknown", "error": "anyrun timeout"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: {"checked": True, "verdict": "suspicious", "analysis_id": "hy-1", "raw_summary": {}},
+    )
+
+    out = svc.lookup_hybrid_analysis(indicator="https://example.test", indicator_type="url")
+    assert out["checked"] is True
+    assert out["verdict"] == "suspicious"
+    assert out["raw_summary"]["source"] == "hybrid"
+    assert out["raw_summary"]["anyrun_error"] == "anyrun timeout"

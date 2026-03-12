@@ -44,6 +44,7 @@ def run_email_indicator_checks(
     extracted: dict[str, Any],
     *,
     include_url_screenshots: bool = False,
+    run_anyrun: bool = False,
     max_urls: int = 20,
     max_attachment_hashes: int = 5,
 ) -> dict[str, Any]:
@@ -62,10 +63,11 @@ def run_email_indicator_checks(
                 url,
                 include_screenshot=include_url_screenshots,
                 include_urlscan=(idx < max_urlscan_urls),
+                run_anyrun=run_anyrun,
             )
             for idx, url in enumerate(urls)
         ],
-        "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes),
+        "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes, run_anyrun=run_anyrun),
     }
     checks["content_ml"] = classify_email_content_locally(extracted)
 
@@ -155,7 +157,7 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
         }
 
 
-def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> dict[str, Any]:
+def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool, run_anyrun: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
     lexical_target = str(resolved_final_url or url)
@@ -238,7 +240,12 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> 
             }
 
     hybrid_target = str(resolved_final_url or url).strip()
-    hybrid = lookup_hybrid_analysis(indicator=hybrid_target, indicator_type="url") if hybrid_target else {
+    hybrid = lookup_hybrid_analysis(
+        indicator=hybrid_target,
+        indicator_type="url",
+        submit_on_not_found=run_anyrun,
+        prefer_anyrun=run_anyrun,
+    ) if hybrid_target else {
         "checked": False,
         "verdict": "unknown",
         "error": "Empty indicator",
@@ -315,7 +322,7 @@ def _check_ip(ip: str) -> dict[str, Any]:
     }
 
 
-def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int) -> dict[str, Any]:
+def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, run_anyrun: bool) -> dict[str, Any]:
     if not attachments:
         return {
             "present": False,
@@ -334,7 +341,7 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int) ->
                 "size_bytes": att.get("size_bytes"),
                 "vt": _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"},
                 "hybrid_analysis": (
-                    lookup_hybrid_analysis(indicator=sha256, indicator_type="hash")
+                    lookup_hybrid_analysis(indicator=sha256, indicator_type="hash", prefer_anyrun=run_anyrun)
                     if sha256
                     else {"checked": False, "verdict": "unknown", "error": "Missing SHA256 hash"}
                 ),

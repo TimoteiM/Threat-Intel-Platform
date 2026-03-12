@@ -47,6 +47,7 @@ def run_email_investigation(
     max_urls: int = 20,
     max_attachment_hashes: int = 5,
     include_url_screenshots: bool = False,
+    run_anyrun: bool = False,
     run_ai: bool = True,
     ml_phishing_score: str | None = None,
 ) -> str:
@@ -86,6 +87,7 @@ def run_email_investigation(
                 max_urls=max_urls,
                 max_attachment_hashes=max_attachment_hashes,
                 include_url_screenshots=include_url_screenshots,
+                run_anyrun=run_anyrun,
                 run_ai=run_ai,
                 ml_phishing_score=ml_phishing_score,
             )
