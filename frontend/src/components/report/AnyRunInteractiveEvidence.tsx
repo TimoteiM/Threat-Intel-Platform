@@ -641,7 +641,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
   const [selectedNode, setSelectedNode] = React.useState<string | null>(null);
   const [selectedProcessManual, setSelectedProcessManual] = React.useState<any | null>(null);
   const [showAdvanced, setShowAdvanced] = React.useState(false);
-  const [processViewMode, setProcessViewMode] = React.useState<"view" | "group" | "deep">("group");
+  const [processViewMode, setProcessViewMode] = React.useState<"view" | "group" | "deep">("view");
   const threatRows = arr(raw?.behavior_details?.network_threats);
   const processDetails = arr(raw?.behavior_details?.process_details);
   const processIndexByRef = React.useMemo(() => {
