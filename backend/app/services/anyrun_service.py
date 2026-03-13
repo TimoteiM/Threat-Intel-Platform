@@ -158,9 +158,7 @@ def _lookup_intelligence(
                 "raw_summary": {"source": "anyrun", "mode": "lookup"},
             }
 
-        threat_score = None
-        if isinstance(threat_level, (int, float)):
-            threat_score = float(threat_level) * 50.0
+        threat_score: float | None = _lookup_level_to_score(threat_level)
         dyn_domains = data.get("relatedDNS") or []
         dyn_hosts = data.get("destinationIP") or []
         ioc_items: list[dict[str, Any]] = []
@@ -210,6 +208,24 @@ def _lookup_intelligence(
                                 network_threats=network_threats,
                             )[:400],
                         }
+                        analysis_block = report_data.get("analysis") or {}
+                        score_block = analysis_block.get("scores") or {}
+                        report_verdict_raw = (
+                            (score_block.get("verdict") or {}).get("threatLevelText")
+                            or score_block.get("verdict_text")
+                            or score_block.get("classification")
+                        )
+                        report_threat_score = _as_float(
+                            score_block.get("threatScore")
+                            or score_block.get("threat_score")
+                            or score_block.get("threatLevel")
+                            or score_block.get("threat_level")
+                        )
+                        if report_verdict_raw:
+                            verdict = _normalize_anyrun_verdict(report_verdict_raw)
+                        if report_threat_score is not None:
+                            threat_score = _clamp_score_0_100(report_threat_score)
+
                         report_excerpt = {
                             "analysis": report_data.get("analysis") or {},
                             "reports": ((report_data.get("analysis") or {}).get("reports") or {}),
@@ -499,6 +515,37 @@ def _normalize_anyrun_verdict(value: Any) -> str:
     if "no threats" in text or "clean" in text or "benign" in text:
         return "clean"
     return _normalize_lookup_verdict(value)
+
+
+def _lookup_level_to_score(level: Any) -> float | None:
+    try:
+        n = int(level)
+    except Exception:
+        return None
+    # Conservative normalization for lookup-only confidence (0..100 scale).
+    if n <= 0:
+        return 0.0
+    if n == 1:
+        return 40.0
+    if n == 2:
+        return 75.0
+    if n == 3:
+        return 90.0
+    return 100.0
+
+
+def _clamp_score_0_100(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    if v < 0:
+        return 0.0
+    if v > 100:
+        return 100.0
+    return v
 
 
 def _extract_task_id(related: str | None) -> str | None:
