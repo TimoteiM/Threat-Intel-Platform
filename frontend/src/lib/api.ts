@@ -579,7 +579,7 @@ export function getAssistantSession(sessionId: string) {
 }
 
 export function createAssistantSession(data: {
-  title: string;
+  title?: string;
   mode: "alert_analysis" | "incident_correlation";
   source_type?: string;
   linked_investigation_id?: string | null;

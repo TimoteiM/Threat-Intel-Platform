@@ -63,6 +63,25 @@ async def test_run_session_persists_alert_result_without_sending_raw_text(monkey
 
 
 @pytest.mark.asyncio
+async def test_create_session_defaults_title_when_missing() -> None:
+    added = []
+
+    class FakeSession:
+        def add(self, obj):
+            added.append(obj)
+
+        flush = AsyncMock()
+        commit = AsyncMock()
+
+    service = AssistantService(FakeSession(), settings=_build_settings())
+
+    created = await service.create_session(title="", mode="alert_analysis")
+
+    assert created.title == "Alert Analysis"
+    assert added[0].title == "Alert Analysis"
+
+
+@pytest.mark.asyncio
 async def test_run_session_restores_sanitized_tokens_in_final_output(monkeypatch) -> None:
     session_obj = _build_session("alert_analysis")
     session_obj.entries[0].raw_text = "hostname=wm-c06.siembiot.int admin@example.com from 10.0.0.1"

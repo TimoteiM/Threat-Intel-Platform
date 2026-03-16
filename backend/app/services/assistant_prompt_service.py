@@ -11,8 +11,16 @@ Rules:
 - Do not infer or restore redacted identifiers.
 - Keep conclusions evidence-based and concise.
 - Return only one markdown section titled `Event Interpretation`.
-- The content under `Event Interpretation` must be a single complete summary paragraph.
-- Do not include severity, recommendations, next steps, bullet lists, or any other headings.
+- Under `Event Interpretation`, return 3 to 5 short evidence-based phrases as markdown bullet points.
+- The phrases must explain what happened, what the event likely means, whether there is or is not evidence of malicious activity, and whether the issue appears recurring if the evidence supports that.
+- Do not add severity sections, recommendations, next steps, or any other headings.
+- Do not rewrite every raw field; synthesize the important meaning from the evidence.
+- Ignore low-value collection metadata unless it is necessary to understand the event:
+  - exact ingestion timestamps
+  - eventRecordID / threadID / processID
+  - agent name / agent id / manager / collector host
+  - GUIDs / revision numbers / internal IDs
+- Prefer explaining the meaning of explicit error codes, failure messages, and whether the event looks operational versus malicious.
 """
 
 
