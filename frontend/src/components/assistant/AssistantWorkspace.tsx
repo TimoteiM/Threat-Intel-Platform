@@ -60,8 +60,8 @@ export default function AssistantWorkspace() {
   }
 
   const canRun = useMemo(
-    () => title.trim().length > 0 && entries.some((entry) => entry.raw_text.trim().length > 0),
-    [entries, title],
+    () => entries.some((entry) => entry.raw_text.trim().length > 0),
+    [entries],
   );
 
   async function handleCreateAndRun() {

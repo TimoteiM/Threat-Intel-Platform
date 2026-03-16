@@ -24,13 +24,20 @@ class AssistantService:
     async def create_session(
         self,
         *,
-        title: str,
+        title: str | None,
         mode: str,
         source_type: str = "manual",
         linked_investigation_id: UUID | None = None,
     ) -> AssistantSession:
+        normalized_title = title.strip() if title else ""
+        if not normalized_title:
+            normalized_title = (
+                "Alert Analysis"
+                if mode == "alert_analysis"
+                else "Incident Correlation"
+            )
         assistant_session = AssistantSession(
-            title=title,
+            title=normalized_title,
             mode=mode,
             source_type=source_type,
             linked_investigation_id=linked_investigation_id,

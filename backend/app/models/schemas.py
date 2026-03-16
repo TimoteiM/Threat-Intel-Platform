@@ -933,7 +933,7 @@ class AnalystReport(BaseModel):
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AssistantSessionCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=255)
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
     mode: str = Field(..., min_length=1, max_length=50)
     source_type: str = "manual"
     linked_investigation_id: Optional[_uuid.UUID] = None

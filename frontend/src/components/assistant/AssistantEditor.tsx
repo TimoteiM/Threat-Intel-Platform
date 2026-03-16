@@ -28,7 +28,7 @@ export default function AssistantEditor({
       <input
         value={title}
         onChange={(e) => onTitleChange(e.target.value)}
-        placeholder="Session title"
+        placeholder="Optional title"
         style={inputStyle}
       />
       {visibleEntries.map((entry, index) => (
