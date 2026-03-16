@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Optional
 import uuid as _uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import (
     Classification,
@@ -937,6 +937,15 @@ class AssistantSessionCreate(BaseModel):
     mode: str = Field(..., min_length=1, max_length=50)
     source_type: str = "manual"
     linked_investigation_id: Optional[_uuid.UUID] = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_blank_title(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class AssistantEntryCreate(BaseModel):
