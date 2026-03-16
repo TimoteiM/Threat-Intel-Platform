@@ -61,6 +61,34 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function requestWithDirectFallback<T>(path: string, options?: RequestInit): Promise<T> {
+  const proxiedUrl = `${BASE}${path}`;
+  const directUrl = `${resolveDirectBackendBase()}${BASE}${path}`;
+  const endpoints = canUseDirectBackendFallback() ? [directUrl, proxiedUrl] : [proxiedUrl];
+
+  let lastError: unknown = null;
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        ...options,
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new ApiError(res.status, body || res.statusText);
+      }
+
+      return res.json();
+    } catch (error) {
+      lastError = error;
+      if (!canUseDirectBackendFallback()) break;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Request failed");
+}
+
 // ─── Investigation endpoints ───
 
 export function createInvestigation(data: {
@@ -541,13 +569,13 @@ export function listAssistantSessions(params?: { limit?: number; offset?: number
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   const query = qs.toString();
-  return request<{ items: any[]; limit: number; offset: number }>(
+  return requestWithDirectFallback<{ items: any[]; limit: number; offset: number }>(
     `/assistant/sessions${query ? `?${query}` : ""}`,
   );
 }
 
 export function getAssistantSession(sessionId: string) {
-  return request<any>(`/assistant/sessions/${sessionId}`);
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}`);
 }
 
 export function createAssistantSession(data: {
@@ -556,7 +584,7 @@ export function createAssistantSession(data: {
   source_type?: string;
   linked_investigation_id?: string | null;
 }) {
-  return request<any>("/assistant/sessions", {
+  return requestWithDirectFallback<any>("/assistant/sessions", {
     method: "POST",
     body: JSON.stringify(data),
   });
@@ -566,21 +594,21 @@ export function addAssistantEntry(
   sessionId: string,
   data: { text: string; entry_label?: string; entry_index?: number },
 ) {
-  return request<any>(`/assistant/sessions/${sessionId}/entries`, {
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}/entries`, {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
 export function runAssistantSession(sessionId: string, data?: { model?: string }) {
-  return request<any>(`/assistant/sessions/${sessionId}/run`, {
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}/run`, {
     method: "POST",
     body: JSON.stringify(data || {}),
   });
 }
 
 export function createAssistantSessionFromInvestigation(investigationId: string) {
-  return request<any>(`/assistant/sessions/from-investigation/${investigationId}`, {
+  return requestWithDirectFallback<any>(`/assistant/sessions/from-investigation/${investigationId}`, {
     method: "POST",
   });
 }
