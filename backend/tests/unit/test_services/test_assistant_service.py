@@ -63,6 +63,27 @@ async def test_run_session_persists_alert_result_without_sending_raw_text(monkey
 
 
 @pytest.mark.asyncio
+async def test_run_session_restores_sanitized_tokens_in_final_output(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "hostname=wm-c06.siembiot.int admin@example.com from 10.0.0.1"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\n[HOST_1] observed [EMAIL_1] from [IP_1]."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert "wm-c06.siembiot.int" in (result.report_markdown or "")
+    assert "admin@example.com" in (result.report_markdown or "")
+    assert "10.0.0.1" in (result.report_markdown or "")
+    assert "[HOST_1]" not in (result.report_markdown or "")
+
+
+@pytest.mark.asyncio
 async def test_run_session_persists_incident_result(monkeypatch) -> None:
     session_obj = _build_session("incident_correlation")
     fake_db = SimpleNamespace(commit=AsyncMock())

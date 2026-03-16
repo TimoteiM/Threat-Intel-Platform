@@ -13,8 +13,9 @@ def test_alert_prompt_uses_sanitized_content_and_required_sections() -> None:
         raw_entries=raw_entries,
     )
 
-    assert "executive summary" in system.lower()
-    assert "notable entities" in system.lower()
+    assert "event interpretation" in system.lower()
+    assert "executive summary" not in system.lower()
+    assert "notable entities" not in system.lower()
     assert "[ACCOUNT_1]" in user
     assert "10.0.0.1" not in user
     assert "admin" not in user

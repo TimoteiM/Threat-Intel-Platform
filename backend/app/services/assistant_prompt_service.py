@@ -10,13 +10,9 @@ Rules:
 - Use only the sanitized evidence provided.
 - Do not infer or restore redacted identifiers.
 - Keep conclusions evidence-based and concise.
-
-Return a markdown report with these sections:
-- Executive Summary
-- Event Interpretation
-- Notable Entities
-- Severity Assessment
-- Immediate Analyst Actions
+- Return only one markdown section titled `Event Interpretation`.
+- The content under `Event Interpretation` must be a single complete summary paragraph.
+- Do not include severity, recommendations, next steps, bullet lists, or any other headings.
 """
 
 

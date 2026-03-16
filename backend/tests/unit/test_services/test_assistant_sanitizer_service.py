@@ -36,6 +36,24 @@ def test_sanitize_session_entries_reuses_same_token_for_same_indicator() -> None
     assert results.summary["emails"] == 1
 
 
+def test_sanitize_entry_replaces_host_fields() -> None:
+    text = (
+        "hostname=wm-c06.siembiot.int computer=FeliciaPopa.Metrorex.local "
+        "Suspicious login from host srv-01"
+    )
+
+    result = sanitizer.sanitize_entry(text, {})
+
+    assert "wm-c06.siembiot.int" not in result.sanitized_text
+    assert "FeliciaPopa.Metrorex.local" not in result.sanitized_text
+    assert "srv-01" not in result.sanitized_text
+    assert "[HOST_1]" in result.sanitized_text
+    assert "[HOST_2]" in result.sanitized_text
+    assert "[HOST_3]" in result.sanitized_text
+    assert result.token_map["[HOST_1]"] == "wm-c06.siembiot.int"
+    assert result.summary["hosts"] == 3
+
+
 def test_sanitize_entries_fail_closed_on_internal_error() -> None:
     class BadStr(str):
         def replace(self, old: str, new: str, count: int = -1):  # type: ignore[override]
