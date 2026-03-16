@@ -131,7 +131,8 @@ class AssistantService:
             assistant_session.status = "completed"
             assistant_session.completed_at = datetime.now(timezone.utc)
             await self.session.commit()
-            return assistant_session
+            reloaded = await self._get_session(session_id)
+            return reloaded or assistant_session
         except Exception as exc:
             assistant_session.status = "failed"
             assistant_session.error = str(exc)
