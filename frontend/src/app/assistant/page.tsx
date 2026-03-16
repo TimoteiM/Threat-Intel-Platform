@@ -1,5 +1,10 @@
+import { Suspense } from "react";
 import AssistantWorkspace from "@/components/assistant/AssistantWorkspace";
 
 export default function AssistantPage() {
-  return <AssistantWorkspace />;
+  return (
+    <Suspense fallback={null}>
+      <AssistantWorkspace />
+    </Suspense>
+  );
 }
