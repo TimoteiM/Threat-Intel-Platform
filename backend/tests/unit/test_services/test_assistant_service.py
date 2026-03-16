@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -77,6 +78,29 @@ async def test_run_session_persists_incident_result(monkeypatch) -> None:
 
     assert result.status == "completed"
     assert result.result_json["mode"] == "incident_correlation"
+
+
+@pytest.mark.asyncio
+async def test_run_session_returns_reloaded_session_after_commit(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    reloaded = _build_session("alert_analysis")
+    reloaded.id = session_obj.id
+    reloaded.status = "completed"
+    reloaded.report_markdown = "# Executive Summary\nReloaded."
+    reloaded.updated_at = datetime.now(timezone.utc)
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, reloaded])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Executive Summary\nReloaded."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result is reloaded
+    assert service._get_session.await_count == 2  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
