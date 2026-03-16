@@ -67,7 +67,10 @@ export default function AssistantWorkspace() {
   async function handleCreateAndRun() {
     setLoading(true);
     try {
-      const session = await api.createAssistantSession({ title, mode });
+      const session = await api.createAssistantSession({
+        mode,
+        ...(title.trim() ? { title: title.trim() } : {}),
+      });
       for (let index = 0; index < entries.length; index += 1) {
         const entry = entries[index];
         if (!entry.raw_text.trim()) continue;
