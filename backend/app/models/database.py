@@ -119,6 +119,9 @@ class Investigation(Base):
     iocs: Mapped[list[IOCRecord]] = relationship(
         back_populates="investigation", cascade="all, delete-orphan"
     )
+    assistant_sessions: Mapped[list["AssistantSession"]] = relationship(
+        back_populates="investigation"
+    )
 
     # Indexes
     __table_args__ = (
@@ -479,4 +482,74 @@ class EmailInvestigationRun(Base):
 
     __table_args__ = (
         Index("idx_email_runs_created", "created_at"),
+    )
+
+
+class AssistantSession(Base):
+    __tablename__ = "assistant_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
+    linked_investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sanitization_summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    investigation: Mapped[Investigation | None] = relationship(back_populates="assistant_sessions")
+    entries: Mapped[list["AssistantEntry"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_assistant_sessions_created", "created_at"),
+        Index("idx_assistant_sessions_mode", "mode"),
+        Index("idx_assistant_sessions_status", "status"),
+        Index("idx_assistant_sessions_investigation", "linked_investigation_id"),
+    )
+
+
+class AssistantEntry(Base):
+    __tablename__ = "assistant_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistant_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    entry_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    entry_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    sanitized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    token_map_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    session: Mapped[AssistantSession] = relationship(back_populates="entries")
+
+    __table_args__ = (
+        Index("idx_assistant_entries_session", "session_id"),
+        Index("idx_assistant_entries_session_order", "session_id", "entry_index"),
     )
