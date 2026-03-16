@@ -1,0 +1,99 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+
+from app.models.database import AssistantEntry, AssistantSession
+from app.services.assistant_service import AssistantService
+
+
+def _build_session(mode: str = "alert_analysis") -> AssistantSession:
+    session = AssistantSession(
+        id=uuid4(),
+        title="Test session",
+        mode=mode,
+        status="draft",
+        source_type="manual",
+    )
+    session.entries = [
+        AssistantEntry(
+            id=uuid4(),
+            session_id=session.id,
+            entry_index=0,
+            entry_label="entry-1",
+            raw_text="User admin@example.com from 10.0.0.1",
+            sanitized_text="",
+            token_map_json={},
+        )
+    ]
+    return session
+
+
+def _build_settings() -> SimpleNamespace:
+    return SimpleNamespace(openai_model="gpt-5-mini", openai_api_key="test-key")
+
+
+@pytest.mark.asyncio
+async def test_run_session_persists_alert_result_without_sending_raw_text(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    seen_prompt = {}
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        seen_prompt["user_text"] = user_text
+        return "# Executive Summary\nAlert is suspicious."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result.report_markdown.startswith("# Executive Summary")
+    assert result.status == "completed"
+    assert "admin@example.com" not in seen_prompt["user_text"]
+    assert "10.0.0.1" not in seen_prompt["user_text"]
+    assert "[EMAIL_1]" in seen_prompt["user_text"]
+    assert "[IP_1]" in seen_prompt["user_text"]
+    assert result.entries[0].sanitized_text
+    fake_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_session_persists_incident_result(monkeypatch) -> None:
+    session_obj = _build_session("incident_correlation")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Executive Summary\nCorrelated incident."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result.status == "completed"
+    assert result.result_json["mode"] == "incident_correlation"
+
+
+@pytest.mark.asyncio
+async def test_run_session_marks_failed_when_openai_errors(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    async def broken_openai(*, model: str, system: str, user_text: str) -> str:
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(service, "_call_openai", broken_openai)
+
+    with pytest.raises(RuntimeError):
+        await service.run_session(session_obj.id)
+
+    assert session_obj.status == "failed"
+    assert "provider down" in (session_obj.error or "")
+    fake_db.commit.assert_awaited()
