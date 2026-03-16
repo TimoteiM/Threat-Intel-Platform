@@ -198,6 +198,16 @@ export default function InvestigationPage() {
     }
   }, [investigationId, canceling, isCancellable, fetchData]);
 
+  const handleOpenAssistant = useCallback(async () => {
+    if (!investigationId) return;
+    try {
+      const linked = await api.createAssistantSessionFromInvestigation(investigationId);
+      router.push(`/assistant?session=${linked.id}`);
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to open AI Assistant");
+    }
+  }, [investigationId, router]);
+
   // ─── Loading state ───
   if (loading && !evidence && !report) {
     return <Spinner message="Loading investigation..." />;
@@ -434,6 +444,9 @@ export default function InvestigationPage() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <HeaderButton onClick={() => router.push("/")}>New Investigation</HeaderButton>
+          <HeaderButton onClick={() => { void handleOpenAssistant(); }}>
+            Open in AI Assistant
+          </HeaderButton>
           {isCancellable && (
             <HeaderButton onClick={handleCancel}>
               {canceling ? "Cancelling..." : "Cancel"}
