@@ -1115,5 +1115,39 @@ export interface EmailInvestigationSubmitResponse {
   message: string;
 }
 
+export type AssistantMode = "alert_analysis" | "incident_correlation";
+export type AssistantSessionStatus = "draft" | "processing" | "completed" | "failed";
+
+export interface AssistantEntry {
+  id: string;
+  session_id: string;
+  entry_index: number;
+  entry_label?: string;
+  raw_text: string;
+  sanitized_text: string;
+  token_map_json: Record<string, string>;
+  created_at: string;
+}
+
+export interface AssistantSessionListItem {
+  id: string;
+  title: string;
+  mode: AssistantMode;
+  status: AssistantSessionStatus;
+  source_type: string;
+  linked_investigation_id?: string | null;
+  sanitization_summary_json: Record<string, any>;
+  result_json: Record<string, any>;
+  report_markdown?: string | null;
+  error?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface AssistantSessionDetail extends AssistantSessionListItem {
+  entries: AssistantEntry[];
+}
+
 
 
