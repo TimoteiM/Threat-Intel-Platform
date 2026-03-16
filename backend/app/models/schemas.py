@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+import uuid as _uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     Classification,
@@ -906,6 +907,55 @@ class AnalystReport(BaseModel):
 # 3. API SCHEMAS (request / response)
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+class AssistantSessionCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    mode: str = Field(..., min_length=1, max_length=50)
+    source_type: str = "manual"
+    linked_investigation_id: Optional[_uuid.UUID] = None
+
+
+class AssistantEntryCreate(BaseModel):
+    text: str = Field(..., min_length=1)
+    entry_label: Optional[str] = Field(None, max_length=255)
+    entry_index: Optional[int] = Field(None, ge=0)
+
+
+class AssistantSessionRunRequest(BaseModel):
+    model: str = "gpt-5-mini"
+
+
+class AssistantEntryRead(BaseModel):
+    id: _uuid.UUID
+    session_id: _uuid.UUID
+    entry_index: int
+    entry_label: Optional[str] = None
+    raw_text: str
+    sanitized_text: str
+    token_map_json: dict[str, str] = {}
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssistantSessionListItem(BaseModel):
+    id: _uuid.UUID
+    title: str
+    mode: str
+    status: str
+    source_type: str
+    linked_investigation_id: Optional[_uuid.UUID] = None
+    sanitization_summary_json: dict[str, Any] = {}
+    result_json: dict[str, Any] = {}
+    report_markdown: Optional[str] = None
+    error: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssistantSessionDetailResponse(AssistantSessionListItem):
+    entries: list[AssistantEntryRead] = []
+
 class InvestigationCreate(BaseModel):
     """POST /investigations request body."""
     domain: str                                     # Observable value (domain, IP, URL, hash, filename)
@@ -986,9 +1036,6 @@ class WatchlistUpdate(BaseModel):
 
 
 # â”€â”€â”€ Client Management â”€â”€â”€
-
-import uuid as _uuid
-from pydantic import ConfigDict
 
 
 class ClientCreate(BaseModel):
