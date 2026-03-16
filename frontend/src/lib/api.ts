@@ -536,6 +536,58 @@ export function resolveAlert(alertId: string) {
 
 // ─── SSE helper ───
 
+export function listAssistantSessions(params?: { limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return request<{ items: any[]; limit: number; offset: number }>(
+    `/assistant/sessions${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAssistantSession(sessionId: string) {
+  return request<any>(`/assistant/sessions/${sessionId}`);
+}
+
+export function createAssistantSession(data: {
+  title: string;
+  mode: "alert_analysis" | "incident_correlation";
+  source_type?: string;
+  linked_investigation_id?: string | null;
+}) {
+  return request<any>("/assistant/sessions", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function addAssistantEntry(
+  sessionId: string,
+  data: { text: string; entry_label?: string; entry_index?: number },
+) {
+  return request<any>(`/assistant/sessions/${sessionId}/entries`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function runAssistantSession(sessionId: string, data?: { model?: string }) {
+  return request<any>(`/assistant/sessions/${sessionId}/run`, {
+    method: "POST",
+    body: JSON.stringify(data || {}),
+  });
+}
+
+export function createAssistantSessionFromInvestigation(investigationId: string) {
+  return request<any>(`/assistant/sessions/from-investigation/${investigationId}`, {
+    method: "POST",
+  });
+}
+
+export function getAssistantExportUrl(sessionId: string): string {
+  return `${BASE}/assistant/sessions/${sessionId}/export`;
+}
 export function subscribeToProgress(
   investigationId: string,
   onEvent: (data: any) => void,
@@ -557,3 +609,5 @@ export function subscribeToProgress(
   };
   return es;
 }
+
+
