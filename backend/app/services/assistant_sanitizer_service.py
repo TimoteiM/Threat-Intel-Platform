@@ -9,6 +9,14 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECAS
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 SID_RE = re.compile(r"\bS-\d-(?:\d+-){1,14}\d+\b", re.IGNORECASE)
 ACCOUNT_RE = re.compile(r"\b(?:user(?:name)?|account|admin|operator)\b", re.IGNORECASE)
+KEYED_HOST_RE = re.compile(
+    r"(?P<prefix>\b(?:hostname|computer|host|server|device|workstation)\s*[=:]\s*)(?P<value>[A-Z0-9._-]+)",
+    re.IGNORECASE,
+)
+FREEFORM_HOST_RE = re.compile(
+    r"(?P<prefix>\b(?:host|server|device|workstation)\s+)(?P<value>[A-Z0-9][A-Z0-9._-]{1,253})",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -45,6 +53,26 @@ def sanitize_entries(
         try:
             sanitized_text = entry.replace("\r\n", "\n")
             entry_summary: dict[str, int] = defaultdict(int)
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                KEYED_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                FREEFORM_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
             for label, pattern in (
                 ("emails", EMAIL_RE),
                 ("ips", IP_RE),
@@ -107,6 +135,35 @@ def _replace_pattern(
         if entry_summary.get(label_key, 0) == 0 or token not in text:
             entry_summary[label_key] += 1
         return token
+
+    return pattern.sub(repl, text)
+
+
+def _replace_keyed_host_pattern(
+    text: str,
+    pattern: re.Pattern[str],
+    token_prefix: str,
+    shared_token_map: dict[str, str],
+    reverse_token_map: dict[str, str],
+    token_counters: dict[str, int],
+    entry_summary: dict[str, int],
+    batch_summary: dict[str, int],
+) -> str:
+    label_key = "hosts"
+
+    def repl(match: re.Match[str]) -> str:
+        original = match.group("value")
+        if EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original):
+            return match.group(0)
+        token = reverse_token_map.get(original)
+        if token is None:
+            token_counters[token_prefix] += 1
+            token = f"[{token_prefix}_{token_counters[token_prefix]}]"
+            reverse_token_map[original] = token
+            shared_token_map[token] = original
+            batch_summary[label_key] += 1
+        entry_summary[label_key] += 1
+        return f"{match.group('prefix')}{token}"
 
     return pattern.sub(repl, text)
 

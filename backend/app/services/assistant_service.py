@@ -121,13 +121,17 @@ class AssistantService:
                 system=system,
                 user_text=user_text,
             )
+            restored_report_markdown = self._restore_tokens(
+                report_markdown,
+                assistant_session.entries[0].token_map_json if assistant_session.entries else {},
+            )
 
             assistant_session.result_json = {
                 "mode": assistant_session.mode,
                 "title": assistant_session.title,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
-            assistant_session.report_markdown = report_markdown
+            assistant_session.report_markdown = restored_report_markdown
             assistant_session.status = "completed"
             assistant_session.completed_at = datetime.now(timezone.utc)
             await self.session.commit()
@@ -202,3 +206,9 @@ class AssistantService:
         if assistant_session is None:
             raise ValueError(f"Assistant session {session_id} not found")
         return assistant_session.report_markdown or ""
+
+    def _restore_tokens(self, text: str, token_map: dict[str, str]) -> str:
+        restored = text
+        for token, original in sorted(token_map.items(), key=lambda item: len(item[0]), reverse=True):
+            restored = restored.replace(token, original)
+        return restored
