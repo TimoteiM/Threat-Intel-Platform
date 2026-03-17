@@ -34,15 +34,16 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "intel",            label: "Intel",            desc: "crt.sh, URLScan, DNSBL" },
   { id: "vt",           label: "VirusTotal",   desc: "Multi-engine AV scan" },
   { id: "threat_feeds", label: "Threat Feeds", desc: "AbuseIPDB, PhishTank, ThreatFox" },
+  { id: "brave_osint",  label: "Brave OSINT",  desc: "Public OSINT search across forums, blogs, GitHub, Reddit" },
   { id: "urlscan",      label: "URLScan",      desc: "Full page scan, screenshot, network map" },
   { id: "hybrid_analysis", label: "AnyRun Analysis", desc: "Any.Run evidence (Hybrid fallback if needed)" },
 ];
 
 // Which collectors support each observable type
 const COLLECTORS_PER_TYPE: Record<ObservableType, string[]> = {
-  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "hybrid_analysis"],
+  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis"],
   ip:     ["asn", "vt", "threat_feeds", "urlscan"],
-  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "hybrid_analysis"],
+  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis"],
   hash:   ["vt", "threat_feeds", "hybrid_analysis"],
   file:   ["vt", "hybrid_analysis"],
 };
