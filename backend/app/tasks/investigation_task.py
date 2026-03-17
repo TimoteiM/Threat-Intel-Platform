@@ -143,6 +143,7 @@ def run_investigation(
             investigation_id=investigation_id,
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
+            external_context=external_context,
             timeout=settings.collector_timeout,
         )
 
@@ -198,6 +199,7 @@ def _run_collectors_inline(
     investigation_id: str,
     observable_type: str,
     file_artifact_id: str | None,
+    external_context: dict | None,
     timeout: int,
 ) -> tuple[list[dict], dict[str, str]]:
     """
@@ -226,6 +228,7 @@ def _run_collectors_inline(
             timeout=_collector_timeout(name),
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
+            external_context=external_context,
         )
 
         evidence, meta, raw_artifacts = collector.run()

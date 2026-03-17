@@ -45,12 +45,14 @@ class BaseCollector(abc.ABC):
         observable_type: str = "domain",
         timeout: int = 30,
         file_artifact_id: str | None = None,
+        external_context: dict[str, Any] | None = None,
     ):
         self.domain = domain                    # Observable value (backwards-compat name)
         self.observable_type = observable_type  # domain | ip | url | hash | file
         self.investigation_id = investigation_id
         self.timeout = timeout
         self.file_artifact_id = file_artifact_id
+        self.external_context = external_context or {}
         self._artifacts: dict[str, bytes] = {}
 
     @abc.abstractmethod

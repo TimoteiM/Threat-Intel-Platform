@@ -297,6 +297,28 @@ class ThreatFeedEvidence(BaseModel):
     feeds_skipped: list[str] = []
 
 
+class BraveOSINTResult(BaseModel):
+    title: str
+    url: str
+    description: str = ""
+    source: str = "unknown"
+    matched_keywords: list[str] = []
+    score: int = 0
+
+
+class BraveOSINTEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="brave_osint"))
+    checked: bool = False
+    queries: list[str] = []
+    top_hits: list[BraveOSINTResult] = []
+    source_counts: dict[str, int] = {}
+    score: int = 0
+    risk_level: str = "low"
+    summary: str = ""
+    notes: list[str] = []
+    error: Optional[str] = None
+
+
 # â”€â”€â”€ Infrastructure Pivot â”€â”€â”€
 
 class ReverseIPResult(BaseModel):
@@ -805,6 +827,9 @@ class CollectedEvidence(BaseModel):
 
     # Threat feed intelligence (AbuseIPDB, PhishTank, ThreatFox, OpenPhish)
     threat_feeds: Optional[ThreatFeedEvidence] = None
+
+    # Brave Search OSINT enrichment
+    brave_osint: Optional[BraveOSINTEvidence] = None
 
     # Favicon hash pivot (Shodan infrastructure clustering)
     favicon_intel: Optional[FaviconIntelEvidence] = None

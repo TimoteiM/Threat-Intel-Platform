@@ -684,6 +684,28 @@ export interface ThreatFeedEvidence {
   feeds_skipped: string[];
 }
 
+export interface BraveOSINTResult {
+  title: string;
+  url: string;
+  description: string;
+  source: string;
+  matched_keywords: string[];
+  score: number;
+}
+
+export interface BraveOSINTEvidence {
+  meta: CollectorMeta;
+  checked: boolean;
+  queries: string[];
+  top_hits: BraveOSINTResult[];
+  source_counts: Record<string, number>;
+  score: number;
+  risk_level: string;
+  summary: string;
+  notes: string[];
+  error?: string;
+}
+
 // --- Master Evidence ---
 
 export interface CollectedEvidence {
@@ -708,6 +730,7 @@ export interface CollectedEvidence {
   final_risk?: FinalRiskEvidence;
   redirect_destination_intel?: RedirectDestinationIntelEvidence;
   threat_feeds?: ThreatFeedEvidence;
+  brave_osint?: BraveOSINTEvidence;
   domain_similarity?: DomainSimilarityEvidence;
   visual_comparison?: VisualComparisonEvidence;
   screenshot?: ScreenshotEvidence;

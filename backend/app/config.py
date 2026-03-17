@@ -57,7 +57,11 @@ class Settings(BaseSettings):
     phishtank_api_key: str = ""
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
+    brave_search_api_key: str = ""
+    brave_search_base_url: str = "https://api.search.brave.com/res/v1/web/search"
+    brave_search_count: int = 10
     anyrun_api_key: str = ""
+    anyrun_api_key_fallback: str = ""
     anyrun_sandbox_os: str = "windows"
     anyrun_privacy_type: str = "owner"
     anyrun_timeout_url_domain_seconds: int = 45
@@ -95,7 +99,7 @@ class Settings(BaseSettings):
     max_analyst_iterations: int = 1
     analyst_timeout_seconds: int = 75
     collector_timeout: int = 20
-    default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,urlscan,hybrid_analysis"
+    default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24

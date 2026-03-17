@@ -27,6 +27,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const hosting = evidence?.hosting || ({} as any);
   const intel = evidence?.intel || ({} as any);
   const vt = evidence?.vt || ({} as any);
+  const braveOsint = evidence?.brave_osint || ({} as any);
   const urlscan = evidence?.urlscan || ({} as any);
   const urlLexical = evidence?.url_lexical_ml || ({} as any);
   const urlMlScore = evidence?.ml_url_score || ({} as any);
@@ -126,6 +127,15 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         hasData: !!(vt && (vt.found || vt.total_vendors || vt.meta?.status === "completed")),
       },
       {
+        title: "Brave OSINT",
+        visible: !!evidence?.brave_osint,
+        hasData: !!(evidence?.brave_osint && (
+          arr(evidence.brave_osint.top_hits).length ||
+          evidence.brave_osint.summary ||
+          evidence.brave_osint.meta?.status === "completed"
+        )),
+      },
+      {
         title: "URLScan Reputation",
         visible: true,
         hasData: !!(urlscan && (urlscan.scan_id || urlscan.page_url || urlscan.meta?.status === "completed")),
@@ -195,7 +205,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         hasData: true,
       },
     ],
-    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, finalRisk, hasRedirectDestinationIntel, intel, type],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, finalRisk, hasRedirectDestinationIntel, intel, type],
   );
   const availableSections = React.useMemo(
     () => sectionDefs.filter((s) => s.visible),
@@ -2090,6 +2100,77 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
       </Section>
 
       {/* THREAT FEEDS */}
+      {evidence?.brave_osint && (
+        <Section title="Brave OSINT">
+          {braveOsint?.meta?.status === "failed" ? (
+            <EmptyNote>Brave OSINT lookup failed: {braveOsint?.meta?.error || braveOsint?.error || "unknown error"}</EmptyNote>
+          ) : !braveOsint?.checked ? (
+            <EmptyNote>Brave OSINT data not available (collector not run)</EmptyNote>
+          ) : (
+            <>
+              <EvidenceTable
+                title="Brave OSINT Summary"
+                data={[
+                  { field: "Risk Score", value: braveOsint?.score ?? "—" },
+                  { field: "Risk Level", value: String(braveOsint?.risk_level || "unknown").toUpperCase() },
+                  { field: "Queries Run", value: arr(braveOsint?.queries).length || 0 },
+                  { field: "Relevant Hits", value: arr(braveOsint?.top_hits).length || 0 },
+                  {
+                    field: "Sources",
+                    value: braveOsint?.source_counts
+                      ? Object.entries(braveOsint.source_counts).map(([k, v]) => `${k} (${v})`).join(", ") || "—"
+                      : "—",
+                  },
+                ]}
+                columns={[{ key: "field" }, { key: "value", wrap: true }]}
+              />
+              {braveOsint?.summary && (
+                <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.6, color: "var(--text-secondary)" }}>
+                  {braveOsint.summary}
+                </div>
+              )}
+              {arr(braveOsint?.queries).length > 0 && (
+                <EvidenceTable
+                  title="Generated Queries"
+                  data={arr(braveOsint.queries).map((query: string) => ({ query }))}
+                  columns={[{ key: "query", wrap: true }]}
+                />
+              )}
+              {arr(braveOsint?.top_hits).length > 0 && (
+                <EvidenceTable
+                  title="Top Relevant Hits"
+                  data={arr(braveOsint.top_hits).map((hit: any, index: number) => ({
+                    index: index + 1,
+                    source: hit?.source || "unknown",
+                    score: hit?.score ?? "—",
+                    title: hit?.title || "—",
+                    keywords: arr(hit?.matched_keywords).join(", ") || "—",
+                    url: hit?.url || "—",
+                  }))}
+                  columns={[
+                    { key: "index", label: "#" },
+                    { key: "source", label: "Source" },
+                    { key: "score", label: "Score" },
+                    { key: "title", label: "Title", wrap: true },
+                    { key: "keywords", label: "Matched Keywords", wrap: true },
+                    { key: "url", label: "URL", wrap: true },
+                  ]}
+                  showHeader
+                />
+              )}
+              {arr(braveOsint?.notes).length > 0 && (
+                <EvidenceTable
+                  title="Collector Notes"
+                  data={arr(braveOsint.notes).map((note: string) => ({ note }))}
+                  columns={[{ key: "note", wrap: true }]}
+                />
+              )}
+            </>
+          )}
+        </Section>
+      )}
+
+      {/* THREAT FEEDS */}
       {evidence?.threat_feeds && (
         <Section title="Threat Feed Intelligence">
           <ThreatFeedsSection threatFeeds={evidence.threat_feeds} />
@@ -2121,6 +2202,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             metaRow("ASN", hosting.meta),
             metaRow("INTEL", intel.meta),
             metaRow("VT", vt.meta),
+            ...(evidence?.brave_osint ? [metaRow("BRAVE OSINT", evidence.brave_osint.meta)] : []),
             metaRow("URLSCAN", urlscan.meta),
             ...(evidence?.hybrid_analysis ? [metaRow("SANDBOX (ANY.RUN/HYBRID)", (evidence as any).hybrid_analysis?.meta)] : []),
             ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),

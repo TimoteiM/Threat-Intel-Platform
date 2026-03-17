@@ -73,6 +73,7 @@ export const COLLECTOR_NAMES: Record<string, string> = {
   intel:         "INTEL",
   vt:            "VT",
   threat_feeds:  "THREAT FEEDS",
+  brave_osint:   "BRAVE OSINT",
   hybrid_analysis:"ANYRUN ANALYSIS",
   urlscan:       "URLSCAN",
   screenshot:    "SCREENSHOT",

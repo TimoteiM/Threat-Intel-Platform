@@ -58,6 +58,24 @@ class TestGenerateSignals:
         ids = [s.id for s in signals]
         assert "sig_blocklisted" in ids
 
+    def test_brave_osint_high_signal(self):
+        evidence = {
+            "brave_osint": {
+                "score": 82,
+                "top_hits": [
+                    {
+                        "title": "Adidas-samba.de phishing campaign",
+                        "url": "https://www.reddit.com/r/netsec/comments/example/adidas_samba_de_phishing/",
+                        "source": "reddit.com",
+                        "score": 88,
+                    }
+                ],
+            }
+        }
+        signals = generate_signals(evidence)
+        ids = [s.id for s in signals]
+        assert "sig_brave_osint_high" in ids
+
     def test_empty_evidence_no_crash(self):
         """Should not crash on completely empty evidence."""
         signals = generate_signals({})

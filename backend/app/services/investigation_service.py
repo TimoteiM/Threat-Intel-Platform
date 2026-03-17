@@ -65,7 +65,7 @@ def _ensure_baseline_collectors(
             normalized.append(name)
             seen.add(name)
 
-    for baseline in ("threat_feeds", "urlscan"):
+    for baseline in ("threat_feeds", "brave_osint", "urlscan"):
         if baseline in supported_for_type and baseline not in seen:
             normalized.append(baseline)
             seen.add(baseline)

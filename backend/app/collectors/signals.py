@@ -715,6 +715,32 @@ def generate_signals(evidence: dict) -> list[Signal]:
                 evidence_refs=["threat_feeds.openphish_listed"],
             ))
 
+    brave_osint = evidence.get("brave_osint", {}) or {}
+    brave_score = int(brave_osint.get("score") or 0)
+    brave_hits = brave_osint.get("top_hits") or []
+    if brave_score >= 70 and brave_hits:
+        signals.append(Signal(
+            id="sig_brave_osint_high",
+            category="osint",
+            description=(
+                f"Brave OSINT found {len(brave_hits)} high-signal public abuse references "
+                f"(score {brave_score}/100)"
+            ),
+            severity="medium",
+            evidence_refs=["brave_osint.score", "brave_osint.top_hits"],
+        ))
+    elif brave_score >= 40 and brave_hits:
+        signals.append(Signal(
+            id="sig_brave_osint_medium",
+            category="osint",
+            description=(
+                f"Brave OSINT found relevant public abuse discussion for this observable "
+                f"(score {brave_score}/100)"
+            ),
+            severity="info",
+            evidence_refs=["brave_osint.score", "brave_osint.top_hits"],
+        ))
+
     # ── Domain similarity signals ──
     similarity = evidence.get("domain_similarity")
     if similarity:

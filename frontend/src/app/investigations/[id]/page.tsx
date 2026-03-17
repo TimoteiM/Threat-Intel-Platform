@@ -47,6 +47,7 @@ const DEFAULT_COLLECTOR_ORDER = [
   "asn",
   "intel",
   "vt",
+  "brave_osint",
   "threat_feeds",
   "hybrid_analysis",
   "urlscan",
@@ -89,6 +90,7 @@ export default function InvestigationPage() {
       if (evidence.hosting?.meta) keys.add("asn");
       if (evidence.intel?.meta) keys.add("intel");
       if (evidence.vt?.meta) keys.add("vt");
+      if (evidence.brave_osint?.meta) keys.add("brave_osint");
       if (evidence.threat_feeds?.meta) keys.add("threat_feeds");
       if (evidence.hybrid_analysis?.meta) keys.add("hybrid_analysis");
       if (evidence.urlscan?.meta) keys.add("urlscan");

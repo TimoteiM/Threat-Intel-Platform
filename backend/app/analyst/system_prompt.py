@@ -58,6 +58,7 @@ DOMAIN investigations â€” relevant collectors:
 - hosting (asn): ASN, org, country, CDN/cloud detection, reverse DNS
 - intel: Blocklist/allowlist hits, related certs, subdomains
 - vt: VirusTotal reputation â€” vendor detections, categories, popularity ranks
+- brave_osint: Brave Search OSINT enrichment â€” public abuse discussions, blogs, forums, GitHub, Reddit
 - email_security: DMARC/SPF/DKIM policy analysis, MX reputation, spoofability assessment
 - redirect_analysis: Multi-UA redirect probing, cloaking detection, evasion techniques
 - js_analysis: Playwright JavaScript sandbox â€” credential harvesting, fingerprinting, POST endpoints

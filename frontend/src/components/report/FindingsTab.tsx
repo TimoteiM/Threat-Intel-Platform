@@ -14,6 +14,21 @@ export default function FindingsTab({ report, evidence }: Props) {
   const findings = Array.isArray(report?.findings) ? report.findings : [];
   const keyEvidence = Array.isArray(report?.key_evidence) ? report.key_evidence : [];
   const contradicting = Array.isArray(report?.contradicting_evidence) ? report.contradicting_evidence : [];
+  const braveOsint = evidence?.brave_osint || null;
+  const braveHits = Array.isArray(braveOsint?.top_hits) ? braveOsint.top_hits : [];
+  const braveHasSignal = !!(
+    braveOsint &&
+    ((typeof braveOsint.score === "number" && braveOsint.score > 0) ||
+      braveHits.length > 0 ||
+      braveOsint.summary)
+  );
+  const braveSeverity =
+    braveOsint?.risk_level === "high"
+      ? "high"
+      : braveOsint?.risk_level === "medium"
+        ? "medium"
+        : "info";
+  const braveColor = SEVERITY_COLORS[braveSeverity] || SEVERITY_COLORS.info;
 
   const tacticMap: Record<string, { id: string; name: string; finding: string }[]> = {};
   for (const f of findings) {
@@ -29,6 +44,70 @@ export default function FindingsTab({ report, evidence }: Props) {
 
   return (
     <div>
+      {braveHasSignal && (
+        <Section title="Brave OSINT Highlights">
+          <div
+            style={{
+              padding: "16px 20px",
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              borderLeft: `3px solid ${braveColor}`,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <Badge label={braveSeverity} color={braveColor} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+                Public OSINT enrichment
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                Score {typeof braveOsint?.score === "number" ? `${braveOsint.score}/100` : "n/a"}
+              </span>
+            </div>
+
+            {braveOsint?.summary && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 12 }}>
+                {braveOsint.summary}
+              </div>
+            )}
+
+            {braveHits.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {braveHits.slice(0, 3).map((hit: any, i: number) => (
+                  <a
+                    key={`${hit?.url || "hit"}-${i}`}
+                    href={hit?.url || "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: "block",
+                      padding: "10px 12px",
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      textDecoration: "none",
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
+                      {hit?.title || hit?.url || "Relevant Brave OSINT result"}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>
+                      {hit?.source || "Unknown source"}
+                      {typeof hit?.score === "number" ? ` · score ${hit.score}` : ""}
+                    </div>
+                    {hit?.description && (
+                      <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                        {hit.description}
+                      </div>
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       <Section title="Analyst Findings">
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {findings.length === 0 ? (
