@@ -16,11 +16,14 @@ export default function FindingsTab({ report, evidence }: Props) {
   const contradicting = Array.isArray(report?.contradicting_evidence) ? report.contradicting_evidence : [];
   const braveOsint = evidence?.brave_osint || null;
   const braveHits = Array.isArray(braveOsint?.top_hits) ? braveOsint.top_hits : [];
+  const braveScore = typeof braveOsint?.score === "number" ? braveOsint.score : 0;
+  const braveRiskLevel = String(braveOsint?.risk_level || "").toLowerCase();
   const braveHasSignal = !!(
     braveOsint &&
-    ((typeof braveOsint.score === "number" && braveOsint.score > 0) ||
-      braveHits.length > 0 ||
-      braveOsint.summary)
+    (braveRiskLevel === "high" ||
+      braveRiskLevel === "medium" ||
+      braveScore >= 40 ||
+      braveHits.length >= 2)
   );
   const braveSeverity =
     braveOsint?.risk_level === "high"
