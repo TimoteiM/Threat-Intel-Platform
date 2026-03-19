@@ -291,7 +291,7 @@ SECTION 1 â€” JSON:
   "classification": "benign | suspicious | malicious | inconclusive",
   "confidence": "low | medium | high",
   "investigation_state": "evaluating | insufficient_data | concluded",
-  "primary_reasoning": "1-2 concise SOC-style sentences (max ~220 chars) summarizing conclusion + strongest evidence; avoid numbered lists, methodology labels, and parenthetical evidence dumps",
+  "primary_reasoning": "For domain/url/email: write one richer SOC-analyst reasoning block instead of a parser-style recap. Do not repeat raw data or list evidence fields unless strictly necessary. Use this structure inside the single field: One-line Summary: one concise SOC-style conclusion sentence. Associated With: if defensible from evidence, state what the domain, URL, email sender, company, or service appears to be about. Analysis: explain why the observable appears benign, suspicious, or malicious by correlating the strongest signals rather than copying collector output. Verdict: explicitly state MALICIOUS, SUSPICIOUS, BENIGN, or INCONCLUSIVE with LOW, MEDIUM, or HIGH confidence. For ip/hash/file: keep it concise in 1-2 SOC-style sentences. Avoid numbered lists, methodology labels, and parenthetical evidence dumps.",
   "legitimate_explanation": "Best legitimate scenario for ALL evidence",
   "malicious_explanation": "Best malicious scenario for ALL evidence",
   "key_evidence": ["evidence.field references supporting classification"],
