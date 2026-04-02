@@ -1,0 +1,268 @@
+import os
+from http import HTTPStatus
+from typing import Optional, Union, Any
+from typing_extensions import Self
+from abc import abstractmethod
+from traceback import format_exc
+from warnings import warn
+
+import aiohttp
+import asyncio
+import requests
+
+from aiohttp import BasicAuth
+from urllib3 import disable_warnings
+from urllib3.exceptions import InsecureRequestWarning
+
+from anyrun.utils.config import Config
+from anyrun.utils.exceptions import RunTimeException
+from anyrun.utils.utility_functions import execute_synchronously, get_running_loop
+
+disable_warnings(InsecureRequestWarning)
+
+class AnyRunConnector:
+
+    def __init__(
+        self,
+        api_key: str,
+        integration: str = Config.PUBLIC_INTEGRATION,
+        trust_env: bool = False,
+        verify_ssl: Optional[str] = None,
+        proxy: Optional[str] = None,
+        proxy_username: Optional[str] = None,
+        proxy_password: Optional[str] = None,
+        connector: Optional[aiohttp.BaseConnector] = None,
+        timeout: int = Config.DEFAULT_REQUEST_TIMEOUT_IN_SECONDS,
+        enable_requests: bool = False
+    ) -> None:
+        """
+        :param api_key: ANY.RUN API-KEY in format: API-KEY <token> or Basic token in format: Basic <base64_auth>.
+        :param integration: Name of the integration.
+        :param trust_env: Trust environment settings for proxy configuration.
+        :param verify_ssl: Enable/disable SSL verification option.
+        :param proxy: Proxy url. Example: https://<host>:<port>.
+        :param proxy_username: Proxy username.
+        :param proxy_password: Proxy password.
+        :param connector: A custom aiohttp connector.
+        :param timeout: Override the session’s timeout.
+        :param enable_requests: Use requests.request to make api calls. May block the event loop.
+        """
+        self._proxy = proxy
+        self._proxy_username = proxy_username
+        self._proxy_password = proxy_password
+        self._trust_env = trust_env
+        self._connector = connector
+        self._timeout = timeout
+        self._enable_requests = enable_requests
+        self._verify_ssl = verify_ssl
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._api_key: Optional[str] = None
+
+        self._api_key_validator(api_key)
+        self._setup_connector()
+        self._setup_headers(integration)
+
+        self._response_headers: dict[str, Any] = dict()
+
+    def __enter__(self) -> Self:
+        execute_synchronously(self._open_session)
+        return self
+
+    def __exit__(self, item_type, value, traceback) -> None:
+        execute_synchronously(self._close_session)
+
+    async def __aenter__(self) -> Self:
+        await self._open_session()
+        return self
+
+    async def __aexit__(self, item_type, value, traceback) -> None:
+        await self._close_session()
+
+    def check_proxy(self) -> dict:
+        """
+        Executes test proxy request to google.com
+
+        :returns: Verification status
+        """
+        return execute_synchronously(self.check_proxy_async)
+
+    async def check_proxy_async(self) -> dict:
+        """"
+        Executes test proxy request to google.com
+
+        :returns: Verification status
+        """
+        try:
+            await self._make_request_async('GET', 'https://google.com', request_timeout=5, parse_response=False)
+        except (aiohttp.ClientError, requests.RequestException, OSError) as exception:
+            raise RunTimeException('The proxy request failed. Check the proxy settings are correct') from exception
+        return {'status': 'ok', 'description': 'Successful proxy verification'}
+
+    async def _make_request_async(
+        self,
+        method: str,
+        url: str,
+        json: Optional[dict] = None,
+        data: Union[dict, aiohttp.MultipartWriter, None] = None,
+        files: Optional[dict[str, tuple[str, bytes]]] = None,
+        parse_response: bool = True,
+        request_timeout: Optional[int] = None
+    ) -> Union[dict, list[dict], aiohttp.ClientResponse, requests.Response]:
+        """
+        Provides async interface for making any request
+
+        :param method: HTTP method
+        :param url: Request url
+        :param json: Request json
+        :param data: Request data
+        :param files: Request files (only for the requests package)
+        :param parse_response: Enable/disable API response parsing. If enabled, returns response.json() object dict
+            else aiohttp.ClientResponse instance
+        :param request_timeout: HTTP Request timeout
+        :return: Api response
+        :raises RunTimeException: If the connector was executed outside the context manager
+        """
+        url = os.environ.get("ANYRUN_GENERIC_ENDPOINT_URL") or url
+
+        try:
+            if self._enable_requests:
+                response: requests.Response = requests.request(
+                    method,
+                    url,
+                    headers=self._headers,
+                    json=json,
+                    params=data,
+                    files=files,
+                    verify=self._verify_ssl,
+                    proxies=self._generate_proxy_config() if self._proxy else None,
+                    timeout=request_timeout
+                )
+            else:
+                response: aiohttp.ClientResponse = await self._session.request(
+                    method,
+                    url,
+                    json=json,
+                    data=data,
+                    ssl=True if self._verify_ssl else False,
+                    timeout=request_timeout
+                )
+
+            self._response_headers = response.headers
+
+            if parse_response:
+                response_data = response.json() if self._enable_requests else await response.json()
+                return await self._check_response_status(
+                    response_data,
+                    response.status_code if self._enable_requests else response.status
+                )
+            return response
+
+        except AttributeError:
+            raise RunTimeException('The connector object must be executed using the context manager')
+        except (aiohttp.ClientError, requests.RequestException, OSError) as exception:
+            raise RunTimeException(f'Connection error: {format_exc(exception)}')
+
+    def _setup_connector(self) -> None:
+        if not self._connector and self._verify_ssl:
+            event_loop = get_running_loop()
+            asyncio.set_event_loop(event_loop)
+            self._connector = aiohttp.TCPConnector(ssl=self._verify_ssl, loop=event_loop)
+
+    def _setup_headers(self, integration: str) -> None:
+        self._headers = {
+            'Authorization': self._api_key,
+            'x-anyrun-connector': integration,
+            'x-anyrun-sdk': Config.SDK_VERSION
+        }
+
+    async def _open_session(self) -> None:
+        if not self._session:
+            self._session = aiohttp.ClientSession(
+                trust_env=self._trust_env,
+                connector=self._connector,
+                proxy=self._proxy,
+                auth=BasicAuth(self._proxy_username, self._proxy_password) if self._proxy_username else None,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+                headers=self._headers
+            )
+
+    async def _close_session(self) -> None:
+        if self._session:
+            await self._session.close()
+            self._session = None
+
+    def _generate_proxy_config(self) -> Optional[dict[str, str]]:
+        """
+        Generates proxies dict using received proxy string
+
+        :return: Proxy dict
+        """
+        if self._proxy:
+            protocol = self._proxy.split(':')[0]
+
+            if self._proxy_username and self._proxy_password:
+                connection = self._proxy[self._proxy.index('//') + 2:]
+                return {protocol: f'{protocol}://{self._proxy_username}:{self._proxy_password}@{connection}'}
+
+            return {protocol: self._proxy}
+
+    @abstractmethod
+    def check_authorization(self) -> dict:
+        """
+        Makes a request to check the validity of the API key.
+        The request does not consume the license
+
+        :return: Verification status
+        """
+        pass
+
+    @abstractmethod
+    async def check_authorization_async(self) -> dict:
+        """
+        Makes a request to check the validity of the API key.
+        The request does not consume the license
+
+        :return: Verification status
+        """
+        pass
+
+    @staticmethod
+    async def _check_response_status(response_data: dict, status: int) -> dict:
+        """
+        Process ANY.RUN endpoint response.
+
+        Returns a dictionary with an explanation of the error if the response status code is not equal **OK**
+
+        :param response_data: API response
+        :return: The collection of IOCs
+        :raises RunTimeException: If status code 200 is not received
+        """
+        if status in (HTTPStatus.OK, HTTPStatus.CREATED, HTTPStatus.ACCEPTED):
+            return response_data
+
+        raise RunTimeException(
+            response_data.get('message') or response_data.get('description'),
+            status or HTTPStatus.BAD_REQUEST
+        )
+
+    def _api_key_validator(self, api_key: str) -> None:
+        """
+        Checks if API key format is valid
+
+        :param api_key: ANY.RUN API-KEY in format: API-KEY <token> or Basic token in format: Basic <base64_auth>.
+        :raises RunTimeException: If API key format is not valid
+        """
+        if not api_key:
+            raise RunTimeException('The ANY.RUN API key can not be empty.')
+        elif not isinstance(api_key, str):
+            raise RunTimeException('The ANY.RUN API key must be a valid string')
+        elif api_key.lower().startswith('api-key') or api_key.lower().startswith('basic'):
+            warn(
+                'To access all ANY.RUN services, please use an API key without a prefix. '
+                'API keys with a prefix and access to TI Feeds via Basic Authentication are '
+                'supported only for backward compatibility and will be removed in future releases.'
+            )
+        else:
+            api_key = 'API-KEY ' + api_key
+
+        self._api_key = api_key

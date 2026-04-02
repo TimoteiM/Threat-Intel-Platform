@@ -52,42 +52,7 @@ def _normalize_terms(values: list[str] | None) -> list[str]:
 
 def generate_queries(domain: str, context: dict[str, Any] | None = None) -> list[str]:
     domain = domain.strip()
-    context = context or {}
-    queries: list[str] = [
-        f'"{domain}"',
-        f'"{domain}" phishing',
-        f'"{domain}" scam',
-    ]
-
-    brand = str(context.get("brand") or "").strip()
-    if brand:
-        queries.append(f"{brand} phishing")
-        queries.append(f"{brand} login scam")
-
-    ip = str(context.get("ip") or "").strip()
-    if ip:
-        queries.append(f"{ip} abuse")
-
-    asn = str(context.get("asn") or "").strip()
-    if asn:
-        queries.append(f"{asn} phishing")
-
-    keywords = _normalize_terms(context.get("keywords"))
-    if keywords:
-        keyword_query = " ".join(keywords[:3] + ["account", "scam"])
-        queries.append(keyword_query)
-
-    queries.append(f'"{domain}" malware')
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for query in queries:
-        normalized = query.lower()
-        if normalized in seen:
-            continue
-        deduped.append(query)
-        seen.add(normalized)
-    return deduped[:8]
+    return [domain] if domain else []
 
 
 def search_brave(
@@ -186,8 +151,10 @@ def build_summary(
     *,
     domain: str,
     queries: list[str],
+    raw_results: list[dict[str, Any]] | None = None,
     scored_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    raw_results = raw_results or []
     top_hits = [
         BraveOSINTResult(
             title=str(item.get("title") or ""),
@@ -199,6 +166,38 @@ def build_summary(
         )
         for item in scored_results[:5]
     ]
+    observed_results: list[BraveOSINTResult] = []
+    all_results: list[BraveOSINTResult] = []
+    seen_observed_urls: set[str] = set()
+    for item in raw_results:
+        url = str(item.get("url") or "").strip()
+        if not url or url in seen_observed_urls:
+            continue
+        seen_observed_urls.add(url)
+        observed_results.append(
+            BraveOSINTResult(
+                title=str(item.get("title") or ""),
+                url=url,
+                description=str(item.get("description") or ""),
+                source=_result_source(url),
+                matched_keywords=[],
+                score=0,
+            )
+        )
+        all_results.append(
+            BraveOSINTResult(
+                title=str(item.get("title") or ""),
+                url=url,
+                description=str(item.get("description") or ""),
+                source=_result_source(url),
+                matched_keywords=[],
+                score=0,
+            )
+        )
+        if len(all_results) >= 25:
+            break
+        if len(observed_results) >= 10:
+            break
     source_counts = Counter(hit.source for hit in top_hits)
     overall_score = min(100, max((hit.score for hit in top_hits), default=0) + max(0, len(top_hits) - 1) * 5)
     risk_level = "high" if overall_score >= 70 else "medium" if overall_score >= 40 else "low"
@@ -218,6 +217,8 @@ def build_summary(
     return {
         "queries": queries,
         "top_hits": [hit.model_dump() for hit in top_hits],
+        "observed_results": [hit.model_dump() for hit in observed_results],
+        "all_results": [hit.model_dump() for hit in all_results],
         "source_counts": dict(source_counts),
         "score": overall_score,
         "risk_level": risk_level,
@@ -255,12 +256,14 @@ class BraveOSINTCollector(BaseCollector):
         self._store_artifact("raw_results", json.dumps({"queries": queries, "results": raw_results}))
         filtered = filter_results(raw_results)
         scored = score_results(filtered)
-        summary = build_summary(domain=self.target_domain, queries=queries, scored_results=scored)
+        summary = build_summary(domain=self.target_domain, queries=queries, raw_results=raw_results, scored_results=scored)
         return BraveOSINTEvidence(
             meta=CollectorMeta(collector=self.name),
             checked=True,
             queries=summary["queries"],
             top_hits=summary["top_hits"],
+            observed_results=summary["observed_results"],
+            all_results=summary["all_results"],
             source_counts=summary["source_counts"],
             score=summary["score"],
             risk_level=summary["risk_level"],

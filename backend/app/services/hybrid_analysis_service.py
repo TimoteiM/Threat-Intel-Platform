@@ -30,6 +30,7 @@ def lookup_hybrid_analysis(
     file_name: str | None = None,
     submit_on_not_found: bool = False,
     prefer_anyrun: bool = True,
+    sandbox_first: bool = False,
 ) -> dict[str, Any]:
     """
     indicator_type: "url" | "hash"
@@ -44,17 +45,22 @@ def lookup_hybrid_analysis(
         cached_source = str(((cached.get("raw_summary") or {}).get("source") or "")).strip().lower()
         if "anyrun" not in cached_source:
             cached = None
+        elif indicator_type == "url" and submit_on_not_found and sandbox_first and not _has_meaningful_behavior_details(cached):
+            cached = None
         elif indicator_type == "url" and submit_on_not_found and _is_sparse_anyrun_cache(cached):
             # Do not reuse minimal Any.Run lookup cache for URL/domain when sandbox enrichment is allowed.
             cached = None
         elif indicator_type == "url" and submit_on_not_found:
             cached_analysis_id = str(cached.get("analysis_id") or "").strip()
             cached_mode = str(((cached.get("raw_summary") or {}).get("mode") or "")).strip().lower()
+            sandbox_deferred = bool(((cached.get("raw_summary") or {}).get("sandbox_deferred")))
             if not cached_analysis_id:
                 # Lookup-only Any.Run cache (no task/report id) cannot provide process graph/details.
                 cached = None
-            elif cached_mode != "sandbox":
+            elif cached_mode not in {"sandbox", "lookup_deferred"}:
                 # URL/domain investigations with enrichment enabled require sandbox-detail payloads.
+                cached = None
+            elif cached_mode == "lookup_deferred" and not sandbox_deferred:
                 cached = None
             elif _is_stale_anyrun_sandbox_cache(cached):
                 # Sandbox cache from older mapper versions may include only counters but no detail rows.
@@ -98,6 +104,7 @@ def lookup_hybrid_analysis(
             file_bytes=file_bytes,
             file_name=file_name,
             submit_on_not_found=submit_on_not_found,
+            sandbox_first=sandbox_first,
         )
         if anyrun_result.get("checked"):
             anyrun_result = dict(anyrun_result)
@@ -564,6 +571,25 @@ def _normalize_base_url(base_url: str) -> str:
     if "://www.hybrid-analysis.com" in base:
         base = base.replace("://www.hybrid-analysis.com", "://hybrid-analysis.com")
     return base
+
+
+def _has_meaningful_behavior_details(result: dict[str, Any]) -> bool:
+    if not isinstance(result, dict) or not result.get("checked"):
+        return False
+    io = result.get("dynamic_io_summary") or {}
+    if isinstance(io, dict):
+        for key in ("domains", "hosts", "http_requests", "connections"):
+            value = io.get(key)
+            if isinstance(value, list) and len(value) > 0:
+                return True
+    raw = result.get("raw_summary") or {}
+    behavior = raw.get("behavior_details") if isinstance(raw, dict) else None
+    if isinstance(behavior, dict):
+        for key in ("dns_requests", "http_requests", "connections", "network_threats", "processes", "process_details"):
+            value = behavior.get(key)
+            if isinstance(value, list) and len(value) > 0:
+                return True
+    return False
 
 
 def _is_sparse_anyrun_cache(cached: dict[str, Any]) -> bool:

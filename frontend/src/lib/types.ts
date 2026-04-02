@@ -698,6 +698,8 @@ export interface BraveOSINTEvidence {
   checked: boolean;
   queries: string[];
   top_hits: BraveOSINTResult[];
+  observed_results: BraveOSINTResult[];
+  all_results: BraveOSINTResult[];
   source_counts: Record<string, number>;
   score: number;
   risk_level: string;

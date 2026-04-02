@@ -131,6 +131,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         visible: !!evidence?.brave_osint,
         hasData: !!(evidence?.brave_osint && (
           arr(evidence.brave_osint.top_hits).length ||
+          arr(evidence.brave_osint.all_results).length ||
           evidence.brave_osint.summary ||
           evidence.brave_osint.meta?.status === "completed"
         )),
@@ -2115,6 +2116,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                   { field: "Risk Level", value: String(braveOsint?.risk_level || "unknown").toUpperCase() },
                   { field: "Queries Run", value: arr(braveOsint?.queries).length || 0 },
                   { field: "Relevant Hits", value: arr(braveOsint?.top_hits).length || 0 },
+                  { field: "All Results", value: arr(braveOsint?.all_results).length || 0 },
                   {
                     field: "Sources",
                     value: braveOsint?.source_counts
@@ -2153,6 +2155,26 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
                     { key: "score", label: "Score" },
                     { key: "title", label: "Title", wrap: true },
                     { key: "keywords", label: "Matched Keywords", wrap: true },
+                    { key: "url", label: "URL", wrap: true },
+                  ]}
+                  showHeader
+                />
+              )}
+              {arr(braveOsint?.all_results).length > 0 && (
+                <EvidenceTable
+                  title="All Brave Search Results"
+                  data={arr(braveOsint.all_results).map((hit: any, index: number) => ({
+                    index: index + 1,
+                    source: hit?.source || "unknown",
+                    title: hit?.title || "—",
+                    description: hit?.description || "—",
+                    url: hit?.url || "—",
+                  }))}
+                  columns={[
+                    { key: "index", label: "#" },
+                    { key: "source", label: "Source" },
+                    { key: "title", label: "Title", wrap: true },
+                    { key: "description", label: "Description", wrap: true },
                     { key: "url", label: "URL", wrap: true },
                   ]}
                   showHeader

@@ -312,6 +312,8 @@ class BraveOSINTEvidence(BaseModel):
     checked: bool = False
     queries: list[str] = []
     top_hits: list[BraveOSINTResult] = []
+    observed_results: list[BraveOSINTResult] = []
+    all_results: list[BraveOSINTResult] = []
     source_counts: dict[str, int] = {}
     score: int = 0
     risk_level: str = "low"
@@ -865,6 +867,7 @@ class CollectedEvidence(BaseModel):
 
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None
+    analyst_digest: dict[str, Any] = {}
 
     # Artifact tracking
     artifact_hashes: dict[str, str] = {}

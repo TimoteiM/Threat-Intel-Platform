@@ -170,3 +170,160 @@ def test_lookup_falls_back_to_hybrid_when_anyrun_fails(monkeypatch):
     assert out["verdict"] == "suspicious"
     assert out["raw_summary"]["source"] == "hybrid"
     assert out["raw_summary"]["anyrun_error"] == "anyrun timeout"
+
+
+def test_lookup_keeps_anyrun_when_sandbox_is_deferred(monkeypatch):
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        svc,
+        "lookup_anyrun",
+        lambda **kwargs: {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "clean",
+            "analysis_id": "ar-1",
+            "raw_summary": {
+                "source": "anyrun",
+                "mode": "lookup_deferred",
+                "sandbox_deferred": True,
+                "sandbox_error": "ANY.RUN sandbox submission deferred: parallel task limit reached",
+            },
+        },
+    )
+
+    called = {"retry": False}
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: called.__setitem__("retry", True) or {"checked": False, "verdict": "unknown"},
+    )
+
+    out = svc.lookup_hybrid_analysis(indicator="https://example.test", indicator_type="url")
+    assert out["checked"] is True
+    assert out["raw_summary"]["source"] == "anyrun"
+    assert out["raw_summary"]["sandbox_deferred"] is True
+    assert called["retry"] is False
+
+
+def test_behavior_rich_anyrun_result_does_not_require_sandbox_first():
+    result = {
+        "checked": True,
+        "analysis_id": "ar-1",
+        "dynamic_io_summary": {"domains": ["a.example"], "hosts": [], "mitre_attcks": []},
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "sandbox",
+            "behavior_details": {
+                "dns_requests": ["a.example"],
+                "http_requests": [],
+                "connections": [],
+                "network_threats": [],
+                "processes": [],
+            },
+        },
+    }
+
+    assert svc._has_meaningful_behavior_details(result) is True
+
+
+def test_lookup_uses_sandbox_first_for_url_when_requested(monkeypatch):
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    calls = []
+
+    def fake_lookup_anyrun(**kwargs):
+        calls.append(kwargs)
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "ar-2",
+            "dynamic_io_summary": {"domains": ["evil.example"], "hosts": [], "mitre_attcks": []},
+            "raw_summary": {
+                "source": "anyrun",
+                "mode": "sandbox",
+                "behavior_details": {"http_requests": ["https://evil.example"], "dns_requests": [], "connections": []},
+            },
+        }
+
+    monkeypatch.setattr(svc, "lookup_anyrun", fake_lookup_anyrun)
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: {"checked": False, "verdict": "unknown", "error": "should not be used"},
+    )
+
+    out = svc.lookup_hybrid_analysis(
+        indicator="https://example.test",
+        indicator_type="url",
+        submit_on_not_found=True,
+        sandbox_first=True,
+    )
+
+    assert out["checked"] is True
+    assert out["analysis_id"] == "ar-2"
+    assert calls and calls[0]["submit_on_not_found"] is True
+
+
+def test_lookup_preserves_lookup_when_sandbox_first_is_deferred(monkeypatch):
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        svc,
+        "lookup_anyrun",
+        lambda **kwargs: {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "clean",
+            "analysis_id": "ar-3",
+            "raw_summary": {
+                "source": "anyrun",
+                "mode": "lookup_deferred",
+                "sandbox_deferred": True,
+                "sandbox_error": "ANY.RUN sandbox submission deferred: parallel task limit reached",
+            },
+        },
+    )
+    called = {"retry": False}
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: called.__setitem__("retry", True) or {"checked": False, "verdict": "unknown"},
+    )
+
+    out = svc.lookup_hybrid_analysis(
+        indicator="https://example.test",
+        indicator_type="url",
+        submit_on_not_found=True,
+        sandbox_first=True,
+    )
+
+    assert out["checked"] is True
+    assert out["raw_summary"]["sandbox_deferred"] is True
+    assert called["retry"] is False

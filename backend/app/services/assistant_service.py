@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,14 +72,51 @@ class AssistantService:
         await self.session.commit()
         return entry
 
-    async def list_sessions(self, *, limit: int = 50, offset: int = 0) -> list[AssistantSession]:
+    async def list_sessions(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+    ) -> dict[str, object]:
+        normalized_search = (search or "").strip()
+        base_query = select(AssistantSession)
+        count_query = select(func.count(func.distinct(AssistantSession.id)))
+
+        if normalized_search:
+            pattern = f"%{normalized_search}%"
+            search_filter = or_(
+                AssistantSession.title.ilike(pattern),
+                AssistantEntry.raw_text.ilike(pattern),
+            )
+            base_query = (
+                base_query
+                .outerjoin(AssistantEntry, AssistantEntry.session_id == AssistantSession.id)
+                .where(search_filter)
+            )
+            count_query = (
+                count_query
+                .select_from(AssistantSession)
+                .outerjoin(AssistantEntry, AssistantEntry.session_id == AssistantSession.id)
+                .where(search_filter)
+            )
+        else:
+            count_query = count_query.select_from(AssistantSession)
+
         result = await self.session.execute(
-            select(AssistantSession)
+            base_query
+            .distinct()
             .order_by(AssistantSession.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
-        return list(result.scalars().all())
+        total_result = await self.session.execute(count_query)
+        return {
+            "items": list(result.scalars().all()),
+            "total": int(total_result.scalar_one()),
+            "limit": limit,
+            "offset": offset,
+        }
 
     async def get_session(self, session_id: UUID) -> AssistantSession | None:
         return await self._get_session(session_id)

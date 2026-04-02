@@ -14,6 +14,10 @@ export default function ExecutiveSummaryTab({ report }: Props) {
   const actionConfig = ACTION_CONFIG[actionKey] || ACTION_CONFIG.monitor;
   const steps = Array.isArray(report?.recommended_steps) ? report.recommended_steps : [];
   const reasoningText = report?.primary_reasoning || "No reasoning provided.";
+  const reasoningParagraphs = reasoningText
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 
   return (
     <div>
@@ -24,9 +28,13 @@ export default function ExecutiveSummaryTab({ report }: Props) {
       />
 
       <Section title="Primary Reasoning">
-        <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-          {reasoningText}
-        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {(reasoningParagraphs.length ? reasoningParagraphs : [reasoningText]).map((paragraph, index) => (
+            <p key={index} style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.8, margin: 0 }}>
+              {paragraph}
+            </p>
+          ))}
+        </div>
       </Section>
 
       <Section title="Recommended Action">

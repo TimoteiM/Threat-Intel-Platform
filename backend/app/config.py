@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     anyrun_timeout_url_domain_seconds: int = 45
     anyrun_timeout_file_hash_seconds: int = 90
     anyrun_max_upload_mb: int = 100
+    anyrun_parallel_limit_retries: int = 8
+    anyrun_parallel_backoff_seconds: int = 10
+    anyrun_transient_retries: int = 3
+    anyrun_transient_backoff_seconds: int = 6
     hybrid_analysis_api_key: str = ""
     hybrid_analysis_base_url: str = "https://hybrid-analysis.com/api/v2"
     hybrid_analysis_environment_id: int = 160

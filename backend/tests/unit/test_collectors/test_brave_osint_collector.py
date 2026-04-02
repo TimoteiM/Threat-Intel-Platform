@@ -7,7 +7,7 @@ from app.collectors.brave_osint_collector import (
 )
 
 
-def test_generate_queries_uses_domain_and_optional_context():
+def test_generate_queries_uses_single_exact_domain_query():
     queries = generate_queries(
         domain="evantage.eu",
         context={
@@ -18,15 +18,7 @@ def test_generate_queries_uses_domain_and_optional_context():
         },
     )
 
-    assert '"evantage.eu"' in queries
-    assert '"evantage.eu" phishing' in queries
-    assert 'revantage phishing' in queries
-    assert 'revantage login scam' in queries
-    assert '1.2.3.4 abuse' in queries
-    assert 'AS12345 phishing' in queries
-    assert 'login secure account scam' in queries
-    assert 5 <= len(queries) <= 8
-    assert len(queries) == len(set(queries))
+    assert queries == ["evantage.eu"]
 
 
 def test_filter_results_keeps_security_relevant_hits_and_prioritizes_preferred_sources():
@@ -71,7 +63,7 @@ def test_score_results_and_build_summary_favor_high_signal_sources():
     ]
 
     scored = score_results(filtered)
-    summary = build_summary(domain="evantage.eu", queries=['"evantage.eu" phishing'], scored_results=scored)
+    summary = build_summary(domain="evantage.eu", queries=["evantage.eu"], scored_results=scored)
 
     assert all("score" in item for item in scored)
     assert summary["score"] >= 60
@@ -113,3 +105,79 @@ def test_collector_run_builds_brave_osint_evidence(monkeypatch):
     assert evidence.score > 0
     assert evidence.top_hits[0].source == "reddit.com"
     assert any(name.startswith("brave_osint_") for name in artifacts)
+
+
+def test_collector_keeps_observed_results_when_no_hits_match_security_filter(monkeypatch):
+    class _Settings:
+        brave_search_api_key = "brave-test"
+        brave_search_base_url = "https://api.search.brave.com/res/v1/web/search"
+        brave_search_count = 10
+
+    monkeypatch.setattr("app.collectors.brave_osint_collector.get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        "app.collectors.brave_osint_collector.search_brave",
+        lambda *args, **kwargs: [
+            {
+                "title": "Revantage official website",
+                "url": "https://revantage.eu/",
+                "description": "Corporate real estate services and investment platform.",
+            },
+            {
+                "title": "Revantage careers",
+                "url": "https://jobs.revantage.eu/",
+                "description": "Open roles and company profile.",
+            },
+        ],
+    )
+
+    collector = BraveOSINTCollector(
+        domain="revantage.eu",
+        investigation_id="00000000-0000-0000-0000-000000000000",
+        observable_type="domain",
+        timeout=5,
+    )
+
+    evidence, meta, _ = collector.run()
+
+    assert meta.status.value == "completed"
+    assert evidence.checked is True
+    assert evidence.score == 0
+    assert evidence.top_hits == []
+    assert len(evidence.observed_results) == 2
+    assert len(evidence.all_results) == 2
+    assert evidence.observed_results[0].source == "revantage.eu"
+    assert any("No high-signal Brave search results" in note for note in evidence.notes)
+
+
+def test_build_summary_keeps_all_results_separate_from_filtered_hits():
+    raw_results = [
+        {
+            "title": "Example official page",
+            "url": "https://example.com/",
+            "description": "Corporate landing page.",
+        },
+        {
+            "title": "Example phishing discussion",
+            "url": "https://reddit.com/r/netsec/example-phishing",
+            "description": "Phishing and scam indicators tied to example.com.",
+        },
+    ]
+    filtered = [
+        {
+            "title": "Example phishing discussion",
+            "url": "https://reddit.com/r/netsec/example-phishing",
+            "description": "Phishing and scam indicators tied to example.com.",
+        },
+    ]
+
+    scored = score_results(filtered)
+    summary = build_summary(
+        domain="example.com",
+        queries=["example.com"],
+        raw_results=raw_results,
+        scored_results=scored,
+    )
+
+    assert len(summary["top_hits"]) == 1
+    assert len(summary["all_results"]) == 2
+    assert summary["all_results"][0]["url"] == "https://example.com/"

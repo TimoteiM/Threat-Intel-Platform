@@ -42,13 +42,19 @@ async def create_session(request: AssistantSessionCreate, session: DBSession):
 
 
 @router.get("/sessions")
-async def list_sessions(session: DBSession, limit: int = 50, offset: int = 0):
+async def list_sessions(
+    session: DBSession,
+    limit: int = 50,
+    offset: int = 0,
+    search: str | None = None,
+):
     service = AssistantService(session)
-    items = await service.list_sessions(limit=limit, offset=offset)
+    results = await service.list_sessions(limit=limit, offset=offset, search=search)
     return {
-        "items": [_serialize_session(item) for item in items],
-        "limit": limit,
-        "offset": offset,
+        "items": [_serialize_session(item) for item in results["items"]],
+        "total": results["total"],
+        "limit": results["limit"],
+        "offset": results["offset"],
     }
 
 

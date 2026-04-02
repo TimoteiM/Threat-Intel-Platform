@@ -6,6 +6,7 @@ Handles first-pass and follow-up iterations.
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from app.analyst.system_prompt import ANALYST_SYSTEM_PROMPT
@@ -37,8 +38,20 @@ def build_messages(
     evidence_json = evidence.model_dump_json(
         indent=2,
         exclude_none=True,
-        exclude={"external_context"},
+        exclude={"external_context", "analyst_digest"},
     )
+
+    analyst_digest_block = ""
+    if evidence.analyst_digest:
+        digest_json = json.dumps(evidence.analyst_digest, indent=2, ensure_ascii=True)
+        analyst_digest_block = f"""
+<analyst_digest>
+This is a compact analyst-ready digest derived from the full evidence. Prefer it for
+high-signal reasoning and for determining what the observable appears to be about.
+
+{digest_json}
+</analyst_digest>
+"""
 
     # Build client domain context if similarity analysis was performed
     similarity_context = ""
@@ -210,7 +223,7 @@ CRITICAL GUIDANCE FOR JS ANALYSIS:
 <investigation_id>{evidence.investigation_id}</investigation_id>
 <iteration>{iteration} of {max_iterations}</iteration>
 <analyst_focus>{focus_line}</analyst_focus>
-{similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}
+{similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}{analyst_digest_block}
 <machine_collected_evidence>
 {evidence_json}
 </machine_collected_evidence>

@@ -564,12 +564,13 @@ export function resolveAlert(alertId: string) {
 
 // ─── SSE helper ───
 
-export function listAssistantSessions(params?: { limit?: number; offset?: number }) {
+export function listAssistantSessions(params?: { limit?: number; offset?: number; search?: string }) {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
   const query = qs.toString();
-  return requestWithDirectFallback<{ items: any[]; limit: number; offset: number }>(
+  return requestWithDirectFallback<PaginatedResponse<any>>(
     `/assistant/sessions${query ? `?${query}` : ""}`,
   );
 }

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.sql import Select
 
 from app.models.database import AssistantEntry, AssistantSession
 from app.services.assistant_service import AssistantService
@@ -33,6 +34,30 @@ def _build_session(mode: str = "alert_analysis") -> AssistantSession:
 
 def _build_settings() -> SimpleNamespace:
     return SimpleNamespace(openai_model="gpt-5-mini", openai_api_key="test-key")
+
+
+class _ScalarResult:
+    def __init__(self, items):
+        self._items = items
+
+    def all(self):
+        return list(self._items)
+
+
+class _ExecuteResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        return _ScalarResult(self._items)
+
+
+class _CountResult:
+    def __init__(self, value: int):
+        self._value = value
+
+    def scalar_one(self):
+        return self._value
 
 
 @pytest.mark.asyncio
@@ -161,3 +186,34 @@ async def test_run_session_marks_failed_when_openai_errors(monkeypatch) -> None:
     assert session_obj.status == "failed"
     assert "provider down" in (session_obj.error or "")
     fake_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_returns_paginated_matches_for_search() -> None:
+    matching = _build_session("alert_analysis")
+    matching.title = "Invoice phishing alert"
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[_ExecuteResult([matching]), _CountResult(3)]),
+    )
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    result = await service.list_sessions(search="invoice", limit=10, offset=20)
+
+    assert result["items"] == [matching]
+    assert result["total"] == 3
+    assert result["limit"] == 10
+    assert result["offset"] == 20
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_searches_titles_and_entry_content() -> None:
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(search="admin@example.com", limit=25, offset=0)
+
+    executed_query = fake_db.execute.await_args_list[0].args[0]
+    assert isinstance(executed_query, Select)
+    query_text = str(executed_query.compile(compile_kwargs={"literal_binds": False}))
+    assert "assistant_sessions.title" in query_text
+    assert "assistant_entries.raw_text" in query_text

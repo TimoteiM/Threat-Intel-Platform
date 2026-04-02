@@ -48,6 +48,7 @@ class HybridAnalysisCollector(BaseCollector):
             file_bytes=file_bytes,
             file_name=file_name,
             submit_on_not_found=submit_on_not_found,
+            sandbox_first=bool(self.observable_type in {"domain", "url"}),
         )
         item = HybridAnalysisItem(
             checked=bool(result.get("checked")),

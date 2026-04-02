@@ -232,6 +232,18 @@ function flattenProcessEvents(proc: any): ProcessEventRow[] {
   return out;
 }
 
+function _hasGroupedProcessData(proc: any): boolean {
+  return flattenProcessEvents(proc).length > 0;
+}
+
+function _hasDeepProcessData(proc: any): boolean {
+  return flattenProcessEvents(proc).some((event) => _extractEventDetailRows(event.details || {}).length > 0);
+}
+
+function _processRefs(proc: any): string[] {
+  return [proc?.uuid, proc?.guid, proc?.pid].filter(Boolean).map((x: any) => String(x));
+}
+
 function _num(v: any): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -271,14 +283,16 @@ function _processRelevanceScore(p: any): number {
   const threatScore = _num(p?.threat_score ?? p?.threatScore ?? p?.score);
   const threatLevel = _num(p?.threat_level ?? p?.threatLevel);
   const networkCount = _num(p?.network_count);
+  const threatEventCount = _num(p?.network_threat_count ?? p?.event_counts?.network_threats);
   const fileCount = _num(p?.file_activity_count);
   const mitreCount = _num(p?.mitre_count);
-  const suspicious = Boolean(p?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35;
+  const suspicious = Boolean(p?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35 || threatEventCount > 0;
 
   let score = 0;
   if (threatLevel >= 2 || threatScore >= 70) score += 10;
   else if (suspicious) score += 6;
   if (networkCount > 0) score += 2;
+  if (threatEventCount > 0) score += 4;
   if (fileCount > 0) score += 2;
   if (mitreCount > 0) score += 3;
   if (String(p?.commandLine || p?.cmd || "").trim()) score += 1;
@@ -302,7 +316,127 @@ function _processRelevanceScore(p: any): number {
   return score;
 }
 
+function _isLowSignalSystemProcess(p: any): boolean {
+  const name = String(p?.fileName || p?.image || p?.processName || p?.name || "").toLowerCase();
+  return (
+    name === "svchost.exe" ||
+    name === "conhost.exe" ||
+    name === "csrss.exe" ||
+    name === "fontdrvhost.exe" ||
+    name === "dwm.exe" ||
+    name === "smss.exe" ||
+    name === "wininit.exe" ||
+    name === "lsass.exe" ||
+    name === "services.exe" ||
+    name === "explorer.exe" ||
+    name === "msedge.exe"
+  );
+}
+
+function _hasDirectThreatSignal(p: any): boolean {
+  return (
+    _num(p?.network_threat_count ?? p?.event_counts?.network_threats) > 0 ||
+    _num(p?.threat_level ?? p?.threatLevel ?? p?.scores?.verdict?.threatLevel) > 0 ||
+    _num(p?.threat_score ?? p?.threatScore ?? p?.score) > 0 ||
+    Boolean(p?.isMalconf) ||
+    Boolean(p?.suspicious_flag) ||
+    arr(p?.threatName).length > 0 ||
+    arr(p?.mitre_tags ?? p?.mitreTags).length > 0
+  );
+}
+
+function _effectiveProcessScore(p: any): number {
+  const backendScore = _num(p?.relevance_score ?? p?.relevanceScore);
+  if (backendScore > 0) return backendScore;
+  return _processRelevanceScore(p);
+}
+
+function _intrinsicProcessScore(p: any): number {
+  const backendScore = _num(p?.intrinsic_relevance_score ?? p?.intrinsicRelevanceScore);
+  if (backendScore > 0) return backendScore;
+  return _processRelevanceScore(p);
+}
+
+function _isExecutionContextProcess(p: any): boolean {
+  const hasThreat = _num(p?.threat_score ?? p?.threatScore ?? p?.score) > 0 || _num(p?.threat_level ?? p?.threatLevel) > 0;
+  const hasActivity =
+    _num(p?.network_count) > 0 ||
+    _num(p?.file_activity_count) > 0 ||
+    _num(p?.mitre_count) > 0 ||
+    arr(p?.mitre_tags).length > 0;
+  return _isLowSignalSystemProcess(p) && !hasThreat && !hasActivity && _intrinsicProcessScore(p) < 3 && _effectiveProcessScore(p) < 6;
+}
+
+function buildBackendProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details: Record<string, any> } | null {
+  const nodes = arr(raw?.behavior_graph?.nodes);
+  const edges = arr(raw?.behavior_graph?.edges);
+  if (!nodes.length) return null;
+
+  const normalizedNodes = nodes.map((node: any, idx: number) => ({
+    id: String(node?.id || `backend-node-${idx}`),
+    kind: String(node?.kind || "process"),
+    label: String(node?.label || node?.id || `node-${idx}`),
+    process: node?.process || {},
+    position: node?.position,
+  }));
+  const nodeIds = new Set(normalizedNodes.map((node: any) => String(node.id)));
+  const normalizedEdges = edges.filter((edge: any) => {
+    const source = String(edge?.source || "");
+    const target = String(edge?.target || "");
+    return source && target && nodeIds.has(source) && nodeIds.has(target);
+  });
+  const details: Record<string, any> = {};
+  normalizedNodes.forEach((node: any) => {
+    if (String(node?.kind || "process") !== "process") return;
+    details[String(node.id)] = node?.process || {};
+  });
+  return { nodes: normalizedNodes, edges: normalizedEdges, details };
+}
+
+function hasRicherProcessEvidence(raw: any): boolean {
+  const processDetails = arr(raw?.behavior_details?.process_details);
+  return processDetails.some((proc: any) => {
+    const counts = proc?.event_counts || {};
+    return (
+      _num(counts?.network_threats) > 0 ||
+      _num(counts?.http_requests) > 0 ||
+      _num(counts?.connections) > 0 ||
+      _num(counts?.dns_requests) > 0 ||
+      _num(proc?.threat_level ?? proc?.threatLevel) > 0 ||
+      _num(proc?.threat_score ?? proc?.threatScore ?? proc?.score) > 0
+    );
+  });
+}
+
+function isDegenerateBackendGraph(graph: { nodes: any[]; edges: any[]; details: Record<string, any> } | null, raw: any): boolean {
+  if (!graph) return false;
+  const processNodes = graph.nodes.filter((node: any) => String(node?.kind || "process") === "process");
+  if (!processNodes.length) return hasRicherProcessEvidence(raw);
+  if (processNodes.length === 1) {
+    const only = processNodes[0];
+    const label = String(only?.label || "").trim().toLowerCase();
+    if (label === "[system process]" || label === "system" || label === "system process") {
+      return hasRicherProcessEvidence(raw);
+    }
+  }
+  const rawThreatAnchors = arr(raw?.behavior_details?.process_details).filter((proc: any) => {
+    if (_isLowSignalSystemProcess(proc)) return false;
+    return _hasDirectThreatSignal(proc);
+  });
+  if (!rawThreatAnchors.length) return false;
+  const backendThreatAnchors = processNodes.filter((node: any) => {
+    const proc = node?.process || graph?.details?.[String(node?.id || "")] || {};
+    if (_isLowSignalSystemProcess(proc)) return false;
+    return _hasDirectThreatSignal(proc);
+  });
+  if (!backendThreatAnchors.length) return true;
+  return false;
+}
+
 function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details: Record<string, any> } {
+  const backendGraph = buildBackendProcessTreeGraph(raw);
+  if (backendGraph && !isDegenerateBackendGraph(backendGraph, raw)) return backendGraph;
+
   let processes = arr(raw?.behavior_details?.processes);
   if (!processes.length) {
     processes = arr(raw?.behavior_details?.process_details);
@@ -374,7 +508,8 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     const pid = String(p?.pid || "").trim();
     const matchedDetail = detailByRef[uuid] || detailByRef[guid] || detailByRef[pid] || detailByRef[String(p?.fileName || p?.image || p?.processName || p?.name || "")];
     const eventCounts = (matchedDetail?.event_counts || {}) as Record<string, number>;
-    const connCount = _num(eventCounts.connections) + _num(eventCounts.http_requests) + _num(eventCounts.dns_requests);
+    const networkThreatCount = _num(eventCounts.network_threats);
+    const connCount = _num(eventCounts.connections) + _num(eventCounts.http_requests) + _num(eventCounts.dns_requests) + networkThreatCount;
     const fileCount = _num(eventCounts.modified_files) + _num(eventCounts.registry_changes);
     const mitreTags = _extractMitreTagsFromProc(matchedDetail || p);
     const threatScore = _num(matchedDetail?.threat_score ?? p?.threatScore ?? p?.score);
@@ -399,8 +534,9 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
         mitre_tags: mitreTags,
         mitre_count: mitreTags.length,
         network_count: connCount,
+        network_threat_count: networkThreatCount,
         file_activity_count: fileCount,
-        suspicious_flag: threatLevel >= 1 || threatScore >= 35,
+        suspicious_flag: threatLevel >= 1 || threatScore >= 35 || networkThreatCount > 0,
         sha256,
         duplicate_count: 1,
       },
@@ -456,14 +592,6 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     }
     return total;
   };
-  // Focus on the primary execution tree (closest to AnyRun visual graph).
-  if (roots.length > 1) {
-    roots = roots
-      .map((r) => ({ r, size: subtreeSize(r) }))
-      .sort((a, b) => b.size - a.size)
-      .slice(0, 1)
-      .map((x) => x.r);
-  }
   roots.forEach((r) => visit(r, 0));
 
   // Collapse identical leaf siblings (same process signature under same parent).
@@ -548,14 +676,11 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
   });
 
   // Relevance pruning (AnyRun-like): keep suspicious/high-signal processes and their ancestry.
-  const MAX_RENDER_NODES = 70;
   const kept = new Set<string>();
   for (const r of roots) kept.add(r);
-  const candidates: Array<{ id: string; score: number }> = [];
   nodesById.forEach((n, id) => {
     if (removed.has(id)) return;
     const score = _processRelevanceScore(n.process || {});
-    candidates.push({ id, score });
     if (score >= 6) kept.add(id);
   });
   const addAncestors = (id: string) => {
@@ -568,17 +693,6 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     }
   };
   Array.from(kept).forEach(addAncestors);
-  if (kept.size < MAX_RENDER_NODES) {
-    const ranked = candidates
-      .filter((c) => !kept.has(c.id))
-      .sort((a, b) => b.score - a.score);
-    for (const c of ranked) {
-      kept.add(c.id);
-      addAncestors(c.id);
-      if (kept.size >= MAX_RENDER_NODES) break;
-    }
-  }
-
   const levels = new Map<number, string[]>();
   depth.forEach((d, id) => {
     if (removed.has(id)) return;
@@ -644,34 +758,78 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
   const [processViewMode, setProcessViewMode] = React.useState<"view" | "group" | "deep">("view");
   const threatRows = arr(raw?.behavior_details?.network_threats);
   const processDetails = arr(raw?.behavior_details?.process_details);
+  const graphProcessRefs = React.useMemo(() => {
+    const refs = new Set<string>();
+    for (const n of rawNodes) {
+      const p = n?.process || {};
+      for (const ref of _processRefs(p)) {
+        refs.add(ref);
+      }
+    }
+    return refs;
+  }, [rawNodes]);
+  const graphProcessByRef = React.useMemo(() => {
+    const byRef: Record<string, any> = {};
+    for (const n of rawNodes) {
+      const p = n?.process || {};
+      for (const ref of _processRefs(p)) {
+        if (!byRef[ref]) byRef[ref] = p;
+      }
+    }
+    return byRef;
+  }, [rawNodes]);
   const processIndexByRef = React.useMemo(() => {
     const m: Record<string, any> = {};
     for (const p of processDetails) {
       // Use stable identifiers only; name-based keys cause collisions (e.g., many svchost.exe).
-      const refs = [p?.uuid, p?.guid, p?.pid].filter(Boolean).map((x: any) => String(x));
+      const refs = _processRefs(p);
       for (const r of refs) m[r] = p;
     }
     return m;
   }, [processDetails]);
   const processListItems = React.useMemo(() => {
-    const src = processDetails.length ? processDetails : rawNodes.map((n: any) => n?.process || {});
+    const graphProcessNodes = rawNodes.filter((n: any) => String(n?.kind || "process") === "process");
+    const src = processDetails.length ? processDetails : graphProcessNodes.map((n: any) => n?.process || {});
     const byKey = new Map<string, any>();
     for (const p of src) {
+      const refs = _processRefs(p);
+      const graphEnrichment = refs.map((ref) => graphProcessByRef[ref]).find(Boolean) || {};
+      const enriched = { ...p, ...graphEnrichment };
       const pid = String(p?.pid ?? "").trim();
       const uuid = String(p?.uuid ?? p?.guid ?? "").trim();
-      const name = String(p?.name || p?.fileName || p?.image || p?.processName || "process").trim();
-      const cmd = String(p?.command_line || p?.commandLine || p?.cmd || "").trim();
+      const name = String(enriched?.name || enriched?.fileName || enriched?.image || enriched?.processName || "process").trim();
+      const cmd = String(enriched?.command_line || enriched?.commandLine || enriched?.cmd || "").trim();
       // Collapse exact duplicates (same identity + same command line).
       const key = [uuid || "-", pid || "-", name.toLowerCase(), cmd.toLowerCase()].join("|");
       if (!byKey.has(key)) {
-        byKey.set(key, { ...p, __dup_count: 1, __key: key });
+        byKey.set(key, { ...enriched, __dup_count: 1, __key: key });
       } else {
         const prev = byKey.get(key);
         byKey.set(key, { ...prev, __dup_count: Number(prev?.__dup_count || 1) + 1 });
       }
     }
     return Array.from(byKey.values());
-  }, [processDetails, rawNodes]);
+  }, [processDetails, rawNodes, graphProcessByRef]);
+  const relevantProcessListItems = React.useMemo(() => {
+    return processListItems.filter((p: any) => {
+      const refs = [p?.uuid, p?.guid, p?.pid].filter(Boolean).map((x: any) => String(x));
+      const inRenderedGraph = refs.some((r) => graphProcessRefs.has(r));
+      return inRenderedGraph;
+    });
+  }, [processListItems, graphProcessRefs]);
+  const groupProcessListItems = React.useMemo(
+    () => relevantProcessListItems.filter((p: any) => _hasGroupedProcessData(p)),
+    [relevantProcessListItems]
+  );
+  const deepProcessListItems = React.useMemo(
+    () => relevantProcessListItems.filter((p: any) => _hasDeepProcessData(p)),
+    [relevantProcessListItems]
+  );
+  const activeProcessList = React.useMemo(() => {
+    if (processViewMode === "group") return groupProcessListItems;
+    if (processViewMode === "deep") return deepProcessListItems;
+    return relevantProcessListItems;
+  }, [processViewMode, relevantProcessListItems, groupProcessListItems, deepProcessListItems]);
   const nodeIdByRef = React.useMemo(() => {
     const m: Record<string, string> = {};
     for (const n of rawNodes) {
@@ -728,7 +886,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
         return {
           id: String(n?.id || `n-${idx}`),
           position: n?.position || { x: ((idx % 8) * 280), y: Math.floor(idx / 8) * 110 },
-          data: { label, process: p },
+          data: { label, process: p, kind: String(n?.kind || "process") },
           style: {
             border: `1px solid ${borderColor}`,
             borderLeft: leftBar,
@@ -808,6 +966,53 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
     }
     return map;
   }, [selectedEvents]);
+  React.useEffect(() => {
+    if (!showAdvanced) return;
+    if (activeProcessList.length === 0) {
+      setSelectedNode(null);
+      setSelectedProcessManual(null);
+      return;
+    }
+    if ((!selected && !selectedProcessManual) || (processViewMode !== "view" && !selectedProcessManual)) {
+      const first = activeProcessList[0];
+      const refs = [first?.uuid, first?.guid, first?.pid].filter(Boolean).map((x: any) => String(x));
+      let nodeId = "";
+      for (const r of refs) {
+        if (nodeIdByRef[r]) {
+          nodeId = nodeIdByRef[r];
+          break;
+        }
+      }
+      setSelectedNode(nodeId || null);
+      setSelectedProcessManual(first || null);
+      return;
+    }
+    const selectedRefs = [selected?.uuid, selected?.guid, selected?.pid, selectedProcessManual?.uuid, selectedProcessManual?.guid, selectedProcessManual?.pid]
+      .filter(Boolean)
+      .map((x: any) => String(x));
+    const selectedNames = [selected?.fileName, selected?.image, selected?.processName, selected?.name, selectedProcessManual?.name]
+      .filter(Boolean)
+      .map((x: any) => String(x));
+    const stillPresent = activeProcessList.some((p: any) => {
+      const refs = [p?.uuid, p?.guid, p?.pid].filter(Boolean).map((x: any) => String(x));
+      if (refs.some((ref) => selectedRefs.includes(ref))) return true;
+      const names = [p?.fileName, p?.image, p?.processName, p?.name].filter(Boolean).map((x: any) => String(x));
+      return names.some((name) => selectedNames.includes(name));
+    });
+    if (!stillPresent) {
+      const first = activeProcessList[0];
+      const refs = [first?.uuid, first?.guid, first?.pid].filter(Boolean).map((x: any) => String(x));
+      let nodeId = "";
+      for (const r of refs) {
+        if (nodeIdByRef[r]) {
+          nodeId = nodeIdByRef[r];
+          break;
+        }
+      }
+      setSelectedNode(nodeId || null);
+      setSelectedProcessManual(first || null);
+    }
+  }, [activeProcessList, nodeIdByRef, processViewMode, selected, selectedProcessManual, showAdvanced]);
 
   return (
     <div style={{ marginBottom: 10, position: "relative" }}>
@@ -817,7 +1022,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
           edges={edges}
           onNodeClick={(_, n) => {
             setSelectedNode(String(n.id));
-            setSelectedProcessManual((n as any)?.data?.process || null);
+            setSelectedProcessManual((n as any)?.data?.kind === "process" ? ((n as any)?.data?.process || null) : null);
           }}
           onPaneClick={() => {
             setSelectedNode(null);
@@ -984,13 +1189,22 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
           >
             <div style={{ borderRight: "1px solid #1b4d6b", background: "#072f46", display: "flex", flexDirection: "column", minHeight: 0 }}>
               <div style={{ padding: "10px 12px", borderBottom: "1px solid #1b4d6b", fontWeight: 700, color: "var(--accent)" }}>
-                Processes ({processListItems.length})
+                {processViewMode === "view" ? "Process Chain" : processViewMode === "group" ? "Processes With Group Details" : "Processes With Deep Details"} ({activeProcessList.length})
               </div>
               <div style={{ overflowY: "auto", padding: 8 }}>
-                {processListItems.map((p: any, idx: number) => {
+                {activeProcessList.length === 0 ? (
+                  <EmptyNote>
+                    {processViewMode === "group"
+                      ? "No processes have group details."
+                      : processViewMode === "deep"
+                        ? "No processes have deep details."
+                        : "No relevant processes available."}
+                  </EmptyNote>
+                ) : activeProcessList.map((p: any, idx: number) => {
                   const key = String(p?.uuid || p?.guid || p?.pid || p?.name || idx);
                   const title = String(p?.name || p?.fileName || p?.image || p?.processName || p?.label || "process");
                   const pid = p?.pid != null ? String(p.pid) : "-";
+                  const isContext = _isExecutionContextProcess(p);
                   const active = Boolean(selected && [selected?.uuid, selected?.guid, selected?.pid, selected?.name, selected?.fileName, selected?.image].filter(Boolean).map(String).includes(key));
                   return (
                     <button
@@ -1024,7 +1238,27 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                         fontSize: 12,
                       }}
                     >
-                      <div style={{ fontWeight: 700 }}>{title}</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ fontWeight: 700 }}>{title}</div>
+                        {isContext && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              letterSpacing: 0.3,
+                              textTransform: "uppercase",
+                              color: "#93c5fd",
+                              background: "rgba(59,130,246,0.14)",
+                              border: "1px solid rgba(96,165,250,0.32)",
+                              borderRadius: 999,
+                              padding: "2px 6px",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Context
+                          </div>
+                        )}
+                      </div>
                       <div style={{ color: "var(--text-muted)", marginTop: 2 }}>
                         PID: {pid}{Number(p?.__dup_count || 1) > 1 ? `  |  x${p.__dup_count}` : ""}
                       </div>
@@ -1433,6 +1667,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
       {items.map((item: any, idx: number) => {
         const raw = item?.raw_summary || {};
         const sourceLower = String(raw?.source || "").toLowerCase();
+        const modeLower = String(raw?.mode || "").toLowerCase();
         const summary = raw?.summary || {};
         const details = arr(summary?.details);
         const io = item?.dynamic_io_summary || {};
@@ -1442,6 +1677,16 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
         const anyrunAiSummary = String(raw?.anyrun_ai_summary || "").trim();
         const behaviorCounts = raw?.behavior_counts || {};
         const behaviorDetails = raw?.behavior_details || {};
+        const hasSandboxTask = Boolean(item?.analysis_id || item?.analysis_link);
+        const hasBehaviorDetails =
+          arr(behaviorDetails?.dns_requests).length > 0 ||
+          arr(behaviorDetails?.connections).length > 0 ||
+          arr(behaviorDetails?.http_requests).length > 0 ||
+          arr(behaviorDetails?.network_threats).length > 0 ||
+          arr(behaviorDetails?.processes).length > 0 ||
+          arr(behaviorDetails?.process_details).length > 0;
+        const isLookupOnly = modeLower === "lookup" || modeLower === "lookup_deferred";
+        const showSandboxSections = !isLookupOnly && (hasSandboxTask || hasBehaviorDetails);
         const anyrunLink = sourceLower === "anyrun"
           ? (
             (typeof item?.analysis_link === "string" && item.analysis_link.startsWith("http"))
@@ -1451,14 +1696,14 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
           : null;
         const anyrunFallbackError = String(raw?.anyrun_error || "").trim();
 
-        const dnsRows = arr(behaviorDetails?.dns_requests).slice(0, 200).map((d: any) => ({
+        const dnsRows = arr(behaviorDetails?.dns_requests).map((d: any) => ({
           timeshift: d?.time || d?.timestamp || "-",
           rep: d?.reputation || d?.reputationNumber || "-",
           domain: d?.domainName || d?.domain || d?.hostname || "-",
           ips: arr(d?.ips).join(", ") || arr(d?.answers).join(", ") || d?.resolvedTo || "-",
           threat: d?.threatLevel ?? "-",
         }));
-        const connRows = arr(behaviorDetails?.connections).slice(0, 200).map((c: any) => ({
+        const connRows = arr(behaviorDetails?.connections).map((c: any) => ({
           timeshift: c?.time || c?.timestamp || "-",
           protocol: c?.protocol || "-",
           rep: c?.reputation || "-",
@@ -1471,7 +1716,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
           asn: c?.asn || "-",
           traffic: c?.traffic || "-",
         }));
-        const httpRows = arr(behaviorDetails?.http_requests).slice(0, 200).map((h: any) => ({
+        const httpRows = arr(behaviorDetails?.http_requests).map((h: any) => ({
           timeshift: h?.time || h?.timestamp || "-",
           headers: `${h?.method || "-"}${h?.httpCode ? ` - ${h.httpCode}` : ""}`,
           rep: h?.reputation || "-",
@@ -1481,7 +1726,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
           url: h?.url || h?.requestUrl || "-",
           content: h?.content || h?.body?.response?.size || h?.mimeType || h?.contentType || "-",
         }));
-        const threatRows = arr(behaviorDetails?.network_threats).slice(0, 200).map((t: any) => ({
+        const threatRows = arr(behaviorDetails?.network_threats).map((t: any) => ({
           type: t?.class || t?.category || t?.type || "-",
           indicator: t?.indicator || t?.domain || t?.destinationIP || t?.url || "-",
           threat_level: t?.threatLevel ?? t?.priority ?? t?.severity ?? "-",
@@ -1513,14 +1758,38 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
                 { field: "Detected Type", value: summary?.detectedType || item?.indicator_type || "-" },
                 { field: "Threat Level", value: summary?.threatLevel ?? "-" },
                 { field: "Last Seen", value: summary?.lastSeen || "-" },
-                { field: "HTTP Requests", value: behaviorCounts?.http_requests ?? dnsRows.length ?? "—" },
-                { field: "Connections", value: behaviorCounts?.connections ?? connRows.length ?? "—" },
-                { field: "DNS Requests", value: behaviorCounts?.dns_requests ?? dnsRows.length ?? "—" },
-                { field: "Network Threats", value: behaviorCounts?.network_threats ?? threatRows.length ?? "—" },
+                ...(showSandboxSections
+                  ? [
+                      { field: "HTTP Requests", value: behaviorCounts?.http_requests ?? httpRows.length ?? "?" },
+                      { field: "Connections", value: behaviorCounts?.connections ?? connRows.length ?? "?" },
+                      { field: "DNS Requests", value: behaviorCounts?.dns_requests ?? dnsRows.length ?? "?" },
+                      { field: "Network Threats", value: behaviorCounts?.network_threats ?? threatRows.length ?? "?" },
+                    ]
+                  : []),
                 { field: "Task URL", value: anyrunLink || "-" },
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
             />
+
+            {!showSandboxSections && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: "10px 12px",
+                  border: "1px solid rgba(96,165,250,0.20)",
+                  background: "rgba(96,165,250,0.07)",
+                  color: "var(--text-secondary)",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                This result comes from Any.Run lookup intelligence only. The official SDK returns rich behavior details
+                only after a real sandbox task ID and completed report are available. This entry did not produce a
+                completed sandbox report, so process, DNS, connection, and HTTP behavior details are not available
+                here.
+              </div>
+            )}
 
             {anyrunAiSummary && (
               <EvidenceTable
@@ -1530,46 +1799,48 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
               />
             )}
 
-            <div
-              style={{
-                marginBottom: 12,
-                padding: "10px 12px",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                background: "var(--bg-elevated)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 10,
-              }}
-            >
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Process Graph is available in a dedicated windowed tab for large visibility.
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (typeof window === "undefined") return;
-                  const u = new URL(window.location.href);
-                  u.pathname = `${u.pathname.replace(/\/$/, "")}/process-graph`;
-                  u.search = "";
-                  u.searchParams.set("graph_index", String(idx));
-                  window.open(u.toString(), "_blank", "noopener,noreferrer");
-                }}
+            {showSandboxSections && (
+              <div
                 style={{
-                  padding: "7px 12px",
-                  border: "1px solid rgba(96,165,250,0.35)",
-                  borderRadius: 6,
-                  background: "rgba(96,165,250,0.12)",
-                  color: "var(--accent)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
+                  marginBottom: 12,
+                  padding: "10px 12px",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  background: "var(--bg-elevated)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
                 }}
               >
-                Open Process Graph
-              </button>
-            </div>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  Process Graph is available in a dedicated windowed tab for large visibility.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window === "undefined") return;
+                    const u = new URL(window.location.href);
+                    u.pathname = `${u.pathname.replace(/\/$/, "")}/process-graph`;
+                    u.search = "";
+                    u.searchParams.set("graph_index", String(idx));
+                    window.open(u.toString(), "_blank", "noopener,noreferrer");
+                  }}
+                  style={{
+                    padding: "7px 12px",
+                    border: "1px solid rgba(96,165,250,0.35)",
+                    borderRadius: 6,
+                    background: "rgba(96,165,250,0.12)",
+                    color: "var(--accent)",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  Open Process Graph
+                </button>
+              </div>
+            )}
 
             {anyrunIocs.length > 0 && (
               <details style={{ marginBottom: 10 }}>
@@ -1578,7 +1849,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
                 </summary>
                 <DataGrid
                   title="IOC Details"
-                  rows={anyrunIocs.slice(0, 500).map((ioc: any) => ({
+                  rows={anyrunIocs.map((ioc: any) => ({
                     category: ioc?.category || "-",
                     type: ioc?.type || "-",
                     ioc: ioc?.ioc || ioc?.value || "-",
@@ -1596,86 +1867,90 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
               </details>
             )}
 
-            <details style={{ marginBottom: 10 }}>
-              <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
-                DNS Request Details ({dnsRows.length})
-              </summary>
-              <DataGrid
-                title="DNS Requests"
-                rows={dnsRows}
-                columns={[
-                  { key: "timeshift", label: "Timeshift", minWidth: 260 },
-                  { key: "rep", label: "Rep", minWidth: 130 },
-                  { key: "domain", label: "Domain", minWidth: 320, maxWidth: 560 },
-                  { key: "ips", label: "IPs", minWidth: 320, maxWidth: 560 },
-                  { key: "threat", label: "Threat", minWidth: 130 },
-                ]}
-              />
-            </details>
+            {showSandboxSections && (
+              <>
+                <details style={{ marginBottom: 10 }}>
+                  <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
+                    DNS Request Details ({dnsRows.length})
+                  </summary>
+                  <DataGrid
+                    title="DNS Requests"
+                    rows={dnsRows}
+                    columns={[
+                      { key: "timeshift", label: "Timeshift", minWidth: 260 },
+                      { key: "rep", label: "Rep", minWidth: 130 },
+                      { key: "domain", label: "Domain", minWidth: 320, maxWidth: 560 },
+                      { key: "ips", label: "IPs", minWidth: 320, maxWidth: 560 },
+                      { key: "threat", label: "Threat", minWidth: 130 },
+                    ]}
+                  />
+                </details>
 
-            <details style={{ marginBottom: 10 }}>
-              <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
-                Connection Details ({connRows.length})
-              </summary>
-              <DataGrid
-                title="Connections"
-                rows={connRows}
-                columns={[
-                  { key: "timeshift", label: "Timeshift", minWidth: 260 },
-                  { key: "protocol", label: "Protocol", minWidth: 130 },
-                  { key: "rep", label: "Rep", minWidth: 130 },
-                  { key: "pid", label: "PID", minWidth: 110 },
-                  { key: "process_name", label: "Process Name", minWidth: 320, maxWidth: 520 },
-                  { key: "cn", label: "CN", minWidth: 110 },
-                  { key: "ip", label: "IP", minWidth: 240 },
-                  { key: "port", label: "Port", minWidth: 110 },
-                  { key: "domain", label: "Domain", minWidth: 260, maxWidth: 420 },
-                  { key: "asn", label: "ASN", minWidth: 280, maxWidth: 420 },
-                  { key: "traffic", label: "Traffic", minWidth: 180 },
-                ]}
-              />
-            </details>
+                <details style={{ marginBottom: 10 }}>
+                  <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
+                    Connection Details ({connRows.length})
+                  </summary>
+                  <DataGrid
+                    title="Connections"
+                    rows={connRows}
+                    columns={[
+                      { key: "timeshift", label: "Timeshift", minWidth: 260 },
+                      { key: "protocol", label: "Protocol", minWidth: 130 },
+                      { key: "rep", label: "Rep", minWidth: 130 },
+                      { key: "pid", label: "PID", minWidth: 110 },
+                      { key: "process_name", label: "Process Name", minWidth: 320, maxWidth: 520 },
+                      { key: "cn", label: "CN", minWidth: 110 },
+                      { key: "ip", label: "IP", minWidth: 240 },
+                      { key: "port", label: "Port", minWidth: 110 },
+                      { key: "domain", label: "Domain", minWidth: 260, maxWidth: 420 },
+                      { key: "asn", label: "ASN", minWidth: 280, maxWidth: 420 },
+                      { key: "traffic", label: "Traffic", minWidth: 180 },
+                    ]}
+                  />
+                </details>
 
-            <details style={{ marginBottom: 10 }}>
-              <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
-                HTTP Request Details ({httpRows.length})
-              </summary>
-              <DataGrid
-                title="HTTP Requests"
-                rows={httpRows}
-                columns={[
-                  { key: "timeshift", label: "Timeshift", minWidth: 260 },
-                  { key: "headers", label: "Headers", minWidth: 180, maxWidth: 260 },
-                  { key: "rep", label: "Rep", minWidth: 130 },
-                  { key: "pid", label: "PID", minWidth: 110 },
-                  { key: "process_name", label: "Process Name", minWidth: 280, maxWidth: 420 },
-                  { key: "cn", label: "CN", minWidth: 110 },
-                  { key: "url", label: "URL", minWidth: 520, maxWidth: 900 },
-                  { key: "content", label: "Content", minWidth: 260, maxWidth: 420 },
-                ]}
-              />
-            </details>
+                <details style={{ marginBottom: 10 }}>
+                  <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
+                    HTTP Request Details ({httpRows.length})
+                  </summary>
+                  <DataGrid
+                    title="HTTP Requests"
+                    rows={httpRows}
+                    columns={[
+                      { key: "timeshift", label: "Timeshift", minWidth: 260 },
+                      { key: "headers", label: "Headers", minWidth: 180, maxWidth: 260 },
+                      { key: "rep", label: "Rep", minWidth: 130 },
+                      { key: "pid", label: "PID", minWidth: 110 },
+                      { key: "process_name", label: "Process Name", minWidth: 280, maxWidth: 420 },
+                      { key: "cn", label: "CN", minWidth: 110 },
+                      { key: "url", label: "URL", minWidth: 520, maxWidth: 900 },
+                      { key: "content", label: "Content", minWidth: 260, maxWidth: 420 },
+                    ]}
+                  />
+                </details>
 
-            {threatRows.length > 0 && (
-              <details style={{ marginBottom: 10 }}>
-                <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
-                  Network Threat Details ({threatRows.length})
-                </summary>
-                <DataGrid
-                  title="Network Threats"
-                  rows={threatRows}
-                  columns={[
-                    { key: "type", label: "Type", minWidth: 170 },
-                    { key: "indicator", label: "Indicator", minWidth: 320, maxWidth: 560 },
-                    { key: "threat_level", label: "Threat Level", minWidth: 170 },
-                    { key: "threat_name", label: "Threat Name", minWidth: 280, maxWidth: 480 },
-                    { key: "description", label: "Description", minWidth: 360, maxWidth: 700 },
-                  ]}
-                />
-              </details>
+                {threatRows.length > 0 && (
+                  <details style={{ marginBottom: 10 }}>
+                    <summary style={{ cursor: "pointer", color: "var(--accent)", fontSize: 12 }}>
+                      Network Threat Details ({threatRows.length})
+                    </summary>
+                    <DataGrid
+                      title="Network Threats"
+                      rows={threatRows}
+                      columns={[
+                        { key: "type", label: "Type", minWidth: 170 },
+                        { key: "indicator", label: "Indicator", minWidth: 320, maxWidth: 560 },
+                        { key: "threat_level", label: "Threat Level", minWidth: 170 },
+                        { key: "threat_name", label: "Threat Name", minWidth: 280, maxWidth: 480 },
+                        { key: "description", label: "Description", minWidth: 360, maxWidth: 700 },
+                      ]}
+                    />
+                  </details>
+                )}
+              </>
             )}
 
-            {(details.length > 0 || domains.length > 0 || hosts.length > 0) && (
+            {showSandboxSections && (details.length > 0 || domains.length > 0 || hosts.length > 0) && (
               <EvidenceTable
                 title="Any.Run Highlights"
                 data={[

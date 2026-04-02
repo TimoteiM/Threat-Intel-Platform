@@ -834,10 +834,9 @@ def run_analysis(
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
                           "Evidence collected. Running analyst...", 90)
         try:
-            analyst_input = _build_analyst_input_evidence(evidence_data)
-            report_data = _run_analyst_sync(
-                analyst_input,
-                max_iterations,
+            report_data, analyst_tier = _run_analyst_with_compaction(
+                evidence_data,
+                max_iterations=max_iterations,
                 timeout_seconds=settings.analyst_timeout_seconds,
             )
             if _is_parser_fallback_report(report_data):
@@ -854,6 +853,7 @@ def run_analysis(
                 if raw_summary:
                     auto_report["executive_summary"] = raw_summary
                 report_data = auto_report
+            report_data = _annotate_compact_analyst_report(report_data, used_tier=analyst_tier)
         except TimeoutError as e:
             logger.warning(
                 f"[{investigation_id}] Analyst timed out after "
@@ -873,18 +873,28 @@ def run_analysis(
             if report_data.get("executive_summary"):
                 report_data["executive_summary"] = f"{timeout_note} {report_data['executive_summary']}".strip()
         except Exception as e:
-            logger.error(f"[{investigation_id}] Analyst failed: {e}")
-            report_data = {
-                "classification": "inconclusive",
-                "confidence": "low",
-                "investigation_state": "concluded",
-                "primary_reasoning": f"Analyst error: {e}",
-                "legitimate_explanation": "",
-                "malicious_explanation": "",
-                "recommended_action": "investigate",
-                "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
-                "risk_score": None,
-            }
+            if _is_prompt_too_long_error(e):
+                logger.warning(
+                    f"[{investigation_id}] Analyst prompt exceeded model limits after compact retries: {e}. "
+                    "Falling back to automated report."
+                )
+                report_data = _build_prompt_too_long_fallback_report(
+                    _generate_automated_report(evidence_data, observable_type),
+                    prompt_error=e,
+                )
+            else:
+                logger.error(f"[{investigation_id}] Analyst failed: {e}")
+                report_data = {
+                    "classification": "inconclusive",
+                    "confidence": "low",
+                    "investigation_state": "concluded",
+                    "primary_reasoning": f"Analyst error: {e}",
+                    "legitimate_explanation": "",
+                    "malicious_explanation": "",
+                    "recommended_action": "investigate",
+                    "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
+                    "risk_score": None,
+                }
         _inject_lexical_contribution(report_data, evidence_data)
         _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
         _time_phase("report_generation", report_phase_start)
@@ -1425,16 +1435,26 @@ def _ensure_report_completeness(report_data: dict, evidence_data: dict, observab
 
     # Keep primary reasoning short and SOC-usable even when model output is verbose.
     reasoning_text = str(normalized.get("primary_reasoning") or "")
-    if _should_simplify_primary_reasoning(reasoning_text):
+    if _should_simplify_primary_reasoning(reasoning_text, observable_type):
         normalized["primary_reasoning"] = str(fallback.get("primary_reasoning") or reasoning_text).strip()
 
     return normalized
 
 
-def _should_simplify_primary_reasoning(text: str) -> bool:
+def _should_simplify_primary_reasoning(text: str, observable_type: str | None = None) -> bool:
     if not text:
         return False
     compact = " ".join(text.split()).lower()
+    if observable_type in {"domain", "url", "email"}:
+        noisy_markers = (
+            "attacker-necessity",
+            "satisfying the",
+            "hypothesis comparison",
+            "(1)",
+            "(2)",
+            "(3)",
+        )
+        return any(marker in compact for marker in noisy_markers)
     if len(compact) > 420:
         return True
     noisy_markers = (
@@ -1793,15 +1813,24 @@ def _persist_results(
             inv.risk_score = report_data.get("risk_score")
             inv.recommended_action = report_data.get("recommended_action")
 
-            # Save evidence
-            ev = Evidence(
-                investigation_id=inv_id,
-                evidence_json=evidence_data,
-                signals=evidence_data.get("signals", []),
-                data_gaps=evidence_data.get("data_gaps", []),
-                external_context=evidence_data.get("external_context"),
-            )
-            session.merge(ev)
+            # Save or update evidence (one row per investigation_id).
+            ev = session.execute(
+                select(Evidence).where(Evidence.investigation_id == inv_id)
+            ).scalar_one_or_none()
+            if ev is None:
+                ev = Evidence(
+                    investigation_id=inv_id,
+                    evidence_json=evidence_data,
+                    signals=evidence_data.get("signals", []),
+                    data_gaps=evidence_data.get("data_gaps", []),
+                    external_context=evidence_data.get("external_context"),
+                )
+                session.add(ev)
+            else:
+                ev.evidence_json = evidence_data
+                ev.signals = evidence_data.get("signals", [])
+                ev.data_gaps = evidence_data.get("data_gaps", [])
+                ev.external_context = evidence_data.get("external_context")
 
             # Save report
             report = Report(
@@ -1814,18 +1843,31 @@ def _persist_results(
             )
             session.add(report)
 
-            # Save collector results
+            # Save or update collector results (one row per collector per investigation).
+            existing_collector_results = {
+                row.collector_name: row
+                for row in session.execute(
+                    select(CollectorResult).where(CollectorResult.investigation_id == inv_id)
+                ).scalars()
+            }
+
             for name, status in collector_statuses.items():
                 field_name = COLLECTOR_FIELD_MAP.get(name, name)
                 col_evidence = evidence_data.get(field_name, {})
-                cr = CollectorResult(
-                    investigation_id=inv_id,
-                    collector_name=name,
-                    status=status,
-                    evidence_json=col_evidence,
-                    duration_ms=col_evidence.get("meta", {}).get("duration_ms"),
-                )
-                session.merge(cr)
+                cr = existing_collector_results.get(name)
+                if cr is None:
+                    cr = CollectorResult(
+                        investigation_id=inv_id,
+                        collector_name=name,
+                        status=status,
+                        evidence_json=col_evidence,
+                        duration_ms=col_evidence.get("meta", {}).get("duration_ms"),
+                    )
+                    session.add(cr)
+                else:
+                    cr.status = status
+                    cr.evidence_json = col_evidence
+                    cr.duration_ms = col_evidence.get("meta", {}).get("duration_ms")
 
             # Extract IOCs from report and persist to iocs table
             for ioc in report_data.get("iocs", []):
@@ -2096,41 +2138,539 @@ def _guess_content_type(artifact_name: str) -> str:
     return "application/octet-stream"
 
 
-def _build_analyst_input_evidence(evidence_data: dict) -> dict:
+def _build_analyst_input_evidence(evidence_data: dict, tier: str = "standard") -> dict:
     """
     Build a compact evidence payload for LLM analysis while preserving the full
     evidence object for persistence and UI rendering.
     """
     compact = copy.deepcopy(evidence_data or {})
+    compact["_analyst_compaction_tier"] = tier
+    compact["analyst_digest"] = _build_analyst_evidence_digest(evidence_data, tier=tier)
+    _summarize_heavy_analyst_sections(compact, tier=tier)
 
-    _trim_list(compact, ["intel", "related_subdomains"], 40)
-    _trim_list(compact, ["intel", "related_urls"], 30)
-    _trim_list(compact, ["intel", "historical_ip_addresses"], 20)
-    _trim_list(compact, ["intel", "certificates"], 20)
+    if tier == "standard":
+        trim_limits = {
+            ("intel", "related_subdomains"): 40,
+            ("intel", "related_urls"): 30,
+            ("intel", "historical_ip_addresses"): 20,
+            ("intel", "certificates"): 20,
+            ("js_analysis", "captured_requests"): 25,
+            ("js_analysis", "request_domains"): 20,
+            ("js_analysis", "tracking_pixels"): 20,
+            ("js_analysis", "suspicious_scripts"): 20,
+            ("js_analysis", "data_exfil_indicators"): 20,
+            ("js_analysis", "console_errors"): 10,
+            ("subdomains", "resolved"): 40,
+            ("subdomains", "unresolved"): 40,
+            ("subdomains", "interesting_subdomains"): 30,
+            ("threat_feeds", "threatfox_matches"): 20,
+            ("threat_feeds", "recent_reports"): 20,
+            ("cert_timeline", "entries"): 40,
+            ("favicon_intel", "hosts"): 30,
+            ("infrastructure_pivot", "related_ips"): 25,
+            ("signals",): 40,
+            ("data_gaps",): 20,
+            ("artifact_hashes",): 50,
+        }
+        text_limit = 2000
+    elif tier == "compact":
+        trim_limits = {
+            ("intel", "related_subdomains"): 20,
+            ("intel", "related_urls"): 12,
+            ("intel", "historical_ip_addresses"): 10,
+            ("intel", "certificates"): 10,
+            ("js_analysis", "captured_requests"): 10,
+            ("js_analysis", "request_domains"): 10,
+            ("js_analysis", "tracking_pixels"): 8,
+            ("js_analysis", "suspicious_scripts"): 8,
+            ("js_analysis", "data_exfil_indicators"): 8,
+            ("js_analysis", "console_errors"): 5,
+            ("subdomains", "resolved"): 20,
+            ("subdomains", "unresolved"): 20,
+            ("subdomains", "interesting_subdomains"): 12,
+            ("threat_feeds", "threatfox_matches"): 10,
+            ("threat_feeds", "recent_reports"): 10,
+            ("cert_timeline", "entries"): 15,
+            ("favicon_intel", "hosts"): 12,
+            ("infrastructure_pivot", "related_ips"): 10,
+            ("signals",): 20,
+            ("data_gaps",): 10,
+            ("artifact_hashes",): 20,
+        }
+        text_limit = 1000
+    else:
+        trim_limits = {
+            ("intel", "related_subdomains"): 10,
+            ("intel", "related_urls"): 5,
+            ("intel", "historical_ip_addresses"): 5,
+            ("intel", "certificates"): 5,
+            ("js_analysis", "captured_requests"): 4,
+            ("js_analysis", "request_domains"): 5,
+            ("js_analysis", "tracking_pixels"): 3,
+            ("js_analysis", "suspicious_scripts"): 3,
+            ("js_analysis", "data_exfil_indicators"): 3,
+            ("js_analysis", "console_errors"): 3,
+            ("subdomains", "resolved"): 10,
+            ("subdomains", "unresolved"): 10,
+            ("subdomains", "interesting_subdomains"): 6,
+            ("threat_feeds", "threatfox_matches"): 5,
+            ("threat_feeds", "recent_reports"): 5,
+            ("cert_timeline", "entries"): 8,
+            ("favicon_intel", "hosts"): 6,
+            ("infrastructure_pivot", "related_ips"): 5,
+            ("signals",): 8,
+            ("data_gaps",): 6,
+            ("artifact_hashes",): 10,
+        }
+        text_limit = 600
+        _drop_paths(
+            compact,
+            [
+                ["screenshot"],
+                ["artifact_hashes"],
+            ],
+        )
 
-    _trim_list(compact, ["js_analysis", "captured_requests"], 25)
-    _trim_list(compact, ["js_analysis", "request_domains"], 20)
-    _trim_list(compact, ["js_analysis", "tracking_pixels"], 20)
-    _trim_list(compact, ["js_analysis", "suspicious_scripts"], 20)
-    _trim_list(compact, ["js_analysis", "data_exfil_indicators"], 20)
-    _trim_list(compact, ["js_analysis", "console_errors"], 10)
+    for path, limit in trim_limits.items():
+        _trim_list(compact, list(path), limit)
 
-    _trim_list(compact, ["subdomains", "resolved"], 40)
-    _trim_list(compact, ["subdomains", "unresolved"], 40)
-    _trim_list(compact, ["subdomains", "interesting_subdomains"], 30)
-
-    _trim_list(compact, ["threat_feeds", "threatfox_matches"], 20)
-    _trim_list(compact, ["threat_feeds", "recent_reports"], 20)
-
-    _trim_list(compact, ["cert_timeline", "entries"], 40)
-    _trim_list(compact, ["favicon_intel", "hosts"], 30)
-    _trim_list(compact, ["infrastructure_pivot", "related_ips"], 25)
-    _trim_list(compact, ["signals"], 40)
-    _trim_list(compact, ["data_gaps"], 20)
-    _trim_list(compact, ["artifact_hashes"], 50)
-
-    _trim_nested_text(compact, max_chars=2000)
+    _trim_nested_text(compact, max_chars=text_limit)
     return compact
+
+
+def _build_analyst_evidence_digest(evidence_data: dict, *, tier: str) -> dict:
+    associated_with, basis = _infer_observable_association(evidence_data)
+    signals = evidence_data.get("signals") or []
+    gaps = evidence_data.get("data_gaps") or []
+    digest = {
+        "observable_summary": {
+            "observable": str(evidence_data.get("domain") or ""),
+            "observable_type": str(evidence_data.get("observable_type") or "domain"),
+            "tier": tier,
+        },
+        "associated_with": associated_with,
+        "association_basis": basis,
+        "collector_summaries": {
+            "whois": _digest_whois(evidence_data.get("whois") or {}),
+            "http": _digest_http(evidence_data.get("http") or {}),
+            "urlscan": _digest_urlscan(evidence_data.get("urlscan") or {}),
+            "vt": _digest_vt(evidence_data.get("vt") or {}),
+            "threat_feeds": _digest_threat_feeds(evidence_data.get("threat_feeds") or {}),
+            "brave_osint": _digest_brave_osint(evidence_data.get("brave_osint") or {}),
+            "js_analysis": _digest_js_analysis(evidence_data.get("js_analysis") or {}),
+            "hybrid_analysis": _digest_hybrid_analysis(evidence_data.get("hybrid_analysis") or {}),
+            "domain_similarity": _digest_domain_similarity(evidence_data.get("domain_similarity") or {}),
+            "visual_comparison": _digest_visual_comparison(evidence_data.get("visual_comparison") or {}),
+            "redirect_destination_intel": _digest_redirect_destination(evidence_data.get("redirect_destination_intel") or {}),
+        },
+        "top_signals": [
+            {
+                "id": str(item.get("id") or ""),
+                "severity": str(item.get("severity") or "info"),
+                "description": str(item.get("description") or ""),
+            }
+            for item in signals[: (8 if tier == "standard" else 5 if tier == "compact" else 3)]
+            if isinstance(item, dict)
+        ],
+        "top_data_gaps": [
+            {
+                "id": str(item.get("id") or ""),
+                "impact": str(item.get("impact") or ""),
+                "description": str(item.get("description") or ""),
+            }
+            for item in gaps[: (5 if tier != "digest" else 3)]
+            if isinstance(item, dict)
+        ],
+    }
+    return digest
+
+
+def _infer_observable_association(evidence_data: dict) -> tuple[str, list[str]]:
+    http = evidence_data.get("http") or {}
+    urlscan = evidence_data.get("urlscan") or {}
+    whois = evidence_data.get("whois") or {}
+    brave = evidence_data.get("brave_osint") or {}
+    redirect_dest = evidence_data.get("redirect_destination_intel") or {}
+
+    basis: list[str] = []
+    candidates: list[str] = []
+
+    for brand in (http.get("brand_indicators") or [])[:3]:
+        text = str(brand or "").strip()
+        if text:
+            candidates.append(text)
+            basis.append(f"HTTP brand indicator: {text}")
+
+    for label, raw in (
+        ("HTTP title", http.get("title")),
+        ("URLScan title", urlscan.get("page_title")),
+    ):
+        title = _normalize_title_candidate(raw)
+        if title:
+            candidates.append(title)
+            basis.append(f"{label}: {title}")
+
+    registrant_org = str(whois.get("registrant_org") or "").strip()
+    if registrant_org and not _looks_like_privacy_service(registrant_org):
+        candidates.append(registrant_org)
+        basis.append(f"WHOIS registrant org: {registrant_org}")
+
+    top_hits = brave.get("top_hits") or []
+    if isinstance(top_hits, list):
+        for hit in top_hits[:3]:
+            if not isinstance(hit, dict):
+                continue
+            hit_title = _normalize_title_candidate(hit.get("title"))
+            if hit_title:
+                candidates.append(hit_title)
+                basis.append(f"Brave OSINT hit: {hit_title}")
+            for keyword in (hit.get("matched_keywords") or [])[:2]:
+                text = str(keyword or "").strip()
+                if text:
+                    candidates.append(text)
+                    basis.append(f"Brave OSINT keyword: {text}")
+
+    destination_root = str(redirect_dest.get("destination_root") or "").strip()
+    if destination_root:
+        basis.append(f"Redirect destination root: {destination_root}")
+
+    if not candidates:
+        return "", basis[:6]
+
+    normalized = {}
+    for candidate in candidates:
+        key = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+        if not key:
+            continue
+        normalized[key] = normalized.get(key, {"label": candidate, "count": 0})
+        normalized[key]["count"] += 1
+
+    best = max(normalized.values(), key=lambda item: item["count"])
+    label = str(best["label"]).strip()
+    phishing_hints = " ".join(
+        str(x)
+        for x in (
+            http.get("title"),
+            urlscan.get("page_title"),
+            " ".join(http.get("phishing_indicators") or []),
+            brave.get("summary"),
+        )
+        if x
+    ).lower()
+    if any(token in phishing_hints for token in ("login", "verify", "verification", "account", "phish", "credential")):
+        association = f"Appears associated with a {label} themed login or verification flow."
+    else:
+        association = f"Appears associated with {label}."
+    return association, basis[:6]
+
+
+def _normalize_title_candidate(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    primary = re.split(r"\s[\-\|\:\u2013]\s", text, maxsplit=1)[0].strip()
+    primary = re.sub(r"\s+", " ", primary)
+    words = primary.split()
+    if len(words) > 8:
+        primary = " ".join(words[:8]).strip()
+    return primary
+
+
+def _looks_like_privacy_service(value: str) -> bool:
+    compact = value.lower()
+    markers = ("proxy", "privacy", "redacted", "whoisguard", "contact privacy", "domains by proxy")
+    return any(marker in compact for marker in markers)
+
+
+def _digest_whois(whois: dict) -> dict:
+    return {
+        "registrar": whois.get("registrar"),
+        "domain_age_days": whois.get("domain_age_days"),
+        "privacy_protected": whois.get("privacy_protected"),
+        "registrant_org": whois.get("registrant_org"),
+        "registrant_country": whois.get("registrant_country"),
+    }
+
+
+def _digest_http(http: dict) -> dict:
+    return {
+        "reachable": http.get("reachable"),
+        "final_url": http.get("final_url"),
+        "final_status_code": http.get("final_status_code"),
+        "title": http.get("title"),
+        "has_login_form": http.get("has_login_form"),
+        "brand_indicators": (http.get("brand_indicators") or [])[:5],
+        "phishing_indicators": (http.get("phishing_indicators") or [])[:5],
+        "technologies_detected": (http.get("technologies_detected") or [])[:5],
+    }
+
+
+def _digest_urlscan(urlscan: dict) -> dict:
+    return {
+        "verdict": urlscan.get("verdict"),
+        "score": urlscan.get("score"),
+        "page_url": urlscan.get("page_url"),
+        "page_title": urlscan.get("page_title"),
+        "page_ip": urlscan.get("page_ip"),
+        "tags": (urlscan.get("tags") or [])[:5],
+        "notes": (urlscan.get("notes") or [])[:3],
+    }
+
+
+def _digest_vt(vt: dict) -> dict:
+    return {
+        "malicious_count": vt.get("malicious_count"),
+        "suspicious_count": vt.get("suspicious_count"),
+        "total_vendors": vt.get("total_vendors"),
+        "flagged_malicious_by": (vt.get("flagged_malicious_by") or [])[:8],
+        "flagged_suspicious_by": (vt.get("flagged_suspicious_by") or [])[:5],
+        "tags": (vt.get("tags") or [])[:8],
+        "categories": dict(list((vt.get("categories") or {}).items())[:6]),
+    }
+
+
+def _digest_threat_feeds(threat_feeds: dict) -> dict:
+    phishtank = threat_feeds.get("phishtank") or {}
+    abuse = threat_feeds.get("abuseipdb") or {}
+    return {
+        "openphish_listed": threat_feeds.get("openphish_listed"),
+        "phishtank": {
+            "in_database": phishtank.get("in_database"),
+            "verified": phishtank.get("verified"),
+            "target_brand": phishtank.get("target_brand"),
+        },
+        "abuseipdb": {
+            "abuse_confidence_score": abuse.get("abuse_confidence_score"),
+            "total_reports": abuse.get("total_reports"),
+        },
+        "threatfox_matches": [
+            {
+                "ioc_value": item.get("ioc_value"),
+                "threat_type": item.get("threat_type"),
+                "malware": item.get("malware"),
+            }
+            for item in (threat_feeds.get("threatfox_matches") or [])[:5]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _digest_brave_osint(brave: dict) -> dict:
+    return {
+        "score": brave.get("score"),
+        "risk_level": brave.get("risk_level"),
+        "summary": brave.get("summary"),
+        "top_hits": [
+            {
+                "title": hit.get("title"),
+                "url": hit.get("url"),
+                "description": hit.get("description"),
+                "source": hit.get("source"),
+                "matched_keywords": (hit.get("matched_keywords") or [])[:3],
+            }
+            for hit in (brave.get("top_hits") or [])[:3]
+            if isinstance(hit, dict)
+        ],
+    }
+
+
+def _digest_js_analysis(js: dict) -> dict:
+    return {
+        "total_requests": js.get("total_requests"),
+        "external_requests": js.get("external_requests"),
+        "request_domains": (js.get("request_domains") or [])[:8],
+        "credential_post_endpoints": [
+            item.get("url")
+            for item in (js.get("post_endpoints") or [])[:10]
+            if isinstance(item, dict) and item.get("is_credential_form")
+        ][:5],
+        "suspicious_scripts": [
+            {
+                "domain": item.get("domain"),
+                "reason": item.get("reason"),
+            }
+            for item in (js.get("suspicious_scripts") or [])[:5]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _digest_hybrid_analysis(hybrid: dict) -> dict:
+    return {
+        "items": [
+            {
+                "indicator_type": item.get("indicator_type"),
+                "verdict": item.get("verdict"),
+                "analysis_id": item.get("analysis_id"),
+                "threat_score": item.get("threat_score"),
+                "contacted_domains": ((item.get("dynamic_io_summary") or {}).get("contacted_domains") or [])[:5],
+                "contacted_ips": ((item.get("dynamic_io_summary") or {}).get("contacted_ips") or [])[:5],
+            }
+            for item in (hybrid.get("items") or [])[:3]
+            if isinstance(item, dict)
+        ]
+    }
+
+
+def _digest_domain_similarity(similarity: dict) -> dict:
+    return {
+        "client_domain": similarity.get("client_domain"),
+        "overall_similarity_score": similarity.get("overall_similarity_score"),
+        "is_potential_typosquat": similarity.get("is_potential_typosquat"),
+        "summary": similarity.get("summary"),
+    }
+
+
+def _digest_visual_comparison(visual: dict) -> dict:
+    return {
+        "client_domain": visual.get("client_domain"),
+        "overall_visual_similarity": visual.get("overall_visual_similarity"),
+        "is_visual_clone": visual.get("is_visual_clone"),
+        "summary": visual.get("summary"),
+    }
+
+
+def _digest_redirect_destination(redirect_dest: dict) -> dict:
+    return {
+        "destination_root": redirect_dest.get("destination_root"),
+        "final_url": redirect_dest.get("final_url"),
+        "destination_host": redirect_dest.get("destination_host"),
+        "whois_registrant_org": ((redirect_dest.get("whois") or {}).get("registrant_org") if isinstance(redirect_dest.get("whois"), dict) else None),
+    }
+
+
+def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
+    vt = compact.get("vt")
+    if isinstance(vt, dict):
+        vt["vendor_results"] = (vt.get("vendor_results") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 5)]
+        vt["tags"] = (vt.get("tags") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 5)]
+        vt_dns_records = vt.get("vt_dns_records")
+        if isinstance(vt_dns_records, list):
+            vt["vt_dns_records"] = vt_dns_records[:3]
+
+    intel = compact.get("intel")
+    if isinstance(intel, dict):
+        intel["cert_entries_raw"] = []
+        intel["related_subdomains"] = (intel.get("related_subdomains") or [])[: (20 if tier == "standard" else 10 if tier == "compact" else 5)]
+        intel["related_certs"] = (intel.get("related_certs") or [])[:5]
+
+    brave = compact.get("brave_osint")
+    if isinstance(brave, dict):
+        brave["top_hits"] = (brave.get("top_hits") or [])[: (5 if tier == "standard" else 4 if tier == "compact" else 3)]
+        brave["observed_results"] = []
+        brave["all_results"] = []
+        brave["queries"] = (brave.get("queries") or [])[:3]
+
+    js = compact.get("js_analysis")
+    if isinstance(js, dict):
+        js["captured_requests"] = (js.get("captured_requests") or [])[: (25 if tier == "standard" else 10 if tier == "compact" else 4)]
+        js["request_domains"] = (js.get("request_domains") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 4)]
+        post_endpoints = []
+        for item in (js.get("post_endpoints") or [])[:10]:
+            if isinstance(item, dict) and (item.get("is_credential_form") or tier != "digest"):
+                post_endpoints.append(item)
+        js["post_endpoints"] = post_endpoints[: (8 if tier == "standard" else 5 if tier == "compact" else 3)]
+
+    hybrid = compact.get("hybrid_analysis")
+    if isinstance(hybrid, dict):
+        summarized_items = []
+        for item in (hybrid.get("items") or [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            dynamic = item.get("dynamic_io_summary") or {}
+            raw = item.get("raw_summary") or {}
+            summarized_items.append(
+                {
+                    "checked": item.get("checked"),
+                    "indicator_type": item.get("indicator_type"),
+                    "verdict": item.get("verdict"),
+                    "analysis_id": item.get("analysis_id"),
+                    "threat_score": item.get("threat_score"),
+                    "error": item.get("error"),
+                    "cache_hit": item.get("cache_hit"),
+                    "dynamic_io_summary": {
+                        "contacted_domains": (dynamic.get("contacted_domains") or [])[:5],
+                        "contacted_ips": (dynamic.get("contacted_ips") or [])[:5],
+                        "processes": (dynamic.get("processes") or [])[:5],
+                    },
+                    "raw_summary": dict(list(raw.items())[:5]) if isinstance(raw, dict) else {},
+                }
+            )
+        hybrid["items"] = summarized_items
+
+    http = compact.get("http")
+    if isinstance(http, dict):
+        http["response_headers"] = dict(list((http.get("response_headers") or {}).items())[:8])
+        http["external_resources"] = (http.get("external_resources") or [])[:8]
+
+
+def _run_analyst_with_compaction(
+    evidence_data: dict,
+    *,
+    max_iterations: int,
+    timeout_seconds: int,
+) -> tuple[dict, str]:
+    last_error: Exception | None = None
+    tiers = ("standard", "compact", "digest")
+    for tier in tiers:
+        analyst_input = _build_analyst_input_evidence(evidence_data, tier=tier)
+        try:
+            return (
+                _run_analyst_sync(
+                    analyst_input,
+                    max_iterations,
+                    timeout_seconds=timeout_seconds,
+                ),
+                tier,
+            )
+        except Exception as exc:
+            if not _is_prompt_too_long_error(exc) or tier == tiers[-1]:
+                raise
+            last_error = exc
+            logger.warning("Analyst prompt exceeded model limits at tier=%s; retrying with smaller payload.", tier)
+    if last_error:
+        raise last_error
+    raise RuntimeError("Analyst compaction retry exhausted without result")
+
+
+def _is_prompt_too_long_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "invalid_request_error" in text and "prompt is too long" in text
+
+
+def _annotate_compact_analyst_report(report_data: dict, *, used_tier: str) -> dict:
+    if used_tier == "standard":
+        return report_data
+
+    annotated = copy.deepcopy(report_data or {})
+    note = f"Analyst used compact evidence ({used_tier} tier) due to prompt size limits."
+    primary = str(annotated.get("primary_reasoning") or "").strip()
+    executive = str(annotated.get("executive_summary") or "").strip()
+    annotated["primary_reasoning"] = f"{note} {primary}".strip()
+    if executive:
+        annotated["executive_summary"] = f"{note} {executive}".strip()
+    return annotated
+
+
+def _build_prompt_too_long_fallback_report(automated_report: dict, *, prompt_error: Exception) -> dict:
+    fallback = copy.deepcopy(automated_report or {})
+    note = "Analyst prompt exceeded model limits after compact retries. Fallback automated analysis applied."
+    detail = (
+        fallback.get("executive_summary")
+        or fallback.get("technical_narrative")
+        or fallback.get("primary_reasoning", "")
+    )
+    fallback["primary_reasoning"] = f"{note} {detail}".strip()
+    if fallback.get("executive_summary"):
+        fallback["executive_summary"] = f"{note} {fallback['executive_summary']}".strip()
+    steps = fallback.get("recommended_steps")
+    if not isinstance(steps, list):
+        steps = []
+    if "Review evidence manually if the full analyst narrative is required." not in steps:
+        steps.append("Review evidence manually if the full analyst narrative is required.")
+    fallback["recommended_steps"] = steps
+    fallback["analyst_error"] = str(prompt_error)
+    return fallback
 
 
 def _trim_list(payload: dict, path: list[str], limit: int) -> None:
@@ -2149,6 +2689,20 @@ def _trim_list(payload: dict, path: list[str], limit: int) -> None:
         node[leaf] = value[:limit]
     elif isinstance(value, dict) and len(value) > limit:
         node[leaf] = dict(list(value.items())[:limit])
+
+
+def _drop_paths(payload: dict, paths: list[list[str]]) -> None:
+    for path in paths:
+        node = payload
+        for key in path[:-1]:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+            if node is None:
+                break
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
 
 
 def _trim_nested_text(value, *, max_chars: int):

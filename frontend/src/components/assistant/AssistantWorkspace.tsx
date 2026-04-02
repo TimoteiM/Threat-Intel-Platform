@@ -24,7 +24,13 @@ function newEntry(index: number): AssistantEntry {
 export default function AssistantWorkspace() {
   const searchParams = useSearchParams();
   const requestedSessionId = searchParams.get("session");
+  const pageSize = 10;
   const [sessions, setSessions] = useState<AssistantSessionListItem[]>([]);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [appliedSessionSearch, setAppliedSessionSearch] = useState("");
+  const [sessionOffset, setSessionOffset] = useState(0);
+  const [sessionTotal, setSessionTotal] = useState(0);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeSession, setActiveSession] = useState<AssistantSessionDetail | null>(null);
   const [mode, setMode] = useState<AssistantMode>("alert_analysis");
   const [title, setTitle] = useState("");
@@ -32,10 +38,38 @@ export default function AssistantWorkspace() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.listAssistantSessions({ limit: 20, offset: 0 })
-      .then((data) => setSessions(data.items || []))
-      .catch(() => {});
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      setAppliedSessionSearch(sessionSearch.trim());
+      setSessionOffset(0);
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [sessionSearch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSessionsLoading(true);
+    api.listAssistantSessions({
+      limit: pageSize,
+      offset: sessionOffset,
+      search: appliedSessionSearch,
+    })
+      .then((data) => {
+        if (cancelled) return;
+        setSessions(data.items || []);
+        setSessionTotal(data.total || 0);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSessions([]);
+        setSessionTotal(0);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedSessionSearch, sessionOffset, pageSize]);
 
   useEffect(() => {
     if (!requestedSessionId) return;
@@ -82,7 +116,11 @@ export default function AssistantWorkspace() {
       }
       const completed = await api.runAssistantSession(session.id, { model: "gpt-5-mini" });
       setActiveSession(completed);
-      setSessions((prev) => [completed, ...prev.filter((item) => item.id !== completed.id)]);
+      setSessionSearch("");
+      setAppliedSessionSearch("");
+      setSessionOffset(0);
+      setSessions((prev) => [completed, ...prev.filter((item) => item.id !== completed.id)].slice(0, pageSize));
+      setSessionTotal((prev) => Math.max(prev + 1, 1));
     } finally {
       setLoading(false);
     }
@@ -99,6 +137,14 @@ export default function AssistantWorkspace() {
           <AssistantSessionList
             sessions={sessions}
             activeSessionId={activeSession?.id}
+            searchValue={sessionSearch}
+            onSearchChange={setSessionSearch}
+            offset={sessionOffset}
+            limit={pageSize}
+            total={sessionTotal}
+            loading={sessionsLoading}
+            onPreviousPage={() => setSessionOffset((prev) => Math.max(prev - pageSize, 0))}
+            onNextPage={() => setSessionOffset((prev) => prev + pageSize)}
             onSelect={(sessionId) => void loadSession(sessionId)}
           />
         </div>

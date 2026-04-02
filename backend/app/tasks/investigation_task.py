@@ -37,6 +37,37 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _sandbox_collector_timeout(base_timeout: int) -> int:
+    """
+    Derive a realistic timeout budget for the sandbox collector.
+
+    The hybrid/Any.Run path can spend significant time in provider retry/backoff
+    before a sandbox report is available. A fixed 180s window is too short for
+    the retry strategy we already run, so size the collector budget from those
+    configured limits and cap it below the task soft time limit.
+    """
+    s = get_settings()
+    parallel_retries = max(0, int(getattr(s, "anyrun_parallel_limit_retries", 8) or 8))
+    parallel_backoff = max(0, int(getattr(s, "anyrun_parallel_backoff_seconds", 10) or 10))
+    transient_retries = max(0, int(getattr(s, "anyrun_transient_retries", 3) or 3))
+    transient_backoff = max(0, int(getattr(s, "anyrun_transient_backoff_seconds", 6) or 6))
+    anyrun_wait = max(
+        int(getattr(s, "anyrun_timeout_url_domain_seconds", 45) or 45),
+        int(getattr(s, "anyrun_timeout_file_hash_seconds", 90) or 90),
+    )
+
+    parallel_backoff_budget = parallel_backoff * parallel_retries * (parallel_retries + 1) // 2
+    transient_backoff_budget = transient_backoff * transient_retries * (transient_retries + 1) // 2
+    computed = anyrun_wait + parallel_backoff_budget + transient_backoff_budget + 120
+    return max(base_timeout, min(480, computed))
+
+
+def _collector_timeout(name: str, base_timeout: int) -> int:
+    if name == "hybrid_analysis":
+        return _sandbox_collector_timeout(base_timeout)
+    return base_timeout
+
+
 @celery_app.task(
     bind=True,
     name="tasks.run_investigation",
@@ -225,7 +256,7 @@ def _run_collectors_inline(
         collector = collector_cls(
             domain=domain,
             investigation_id=investigation_id,
-            timeout=_collector_timeout(name),
+            timeout=_collector_timeout(name, timeout),
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
             external_context=external_context,
@@ -248,13 +279,7 @@ def _run_collectors_inline(
     total_collectors = max(1, len(collectors_to_run))
     max_workers = max(4, len(collectors_to_run))
 
-    def _collector_timeout(name: str) -> int:
-        # Sandbox collectors need a longer window than lightweight infra collectors.
-        if name == "hybrid_analysis":
-            return max(timeout, 180)
-        return timeout
-
-    overall_timeout = max((_collector_timeout(name) for name in collectors_to_run), default=timeout) + 30
+    overall_timeout = max((_collector_timeout(name, timeout) for name in collectors_to_run), default=timeout) + 30
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=max_workers,
