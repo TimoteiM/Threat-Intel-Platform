@@ -1562,7 +1562,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
             </div>
             <div style={{ padding: 10, fontSize: 12, color: "var(--text-secondary)" }}>
               <div style={{ marginBottom: 6 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.3 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.35, wordBreak: "break-all", overflowWrap: "break-word" }}>
                   {_filenameFromPath(selected?.fileName || selected?.image || selected?.processName || selected?.name || "-")}
                 </div>
                 {(() => {
