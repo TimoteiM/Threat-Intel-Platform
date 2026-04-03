@@ -47,7 +47,7 @@ Return ONLY a valid JSON object with this shape:
   ],
   "sender_domain_analysis": {
     "classification": "benign|suspicious|malicious|unknown",
-    "primary_reasoning": "2-5 evidence-based sentences focused on sender domain",
+    "primary_reasoning": "2-3 sentences as a senior SOC analyst case note about the sender domain — what the domain is, the decisive risk signal, and the verdict inline (e.g. 'SUSPICIOUS — medium confidence'). No headings, no labels, no field=value citations in parentheses. Translate data into analyst language.",
     "findings": [
       {
         "title": "short finding title",
