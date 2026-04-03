@@ -32,6 +32,12 @@ export default function EmailInvestigationsPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());
+  const [anyrunPages, setAnyrunPages] = useState({
+    domains: 1,
+    hosts: 1,
+    urls: 1,
+    files: 1,
+  });
 
   useEffect(() => {
     if (!loading) return;
@@ -88,6 +94,20 @@ export default function EmailInvestigationsPage() {
     () => buildUrlSummary(result),
     [result],
   );
+  const anyrunArtifacts = useMemo(
+    () => buildAnyRunEmailArtifacts(result),
+    [result],
+  );
+  const anyrunPageSize = 8;
+
+  useEffect(() => {
+    setAnyrunPages({
+      domains: 1,
+      hosts: 1,
+      urls: 1,
+      files: 1,
+    });
+  }, [result?.run_id, result?.history_id, result?.created_at]);
 
   async function refreshHistory() {
     setLoadingHistory(true);
@@ -543,6 +563,216 @@ export default function EmailInvestigationsPage() {
             borderRadius: "var(--radius-lg)",
             padding: 16,
           }}>
+            <div style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--accent)",
+              letterSpacing: "0.01em",
+              marginBottom: 14,
+              paddingBottom: 8,
+              borderBottom: "1px solid var(--border)",
+            }}>
+              AnyRun Email Analysis
+            </div>
+            {!(result?.indicator_checks as any)?.email_anyrun ? (
+              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                AnyRun email analysis was not requested for this investigation.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    borderRadius: 999,
+                    padding: "4px 8px",
+                    color:
+                      String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "malicious"
+                        ? "#ef4444"
+                        : String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "suspicious"
+                          ? "#f59e0b"
+                          : String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "clean"
+                            ? "#34d399"
+                            : "var(--text-secondary)",
+                    border: "1px solid var(--border)",
+                  }}>
+                    {String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown")}
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px" }}>
+                    Checked: {String((result as any)?.indicator_checks?.email_anyrun?.checked ? "yes" : "no")}
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px" }}>
+                    Threat score: {(result as any)?.indicator_checks?.email_anyrun?.threat_score ?? "N/A"}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>
+                      Sample
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600 }}>
+                      {(result as any)?.indicator_checks?.email_anyrun?.file_name || result?.filename || "Not present in the provided evidence."}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6, wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>
+                      Task ID: {(result as any)?.indicator_checks?.email_anyrun?.analysis_id || "Not present in the provided evidence."}
+                    </div>
+                    {(result as any)?.indicator_checks?.email_anyrun?.analysis_link && (
+                      <a
+                        href={String((result as any)?.indicator_checks?.email_anyrun?.analysis_link)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ display: "inline-block", marginTop: 8, fontSize: 11, color: "var(--accent)" }}
+                      >
+                        Open AnyRun task
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>
+                      Analyst Summary
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                      {(() => {
+                        const anyrun = (result as any)?.indicator_checks?.email_anyrun || {};
+                        const raw = anyrun?.raw_summary || {};
+                        const ai = raw?.anyrun_ai_summary || {};
+                        if (typeof ai === "string" && ai.trim()) {
+                          return ai;
+                        }
+                        if (typeof ai?.summary === "string" && ai.summary.trim()) {
+                          return ai.summary;
+                        }
+                        if (typeof ai?.verdict === "string" && ai.verdict.trim()) {
+                          return ai.verdict;
+                        }
+                        if (typeof anyrun?.error === "string" && anyrun.error.trim()) {
+                          return anyrun.error;
+                        }
+                        return "Email sample was submitted to AnyRun and the detonation result was captured for this investigation.";
+                      })()}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+                      Domains observed: {anyrunArtifacts.domains.length}
+                      {" | "}
+                      Hosts observed: {anyrunArtifacts.hosts.length}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}>
+                      Observed Domains
+                    </div>
+                    {anyrunArtifacts.domains.length ? (
+                      <PaginatedTextList
+                        items={anyrunArtifacts.domains}
+                        page={anyrunPages.domains}
+                        pageSize={anyrunPageSize}
+                        onPageChange={(page) => setAnyrunPages((current) => ({ ...current, domains: page }))}
+                        renderItem={(domain, idx) => (
+                          <div key={`${domain}-${idx}`} style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                            {domain}
+                          </div>
+                        )}
+                      />
+                    ) : (
+                      <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No domains were surfaced by AnyRun.</div>
+                    )}
+                  </div>
+                  <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}>
+                      Observed Hosts
+                    </div>
+                    {anyrunArtifacts.hosts.length ? (
+                      <PaginatedTextList
+                        items={anyrunArtifacts.hosts}
+                        page={anyrunPages.hosts}
+                        pageSize={anyrunPageSize}
+                        onPageChange={(page) => setAnyrunPages((current) => ({ ...current, hosts: page }))}
+                        renderItem={(host, idx) => (
+                          <div key={`${host}-${idx}`} style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                            {host}
+                          </div>
+                        )}
+                      />
+                    ) : (
+                      <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No destination hosts were surfaced by AnyRun.</div>
+                    )}
+                  </div>
+                </div>
+                <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}>
+                    AnyRun-Surfaced URL And File Indicators
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 8 }}>
+                    URLs: {anyrunArtifacts.urls.length} | File-like indicators: {anyrunArtifacts.files.length}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}>
+                        URLs
+                      </div>
+                      {anyrunArtifacts.urls.length ? (
+                        <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                          <PaginatedTextList
+                            items={anyrunArtifacts.urls}
+                            page={anyrunPages.urls}
+                            pageSize={anyrunPageSize}
+                            onPageChange={(page) => setAnyrunPages((current) => ({ ...current, urls: page }))}
+                            renderItem={(url, idx) => (
+                              <div key={`${url}-${idx}`} style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                                {url}
+                              </div>
+                            )}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No URL IOCs surfaced by AnyRun.</div>
+                      )}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 6 }}>
+                        Files And Hashes
+                      </div>
+                      {anyrunArtifacts.files.length ? (
+                        <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                          <PaginatedTextList
+                            items={anyrunArtifacts.files}
+                            page={anyrunPages.files}
+                            pageSize={anyrunPageSize}
+                            onPageChange={(page) => setAnyrunPages((current) => ({ ...current, files: page }))}
+                            renderItem={(file, idx) => (
+                              <div key={`${file.name}-${file.value}-${idx}`} style={{ padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6 }}>
+                                <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                                  {file.name}
+                                </div>
+                                <div style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", marginTop: 2 }}>
+                                  {file.category}
+                                </div>
+                                <div style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", wordBreak: "break-all", marginTop: 2 }}>
+                                  {file.value}
+                                </div>
+                              </div>
+                            )}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No file-like IOCs surfaced by AnyRun.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-lg)",
+            padding: 16,
+          }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Attachment Hash Checks</div>
             {!result?.indicator_checks?.attachments?.items?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No attachments found.</div>
@@ -971,6 +1201,122 @@ function buildUrlSummary(result: EmailInvestigationResponse | null): {
     purpose: purposeList,
     destinations: topPoints,
     caution: riskyList,
+  };
+}
+
+function buildAnyRunEmailArtifacts(result: EmailInvestigationResponse | null): {
+  domains: string[];
+  hosts: string[];
+  urls: string[];
+  files: Array<{ name: string; value: string; category: string }>;
+} {
+  const anyrun = (result?.indicator_checks as any)?.email_anyrun || {};
+  const dynamic = anyrun?.dynamic_io_summary || {};
+  const raw = anyrun?.raw_summary || {};
+  const iocs = Array.isArray(raw?.iocs) ? raw.iocs : [];
+
+  const domains: string[] = Array.from(new Set(
+    (Array.isArray(dynamic?.domains) ? dynamic.domains : [])
+      .map((entry: any) => String(entry?.domainName || entry?.domain || "").trim())
+      .filter(Boolean),
+  ));
+
+  const hosts: string[] = Array.from(new Set(
+    (Array.isArray(dynamic?.hosts) ? dynamic.hosts : [])
+      .map((entry: any) => {
+        const ip = String(entry?.destinationIP || entry?.ip || entry?.host || "").trim();
+        const port = entry?.destinationPort ?? entry?.port;
+        return ip ? `${ip}${port ? `:${port}` : ""}` : "";
+      })
+      .filter(Boolean),
+  ));
+
+  const urls: string[] = Array.from(new Set(
+    iocs
+      .filter((item: any) => String(item?.type || "").toLowerCase() === "url")
+      .map((item: any) => String(item?.ioc || "").trim())
+      .filter(Boolean),
+  ));
+
+  const fileMap: Record<string, { name: string; value: string; category: string }> = {};
+  for (const item of iocs) {
+    if (!["file", "sha256", "md5", "hash"].includes(String(item?.type || "").toLowerCase())) {
+      continue;
+    }
+    const name = String(item?.name || item?.ioc || "Unknown file").trim();
+    const value = String(item?.ioc || "").trim();
+    const category = String(item?.category || String(item?.type || "indicator")).trim();
+    fileMap[`${name}|${value}|${category}`] = { name, value, category };
+  }
+  const files: Array<{ name: string; value: string; category: string }> = Object.values(fileMap);
+
+  return { domains, hosts, urls, files };
+}
+
+function PaginatedTextList<T>({
+  items,
+  page,
+  pageSize,
+  onPageChange,
+  renderItem,
+}: {
+  items: T[];
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  renderItem: (item: T, index: number) => React.ReactNode;
+}) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const endIndex = Math.min(items.length, startIndex + pageSize);
+  const visibleItems = items.slice(startIndex, endIndex);
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          Showing {items.length ? startIndex + 1 : 0}-{endIndex} of {items.length}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => onPageChange(safePage - 1)}
+            disabled={safePage <= 1}
+            style={pagerButtonStyle(safePage <= 1)}
+          >
+            Previous
+          </button>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            Page {safePage} / {totalPages}
+          </div>
+          <button
+            type="button"
+            onClick={() => onPageChange(safePage + 1)}
+            disabled={safePage >= totalPages}
+            style={pagerButtonStyle(safePage >= totalPages)}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {visibleItems.map((item, idx) => renderItem(item, startIndex + idx))}
+      </div>
+    </div>
+  );
+}
+
+function pagerButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    background: disabled ? "rgba(148,163,184,0.08)" : "rgba(96,165,250,0.12)",
+    color: disabled ? "var(--text-muted)" : "var(--accent)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "4px 10px",
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: disabled ? "not-allowed" : "pointer",
   };
 }
 

@@ -1111,6 +1111,7 @@ export interface EmailInvestigationResponse {
     content_ml?: Record<string, any>;
     attachment_analysis?: Record<string, any>;
     hybrid_analysis?: Record<string, any>;
+    email_anyrun?: Record<string, any>;
     final_risk?: Record<string, any>;
   };
   resolution_source: string;

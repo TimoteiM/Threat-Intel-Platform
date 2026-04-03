@@ -10,9 +10,11 @@ import re
 from email.header import decode_header
 from urllib.parse import parse_qs, unquote, urlparse
 
+from app.services.anyrun_service import lookup_anyrun
 from app.services.email_ai_interpreter_service import interpret_email_results_with_ai
 from app.services.email_indicator_checks_service import run_email_indicator_checks
 from app.services.email_ioc_service import extract_email_iocs
+from app.services.risk_aggregator import aggregate_risk
 from app.utils.domain_utils import extract_registered_domain, normalize_domain
 
 NOT_PRESENT = "Not present in the provided evidence."
@@ -32,14 +34,26 @@ async def process_email_investigation(
 ) -> dict[str, Any]:
     extracted = extract_email_iocs(payload, filename=filename)
 
-    checks = await asyncio.to_thread(
-        run_email_indicator_checks,
-        extracted,
-        include_url_screenshots=include_url_screenshots,
-        run_anyrun=run_anyrun,
-        max_urls=max_urls,
-        max_attachment_hashes=max_attachment_hashes,
+    checks, email_anyrun = await asyncio.gather(
+        asyncio.to_thread(
+            run_email_indicator_checks,
+            extracted,
+            include_url_screenshots=include_url_screenshots,
+            run_anyrun=run_anyrun,
+            max_urls=max_urls,
+            max_attachment_hashes=max_attachment_hashes,
+        ),
+        asyncio.to_thread(
+            _lookup_email_anyrun,
+            payload,
+            filename,
+            run_anyrun=run_anyrun,
+        ),
     )
+    if email_anyrun is not None:
+        checks["email_anyrun"] = email_anyrun
+        checks["hybrid_analysis"] = {"items": [email_anyrun] if email_anyrun.get("checked") else []}
+        checks["final_risk"] = _aggregate_email_risk(checks)
 
     parsed_ml_score: float | None = None
     if ml_phishing_score not in (None, ""):
@@ -128,6 +142,39 @@ async def process_email_investigation(
         "resolution_source": resolution_source,
         "resolution": resolution,
     }
+
+
+def _lookup_email_anyrun(payload: bytes, filename: str, *, run_anyrun: bool) -> dict[str, Any] | None:
+    if not run_anyrun:
+        return None
+
+    result = lookup_anyrun(
+        indicator=filename,
+        indicator_type="file",
+        file_bytes=payload,
+        file_name=filename,
+        submit_on_not_found=True,
+        sandbox_first=True,
+    )
+    return {
+        **(result if isinstance(result, dict) else {}),
+        "file_name": filename,
+    }
+
+
+def _aggregate_email_risk(checks: dict[str, Any]) -> dict[str, Any]:
+    first_url = next((u for u in checks.get("urls") or [] if isinstance(u, dict)), {}) or {}
+    risk_input = {
+        "url_lexical_ml": (first_url.get("lexical_ml") or {}),
+        "url_behavior": (first_url.get("url_behavior") or {}),
+        "content_ml": checks.get("content_ml") or {},
+        "attachment_analysis": checks.get("attachment_analysis") or {},
+        "hybrid_analysis": checks.get("hybrid_analysis") or {},
+        "vt": ((checks.get("sender_ip") or {}).get("vt") or {}),
+        "threat_feeds": {"abuseipdb": ((checks.get("sender_ip") or {}).get("abuseipdb") or {})},
+        "whois": ((checks.get("sender_domain") or {}).get("whois") or {}),
+    }
+    return aggregate_risk(risk_input)
 
 
 def _build_url_assessments_fallback(checks: dict[str, Any]) -> list[dict[str, str]]:
@@ -307,6 +354,7 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
     checks["content_ml"] = checks.get("content_ml") or {}
     checks["attachment_analysis"] = checks.get("attachment_analysis") or {}
     checks["hybrid_analysis"] = checks.get("hybrid_analysis") or {}
+    checks["email_anyrun"] = checks.get("email_anyrun") or {}
     checks["final_risk"] = checks.get("final_risk") or {}
 
     return {
@@ -430,6 +478,7 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
         "content_ml": checks.get("content_ml") or {},
         "attachment_analysis": checks.get("attachment_analysis") or {},
         "hybrid_analysis": checks.get("hybrid_analysis") or {},
+        "email_anyrun": checks.get("email_anyrun") or {},
         "final_risk": checks.get("final_risk") or {},
     }
 
@@ -569,7 +618,7 @@ def _render_template_resolution(
             f"was checked and {ip_summary}."
         ),
         attachments_line,
-        f"URL destinations: {url_summary}.",
+        f"Embedded URLs: {url_summary}.",
     ]
 
     findings = sender_domain_analysis.get("findings")

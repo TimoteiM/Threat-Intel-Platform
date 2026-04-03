@@ -1,12 +1,15 @@
 "use client";
 
 import React from "react";
+import dagre from "dagre";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
 import ReactFlow, {
   Controls,
+  Handle,
   MarkerType,
   Node,
   Edge,
+  Position,
   ReactFlowProvider,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -79,6 +82,31 @@ type ProcessEventRow = {
   timeshift: string;
   details: Record<string, any>;
 };
+
+type EventCategoryKey =
+  | "modified_files"
+  | "registry_changes"
+  | "synchronization"
+  | "http_requests"
+  | "connections"
+  | "network_threats"
+  | "modules"
+  | "debug";
+
+const EVENT_CATEGORY_META: Array<{
+  key: EventCategoryKey;
+  label: string;
+  description: string;
+}> = [
+  { key: "modified_files", label: "Modified files", description: "File-system changes made by the process" },
+  { key: "registry_changes", label: "Registry changes", description: "Registry writes or modifications" },
+  { key: "synchronization", label: "Synchronization", description: "Mutexes, events, and sync primitives" },
+  { key: "http_requests", label: "HTTP requests", description: "Web requests issued by the process" },
+  { key: "connections", label: "Connections", description: "Socket and network connection activity" },
+  { key: "network_threats", label: "Network threats", description: "Threat detections tied to network events" },
+  { key: "modules", label: "Modules", description: "Loaded modules and libraries" },
+  { key: "debug", label: "Debug", description: "Debug and inspection events" },
+];
 
 function _toSeverity(ev: any): "danger" | "warning" | "other" {
   const n = Number(ev?.threatLevel ?? ev?.severity ?? ev?.priority ?? -1);
@@ -232,6 +260,30 @@ function flattenProcessEvents(proc: any): ProcessEventRow[] {
   return out;
 }
 
+function _eventCountForCategory(proc: any, category: EventCategoryKey): number {
+  const explicit = Number(proc?.event_counts?.[category]);
+  if (Number.isFinite(explicit)) return explicit;
+  return arr(proc?.events?.[category]).length;
+}
+
+function _eventRowsForCategory(proc: any, category: EventCategoryKey): any[] {
+  return arr(proc?.events?.[category]);
+}
+
+function _parseTimeshiftMs(value: any): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value).trim();
+  if (!text) return null;
+  const plain = text.match(/^-?\d+(?:\.\d+)?$/);
+  if (plain) return Number(plain[0]);
+  const ms = text.match(/([+-]?\d+(?:\.\d+)?)\s*ms\b/i);
+  if (ms) return Number(ms[1]);
+  const sec = text.match(/([+-]?\d+(?:\.\d+)?)\s*s\b/i);
+  if (sec) return Number(sec[1]) * 1000;
+  return null;
+}
+
 function _hasGroupedProcessData(proc: any): boolean {
   return flattenProcessEvents(proc).length > 0;
 }
@@ -333,6 +385,172 @@ function _isLowSignalSystemProcess(p: any): boolean {
   );
 }
 
+const NOISE_PROCESS_NAMES = new Set([
+  "svchost.exe",
+  "runtimebroker.exe",
+  "lsass.exe",
+]);
+
+const GRAPH_NODE_WIDTH = 196;
+const GRAPH_NODE_HEIGHT = 52;
+
+// ── Custom ReactFlow node components ─────────────────────────────────────────
+
+function ProcessIconSvg({ color, isEntry }: { color: string; isEntry: boolean }) {
+  if (isEntry) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill={color}>
+        <polygon points="3,2 14,8 3,14" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="1.5" y="1.5" width="15" height="15" rx="2.5" stroke={color} strokeWidth="1.4" />
+      <rect x="1.5" y="1.5" width="15" height="4.5" rx="2.5" fill={color} fillOpacity="0.35" />
+      <circle cx="4.5" cy="3.75" r="1" fill={color} fillOpacity="0.7" />
+      <circle cx="7.5" cy="3.75" r="1" fill={color} fillOpacity="0.7" />
+      <text x="9" y="14.5" textAnchor="middle" fill={color} fontSize="6.5" fontWeight="bold" fontFamily="monospace">?</text>
+    </svg>
+  );
+}
+
+const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: any }) {
+  const proc = data?.process || {};
+  const rawLabel = String(data?.label || proc?.fileName || proc?.processName || proc?.name || "process");
+  const label = _filenameFromPath(rawLabel);
+  const isEntry = Boolean(data?.isEntry);
+  const threatLevel = Number(proc?.threat_level ?? proc?.threatLevel ?? 0);
+  const threatScore = Number(proc?.threat_score ?? proc?.threatScore ?? 0);
+  const malicious = threatLevel >= 2 || threatScore >= 70;
+  const suspicious = Boolean(data?.suspicious) || Boolean(proc?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35;
+  const selected = Boolean(data?.__selected);
+
+  const threatNames: string[] = Array.isArray(proc?.threat_name)
+    ? proc.threat_name
+    : Array.isArray(proc?.threatName)
+    ? proc.threatName
+    : [];
+
+  let statusText = "no specs";
+  let statusColor = "#5fa8c5";
+  if (malicious) {
+    statusText = threatNames[0] || "malicious";
+    statusColor = "#ef4444";
+  } else if (suspicious) {
+    statusText = threatNames[0] || "suspicious";
+    statusColor = "#f59e0b";
+  } else if (isEntry) {
+    statusText = "analysis start";
+    statusColor = "#22d3ee";
+  }
+
+  const iconColor = malicious ? "#ef4444" : isEntry ? "#22d3ee" : suspicious ? "#f59e0b" : "#4ea8cc";
+  const iconBg = malicious
+    ? "rgba(127,29,29,0.65)"
+    : isEntry
+    ? "rgba(8,72,102,0.75)"
+    : suspicious
+    ? "rgba(120,80,10,0.55)"
+    : "rgba(13,55,84,0.75)";
+  const borderColor = selected
+    ? "#22d3ee"
+    : malicious
+    ? "rgba(239,68,68,0.7)"
+    : isEntry
+    ? "rgba(34,211,238,0.5)"
+    : suspicious
+    ? "rgba(245,158,11,0.55)"
+    : "rgba(56,140,190,0.25)";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px 6px 7px",
+        width: GRAPH_NODE_WIDTH,
+        height: GRAPH_NODE_HEIGHT,
+        background: isEntry ? "rgba(8,45,68,0.88)" : "rgba(10,28,46,0.92)",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 7,
+        boxSizing: "border-box",
+        boxShadow: selected
+          ? "0 0 0 2px rgba(34,211,238,0.22)"
+          : malicious
+          ? "0 0 8px rgba(239,68,68,0.18)"
+          : "none",
+        cursor: "pointer",
+        userSelect: "none",
+      }}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: iconColor, width: 7, height: 7, border: "none", opacity: 0.7 }}
+      />
+
+      {/* icon */}
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+          borderRadius: 5,
+          background: iconBg,
+          border: `1px solid ${iconColor}30`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <ProcessIconSvg color={iconColor} isEntry={isEntry} />
+      </div>
+
+      {/* text */}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#dff0fb",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.25,
+            letterSpacing: "0.01em",
+          }}
+        >
+          {label}
+        </div>
+        <div
+          style={{
+            fontSize: 10,
+            color: statusColor,
+            opacity: 0.88,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            lineHeight: 1.3,
+            marginTop: 2,
+          }}
+        >
+          {statusText}
+        </div>
+      </div>
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: iconColor, width: 7, height: 7, border: "none", opacity: 0.7 }}
+      />
+    </div>
+  );
+});
+
+const GRAPH_NODE_TYPES = { process: ProcessGraphNode, analysis: ProcessGraphNode, default: ProcessGraphNode };
+
 function _hasDirectThreatSignal(p: any): boolean {
   return (
     _num(p?.network_threat_count ?? p?.event_counts?.network_threats) > 0 ||
@@ -367,30 +585,150 @@ function _isExecutionContextProcess(p: any): boolean {
   return _isLowSignalSystemProcess(p) && !hasThreat && !hasActivity && _intrinsicProcessScore(p) < 3 && _effectiveProcessScore(p) < 6;
 }
 
+function _filenameFromPath(path: string): string {
+  if (!path) return path;
+  const sep = path.includes("\\") ? "\\" : "/";
+  return path.split(sep).pop() || path;
+}
+
 function buildBackendProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details: Record<string, any> } | null {
   const nodes = arr(raw?.behavior_graph?.nodes);
   const edges = arr(raw?.behavior_graph?.edges);
   if (!nodes.length) return null;
 
-  const normalizedNodes = nodes.map((node: any, idx: number) => ({
-    id: String(node?.id || `backend-node-${idx}`),
-    kind: String(node?.kind || "process"),
-    label: String(node?.label || node?.id || `node-${idx}`),
-    process: node?.process || {},
-    position: node?.position,
-  }));
-  const nodeIds = new Set(normalizedNodes.map((node: any) => String(node.id)));
-  const normalizedEdges = edges.filter((edge: any) => {
+  // Normalize: extract filename from full-path labels and enrich process objects
+  // so that _isLowSignalSystemProcess / _isExecutionContextProcess work correctly.
+  const normalizedNodes = nodes.map((node: any, idx: number) => {
+    const rawLabel = String(node?.label || node?.id || `node-${idx}`);
+    const filename = _filenameFromPath(rawLabel);
+    const proc = node?.process || {};
+    const enrichedProc = {
+      ...proc,
+      fileName: proc?.fileName || filename,
+      processName: proc?.processName || proc?.fileName || filename,
+      name: proc?.name || proc?.fileName || filename,
+    };
+    return {
+      id: String(node?.id || `backend-node-${idx}`),
+      kind: String(node?.kind || "process"),
+      label: filename,
+      process: enrichedProc,
+      position: node?.position,
+      isEntry: Boolean(node?.isEntry),
+      suspicious: Boolean(node?.suspicious),
+    };
+  });
+
+  const nodeById = new Map<string, any>(normalizedNodes.map((n: any) => [String(n.id), n]));
+  const allEdges = edges.filter((edge: any) => {
     const source = String(edge?.source || "");
     const target = String(edge?.target || "");
-    return source && target && nodeIds.has(source) && nodeIds.has(target);
+    return source && target && nodeById.has(source) && nodeById.has(target);
   });
+
+  // Build adjacency maps for reconnection
+  const parentOf = new Map<string, string>(); // childId -> parentId
+  const childrenOf = new Map<string, string[]>();
+  for (const n of normalizedNodes) childrenOf.set(String(n.id), []);
+  for (const e of allEdges) {
+    const src = String(e.source || e.from || "");
+    const tgt = String(e.target || e.to || "");
+    if (src && tgt) {
+      parentOf.set(tgt, src);
+      childrenOf.get(src)?.push(tgt);
+    }
+  }
+
+  // ── Step 1: Find anchor nodes (threat-bearing + analysis/entry kinds) ────────
+  // Descendants of anchors are ALWAYS kept regardless of their own threat level,
+  // because they represent the actual process behavior we care about.
+  // Only nodes that are ANCESTORS (above the anchor) are candidates for noise removal.
+  const anchorIds = new Set<string>();
+  for (const n of normalizedNodes) {
+    const kind = String(n.kind || "process");
+    if (kind !== "process") {
+      anchorIds.add(String(n.id)); // analysis / entry nodes always anchor
+      continue;
+    }
+    const proc = n.process || {};
+    if (_hasDirectThreatSignal(proc) || n.suspicious || n.isEntry) {
+      anchorIds.add(String(n.id));
+    }
+  }
+
+  // ── Step 2: Collect all descendants of anchors (always kept) ─────────────────
+  const protectedIds = new Set<string>(Array.from(anchorIds));
+  const descStack = Array.from(anchorIds);
+  while (descStack.length > 0) {
+    const cur = descStack.pop()!;
+    for (const child of childrenOf.get(cur) || []) {
+      if (!protectedIds.has(child)) {
+        protectedIds.add(child);
+        descStack.push(child);
+      }
+    }
+  }
+
+  // ── Step 3: Mark noise only among non-protected (i.e. pure-ancestor) nodes ───
+  const noiseIds = new Set<string>();
+  for (const n of normalizedNodes) {
+    if (protectedIds.has(String(n.id))) continue; // never filter descendants of anchors
+    if (String(n.kind || "process") !== "process") continue;
+    const proc = n.process || {};
+    const nameLower = String(proc.name || proc.fileName || "").toLowerCase().trim();
+    const isSystemRoot =
+      nameLower === "[system process]" ||
+      nameLower === "system process" ||
+      (nameLower === "system" && !_hasDirectThreatSignal(proc));
+    if (isSystemRoot || _isExecutionContextProcess(proc)) {
+      noiseIds.add(String(n.id));
+    }
+  }
+
+  // ── Step 4: Reconnect edges around removed noise ancestors ───────────────────
+  function nonNoiseAncestor(id: string, depth = 0): string | null {
+    if (depth > 20) return null;
+    const parent = parentOf.get(id);
+    if (!parent) return null;
+    return noiseIds.has(parent) ? nonNoiseAncestor(parent, depth + 1) : parent;
+  }
+
+  const edgeSet = new Set<string>();
+  const reconnectedEdges: any[] = [];
+  for (const e of allEdges) {
+    const src = String(e.source || e.from || "");
+    const tgt = String(e.target || e.to || "");
+    if (noiseIds.has(src) || noiseIds.has(tgt)) continue;
+    const key = `${src}->${tgt}`;
+    if (!edgeSet.has(key)) { edgeSet.add(key); reconnectedEdges.push(e); }
+  }
+  for (const noiseId of Array.from(noiseIds)) {
+    const ancestor = nonNoiseAncestor(noiseId);
+    if (!ancestor) continue;
+    for (const child of childrenOf.get(noiseId) || []) {
+      if (noiseIds.has(child)) continue;
+      const key = `${ancestor}->${child}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        reconnectedEdges.push({ source: ancestor, target: child, id: key, suspicious: false });
+      }
+    }
+  }
+
+  const filteredNodes = normalizedNodes.filter((n: any) => !noiseIds.has(String(n.id)));
+  if (!filteredNodes.length) return null;
+
+  const filteredIds = new Set(filteredNodes.map((n: any) => String(n.id)));
+  const finalEdges = reconnectedEdges.filter((e: any) =>
+    filteredIds.has(String(e.source || e.from || "")) && filteredIds.has(String(e.target || e.to || ""))
+  );
+
   const details: Record<string, any> = {};
-  normalizedNodes.forEach((node: any) => {
+  filteredNodes.forEach((node: any) => {
     if (String(node?.kind || "process") !== "process") return;
     details[String(node.id)] = node?.process || {};
   });
-  return { nodes: normalizedNodes, edges: normalizedEdges, details };
+  return layoutProcessGraph(filteredNodes, finalEdges, details);
 }
 
 function hasRicherProcessEvidence(raw: any): boolean {
@@ -434,15 +772,14 @@ function isDegenerateBackendGraph(graph: { nodes: any[]; edges: any[]; details: 
 }
 
 function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details: Record<string, any> } {
-  const backendGraph = buildBackendProcessTreeGraph(raw);
-  if (backendGraph && !isDegenerateBackendGraph(backendGraph, raw)) return backendGraph;
-
-  let processes = arr(raw?.behavior_details?.processes);
-  if (!processes.length) {
-    processes = arr(raw?.behavior_details?.process_details);
-  }
-  if (!processes.length) return { nodes: [], edges: [], details: {} };
   const processDetails = arr(raw?.behavior_details?.process_details);
+  if (!processDetails.length) {
+    const backendGraph = buildBackendProcessTreeGraph(raw);
+    if (backendGraph && !isDegenerateBackendGraph(backendGraph, raw)) return backendGraph;
+  }
+
+  let processes = processDetails.length ? processDetails : arr(raw?.behavior_details?.processes);
+  if (!processes.length) return { nodes: [], edges: [], details: {} };
   const detailByRef: Record<string, any> = {};
   for (const d of processDetails) {
     const refs = [d?.uuid, d?.guid, d?.pid, d?.name].filter(Boolean).map((x: any) => String(x));
@@ -579,19 +916,6 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     depth.set(id, d);
     for (const c of children.get(id) || []) visit(c, d + 1);
   };
-  const subtreeSize = (root: string): number => {
-    let total = 0;
-    const stack = [root];
-    const seen = new Set<string>();
-    while (stack.length) {
-      const cur = stack.pop()!;
-      if (seen.has(cur)) continue;
-      seen.add(cur);
-      total += 1;
-      for (const c of children.get(cur) || []) stack.push(c);
-    }
-    return total;
-  };
   roots.forEach((r) => visit(r, 0));
 
   // Collapse identical leaf siblings (same process signature under same parent).
@@ -675,76 +999,166 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     });
   });
 
-  // Relevance pruning (AnyRun-like): keep suspicious/high-signal processes and their ancestry.
-  const kept = new Set<string>();
-  for (const r of roots) kept.add(r);
+  // ── Relevance pruning ──────────────────────────────────────────────────────
+  // Step 1: Find threat anchors — high-signal processes we MUST show.
+  //         Allow noise-list names if they have a direct threat signal (e.g. malicious svchost).
+  const threatAnchorIds = new Set<string>();
   nodesById.forEach((n, id) => {
     if (removed.has(id)) return;
-    const score = _processRelevanceScore(n.process || {});
-    if (score >= 6) kept.add(id);
+    const proc = n.process || {};
+    const score = _processRelevanceScore(proc);
+    const name = String(n?.label || proc?.name || "").trim().toLowerCase();
+    const isNoiseByName = NOISE_PROCESS_NAMES.has(name);
+    if (score >= 6 && (!isNoiseByName || _hasDirectThreatSignal(proc))) {
+      threatAnchorIds.add(id);
+    }
   });
+
+  // Step 2: Collect ALL descendants of threat anchors (always keep, even if low-signal).
+  //         This ensures child msedge.exe, identity_helper.exe etc. are shown.
+  const kept = new Set<string>(Array.from(threatAnchorIds));
+  const descQueue = Array.from(threatAnchorIds);
+  while (descQueue.length > 0) {
+    const cur = descQueue.pop()!;
+    for (const child of children.get(cur) || []) {
+      if (!removed.has(child) && !kept.has(child)) {
+        kept.add(child);
+        descQueue.push(child);
+      }
+    }
+  }
+
+  // Step 3: Walk ancestors of threat anchors, stopping at execution-context noise.
+  //         This prevents [System Process], System, csrss, wininit, services etc.
+  //         from being pulled in just because they are in the ancestry chain.
   const addAncestors = (id: string) => {
     let cur = nodesById.get(id)?.parentId || null;
     let guard = 0;
     while (cur && guard < 200) {
+      if (removed.has(cur)) break;
+      const curNode = nodesById.get(cur);
+      if (!curNode) break;
+      if (_isExecutionContextProcess(curNode.process || {})) break; // stop at noise boundary
       kept.add(cur);
-      cur = nodesById.get(cur)?.parentId || null;
+      cur = curNode.parentId || null;
       guard += 1;
     }
   };
-  Array.from(kept).forEach(addAncestors);
-  const levels = new Map<number, string[]>();
-  depth.forEach((d, id) => {
-    if (removed.has(id)) return;
-    if (!kept.has(id)) return;
-    if (!levels.has(d)) levels.set(d, []);
-    levels.get(d)!.push(id);
+  Array.from(threatAnchorIds).forEach(addAncestors);
+
+  // Step 4: Safety fallback — if nothing was kept (no threat signals in the whole trace),
+  //         show all non-execution-context nodes so the graph isn't empty.
+  if (kept.size === 0) {
+    nodesById.forEach((n, id) => {
+      if (!removed.has(id) && !_isExecutionContextProcess(n.process || {})) kept.add(id);
+    });
+  }
+  const rfNodes: any[] = [];
+  const rfEdges: any[] = [];
+  const chainIds = new Set<string>();
+  Array.from(kept).forEach((id) => {
+    let cur: string | null = id;
+    let guard = 0;
+    while (cur && guard < 200) {
+      chainIds.add(cur);
+      cur = String(nodesById.get(cur)?.parentId || "") || null;
+      guard += 1;
+    }
   });
 
-  const rfNodes: any[] = [];
-  const spacingX = 280;
-  const spacingY = 110;
-  Array.from(levels.entries())
-    .sort((a, b) => a[0] - b[0])
-    .forEach(([d, ids]) => {
-      const sorted = [...ids].sort((a, b) => {
-        const al = String(nodesById.get(a)?.label || "").toLowerCase();
-        const bl = String(nodesById.get(b)?.label || "").toLowerCase();
-        return al.localeCompare(bl);
-      });
-      const offsetY = -((sorted.length - 1) * spacingY) / 2;
-      sorted.forEach((id, idx) => {
-        const n = nodesById.get(id)!;
-        const dup = _num(n?.process?.duplicate_count);
-        rfNodes.push({
-          id,
-          kind: "process",
-          label: dup > 1 ? `${n.label} x${dup}` : n.label,
-          process: n.process,
-          position: { x: d * spacingX, y: offsetY + idx * spacingY },
-        });
-      });
-    });
-
-  const rfEdges: any[] = [];
-  const renderedIds = new Set(rfNodes.map((n: any) => String(n.id)));
+  const keptIds = Array.from(kept).filter((id) => !removed.has(id) && nodesById.has(id));
+  const keptIndegree = new Map<string, number>();
+  keptIds.forEach((id) => keptIndegree.set(id, 0));
   nodesById.forEach((n, id) => {
     if (!n.parentId || !nodesById.has(n.parentId)) return;
     const sid = alias.get(id) || id;
     const tid = alias.get(n.parentId) || n.parentId;
-    if (!renderedIds.has(sid) || !renderedIds.has(tid) || sid === tid) return;
+    if (!kept.has(sid) || !kept.has(tid) || sid === tid) return;
+    keptIndegree.set(sid, (keptIndegree.get(sid) || 0) + 1);
+  });
+
+  const rootIds = keptIds.filter((id) => (keptIndegree.get(id) || 0) === 0);
+
+  keptIds.forEach((id) => {
+    const n = nodesById.get(id)!;
+    const dup = _num(n?.process?.duplicate_count);
+    const threatScore = _num(n?.process?.threat_score ?? n?.process?.threatScore ?? n?.process?.score);
+    const threatLevel = _num(n?.process?.threat_level ?? n?.process?.threatLevel);
+    const suspicious =
+      Boolean(n?.process?.suspicious_flag) ||
+      threatLevel >= 1 ||
+      threatScore >= 35 ||
+      _num(n?.process?.network_threat_count ?? n?.process?.event_counts?.network_threats) > 0;
+    rfNodes.push({
+      id,
+      kind: "process",
+      label: dup > 1 ? `${n.label} (${dup})` : n.label,
+      process: n.process,
+      isEntry: rootIds.includes(id),
+      suspicious,
+      partOfChain: chainIds.has(id),
+    });
+  });
+
+  const renderedNow = new Set(rfNodes.map((n: any) => String(n.id)));
+  nodesById.forEach((n, id) => {
+    if (!n.parentId || !nodesById.has(n.parentId)) return;
+    const sid = alias.get(id) || id;
+    const tid = alias.get(n.parentId) || n.parentId;
+    if (!renderedNow.has(sid) || !renderedNow.has(tid) || sid === tid) return;
+    const sourceNode = nodesById.get(tid);
+    const targetNode = nodesById.get(sid);
+    const suspiciousEdge =
+      chainIds.has(sid) ||
+      chainIds.has(tid) ||
+      Boolean(sourceNode?.process?.suspicious_flag) ||
+      Boolean(targetNode?.process?.suspicious_flag);
     rfEdges.push({
       id: `${tid}->${sid}`,
       source: tid,
       target: sid,
       label: "",
+      suspicious: suspiciousEdge,
     });
   });
   const details: Record<string, any> = {};
   rfNodes.forEach((n) => {
     details[String(n.id)] = n.process || {};
   });
-  return { nodes: rfNodes, edges: rfEdges, details };
+  return layoutProcessGraph(rfNodes, rfEdges, details);
+}
+
+function layoutProcessGraph(nodes: any[], edges: any[], details: Record<string, any>) {
+  const graph = new dagre.graphlib.Graph();
+  graph.setGraph({
+    rankdir: "LR",
+    ranksep: 120,
+    nodesep: 40,
+    marginx: 24,
+    marginy: 24,
+  });
+  graph.setDefaultEdgeLabel(() => ({}));
+
+  nodes.forEach((node: any) => {
+    graph.setNode(String(node.id), { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT });
+  });
+  edges.forEach((edge: any) => {
+    if (!edge?.source || !edge?.target) return;
+    graph.setEdge(String(edge.source), String(edge.target));
+  });
+  dagre.layout(graph);
+
+  const laidOutNodes = nodes.map((node: any) => {
+    const layout = graph.node(String(node.id));
+    return {
+      ...node,
+      position: {
+        x: (layout?.x ?? 0) - GRAPH_NODE_WIDTH / 2,
+        y: (layout?.y ?? 0) - GRAPH_NODE_HEIGHT / 2,
+      },
+    };
+  });
+  return { nodes: laidOutNodes, edges, details };
 }
 
 export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number }) {
@@ -756,6 +1170,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
   const [selectedProcessManual, setSelectedProcessManual] = React.useState<any | null>(null);
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [processViewMode, setProcessViewMode] = React.useState<"view" | "group" | "deep">("view");
+  const [activeEventCategory, setActiveEventCategory] = React.useState<EventCategoryKey>("modified_files");
   const threatRows = arr(raw?.behavior_details?.network_threats);
   const processDetails = arr(raw?.behavior_details?.process_details);
   const graphProcessRefs = React.useMemo(() => {
@@ -877,26 +1292,21 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
           }
         }
         const threatScore = Number(p?.threat_score || 0);
-        const suspicious = Boolean(p?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35;
-        const malicious = threatLevel >= 2 || threatScore >= 70;
-        const borderColor =
-          malicious ? "#ef4444" : suspicious || threatCount > 0 ? "#f59e0b" : "rgba(125,211,252,0.7)";
-        const leftBar =
-          malicious ? "3px solid #ef4444" : suspicious || threatCount > 0 ? "3px solid #f59e0b" : "3px solid #60a5fa";
+        const suspicious = Boolean(n?.suspicious) || Boolean(p?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35;
+        const isEntry = Boolean(n?.isEntry);
+        const kind = String(n?.kind || "process");
         return {
           id: String(n?.id || `n-${idx}`),
-          position: n?.position || { x: ((idx % 8) * 280), y: Math.floor(idx / 8) * 110 },
-          data: { label, process: p, kind: String(n?.kind || "process") },
-          style: {
-            border: `1px solid ${borderColor}`,
-            borderLeft: leftBar,
-            background: "#0b3550",
-            color: "var(--text-primary)",
-            fontSize: 12,
-            borderRadius: 8,
-            padding: "8px 10px",
-            width: 260,
+          type: kind === "analysis" ? "analysis" : "process",
+          position: n?.position || { x: 0, y: idx * 90 },
+          data: {
+            label,
+            process: { ...p, threat_level: threatLevel, threat_score: threatScore },
+            kind,
+            isEntry,
+            suspicious,
           },
+          style: { padding: 0, background: "transparent", border: "none" },
         };
       }),
     [rawNodes, threatByProcess]
@@ -906,11 +1316,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
     () =>
       nodesBase.map((n) => ({
         ...n,
-        style: {
-          ...(n.style || {}),
-          border: selectedNode === n.id ? "2px solid #22d3ee" : (n.style as any)?.border,
-          boxShadow: selectedNode === n.id ? "0 0 0 2px rgba(34,211,238,0.18)" : "none",
-        },
+        data: { ...(n as any).data, __selected: selectedNode === n.id },
       })),
     [nodesBase, selectedNode]
   );
@@ -923,10 +1329,18 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
           source: String(e?.source || ""),
           target: String(e?.target || ""),
           label: "",
-          style: { stroke: "rgba(56,189,248,0.6)", strokeWidth: 1.4 },
+          style: {
+            stroke: e?.suspicious ? "rgba(239,68,68,0.75)" : "rgba(56,180,240,0.45)",
+            strokeWidth: e?.suspicious ? 1.8 : 1.2,
+          },
           labelStyle: { fill: "#94a3b8", fontSize: 10 },
-          type: "smoothstep",
-          markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(56,189,248,0.9)" },
+          type: "bezier",
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 12,
+            height: 12,
+            color: e?.suspicious ? "rgba(239,68,68,0.85)" : "rgba(56,180,240,0.6)",
+          },
         }))
         .filter((e: any) => e.source && e.target),
     [rawEdges]
@@ -957,7 +1371,49 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
     : [];
   const selectedThreatCount = selectedRefs.reduce((acc, r) => acc + Number(threatByProcess[r]?.count || 0), 0);
   const selectedThreatLevel = selectedRefs.reduce((acc, r) => Math.max(acc, Number(threatByProcess[r]?.maxLevel || 0)), 0);
-  const selectedEvents = React.useMemo(() => flattenProcessEvents(selectedProcessDetail || {}), [selectedProcessDetail]);
+  const selectedEventCounts = React.useMemo(() => {
+    const counts: Record<EventCategoryKey, number> = {
+      modified_files: 0,
+      registry_changes: 0,
+      synchronization: 0,
+      http_requests: 0,
+      connections: 0,
+      network_threats: 0,
+      modules: 0,
+      debug: 0,
+    };
+    for (const item of EVENT_CATEGORY_META) {
+      counts[item.key] = _eventCountForCategory(selectedProcessDetail || {}, item.key);
+    }
+    return counts;
+  }, [selectedProcessDetail]);
+  const selectedEventCategoryRows = React.useMemo(
+    () => _eventRowsForCategory(selectedProcessDetail || {}, activeEventCategory),
+    [selectedProcessDetail, activeEventCategory]
+  );
+  const selectedEvents = React.useMemo(() => {
+    const all = flattenProcessEvents(selectedProcessDetail || {});
+    return all.filter((event) => String(event.source_group || "") === activeEventCategory);
+  }, [selectedProcessDetail, activeEventCategory]);
+  const selectedEventTimeline = React.useMemo(() => {
+    const points = selectedEvents
+      .map((event, index) => ({
+        index,
+        severity: event.severity,
+        ms: _parseTimeshiftMs(event.timeshift),
+      }))
+      .filter((entry) => entry.ms != null) as Array<{ index: number; severity: ProcessEventRow["severity"]; ms: number }>;
+    if (!points.length) return [];
+    const maxMs = Math.max(...points.map((point) => point.ms), 1);
+    return points.map((point) => ({
+      ...point,
+      left: Math.max(0, Math.min(100, (point.ms / maxMs) * 100)),
+    }));
+  }, [selectedEvents]);
+  const activeEventMeta = React.useMemo(
+    () => EVENT_CATEGORY_META.find((item) => item.key === activeEventCategory) || EVENT_CATEGORY_META[0],
+    [activeEventCategory]
+  );
   const groupedBySeverityAndTechnique = React.useMemo(() => {
     const map: Record<string, Record<string, ProcessEventRow[]>> = { danger: {}, warning: {}, other: {} };
     for (const e of selectedEvents) {
@@ -966,6 +1422,16 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
     }
     return map;
   }, [selectedEvents]);
+  React.useEffect(() => {
+    if (!showAdvanced) return;
+    const firstWithEvents = EVENT_CATEGORY_META.find((item) => selectedEventCounts[item.key] > 0)?.key;
+    if (!selectedProcessDetail) {
+      setActiveEventCategory("modified_files");
+      return;
+    }
+    if (selectedEventCounts[activeEventCategory] > 0) return;
+    setActiveEventCategory(firstWithEvents || EVENT_CATEGORY_META[0].key);
+  }, [activeEventCategory, selectedEventCounts, selectedProcessDetail, showAdvanced]);
   React.useEffect(() => {
     if (!showAdvanced) return;
     if (activeProcessList.length === 0) {
@@ -1016,10 +1482,11 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
 
   return (
     <div style={{ marginBottom: 10, position: "relative" }}>
-      <div style={{ height, border: "1px solid #1b4d6b", borderRadius: 6, overflow: "hidden", background: "#07324a" }}>
+      <div style={{ height, border: "1px solid #132e45", borderRadius: 6, overflow: "hidden", background: "#09202f" }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
+          nodeTypes={GRAPH_NODE_TYPES}
           onNodeClick={(_, n) => {
             setSelectedNode(String(n.id));
             setSelectedProcessManual((n as any)?.data?.kind === "process" ? ((n as any)?.data?.process || null) : null);
@@ -1094,8 +1561,19 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
               </button>
             </div>
             <div style={{ padding: 10, fontSize: 12, color: "var(--text-secondary)" }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text-primary)", marginBottom: 6 }}>
-                {selected?.fileName || selected?.image || selected?.processName || selected?.name || "-"}
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.3 }}>
+                  {_filenameFromPath(selected?.fileName || selected?.image || selected?.processName || selected?.name || "-")}
+                </div>
+                {(() => {
+                  const full = selected?.fileName || selected?.image || selected?.processName || selected?.name || "";
+                  const base = _filenameFromPath(full);
+                  return full && full !== base ? (
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2, wordBreak: "break-all", lineHeight: 1.4 }}>
+                      {full}
+                    </div>
+                  ) : null;
+                })()}
               </div>
               <div style={{ marginBottom: 6 }}>
                 <strong>PID:</strong> {selected?.pid ?? "-"} | <strong>PPID:</strong> {selected?.ppid ?? selected?.parentPid ?? "-"}
@@ -1267,7 +1745,376 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                 })}
               </div>
             </div>
-            <div style={{ minHeight: 0, overflow: "auto" }}>
+            <div style={{ minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+              {true ? (
+                <>
+                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #1b4d6b", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 700, marginBottom: 2 }}>
+                        Advanced details of process
+                      </div>
+                      <div style={{ color: "var(--text-primary)", fontSize: 15, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ color: "#dbeafe" }}>[{selected?.pid || selectedProcessDetail?.pid || "-"}]</span>{" "}
+                        <span>{selected?.fileName || selected?.image || selected?.processName || selected?.name || selectedProcessDetail?.name || "-"}</span>{" "}
+                        <span style={{ color: "var(--accent)", fontWeight: 500 }}>
+                          {selectedProcessDetail?.image || selected?.image || ""}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                      {(["view", "group", "deep"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setProcessViewMode(mode)}
+                          style={{
+                            padding: "6px 10px",
+                            border: "1px solid rgba(96,165,250,0.28)",
+                            borderRadius: 6,
+                            background: processViewMode === mode ? "rgba(59,130,246,0.18)" : "rgba(2,23,39,0.5)",
+                            color: processViewMode === mode ? "#dbeafe" : "var(--text-muted)",
+                            cursor: "pointer",
+                            fontWeight: 700,
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setShowAdvanced(false)}
+                        style={{
+                          marginLeft: 6,
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          cursor: "pointer",
+                          fontSize: 20,
+                        }}
+                      >
+                        x
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: 12,
+                      display: "grid",
+                      gridTemplateColumns: "430px minmax(0, 1fr)",
+                      gap: 12,
+                      minHeight: 0,
+                      flex: 1,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div style={{ minHeight: 0, display: "flex", flexDirection: "column", gap: 12, overflowY: "auto", paddingRight: 4 }}>
+                      <AnalystCard title="Threat Verdict">
+                        <div style={{ display: "grid", gridTemplateColumns: "118px 1fr", gap: 14, alignItems: "center" }}>
+                          <div
+                            style={{
+                              width: 118,
+                              height: 118,
+                              borderRadius: "50%",
+                              border: "4px solid rgba(59,130,246,0.35)",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "var(--text-primary)",
+                              background: "radial-gradient(circle at 35% 30%, rgba(59,130,246,0.18), rgba(6,49,74,0.9) 70%)",
+                            }}
+                          >
+                            <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1 }}>
+                              {selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#93c5fd", marginTop: 6 }}>OUT OF 100</div>
+                          </div>
+                          <div>
+                            <div
+                              style={{
+                                fontSize: 19,
+                                fontWeight: 800,
+                                color:
+                                  selectedThreatLevel >= 2
+                                    ? "#fca5a5"
+                                    : selectedThreatLevel >= 1
+                                      ? "#fde68a"
+                                      : "#67e8f9",
+                                marginBottom: 8,
+                              }}
+                            >
+                              {selectedThreatLevel >= 2 ? "High risk" : selectedThreatLevel >= 1 ? "Suspicious" : "No verdict"}
+                            </div>
+                            <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.5 }}>
+                              The process summary combines AnyRun threat counters, per-process telemetry, and analyst-oriented event grouping so we can inspect the behavior without losing execution context.
+                            </div>
+                            <div style={{ marginTop: 10, color: "#93c5fd", fontSize: 12 }}>
+                              Indicators: {selectedThreatCount}
+                            </div>
+                          </div>
+                        </div>
+                      </AnalystCard>
+
+                      <AnalystCard title="Process information">
+                        <AnalystPair label="Username" value={selectedProcessDetail?.username || selected?.user || selected?.username || "-"} />
+                        <AnalystPair label="SID" value={selectedProcessDetail?.sid || "-"} />
+                        <AnalystPair label="IL" value={selectedProcessDetail?.integrity_level || "-"} />
+                        <AnalystPair label="Start" value={selectedProcessDetail?.start || selected?.start || selected?.startedAt || selected?.time || "-"} />
+                        <AnalystPair label="PID" value={selectedProcessDetail?.pid || selected?.pid || "-"} />
+                        <AnalystPair label="PPID" value={selectedProcessDetail?.ppid || selected?.ppid || selected?.parentPid || "-"} />
+                      </AnalystCard>
+
+                      <AnalystCard title="File information">
+                        <AnalystPair label="Company" value={selectedProcessDetail?.company || "-"} />
+                        <AnalystPair label="Description" value={selectedProcessDetail?.description || "-"} />
+                        <AnalystPair label="Version" value={selectedProcessDetail?.version || "-"} />
+                        <AnalystPair label="SHA256" value={selectedProcessDetail?.sha256 || selected?.sha256 || "-"} long />
+                      </AnalystCard>
+
+                      <AnalystCard title="Command line">
+                        <div
+                          style={{
+                            color: "#93c5fd",
+                            fontSize: 12,
+                            lineHeight: 1.45,
+                            wordBreak: "break-word",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          {selectedProcessDetail?.command_line || selected?.commandLine || selected?.cmd || "-"}
+                        </div>
+                      </AnalystCard>
+
+                      <AnalystCard title="Events">
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          {EVENT_CATEGORY_META.map((item) => {
+                            const active = activeEventCategory === item.key;
+                            const count = selectedEventCounts[item.key];
+                            return (
+                              <button
+                                key={item.key}
+                                type="button"
+                                onClick={() => setActiveEventCategory(item.key)}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr auto",
+                                  alignItems: "center",
+                                  gap: 12,
+                                  padding: "8px 10px",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  background: active ? "rgba(59,130,246,0.2)" : "transparent",
+                                  color: active ? "#dbeafe" : "var(--text-secondary)",
+                                  cursor: "pointer",
+                                  textAlign: "left",
+                                }}
+                                title={item.description}
+                              >
+                                <span style={{ fontWeight: active ? 700 : 500 }}>{item.label}</span>
+                                <span style={{ color: active ? "#93c5fd" : "var(--text-muted)", fontWeight: 700 }}>{count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </AnalystCard>
+                    </div>
+
+                    <div style={{ minHeight: 0, display: "flex", flexDirection: "column", gap: 12, overflowY: "auto", paddingRight: 4 }}>
+                      <AnalystCard title="Timeline of the process" bodyStyle={{ padding: 0 }}>
+                        <div style={{ padding: "12px 12px 6px 12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", color: "#93c5fd", fontSize: 12, marginBottom: 8 }}>
+                            <span>0 s</span>
+                            <span>
+                              {selectedEventTimeline.length
+                                ? `${Math.max(...selectedEventTimeline.map((point) => point.ms)).toFixed(0)} ms`
+                                : "No event timing"}
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              position: "relative",
+                              height: 10,
+                              borderRadius: 999,
+                              background: "rgba(96,165,250,0.18)",
+                              overflow: "hidden",
+                              marginBottom: 18,
+                            }}
+                          >
+                            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, rgba(96,165,250,0.88), rgba(103,232,249,0.72))" }} />
+                            {selectedEventTimeline.map((point) => (
+                              <div
+                                key={`timeline-${point.index}`}
+                                style={{
+                                  position: "absolute",
+                                  top: -7,
+                                  left: `${point.left}%`,
+                                  width: 2,
+                                  height: 24,
+                                  background:
+                                    point.severity === "danger"
+                                      ? "#f87171"
+                                      : point.severity === "warning"
+                                        ? "#facc15"
+                                        : "#93c5fd",
+                                }}
+                              />
+                            ))}
+                          </div>
+                          <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 10 }}>
+                            Active category: <span style={{ color: "#dbeafe", fontWeight: 700 }}>{activeEventMeta.label}</span>
+                          </div>
+                        </div>
+                        <div style={{ borderTop: "1px solid rgba(59,130,246,0.18)", padding: "10px 12px 12px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 18, marginBottom: 10, color: "var(--text-muted)", fontSize: 12 }}>
+                            <span><span style={{ color: "var(--red)" }}>●</span> Danger</span>
+                            <span><span style={{ color: "var(--yellow)" }}>●</span> Warning</span>
+                            <span><span style={{ color: "var(--accent)" }}>●</span> Other</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <AnalystStatChip label="Rows" value={selectedEventCategoryRows.length} />
+                            <AnalystStatChip label="Flattened events" value={selectedEvents.length} />
+                            <AnalystStatChip label="Threat score" value={selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0} />
+                          </div>
+                        </div>
+                      </AnalystCard>
+
+                      <AnalystCard
+                        title={processViewMode === "view" ? `${activeEventMeta.label} overview` : processViewMode === "group" ? `${activeEventMeta.label} grouped events` : `${activeEventMeta.label} deep events`}
+                      >
+                        <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 12 }}>
+                          {activeEventMeta.description}
+                        </div>
+
+                        {processViewMode === "view" && (
+                          selectedEventCategoryRows.length === 0 ? (
+                            <EmptyNote>No {activeEventMeta.label.toLowerCase()} recorded for this process.</EmptyNote>
+                          ) : (
+                            <div style={{ display: "grid", gap: 8 }}>
+                              {selectedEventCategoryRows.slice(0, 12).map((row, index) => {
+                                const event = selectedEvents[index];
+                                const detailRows = _extractEventDetailRows((event?.details || row) as Record<string, any>);
+                                return (
+                                  <div
+                                    key={`overview-row-${index}`}
+                                    style={{
+                                      border: "1px solid rgba(96,165,250,0.18)",
+                                      borderRadius: 8,
+                                      background: "rgba(7,47,70,0.72)",
+                                      padding: "10px 12px",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+                                      <div style={{ color: "var(--text-primary)", fontWeight: 700 }}>
+                                        {event?.title || _extractEventTitle(row, activeEventCategory)}
+                                      </div>
+                                      <div style={{ color: "#93c5fd", fontSize: 12, whiteSpace: "nowrap" }}>
+                                        {event?.timeshift || _extractTimeshift(row)}
+                                      </div>
+                                    </div>
+                                    {detailRows.length === 0 ? (
+                                      <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                                        No structured details available for this event.
+                                      </div>
+                                    ) : (
+                                      detailRows.slice(0, 4).map((detail, detailIndex) => (
+                                        <div key={`overview-detail-${index}-${detailIndex}`} style={{ color: "var(--text-secondary)", fontSize: 12, marginBottom: detailIndex === 3 ? 0 : 4 }}>
+                                          <strong>{detail.key}:</strong> {detail.value}
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )
+                        )}
+
+                        {processViewMode === "group" && (
+                          selectedEvents.length === 0 ? (
+                            <EmptyNote>No group details available for {activeEventMeta.label.toLowerCase()}.</EmptyNote>
+                          ) : (
+                            <div>
+                              {(["danger", "warning", "other"] as const).map((sev) => {
+                                const byTech = groupedBySeverityAndTechnique[sev];
+                                const techKeys = Object.keys(byTech || {});
+                                if (!techKeys.length) return null;
+                                const color = sev === "danger" ? "var(--red)" : sev === "warning" ? "var(--yellow)" : "var(--accent)";
+                                return (
+                                  <div key={`sev-${sev}`} style={{ marginBottom: 10, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+                                    <div style={{ padding: "7px 10px", borderBottom: "1px solid var(--border-dim)", color, fontWeight: 700, background: "rgba(2,23,39,0.55)" }}>
+                                      {sev.toUpperCase()} {techKeys.length}
+                                    </div>
+                                    <div>
+                                      {techKeys.map((tech) => (
+                                        <details key={`tech-${sev}-${tech}`} style={{ borderTop: "1px solid var(--border-dim)" }} open>
+                                          <summary style={{ cursor: "pointer", listStyle: "none", padding: "8px 10px", color: "var(--text-secondary)" }}>
+                                            <span style={{ color: "var(--accent)", fontWeight: 700 }}>
+                                              {tech === "UNMAPPED" ? "Unmapped events" : tech}
+                                            </span>{" "}
+                                            ({byTech[tech].length})
+                                          </summary>
+                                          <div style={{ padding: "0 14px 10px 14px" }}>
+                                            {byTech[tech].map((e, i) => (
+                                              <div key={`ev-${sev}-${tech}-${i}`} style={{ marginBottom: 4, color: "var(--text-primary)", fontSize: 13 }}>
+                                                └ {e.title}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </details>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )
+                        )}
+
+                        {processViewMode === "deep" && (
+                          selectedEvents.length === 0 ? (
+                            <EmptyNote>No deep event data available for {activeEventMeta.label.toLowerCase()}.</EmptyNote>
+                          ) : (
+                            selectedEvents.map((e, i) => {
+                              const sevColor = e.severity === "danger" ? "var(--red)" : e.severity === "warning" ? "var(--yellow)" : "var(--accent)";
+                              const d = e.details || {};
+                              return (
+                                <details key={`deep-${i}`} open style={{ marginBottom: 10, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+                                  <summary style={{ cursor: "pointer", listStyle: "none", padding: "8px 10px", borderBottom: "1px solid var(--border-dim)", background: "rgba(2,23,39,0.55)" }}>
+                                    <span style={{ color: "var(--text-primary)", fontWeight: 700 }}>{e.timeshift}</span>{" "}
+                                    <span style={{ color: "var(--text-primary)", marginLeft: 10 }}>{e.title}</span>{" "}
+                                    <span style={{ color: sevColor, marginLeft: 10, fontWeight: 700 }}>
+                                      {e.technique_id === "UNMAPPED" ? "UNMAPPED" : e.technique_id}
+                                    </span>
+                                  </summary>
+                                  <div style={{ padding: 10, background: "rgba(14,116,144,0.22)" }}>
+                                    {(() => {
+                                      const rows = _extractEventDetailRows(d);
+                                      if (!rows.length) {
+                                        return (
+                                          <div style={{ marginBottom: 0, color: "var(--text-secondary)" }}>
+                                            No structured details available for this event.
+                                          </div>
+                                        );
+                                      }
+                                      return rows.map((row, rowIdx) => (
+                                        <div key={`deep-row-${i}-${rowIdx}`} style={{ marginBottom: rowIdx === rows.length - 1 ? 0 : 4, color: "var(--text-secondary)" }}>
+                                          <strong>{row.key}:</strong> {row.value}
+                                        </div>
+                                      ));
+                                    })()}
+                                  </div>
+                                </details>
+                              );
+                            })
+                          )
+                        )}
+                      </AnalystCard>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
               <div style={{ padding: "10px 12px", borderBottom: "1px solid #1b4d6b", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ color: "var(--text-primary)", fontSize: 16, fontWeight: 700 }}>
                   Advanced details of process{" "}
@@ -1441,6 +2288,8 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1965,6 +2814,92 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
         );
       })}
     </ReactFlowProvider>
+  );
+}
+
+function AnalystCard({
+  title,
+  children,
+  bodyStyle,
+}: {
+  title: string;
+  children: React.ReactNode;
+  bodyStyle?: React.CSSProperties;
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(27,77,107,0.95)",
+        borderRadius: 8,
+        overflow: "hidden",
+        background: "linear-gradient(180deg, rgba(7,47,70,0.96), rgba(6,37,56,0.98))",
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 12px",
+          borderBottom: "1px solid rgba(59,130,246,0.18)",
+          color: "#c7f0ff",
+          fontWeight: 700,
+          fontSize: 14,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ padding: 12, ...bodyStyle }}>{children}</div>
+    </div>
+  );
+}
+
+function AnalystPair({
+  label,
+  value,
+  long = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  long?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "96px 1fr",
+        gap: 10,
+        marginBottom: 8,
+        alignItems: "start",
+      }}
+    >
+      <div style={{ color: "#67e8f9", fontWeight: 700, fontSize: 12 }}>{label}:</div>
+      <div
+        style={{
+          color: "var(--text-secondary)",
+          fontSize: 12,
+          lineHeight: 1.45,
+          wordBreak: long ? "break-all" : "break-word",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function AnalystStatChip({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(96,165,250,0.24)",
+        background: "rgba(15,23,42,0.22)",
+        borderRadius: 999,
+        padding: "4px 10px",
+        color: "var(--text-secondary)",
+        fontSize: 12,
+      }}
+    >
+      <span style={{ color: "#67e8f9", fontWeight: 700 }}>{label}:</span> {value}
+    </div>
   );
 }
 

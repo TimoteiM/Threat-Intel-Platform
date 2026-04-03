@@ -45,11 +45,15 @@ def lookup_anyrun(
     except Exception as exc:
         return _error(indicator_type, f"anyrun-sdk unavailable: {exc}")
 
-    sandbox_timeout = timeout_file_hash if indicator_type == "hash" else timeout_url_domain
+    sandbox_timeout = timeout_file_hash if indicator_type in {"hash", "file"} else timeout_url_domain
     can_run_sandbox_first = bool(
         sandbox_first
         and submit_on_not_found
-        and (indicator_type == "url" or (indicator_type == "hash" and file_bytes))
+        and (
+            indicator_type == "url"
+            or indicator_type == "file"
+            or (indicator_type == "hash" and file_bytes)
+        )
     )
 
     if can_run_sandbox_first:
@@ -418,7 +422,7 @@ def _run_sandbox(
     timeout_seconds: int,
 ) -> dict[str, Any]:
     try:
-        if indicator_type == "hash":
+        if indicator_type in {"hash", "file"}:
             max_upload_mb = int(getattr(get_settings(), "anyrun_max_upload_mb", 100) or 100)
             if file_bytes:
                 file_size_mb = len(file_bytes) / (1024 * 1024)
@@ -616,9 +620,9 @@ def _submit_anyrun_task_with_fallback(
     file_name: str | None,
 ) -> Any:
     settings = get_settings()
-    if indicator_type == "hash" and not file_bytes:
-        return {"__error__": "ANY.RUN hash sandbox submission requires uploaded file bytes"}
-    if indicator_type not in {"url", "hash"}:
+    if indicator_type in {"hash", "file"} and not file_bytes:
+        return {"__error__": f"ANY.RUN {indicator_type} sandbox submission requires uploaded file bytes"}
+    if indicator_type not in {"url", "hash", "file"}:
         return {"__error__": f"Unsupported Any.Run indicator type: {indicator_type}"}
 
     attempts: list[str | None] = []

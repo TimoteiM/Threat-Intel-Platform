@@ -28,7 +28,6 @@ from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import LookupCache
 from app.services.content_ml_service import classify_email_content_locally
-from app.services.hybrid_analysis_service import lookup_hybrid_analysis
 from app.services.ml_attachment_analyzer import analyze_attachments_static
 from app.services.ml_url_model import score_url
 from app.services.risk_aggregator import aggregate_risk
@@ -239,16 +238,14 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool, run
                 "error": str(exc),
             }
 
-    hybrid_target = str(resolved_final_url or url).strip()
-    hybrid = lookup_hybrid_analysis(
-        indicator=hybrid_target,
-        indicator_type="url",
-        submit_on_not_found=run_anyrun,
-        prefer_anyrun=run_anyrun,
-    ) if hybrid_target else {
+    hybrid = {
         "checked": False,
         "verdict": "unknown",
-        "error": "Empty indicator",
+        "error": (
+            "Email investigations use a single email-level AnyRun submission."
+            if run_anyrun
+            else "Not requested"
+        ),
     }
 
     return {
@@ -341,7 +338,15 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, ru
                 "size_bytes": att.get("size_bytes"),
                 "vt": _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"},
                 "hybrid_analysis": (
-                    lookup_hybrid_analysis(indicator=sha256, indicator_type="hash", prefer_anyrun=run_anyrun)
+                    {
+                        "checked": False,
+                        "verdict": "unknown",
+                        "error": (
+                            "Email investigations use a single email-level AnyRun submission."
+                            if run_anyrun
+                            else "Not requested"
+                        ),
+                    }
                     if sha256
                     else {"checked": False, "verdict": "unknown", "error": "Missing SHA256 hash"}
                 ),

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
+    "dagre": "^0.8.5",
     "leaflet": "^1.9.4",
     "next": "^14.2.0",
     "react": "^18.3.0",
@@ -19,6 +20,7 @@
     "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@types/dagre": "^0.7.54",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
