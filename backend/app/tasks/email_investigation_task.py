@@ -76,6 +76,7 @@ def run_email_investigation(
     )
 
     try:
+        logger.info("Email investigation %s starting — run_anyrun=%s run_ai=%s", run_id, run_anyrun, run_ai)
         with open(file_path, "rb") as fh:
             payload = fh.read()
 

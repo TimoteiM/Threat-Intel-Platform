@@ -5,7 +5,14 @@
       "Bash(docker compose stop:*)",
       "Bash(powershell -Command:*)",
       "Bash(npx tsc:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(find /c/Users/tmoscaliuc/Downloads/script/threat-investigator/threat-intel/frontend -name *email* -type f)",
+      "Bash(find /c/Users/tmoscaliuc/Downloads/script/threat-investigator/threat-intel/frontend/src -name * -type f)",
+      "Bash(python -c \":*)",
+      "Bash(git -C \"c:/Users/tmoscaliuc/Downloads/script/threat-investigator/threat-intel\" log --oneline --all -- \"frontend/src/app/investigations/[id]/page.tsx\")",
+      "Bash(git -C \"c:/Users/tmoscaliuc/Downloads/script/threat-investigator/threat-intel\" show 8a5744f:frontend/src/app/investigations/[id]/page.tsx)",
+      "Bash(xargs -I{} git show {}:frontend/src/app/investigations/[id]/page.tsx)",
+      "Bash(docker ps:*)"
     ]
   }
 }

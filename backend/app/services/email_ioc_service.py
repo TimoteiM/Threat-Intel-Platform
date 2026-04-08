@@ -61,7 +61,8 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
         or len(decoded_raw_subject) > len(subject)
     ):
         subject = decoded_raw_subject
-    _, sender_email = parseaddr(_safe_header(msg.get("From")))
+    _from_display, sender_email = parseaddr(_safe_header(msg.get("From")))
+    sender_name = _safe_header(str(_from_display or "")).strip() or None
     sender_email = (sender_email or "").strip().lower()
     if not subject:
         subject = _fallback_header_value(raw_email, "Subject")
@@ -87,6 +88,7 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
     return {
         "email_subject": subject or "",
         "sender_email": sender_email or None,
+        "sender_name": sender_name,
         "sender_domain": sender_domain,
         "sender_ip": sender_ip,
         "authentication": {
@@ -121,7 +123,8 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
             raise ValueError(f"Unable to parse .msg file: {exc}") from exc
         subject = _safe_header(getattr(msg_obj, "subject", ""))
         sender_raw = _safe_header(getattr(msg_obj, "sender", ""))
-        _, sender_email = parseaddr(sender_raw)
+        _msg_display, sender_email = parseaddr(sender_raw)
+        sender_name = _safe_header(str(_msg_display or "")).strip() or None
         sender_email = (sender_email or "").strip().lower()
         sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else None
 
@@ -147,6 +150,7 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
         return {
             "email_subject": subject or "",
             "sender_email": sender_email or None,
+            "sender_name": sender_name,
             "sender_domain": sender_domain,
             "sender_ip": sender_ip,
             "authentication": {

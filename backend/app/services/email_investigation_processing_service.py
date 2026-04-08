@@ -65,13 +65,13 @@ async def process_email_investigation(
     interpretation_payload = {
         "email_subject": extracted.get("email_subject"),
         "sender_email": extracted.get("sender_email"),
+        "sender_name": extracted.get("sender_name"),
         "sender_domain": extracted.get("sender_domain"),
         "sender_ip": extracted.get("sender_ip"),
         "authentication": extracted.get("authentication"),
-        "urls": extracted.get("urls") or [],
-        "url_domains": extracted.get("url_domains") or [],
-        "attachments": extracted.get("attachments") or [],
-        "indicator_checks": _compact_checks_for_ai(checks),
+        # Only send suspicious/malicious items to AI — clean ones waste tokens
+        "indicator_checks": _compact_suspicious_checks_for_ai(checks),
+        "email_security": _compact_email_security_for_ai(checks.get("email_security") or {}),
         "context": context or None,
         "ml_phishing_score": parsed_ml_score,
     }
@@ -79,10 +79,6 @@ async def process_email_investigation(
     if run_ai:
         try:
             resolution = await interpret_email_results_with_ai(interpretation_payload)
-            resolution["url_assessments"] = _merge_url_assessments(
-                ai_items=resolution.get("url_assessments"),
-                checks=checks,
-            )
             if not isinstance(resolution.get("sender_domain_analysis"), dict):
                 resolution["sender_domain_analysis"] = _sender_domain_fallback(
                     extracted=extracted,
@@ -90,14 +86,20 @@ async def process_email_investigation(
                     reason="AI response did not include sender-domain analysis.",
                     classification="unknown",
                 )
+            # Merge AI url_assessments with deterministic fallback for full coverage
+            resolution["url_assessments"] = _merge_url_assessments(
+                ai_items=resolution.get("url_assessments"),
+                checks=checks,
+            )
             resolution_source = "ai"
         except Exception as exc:  # pragma: no cover - fallback path
+            logger.warning("AI interpretation failed: %s", exc)
             resolution = {
-                "formatted_resolution": (
-                    "AI interpretation failed. Not present in the provided evidence.\n"
-                    f"Error: {type(exc).__name__}: {exc}"
-                ),
+                "overall_verdict": "inconclusive",
+                "confidence": "low",
+                "primary_signals": [],
                 "url_assessments": _build_url_assessments_fallback(checks),
+                "attachment_narratives": [],
                 "sender_domain_analysis": _sender_domain_fallback(
                     extracted=extracted,
                     checks=checks,
@@ -108,8 +110,11 @@ async def process_email_investigation(
             resolution_source = "fallback_error"
     else:
         resolution = {
-            "formatted_resolution": f"AI interpretation disabled. {NOT_PRESENT}",
+            "overall_verdict": "inconclusive",
+            "confidence": "low",
+            "primary_signals": [],
             "url_assessments": _build_url_assessments_fallback(checks),
+            "attachment_narratives": [],
             "sender_domain_analysis": _sender_domain_fallback(
                 extracted=extracted,
                 checks=checks,
@@ -119,6 +124,15 @@ async def process_email_investigation(
         }
         resolution_source = "disabled"
 
+    # Compute deterministic overall_verdict when AI didn't provide one
+    if resolution_source != "ai":
+        det_verdict, det_signals = _deterministic_overall_verdict(checks)
+        resolution["overall_verdict"] = det_verdict
+        resolution["primary_signals"] = det_signals
+        resolution["confidence"] = "medium" if len(det_signals) >= 2 else "low"
+
+    # Always build the bullet-point template as the primary formatted_resolution.
+    # AI provides narratives for suspicious items that are woven into the template.
     resolution["formatted_resolution"] = _render_template_resolution(
         extracted=extracted,
         checks=checks,
@@ -130,6 +144,7 @@ async def process_email_investigation(
         "filename": filename,
         "email_subject": extracted.get("email_subject"),
         "sender_email": extracted.get("sender_email"),
+        "sender_name": extracted.get("sender_name"),
         "sender_domain": extracted.get("sender_domain"),
         "sender_ip": extracted.get("sender_ip"),
         "authentication": extracted.get("authentication"),
@@ -343,6 +358,7 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
                 "vt": item.get("vt") or {},
                 "effective_verdict": item.get("effective_verdict"),
                 "urlscan": item.get("urlscan") or {},
+                "anyrun": item.get("anyrun") or {},
                 "lexical_ml": item.get("lexical_ml") or {},
                 "ml_url_score": item.get("ml_url_score") or {},
                 "url_behavior": item.get("url_behavior") or {},
@@ -356,6 +372,7 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
     checks["hybrid_analysis"] = checks.get("hybrid_analysis") or {}
     checks["email_anyrun"] = checks.get("email_anyrun") or {}
     checks["final_risk"] = checks.get("final_risk") or {}
+    checks["email_security"] = checks.get("email_security") or {}
 
     return {
         "filename": response_payload.get("filename"),
@@ -383,6 +400,8 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
         vt = item.get("vt") or {}
         ss = item.get("screenshot") or {}
         lexical = item.get("lexical_ml") or {}
+        anyrun_url = item.get("anyrun") or {}
+        behavior = item.get("url_behavior") or {}
         urls_compact.append(
             {
                 "url": item.get("url"),
@@ -395,6 +414,12 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "error": vt.get("error"),
                 },
                 "effective_verdict": item.get("effective_verdict"),
+                "anyrun": {
+                    "checked": anyrun_url.get("checked"),
+                    "verdict": anyrun_url.get("verdict"),
+                    "threat_score": anyrun_url.get("threat_score"),
+                    "error": anyrun_url.get("error"),
+                },
                 "urlscan": item.get("urlscan") or {},
                 "lexical_ml": {
                     "target_url": lexical.get("target_url"),
@@ -405,8 +430,14 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "error": lexical.get("error"),
                 },
                 "ml_url_score": item.get("ml_url_score") or {},
-                "url_behavior": item.get("url_behavior") or {},
-                "hybrid_analysis": item.get("hybrid_analysis") or {},
+                "url_behavior": {
+                    "checked": behavior.get("checked"),
+                    "redirect_count": behavior.get("redirect_count"),
+                    "ua_cloaking_detected": behavior.get("ua_cloaking_detected"),
+                    "credential_form_present": behavior.get("credential_form_present"),
+                    "multiple_domain_hops": behavior.get("multiple_domain_hops"),
+                    "final_url": behavior.get("final_url"),
+                },
                 "screenshot": {
                     "captured": ss.get("captured"),
                     "final_url": ss.get("final_url"),
@@ -416,9 +447,20 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
         )
 
     attachments = checks.get("attachments") or {}
+    attachment_analysis = checks.get("attachment_analysis") or {}
+    att_static_by_hash: dict[str, dict[str, Any]] = {}
+    for static_item in attachment_analysis.get("items") or []:
+        if not isinstance(static_item, dict):
+            continue
+        h = str(static_item.get("hash") or "").strip().lower()
+        if h:
+            att_static_by_hash[h] = static_item
     att_items = []
     for att in attachments.get("items") or []:
         vt = att.get("vt") or {}
+        anyrun = att.get("anyrun") or {}
+        sha = str(att.get("sha256") or "").strip().lower()
+        static = att_static_by_hash.get(sha) or {}
         att_items.append(
             {
                 "filename": att.get("filename"),
@@ -433,6 +475,17 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "total_vendors": vt.get("total_vendors"),
                     "error": vt.get("error"),
                 },
+                "anyrun": {
+                    "checked": anyrun.get("checked"),
+                    "verdict": anyrun.get("verdict"),
+                    "threat_score": anyrun.get("threat_score"),
+                    "error": anyrun.get("error"),
+                },
+                "static_ml": {
+                    "risk_level": static.get("risk_level"),
+                    "static_risk_score": static.get("static_risk_score"),
+                    "mime_type": static.get("mime_type"),
+                } if static else None,
             }
         )
 
@@ -563,18 +616,20 @@ def _render_template_resolution(
     resolution: dict[str, Any],
     context: str,
 ) -> str:
+    """
+    Build the bullet-point investigation template, weaving AI narratives for
+    suspicious/malicious attachments and URLs into each relevant bullet.
+    """
     email_subject = _decode_header_text(str(extracted.get("email_subject") or NOT_PRESENT))
     sender_email = str(extracted.get("sender_email") or NOT_PRESENT)
-    sender_domain_analysis = resolution.get("sender_domain_analysis") or {}
-    sender_classification = _normalize_sender_legitimacy(
-        str(sender_domain_analysis.get("classification") or "unknown")
-    )
+    sender_name = str(extracted.get("sender_name") or "").strip()
     company_name, domain_description = _infer_sender_company_and_description(
         extracted=extracted,
         checks=checks,
         resolution=resolution,
     )
 
+    # Sender IP
     sender_ip = str(extracted.get("sender_ip") or NOT_PRESENT)
     ip_result = checks.get("sender_ip") or {}
     abuse = ip_result.get("abuseipdb") or {}
@@ -584,56 +639,168 @@ def _render_template_resolution(
     isp = str(abuse.get("isp") or abuse.get("asn_org") or ipwhois.get("isp") or ipwhois.get("org") or "").strip()
     usage_type = str(abuse.get("usage_type") or abuse.get("usageType") or "").strip()
     if not usage_type and ipwhois.get("checked"):
-        usage_type = "Inferred network/service provider (ipwho.is)"
+        usage_type = "Inferred via ipwho.is"
     if not isp:
         isp = f"Unavailable ({abuse_error_short})" if abuse_error_short else NOT_PRESENT
     if not usage_type:
         usage_type = f"Unavailable ({abuse_error_short})" if abuse_error_short else NOT_PRESENT
     ip_summary = _summarize_ip_result(ip_result)
 
-    attachment_types, attachment_verdict = _summarize_attachments(checks)
-    url_summary, _ = _summarize_urls(checks, resolution)
-    attachments_line = (
-        "No attachments present in the email body."
-        if attachment_verdict == "no_attachments"
-        else (
-            f"The attachments present in the email body ({attachment_types}) were found to be "
-            f"{attachment_verdict}."
-        )
-    )
+    # AI narratives index
+    attachment_narratives_by_filename: dict[str, str] = {}
+    for an in resolution.get("attachment_narratives") or []:
+        if not isinstance(an, dict):
+            continue
+        fn = str(an.get("filename") or "").strip().lower()
+        if fn:
+            attachment_narratives_by_filename[fn] = str(an.get("narrative") or "").strip()
+
+    url_narratives_by_url: dict[str, str] = {}
+    for ua in resolution.get("url_assessments") or []:
+        if not isinstance(ua, dict):
+            continue
+        url_key = str(ua.get("url") or "").strip().rstrip("/")
+        narrative = str(ua.get("narrative") or ua.get("reasoning") or "").strip()
+        if url_key and narrative and narrative != NOT_PRESENT:
+            url_narratives_by_url[url_key] = narrative
 
     lines = [
         f'Email subject: "{email_subject}"',
         "",
         "After our investigation, we found:",
-        "",
-        _build_sender_line(
-            sender_email=sender_email,
-            sender_classification=sender_classification,
-            company_name=company_name,
-            domain_description=domain_description,
-        ),
-        (
-            f"The sender's IP address {sender_ip} (ISP: {isp}, Usage Type: {usage_type}) "
-            f"was checked and {ip_summary}."
-        ),
-        attachments_line,
-        f"Embedded URLs: {url_summary}.",
     ]
 
-    findings = sender_domain_analysis.get("findings")
-    if isinstance(findings, list) and findings:
-        lines.append("")
-        lines.append("Additional findings:")
-        for finding in findings[:4]:
-            if not isinstance(finding, dict):
-                continue
-            title = str(finding.get("title") or "Finding")
-            description = str(finding.get("description") or NOT_PRESENT)
-            lines.append(f"- {title}: {description}")
+    # ── Sender bullet ──────────────────────────────────────────────
+    sender_name_part = f" (Sender name: {sender_name})" if sender_name else ""
+    sender_domain_check = checks.get("sender_domain") or {}
+    whois = sender_domain_check.get("whois") or {}
+    registrar = str(whois.get("registrar") or "").strip()
+    domain_age = whois.get("domain_age_days")
+    registrant_country = str(whois.get("registrant_country") or "").strip()
+
+    if company_name and company_name != NOT_PRESENT:
+        # Include description only when it's a real company description (not WHOIS noise)
+        if domain_description and domain_description != NOT_PRESENT and not _is_weak_domain_description(domain_description):
+            company_part = f"{company_name} — {domain_description}"
+        else:
+            company_part = company_name
     else:
-        lines.append("")
-        lines.append(f"Additional findings: {NOT_PRESENT}")
+        company_part = NOT_PRESENT
+
+    # Email security spoofability
+    es = checks.get("email_security") or {}
+    spoofability = str(es.get("spoofability_score") or "").lower()
+    auth_header = extracted.get("authentication") or {}
+    spf_header = str(auth_header.get("spf") or "none").lower()
+    dkim_header = str(auth_header.get("dkim") or "none").lower()
+
+    # Only flag authentication issues that are actionable for the client
+    auth_warnings: list[str] = []
+    if spf_header == "fail":
+        auth_warnings.append("the email failed SPF authentication")
+    if dkim_header == "fail":
+        auth_warnings.append("DKIM signature is invalid")
+    if spoofability == "high":
+        auth_warnings.append("the sender domain can be trivially spoofed")
+
+    # Only surface domain age when newly registered (suspicious signal)
+    age_warning = ""
+    if isinstance(domain_age, int) and domain_age < 30:
+        age_warning = f" The domain was registered only {domain_age} days ago, which is a high-risk signal."
+
+    sender_line = f"- The sender's email address {sender_email}{sender_name_part}."
+    if company_part != NOT_PRESENT:
+        sender_line += f" The domain belongs to {company_part}."
+    else:
+        sender_line += " No official information was found about the sender domain."
+    if age_warning:
+        sender_line = sender_line.rstrip(".") + "." + age_warning
+    if auth_warnings:
+        sender_line = sender_line.rstrip(".") + " Note: " + "; ".join(auth_warnings) + "."
+    lines.append(sender_line)
+
+    # ── Sender IP bullet ───────────────────────────────────────────
+    lines.append(
+        f"- The sender's IP address is {sender_ip} (ISP: {isp}, Usage Type: {usage_type}), "
+        f"was checked and {ip_summary}."
+    )
+
+    # ── Attachments bullet(s) ──────────────────────────────────────
+    attachment_items = (checks.get("attachments") or {}).get("items") or []
+    if not attachment_items:
+        lines.append("- No attachments were present in the email body.")
+    else:
+        for att in attachment_items:
+            if not isinstance(att, dict):
+                continue
+            filename = str(att.get("filename") or "unnamed attachment")
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "unknown"
+            vt = att.get("vt") or {}
+            anyrun = att.get("anyrun") or {}
+            vt_verdict = str(vt.get("verdict") or "unknown").lower()
+            anyrun_verdict = str(anyrun.get("verdict") or "").lower()
+
+            # Pick the AI narrative if available
+            ai_narrative = attachment_narratives_by_filename.get(filename.lower(), "")
+
+            if vt_verdict in {"malicious", "suspicious"} or anyrun_verdict in {"malicious", "suspicious"}:
+                source = "AnyRun" if anyrun_verdict in {"malicious", "suspicious"} else "VirusTotal"
+                verdict_word = "malicious" if (vt_verdict == "malicious" or anyrun_verdict == "malicious") else "suspicious"
+                if ai_narrative:
+                    lines.append(
+                        f"- One {verdict_word} attachment was found within the email body (.{ext}). "
+                        f"{ai_narrative}"
+                    )
+                else:
+                    lines.append(
+                        f"- One {verdict_word} attachment was found within the email body (.{ext}). "
+                        f"{source} flagged it as {verdict_word} "
+                        f"(malicious={vt.get('malicious_count', 0)}, suspicious={vt.get('suspicious_count', 0)})."
+                    )
+            else:
+                lines.append(
+                    f"- The attachment in the email body (.{ext}) was found to be safe "
+                    f"(VirusTotal: {vt_verdict})."
+                )
+
+    # ── URL bullet — single consolidated line ──────────────────────
+    url_items = checks.get("urls") or []
+    _RISKY = {"malicious", "suspicious"}
+    ai_url_summary = str(resolution.get("url_summary") or "").strip()
+
+    if not url_items:
+        lines.append("- No URLs were found in the email body.")
+    elif ai_url_summary:
+        # AI provided a human-readable summary — use it directly, no count prefix
+        lines.append(f"- {ai_url_summary}")
+    else:
+        # Fallback: build from deterministic data
+        total_urls = len(url_items)
+        risky_urls = [
+            u for u in url_items
+            if isinstance(u, dict) and (
+                str(u.get("effective_verdict") or "").lower() in _RISKY
+                or str((u.get("vt") or {}).get("verdict") or "").lower() in _RISKY
+                or str((u.get("anyrun") or {}).get("verdict") or "").lower() in _RISKY
+                or bool((u.get("url_behavior") or {}).get("credential_form_present"))
+            )
+        ]
+        if risky_urls:
+            risky_count = len(risky_urls)
+            has_cred = any(
+                bool((u.get("url_behavior") or {}).get("credential_form_present"))
+                for u in risky_urls
+            )
+            cred_note = " A credential input form was detected at one of the destinations." if has_cred else ""
+            lines.append(
+                f"- {total_urls} URL(s) were found in the email body. "
+                f"{risky_count} of them {'was' if risky_count == 1 else 'were'} found suspicious or malicious.{cred_note}"
+            )
+        else:
+            lines.append(
+                f"- {total_urls} URL(s) were found in the email body. "
+                f"All were checked and no suspicious or malicious URLs were identified."
+            )
 
     return "\n".join(lines)
 
@@ -787,10 +954,10 @@ def _summarize_ip_result(ip_result: dict[str, Any]) -> str:
     total = int(vt.get("total_vendors") or 0)
 
     if verdict == "clean":
-        return f"VirusTotal marked it clean ({malicious} malicious, {suspicious} suspicious out of {total} engines)"
+        return "nothing suspicious was found"
     if verdict in {"suspicious", "malicious"}:
-        return f"VirusTotal marked it {verdict} ({malicious} malicious, {suspicious} suspicious out of {total} engines)"
-    return "its reputation could not be confidently established by VirusTotal"
+        return f"it was flagged as {verdict} by VirusTotal ({malicious} out of {total} engines)"
+    return "its reputation could not be confidently established"
 
 
 def _summarize_attachments(checks: dict[str, Any]) -> tuple[str, str]:
@@ -984,6 +1151,12 @@ def _is_weak_domain_description(text: str) -> bool:
         "domain appears tied to",
         "not enough evidence",
         "unknown",
+        "whois",
+        "registrar",
+        "registrant",
+        "identity protection",
+        "domain created",
+        "registration",
     ]
     return any(marker in value for marker in weak_markers)
 
@@ -1090,6 +1263,240 @@ def _extract_urls_from_jwt_value(token: str) -> list[str]:
         if isinstance(v, str) and (v.startswith("http://") or v.startswith("https://")):
             out.append(v)
     return out
+
+
+def _compact_suspicious_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
+    """
+    Build a compact AI payload containing ONLY suspicious/malicious URLs and attachments.
+    Clean items are excluded — they add tokens without analytical value.
+    """
+    _RISKY = {"malicious", "suspicious"}
+
+    sender_domain = checks.get("sender_domain") or {}
+    whois = sender_domain.get("whois") or {}
+
+    # Filter URLs: include if effective_verdict is risky, OR if lexical/behavior signals are strong
+    suspicious_urls: list[dict[str, Any]] = []
+    for item in checks.get("urls") or []:
+        if not isinstance(item, dict):
+            continue
+        ev = str(item.get("effective_verdict") or "").lower()
+        vt_v = str((item.get("vt") or {}).get("verdict") or "").lower()
+        anyrun_v = str((item.get("anyrun") or {}).get("verdict") or "").lower()
+        anyrun_score = float((item.get("anyrun") or {}).get("threat_score") or 0)
+        lexical_label = str((item.get("lexical_ml") or {}).get("label") or "").lower()
+        cred_form = bool((item.get("url_behavior") or {}).get("credential_form_present"))
+        # Only treat AnyRun "malicious" as a risky signal if threat_score >= 95
+        # Below that threshold it is treated as suspicious (cross-validation with VT required)
+        anyrun_is_risky = anyrun_v in _RISKY and (anyrun_v != "malicious" or anyrun_score >= 95)
+        if ev in _RISKY or vt_v in _RISKY or anyrun_is_risky or cred_form:
+            vt = item.get("vt") or {}
+            anyrun = item.get("anyrun") or {}
+            ss = item.get("screenshot") or {}
+            lexical = item.get("lexical_ml") or {}
+            behavior = item.get("url_behavior") or {}
+            suspicious_urls.append(
+                {
+                    "url": item.get("url"),
+                    "effective_verdict": ev or vt_v or anyrun_v or "unknown",
+                    "vt": {
+                        "verdict": vt.get("verdict"),
+                        "malicious_count": vt.get("malicious_count"),
+                        "suspicious_count": vt.get("suspicious_count"),
+                        "total_vendors": vt.get("total_vendors"),
+                    },
+                    "anyrun": {
+                        "checked": anyrun.get("checked"),
+                        "verdict": anyrun.get("verdict"),
+                        "threat_score": anyrun.get("threat_score"),
+                    },
+                    "final_url": ss.get("final_url") or behavior.get("final_url"),
+                    "lexical_ml": {"label": lexical.get("label"), "score": lexical.get("score")},
+                    "url_behavior": {
+                        "redirect_count": behavior.get("redirect_count"),
+                        "credential_form_present": behavior.get("credential_form_present"),
+                        "ua_cloaking_detected": behavior.get("ua_cloaking_detected"),
+                        "unique_domains_in_chain": (behavior.get("unique_domains_in_chain") or [])[:5],
+                    },
+                }
+            )
+
+    # Filter attachments: include if VT or AnyRun flagged it
+    suspicious_atts: list[dict[str, Any]] = []
+    for att in (checks.get("attachments") or {}).get("items") or []:
+        if not isinstance(att, dict):
+            continue
+        vt_v = str((att.get("vt") or {}).get("verdict") or "").lower()
+        anyrun_v = str((att.get("anyrun") or {}).get("verdict") or "").lower()
+        static_risk = str(((checks.get("attachment_analysis") or {}).get("items") or []))
+        if vt_v in _RISKY or anyrun_v in _RISKY:
+            vt = att.get("vt") or {}
+            anyrun = att.get("anyrun") or {}
+            suspicious_atts.append(
+                {
+                    "filename": att.get("filename"),
+                    "sha256": att.get("sha256"),
+                    "vt": {
+                        "verdict": vt.get("verdict"),
+                        "malicious_count": vt.get("malicious_count"),
+                        "suspicious_count": vt.get("suspicious_count"),
+                        "total_vendors": vt.get("total_vendors"),
+                    },
+                    "anyrun": {
+                        "checked": anyrun.get("checked"),
+                        "verdict": anyrun.get("verdict"),
+                        "threat_score": anyrun.get("threat_score"),
+                    },
+                }
+            )
+
+    sender_ip = checks.get("sender_ip") or {}
+    ip_vt = sender_ip.get("vt") or {}
+    return {
+        "sender_domain": {
+            "domain": sender_domain.get("domain"),
+            "whois": {
+                "registrar": whois.get("registrar"),
+                "created_date": whois.get("created_date"),
+                "domain_age_days": whois.get("domain_age_days"),
+                "statuses": whois.get("statuses") or [],
+                "registrant_org": whois.get("registrant_org"),
+                "registrant_country": whois.get("registrant_country"),
+            },
+        },
+        "sender_ip": {
+            "ip": sender_ip.get("ip"),
+            "vt": {
+                "verdict": ip_vt.get("verdict"),
+                "malicious_count": ip_vt.get("malicious_count"),
+                "suspicious_count": ip_vt.get("suspicious_count"),
+                "total_vendors": ip_vt.get("total_vendors"),
+            },
+            "abuseipdb": sender_ip.get("abuseipdb"),
+        },
+        "suspicious_urls": suspicious_urls,
+        "suspicious_attachments": suspicious_atts,
+        # All unique URL domains (not full URLs) — used by AI to write url_summary
+        "all_url_domains": list(dict.fromkeys(
+            str((item.get("vt") or {}).get("url") or item.get("url") or "")
+            .split("/")[2].split(":")[0].lower()
+            for item in (checks.get("urls") or [])
+            if isinstance(item, dict) and item.get("url")
+        )),
+        "content_ml": checks.get("content_ml") or {},
+        "email_anyrun": checks.get("email_anyrun") or {},
+        "final_risk": checks.get("final_risk") or {},
+    }
+
+
+def _compact_email_security_for_ai(es: dict[str, Any]) -> dict[str, Any]:
+    """Extract key email security signals for the AI payload."""
+    if not es or es.get("checked") is False:
+        return {"available": False}
+    return {
+        "available": True,
+        "dmarc_policy": es.get("dmarc_policy"),
+        "dmarc_record": es.get("dmarc_record"),
+        "spf_record": es.get("spf_record"),
+        "spf_all_qualifier": es.get("spf_all_qualifier"),
+        "dkim_selectors_found": es.get("dkim_selectors_found") or [],
+        "spoofability_score": es.get("spoofability_score"),
+        "spoofability_reasons": es.get("spoofability_reasons") or [],
+        "email_security_score": es.get("email_security_score"),
+        "mx_blocklist_hits": sum(
+            len(mx.get("blocklist_hits") or [])
+            for mx in (es.get("mx_records") or [])
+            if isinstance(mx, dict)
+        ),
+    }
+
+
+def _deterministic_overall_verdict(checks: dict[str, Any]) -> tuple[str, list[str]]:
+    """Compute an overall verdict from deterministic check results when AI is unavailable."""
+    signals: list[str] = []
+    verdict = "inconclusive"
+
+    # Attachment VT malicious → definitive malicious
+    for att in (checks.get("attachments") or {}).get("items") or []:
+        vt = (att or {}).get("vt") or {}
+        if int(vt.get("malicious_count") or 0) > 0:
+            signals.append(f"Attachment VT malicious ({vt.get('malicious_count')} engines)")
+            verdict = "malicious"
+        anyrun = (att or {}).get("anyrun") or {}
+        if str(anyrun.get("verdict") or "").lower() == "malicious":
+            signals.append("AnyRun hash verdict: malicious")
+            verdict = "malicious"
+
+    # AnyRun email-level verdict
+    email_anyrun = checks.get("email_anyrun") or {}
+    anyrun_v = str(email_anyrun.get("verdict") or "").lower()
+    if anyrun_v == "malicious":
+        signals.append("AnyRun email verdict: malicious")
+        verdict = "malicious"
+    elif anyrun_v == "suspicious" and verdict != "malicious":
+        signals.append("AnyRun email verdict: suspicious")
+        verdict = "suspicious"
+
+    # URL signals
+    for url_item in checks.get("urls") or []:
+        if not isinstance(url_item, dict):
+            continue
+        ev = str(url_item.get("effective_verdict") or "").lower()
+        url_val = str(url_item.get("url") or "")[:60]
+        if ev == "malicious" and verdict != "malicious":
+            signals.append(f"URL verdict malicious: {url_val}")
+            verdict = "malicious"
+        elif ev == "suspicious" and verdict not in {"malicious"}:
+            signals.append(f"URL verdict suspicious: {url_val}")
+            if verdict == "inconclusive":
+                verdict = "suspicious"
+        behavior = url_item.get("url_behavior") or {}
+        if behavior.get("credential_form_present"):
+            signals.append(f"Credential form detected on URL: {url_val}")
+            if verdict == "inconclusive":
+                verdict = "suspicious"
+
+    # Email security
+    es = checks.get("email_security") or {}
+    spf_all = str(es.get("spf_all_qualifier") or "").lower()
+    dmarc_policy = str(es.get("dmarc_policy") or "").lower()
+    spoofability = str(es.get("spoofability_score") or "").lower()
+    if spoofability == "high":
+        signals.append(f"Domain spoofability: HIGH (DMARC={dmarc_policy or 'none'}, SPF={spf_all or 'none'})")
+        if verdict == "inconclusive":
+            verdict = "suspicious"
+
+    # Domain age
+    age_days = (checks.get("sender_domain") or {}).get("whois", {}).get("domain_age_days")
+    if isinstance(age_days, int) and age_days < 30:
+        signals.append(f"Sender domain age: {age_days} days (newly registered)")
+        if verdict == "inconclusive":
+            verdict = "suspicious"
+
+    # Content ML
+    content_ml = checks.get("content_ml") or {}
+    social_prob = float(content_ml.get("social_engineering_probability") or 0.0)
+    urgency_prob = float(content_ml.get("urgency_probability") or 0.0)
+    if social_prob > 0.7:
+        signals.append(f"Content ML social engineering probability: {social_prob:.2f}")
+        if verdict == "inconclusive":
+            verdict = "suspicious"
+    elif urgency_prob > 0.8:
+        signals.append(f"Content ML urgency probability: {urgency_prob:.2f}")
+        if verdict == "inconclusive":
+            verdict = "suspicious"
+
+    # Final risk
+    final_risk = checks.get("final_risk") or {}
+    risk_level = str(final_risk.get("risk_level") or "").lower()
+    if not signals and risk_level in {"high", "critical"}:
+        signals.append(f"Aggregate risk score: {risk_level}")
+        verdict = "suspicious"
+
+    if not signals:
+        verdict = "inconclusive"
+
+    return verdict, signals[:5]
 
 
 def _describe_destination_domain(domain: str) -> str:

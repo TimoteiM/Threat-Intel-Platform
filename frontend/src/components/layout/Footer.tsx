@@ -62,7 +62,7 @@ export default function Footer() {
                   letterSpacing: "0.01em",
                 }}
               >
-                Threat Investigator
+                Threat Analyzer
               </span>
             </div>
             <p
@@ -75,8 +75,8 @@ export default function Footer() {
                 margin: 0,
               }}
             >
-              AI-powered domain threat analysis platform.
-              Evidence-based classification with MITRE ATT&CK mapping
+              Threat intelligence and investigation platform.
+              Evidence-based analysis with MITRE ATT&CK mapping
               and full IOC extraction.
             </p>
           </div>
@@ -132,7 +132,7 @@ export default function Footer() {
               fontFamily: "var(--font-sans)",
             }}
           >
-            &copy; {YEAR} Threat Investigator - Timotei Moscaliuc. All rights reserved.
+            &copy; {YEAR} Threat Analyzer - Timotei Moscaliuc. All rights reserved.
           </span>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

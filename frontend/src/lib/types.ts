@@ -1061,7 +1061,11 @@ export interface EmailInvestigationOutcome {
 
 export interface EmailInvestigationResolution {
   email_subject?: string;
+  overall_verdict?: "clean" | "suspicious" | "malicious" | "inconclusive";
+  confidence?: "low" | "medium" | "high";
+  primary_signals?: string[];
   formatted_resolution: string;
+  template_resolution?: string;
   url_assessments?: Array<{
     url?: string;
     where_it_points?: string;
@@ -1112,6 +1116,7 @@ export interface EmailInvestigationResponse {
     attachment_analysis?: Record<string, any>;
     hybrid_analysis?: Record<string, any>;
     email_anyrun?: Record<string, any>;
+    email_security?: Record<string, any>;
     final_risk?: Record<string, any>;
   };
   resolution_source: string;

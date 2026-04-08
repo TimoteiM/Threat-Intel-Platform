@@ -15,6 +15,7 @@ import FindingsTab from "@/components/report/FindingsTab";
 import IndicatorsTab from "@/components/report/IndicatorsTab";
 import SignalsTab from "@/components/report/SignalsTab";
 import InfrastructureTab from "@/components/report/InfrastructureTab";
+import AnyRunProcessGraphTab from "@/components/report/AnyRunProcessGraphTab";
 
 import * as api from "@/lib/api";
 import { useSSE } from "@/hooks/useSSE";
@@ -28,6 +29,7 @@ const DOMAIN_TABS = [
   { id: "indicators", label: "Indicators & Pivots" },
   { id: "signals", label: "Signals & Gaps" },
   { id: "infrastructure", label: "Infrastructure" },
+  { id: "anyrun", label: "AnyRun" },
   { id: "raw", label: "Raw JSON" },
 ] as const;
 
@@ -55,7 +57,7 @@ const DEFAULT_COLLECTOR_ORDER = [
   "js_analysis",
 ] as const;
 
-type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "raw";
+type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
 
 export default function InvestigationPage() {
   const params = useParams();
@@ -364,6 +366,8 @@ export default function InvestigationPage() {
           return evidence ? <SignalsTab evidence={evidence} /> : <NoData label="evidence" />;
         case "infrastructure":
           return <InfrastructureTab investigationId={investigationId} evidence={evidence} />;
+        case "anyrun":
+          return <AnyRunProcessGraphTab evidence={evidence || {}} />;
         case "raw":
           return <RawJsonView evidence={evidence} report={report} detail={detail} />;
         default:

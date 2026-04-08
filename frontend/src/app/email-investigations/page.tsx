@@ -27,8 +27,9 @@ export default function EmailInvestigationsPage() {
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [includeScreenshots, setIncludeScreenshots] = useState(false);
-  const [runAnyRun, setRunAnyRun] = useState(false);
-  const [runAiInterpretation, setRunAiInterpretation] = useState(false);
+  const [runAnyRun, setRunAnyRun] = useState(true);
+  const [runAiInterpretation, setRunAiInterpretation] = useState(true);
+  const [copiedText, setCopiedText] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());
@@ -220,6 +221,13 @@ export default function EmailInvestigationsPage() {
     }
   }
 
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedText(text);
+      setTimeout(() => setCopiedText(null), 1800);
+    }).catch(() => {});
+  }
+
   return (
     <div style={{ paddingTop: 24, paddingBottom: 48 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
@@ -395,7 +403,7 @@ export default function EmailInvestigationsPage() {
             checked={runAiInterpretation}
             onChange={(e) => setRunAiInterpretation(e.target.checked)}
           />
-          AI interpretation (GPT-5 mini) - higher cost
+          AI-assisted interpretation (recommended)
         </label>
         <button
           type="submit"
@@ -488,18 +496,97 @@ export default function EmailInvestigationsPage() {
 
       {result && (
         <div style={{ display: "grid", gap: 16 }}>
-          <div style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            padding: 16,
-          }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Summary</div>
-            <div style={{ color: "var(--text)", fontSize: 13 }}>
-              Subject: <b>{result.email_subject || "N/A"}</b>
+
+          {/* ── Overall Verdict Banner ── */}
+          {(() => {
+            const verdict = String((result as any)?.resolution?.overall_verdict || "inconclusive").toLowerCase();
+            const confidence = String((result as any)?.resolution?.confidence || "low").toLowerCase();
+            const signals: string[] = (result as any)?.resolution?.primary_signals || [];
+            const color = verdict === "malicious" ? "#ef4444" : verdict === "suspicious" ? "#f59e0b" : verdict === "clean" ? "#34d399" : "#94a3b8";
+            const bg = verdict === "malicious" ? "rgba(239,68,68,0.08)" : verdict === "suspicious" ? "rgba(245,158,11,0.08)" : verdict === "clean" ? "rgba(52,211,153,0.08)" : "rgba(148,163,184,0.06)";
+            const border = verdict === "malicious" ? "rgba(239,68,68,0.35)" : verdict === "suspicious" ? "rgba(245,158,11,0.35)" : verdict === "clean" ? "rgba(52,211,153,0.3)" : "var(--border)";
+            return (
+              <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 18, fontWeight: 800, color, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    {verdict}
+                  </span>
+                  <span style={{ fontSize: 11, color, fontWeight: 600, border: `1px solid ${border}`, borderRadius: 999, padding: "3px 8px" }}>
+                    {confidence} confidence
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: "auto" }}>
+                    {result.resolution_source === "ai" ? "AI-assisted" : "Deterministic"}
+                  </span>
+                </div>
+                {signals.length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {signals.map((s, i) => (
+                      <span key={i} style={{ fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 8px" }}>
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── Email Summary ── */}
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Email Summary</div>
+            <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+              {result.email_subject || "No subject"}
             </div>
-            <div style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 6 }}>
-              Sender: {result.sender_email || "N/A"} | Sender Domain: {result.sender_domain || "N/A"} | Sender IP: {result.sender_ip || "N/A"}
+            <div style={{ display: "grid", gap: 6 }}>
+              {/* Sender row with copy */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", minWidth: 90 }}>Sender</span>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>{result.sender_email || "N/A"}</span>
+                {result.sender_email && (
+                  <button type="button" onClick={() => copyToClipboard(result.sender_email!)} style={copyBtnStyle(copiedText === result.sender_email)}>
+                    {copiedText === result.sender_email ? "Copied" : "Copy"}
+                  </button>
+                )}
+              </div>
+              {/* Domain row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", minWidth: 90 }}>Domain</span>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>{result.sender_domain || "N/A"}</span>
+                {result.sender_domain && (
+                  <button type="button" onClick={() => copyToClipboard(result.sender_domain!)} style={copyBtnStyle(copiedText === result.sender_domain)}>
+                    {copiedText === result.sender_domain ? "Copied" : "Copy"}
+                  </button>
+                )}
+              </div>
+              {/* IP row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", minWidth: 90 }}>Sender IP</span>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>
+                  {result.sender_ip || "N/A"}
+                  {result?.indicator_checks?.sender_ip?.abuseipdb?.isp ? ` (${result.indicator_checks.sender_ip.abuseipdb.isp}` : ""}
+                  {result?.indicator_checks?.sender_ip?.abuseipdb?.country_code ? `, ${result.indicator_checks.sender_ip.abuseipdb.country_code})` : result?.indicator_checks?.sender_ip?.abuseipdb?.isp ? ")" : ""}
+                </span>
+                {result.sender_ip && (
+                  <button type="button" onClick={() => copyToClipboard(result.sender_ip!)} style={copyBtnStyle(copiedText === result.sender_ip)}>
+                    {copiedText === result.sender_ip ? "Copied" : "Copy"}
+                  </button>
+                )}
+              </div>
+              {/* Auth row */}
+              {result.authentication && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", minWidth: 90 }}>Auth Header</span>
+                  {(["spf", "dkim", "dmarc"] as const).map((k) => {
+                    const val = String((result.authentication as any)?.[k] || "none").toLowerCase();
+                    const c = val === "pass" ? "#34d399" : val === "fail" || val === "permerror" ? "#ef4444" : "#f59e0b";
+                    return (
+                      <span key={k} style={{ fontSize: 11, fontWeight: 700, color: c, border: "1px solid var(--border)", borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>
+                        {k.toUpperCase()}: {val}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
               <span style={{ fontSize: 11, color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px" }}>
@@ -509,55 +596,176 @@ export default function EmailInvestigationsPage() {
                 Attachments: {result.attachments_count}
               </span>
               <span style={{ fontSize: 11, color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px" }}>
-                Resolution: {result.resolution_source}
+                Risk: {(result as any)?.indicator_checks?.final_risk?.risk_level || "unknown"} / score {(result as any)?.indicator_checks?.final_risk?.risk_score ?? "N/A"}
               </span>
             </div>
           </div>
 
-          <div style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            padding: 16,
-          }}>
+          {/* ── Email Authentication & Security Posture ── */}
+          {(() => {
+            const es = (result as any)?.indicator_checks?.email_security || {};
+            const auth = result.authentication as any || {};
+            const hasData = es.available !== false || auth.spf;
+            if (!hasData) return null;
+            const spoofability = String(es.spoofability_score || "").toLowerCase();
+            const spoofColor = spoofability === "high" ? "#ef4444" : spoofability === "medium" ? "#f59e0b" : spoofability === "low" ? "#60a5fa" : "#34d399";
+            return (
+              <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+                  Email Authentication &amp; Security Posture
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10, marginBottom: 12 }}>
+                  {/* Header-parsed tokens */}
+                  {(["spf", "dkim", "dmarc"] as const).map((k) => {
+                    const headerVal = String(auth?.[k] || "none").toLowerCase();
+                    const c = headerVal === "pass" ? "#34d399" : headerVal === "fail" || headerVal === "permerror" ? "#ef4444" : "#f59e0b";
+                    return (
+                      <div key={k} style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                        <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{k.toUpperCase()} (header)</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: c }}>{headerVal.toUpperCase()}</div>
+                      </div>
+                    );
+                  })}
+                  {/* Live DNS DMARC policy */}
+                  {es.dmarc_policy !== undefined && (
+                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DMARC Policy (DNS)</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.dmarc_policy === "reject" ? "#34d399" : es.dmarc_policy === "quarantine" ? "#60a5fa" : "#f59e0b" }}>
+                        {String(es.dmarc_policy || "none").toUpperCase()}
+                      </div>
+                    </div>
+                  )}
+                  {/* SPF all qualifier */}
+                  {es.spf_all_qualifier !== undefined && (
+                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>SPF All Qualifier</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.spf_all_qualifier === "-all" ? "#34d399" : es.spf_all_qualifier === "+all" ? "#ef4444" : "#f59e0b" }}>
+                        {String(es.spf_all_qualifier || "none")}
+                      </div>
+                    </div>
+                  )}
+                  {/* DKIM selectors */}
+                  <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DKIM Selectors</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: (es.dkim_selectors_found || []).length > 0 ? "#34d399" : "#f59e0b" }}>
+                      {(es.dkim_selectors_found || []).length > 0 ? (es.dkim_selectors_found || []).join(", ") : "None found"}
+                    </div>
+                  </div>
+                  {/* Security score */}
+                  {typeof es.email_security_score === "number" && (
+                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Security Score</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.email_security_score >= 80 ? "#34d399" : es.email_security_score >= 50 ? "#f59e0b" : "#ef4444" }}>
+                        {es.email_security_score}/100
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {/* Spoofability */}
+                {spoofability && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase" }}>Spoofability:</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: spoofColor, border: `1px solid ${spoofColor}40`, borderRadius: 6, padding: "2px 10px" }}>
+                      {spoofability.toUpperCase()}
+                    </span>
+                    {(es.spoofability_reasons || []).map((r: string, i: number) => (
+                      <span key={i} style={{ fontSize: 11, color: "var(--text-secondary)", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 8px" }}>{r}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── Investigation Summary (AI narrative) ── */}
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+              Investigation Summary
+              <span style={{ marginLeft: 8, fontSize: 10, color: "var(--text-muted)", fontWeight: 400 }}>
+                {result.resolution_source === "ai" ? "AI-assisted" : result.resolution_source === "disabled" ? "AI disabled — template output" : "Template output"}
+              </span>
+            </div>
+            <div style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", color: "var(--text-secondary)", marginBottom: 14 }}>
+              {result?.resolution?.formatted_resolution || "Not present in the provided evidence."}
+            </div>
+            {/* Sender domain analysis */}
+            <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>Sender Domain Analysis</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              {(() => {
+                const cls = (result?.resolution?.sender_domain_analysis?.classification || "unknown").toLowerCase();
+                const c = cls === "malicious" ? "#ef4444" : cls === "suspicious" ? "#f59e0b" : cls === "benign" ? "#34d399" : "var(--text-secondary)";
+                return <span style={{ fontSize: 11, color: c, border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px", fontWeight: 700, textTransform: "uppercase" }}>{cls}</span>;
+              })()}
+            </div>
+            {result?.resolution?.sender_domain_analysis?.primary_reasoning && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 12, padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                {result.resolution.sender_domain_analysis.primary_reasoning}
+              </div>
+            )}
+            {!domainFindings.length ? (
+              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No sender-domain findings returned.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {domainFindings.map((f: any, idx: number) => (
+                  <div key={idx} style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)", borderLeft: `3px solid ${findingSeverityColor(f?.severity)}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 8px", color: findingSeverityColor(f?.severity), background: "rgba(96,165,250,0.10)", textTransform: "uppercase" }}>
+                          {(f?.severity || "info").toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 700 }}>{f?.title || "Untitled finding"}</span>
+                      </div>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Sender Domain</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>{f?.description || "Not present in the provided evidence."}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Indicator Checks ── */}
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Indicator Checks</div>
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 8 }}>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Sender domain: {result?.indicator_checks?.sender_domain?.domain || result.sender_domain || "Not present in the provided evidence."}
-                {" | "}
-                WHOIS registrar: {result?.indicator_checks?.sender_domain?.whois?.registrar || "N/A"}
-                {" | "}
-                Age days: {result?.indicator_checks?.sender_domain?.whois?.domain_age_days ?? "N/A"}
+                <b>Sender domain:</b> {result?.indicator_checks?.sender_domain?.domain || result.sender_domain || "N/A"}
+                {" | "}Registrar: {result?.indicator_checks?.sender_domain?.whois?.registrar || "N/A"}
+                {" | "}Age: {result?.indicator_checks?.sender_domain?.whois?.domain_age_days ?? "N/A"} days
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                WHOIS statuses: {(result?.indicator_checks?.sender_domain?.whois?.statuses || []).length
-                  ? (result?.indicator_checks?.sender_domain?.whois?.statuses || []).join(", ")
-                  : "Not present in the provided evidence."}
+                <b>Sender IP:</b> {result?.indicator_checks?.sender_ip?.ip || "N/A"}
+                {" | "}VT: {result?.indicator_checks?.sender_ip?.vt?.malicious_count ?? 0}m/{result?.indicator_checks?.sender_ip?.vt?.suspicious_count ?? 0}s
+                {" | "}AbuseIPDB: {result?.indicator_checks?.sender_ip?.abuseipdb?.abuse_confidence_score ?? "N/A"}%
+                {result?.indicator_checks?.sender_ip?.abuseipdb?.usage_type ? ` | ${result.indicator_checks.sender_ip.abuseipdb.usage_type}` : ""}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                IP: {result?.indicator_checks?.sender_ip?.ip || "Not present in the provided evidence."}
-                {" | "}
-                VT malicious/suspicious: {result?.indicator_checks?.sender_ip?.vt?.malicious_count ?? 0}/{result?.indicator_checks?.sender_ip?.vt?.suspicious_count ?? 0}
-                {" | "}
-                AbuseIPDB score: {result?.indicator_checks?.sender_ip?.abuseipdb?.abuse_confidence_score ?? "N/A"}
+                <b>URLs checked:</b> {result?.indicator_checks?.urls?.length || 0}
+                {" | "}<b>Attachments:</b> {result?.indicator_checks?.attachments?.items?.length || 0}
+                {" | "}<b>Final Risk:</b> {(result as any)?.indicator_checks?.final_risk?.risk_level || "unknown"} (score {(result as any)?.indicator_checks?.final_risk?.risk_score ?? "N/A"})
               </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Attachments checked: {result?.indicator_checks?.attachments?.items?.length || 0}
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                URLs checked: {result?.indicator_checks?.urls?.length || 0}
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Final Risk: {(result as any)?.indicator_checks?.final_risk?.risk_level || "unknown"}
-                {" | "}
-                Score: {(result as any)?.indicator_checks?.final_risk?.risk_score ?? "N/A"}
-                {" | "}
-                Confidence: {(result as any)?.indicator_checks?.final_risk?.confidence || "N/A"}
-              </div>
+              {/* Content ML */}
+              {(result as any)?.indicator_checks?.content_ml && (
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--text)" }}>Content ML (header heuristics)</div>
+                  {(["social_engineering_probability", "urgency_probability", "impersonation_probability", "bec_probability"] as const).map((k) => {
+                    const val = (result as any).indicator_checks.content_ml[k];
+                    if (typeof val !== "number") return null;
+                    const pct = (val * 100).toFixed(0);
+                    const label = k.replace("_probability", "").replace(/_/g, " ");
+                    const color = val > 0.7 ? "#ef4444" : val > 0.4 ? "#f59e0b" : "var(--text-dim)";
+                    return (
+                      <span key={k} style={{ marginRight: 12, color }}>
+                        {label}: {pct}%
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
-          <div style={{
+          {(result?.indicator_checks as any)?.email_anyrun?.checked && <div style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius-lg)",
@@ -574,11 +782,7 @@ export default function EmailInvestigationsPage() {
             }}>
               AnyRun Email Analysis
             </div>
-            {!(result?.indicator_checks as any)?.email_anyrun ? (
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
-                AnyRun email analysis was not requested for this investigation.
-              </div>
-            ) : (
+            {(
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span style={{
@@ -765,331 +969,155 @@ export default function EmailInvestigationsPage() {
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
-          <div style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            padding: 16,
-          }}>
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Attachment Hash Checks</div>
             {!result?.indicator_checks?.attachments?.items?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No attachments found.</div>
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
-                {result.indicator_checks.attachments.items.map((a: any, idx: number) => (
-                  <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 10 }}>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-                      File: {a?.filename || "unnamed_attachment"} ({a?.size_bytes ?? 0} bytes)
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginBottom: 4, wordBreak: "break-all" }}>
-                      SHA256: {a?.sha256 || "Not present in the provided evidence."}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginBottom: 6, wordBreak: "break-all" }}>
-                      MD5: {a?.md5 || "Not present in the provided evidence."}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                      VT verdict: {a?.vt?.verdict || "unknown"} (m={a?.vt?.malicious_count ?? 0}, s={a?.vt?.suspicious_count ?? 0}, total={a?.vt?.total_vendors ?? 0})
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
-                      Sandbox: {String(a?.hybrid_analysis?.verdict || "unknown")}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
-                      Static ML: {
-                        (() => {
-                          const items = (result as any)?.indicator_checks?.attachment_analysis?.items || [];
-                          const found = items.find((i: any) => String(i?.hash || "").toLowerCase() === String(a?.sha256 || "").toLowerCase());
-                          if (!found) return "not available";
-                          return `${String(found.risk_level || "unknown").toUpperCase()} (score=${Number(found.static_risk_score || 0).toFixed(3)})`;
-                        })()
-                      }
-                    </div>
-                    {a?.vt?.error && (
-                      <div style={{ fontSize: 11, color: "#f87171", marginTop: 4 }}>
-                        VT error: {a.vt.error}
+                {result.indicator_checks.attachments.items.map((a: any, idx: number) => {
+                  const attVtVerdict = String(a?.vt?.verdict || "unknown").toLowerCase();
+                  const anyrunVerdict = String(a?.anyrun?.verdict || "").toLowerCase();
+                  const isRisky = attVtVerdict === "malicious" || attVtVerdict === "suspicious" || anyrunVerdict === "malicious" || anyrunVerdict === "suspicious";
+                  const staticItems = (result as any)?.indicator_checks?.attachment_analysis?.items || [];
+                  const staticFound = staticItems.find((i: any) => String(i?.hash || "").toLowerCase() === String(a?.sha256 || "").toLowerCase());
+                  return (
+                    <div key={idx} style={{ border: `1px solid ${isRisky ? "rgba(239,68,68,0.4)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 10 }}>
+                      <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600, marginBottom: 6 }}>
+                        {a?.filename || "unnamed_attachment"}
+                        <span style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 400, marginLeft: 8 }}>({a?.size_bytes ?? 0} bytes)</span>
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            padding: 16,
-          }}>
-            <div style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "var(--accent)",
-              letterSpacing: "0.01em",
-              marginBottom: 14,
-              paddingBottom: 8,
-              borderBottom: "1px solid var(--border)",
-            }}>
-              Analyst Findings (Template Output)
-            </div>
-            <div
-              style={{
-                marginBottom: 12,
-                padding: "12px 14px",
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                fontSize: 12,
-                lineHeight: 1.7,
-                whiteSpace: "pre-wrap",
-                color: "var(--text-secondary)",
-              }}
-            >
-              {result?.resolution?.formatted_resolution || "Not present in the provided evidence."}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 8 }}>
-              Supporting evidence details
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-              <span
-                style={{
-                  fontSize: 11,
-                  color:
-                    (result?.resolution?.sender_domain_analysis?.classification || "unknown") === "malicious"
-                      ? "#ef4444"
-                      : (result?.resolution?.sender_domain_analysis?.classification || "unknown") === "suspicious"
-                        ? "#f59e0b"
-                        : (result?.resolution?.sender_domain_analysis?.classification || "unknown") === "benign"
-                          ? "#34d399"
-                          : "var(--text-secondary)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 999,
-                  padding: "4px 8px",
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                }}
-              >
-                {(result?.resolution?.sender_domain_analysis?.classification || "unknown")}
-              </span>
-            </div>
-            {!domainFindings.length ? (
-              <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No sender-domain findings returned.</div>
-            ) : (
-              <div style={{ display: "grid", gap: 8 }}>
-                {domainFindings.map((f: any, idx: number) => (
-                  <div
-                    key={idx}
-                    style={{
-                      padding: "14px 16px",
-                      background: "var(--bg-input)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "var(--radius)",
-                      borderLeft: `3px solid ${findingSeverityColor(f?.severity)}`,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            borderRadius: 999,
-                            padding: "2px 8px",
-                            color: findingSeverityColor(f?.severity),
-                            background: "rgba(96,165,250,0.10)",
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          {(f?.severity || "info").toUpperCase()}
-                        </span>
-                        <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 700 }}>
-                          {f?.title || "Untitled finding"}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase" }}>SHA256</span>
+                        <span style={{ fontSize: 10, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all", flex: 1 }}>{a?.sha256 || "N/A"}</span>
+                        {a?.sha256 && <button type="button" onClick={() => copyToClipboard(a.sha256)} style={copyBtnStyle(copiedText === a.sha256)}>{copiedText === a.sha256 ? "Copied" : "Copy"}</button>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase" }}>MD5</span>
+                        <span style={{ fontSize: 10, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all", flex: 1 }}>{a?.md5 || "N/A"}</span>
+                        {a?.md5 && <button type="button" onClick={() => copyToClipboard(a.md5)} style={copyBtnStyle(copiedText === a.md5)}>{copiedText === a.md5 ? "Copied" : "Copy"}</button>}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+                        <div style={{ padding: "6px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>VirusTotal</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: attVtVerdict === "malicious" ? "#ef4444" : attVtVerdict === "suspicious" ? "#f59e0b" : attVtVerdict === "clean" ? "#34d399" : "var(--text)" }}>
+                            {attVtVerdict.toUpperCase()}
+                          </div>
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>m={a?.vt?.malicious_count ?? 0}, s={a?.vt?.suspicious_count ?? 0}, n={a?.vt?.total_vendors ?? 0}</div>
+                          {a?.vt?.verdict === "rate_limited" && <div style={{ fontSize: 10, color: "#f87171" }}>rate limited</div>}
+                        </div>
+                        <div style={{ padding: "6px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>AnyRun TI</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: anyrunVerdict === "malicious" ? "#ef4444" : anyrunVerdict === "suspicious" ? "#f59e0b" : anyrunVerdict === "clean" ? "#34d399" : "var(--text-dim)" }}>
+                            {a?.anyrun?.checked ? anyrunVerdict.toUpperCase() || "CHECKED" : a?.anyrun?.error === "Not requested" ? "Not queried" : "Not found"}
+                          </div>
+                          {typeof a?.anyrun?.threat_score === "number" && <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>score: {a.anyrun.threat_score}</div>}
+                        </div>
+                        <div style={{ padding: "6px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>Static ML</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)" }}>
+                            {staticFound ? String(staticFound.risk_level || "unknown").toUpperCase() : "N/A"}
+                          </div>
+                          {staticFound && <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>score: {Number(staticFound.static_risk_score || 0).toFixed(3)}</div>}
                         </div>
                       </div>
-                      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>
-                        Sender Domain
-                      </div>
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                      {f?.description || "Not present in the provided evidence."}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-            <div
-              style={{
-                marginTop: 10,
-                padding: "12px 14px",
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-              }}
-            >
-              <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>
-                URL Summary
-              </div>
-              <div style={{ display: "grid", gap: 8 }}>
-                <div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
-                    Overview
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                    {urlSummary.overview}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
-                    Likely Purpose
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                    {urlSummary.purpose.length ? (
-                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
-                        {urlSummary.purpose.map((p, i) => (
-                          <li key={i}>{p}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      "Not present in the provided evidence."
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
-                    Destinations
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                    {urlSummary.destinations.length ? (
-                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
-                        {urlSummary.destinations.map((d, i) => (
-                          <li key={i} style={{ fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      "Not present in the provided evidence."
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>
-                    Caution
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                    {urlSummary.caution.length ? (
-                      <ul style={{ margin: 0, paddingInlineStart: 18 }}>
-                        {urlSummary.caution.map((d, i) => (
-                          <li key={i} style={{ fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      "No suspicious or malicious URL destinations identified by VirusTotal."
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
 
-          <div style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            padding: 16,
-          }}>
+          {/* URL summary strip */}
+          {urlSummary.caution.length > 0 && (
+            <div style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "var(--radius-lg)", padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, color: "#ef4444", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Suspicious / Malicious URL Destinations</div>
+              {urlSummary.caution.map((d, i) => (
+                <div key={i} style={{ fontSize: 11, color: "#fca5a5", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>URL Reputation and Destination</div>
             {!result?.indicator_checks?.urls?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No URLs found.</div>
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
                 {result.indicator_checks.urls.map((u: any, idx: number) => {
-                  const finalUrl = u?.screenshot?.final_url || "Not present in the provided evidence.";
+                  const finalUrl = u?.screenshot?.final_url || u?.url_behavior?.final_url || "Not present in the provided evidence.";
+                  const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
+                  const verdictColor = verdict === "malicious" ? "#ef4444" : verdict === "suspicious" ? "#f59e0b" : verdict === "clean" ? "#34d399" : "var(--text)";
+                  const anyrunVerdict = String(u?.anyrun?.verdict || "").toLowerCase();
+                  // Determine which source drove the effective verdict
+                  const vtV = String(u?.vt?.verdict || "").toLowerCase();
+                  const urlscanV = String(u?.urlscan?.verdict || "").toLowerCase();
+                  const verdictSource: string = (() => {
+                    if (["malicious","suspicious","clean"].includes(vtV)) return "VirusTotal";
+                    if (u?.anyrun?.checked && ["malicious","suspicious","clean"].includes(anyrunVerdict)) return "AnyRun TI";
+                    if (u?.urlscan?.checked && ["malicious","suspicious","clean"].includes(urlscanV)) return "URLScan";
+                    return "";
+                  })();
                   return (
-                  <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 10 }}>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>
-                      URL: {u.url}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 8 }}>
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(96,165,250,0.08)" }}>
-                        <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-                          URL verdict
-                        </div>
-                        {(() => {
-                          const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
-                          return (
-                        <div style={{
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color:
-                            verdict === "malicious"
-                              ? "#ef4444"
-                              : verdict === "suspicious"
-                                ? "#f59e0b"
-                                : verdict === "clean"
-                                  ? "#34d399"
-                                  : "var(--text)",
-                        }}>
-                          {verdict.toUpperCase()}
-                        </div>
-                          );
-                        })()}
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                          m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, total={u?.vt?.total_vendors ?? 0}
-                        </div>
-                        {u?.urlscan?.checked && (
-                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                            URLScan: {String(u?.urlscan?.verdict || "unknown")}
-                            {typeof u?.urlscan?.score === "number" ? ` (score ${u.urlscan.score})` : ""}
+                    <div key={idx} style={{ border: `1px solid ${verdict === "malicious" ? "rgba(239,68,68,0.4)" : verdict === "suspicious" ? "rgba(245,158,11,0.3)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 12 }}>
+                      {/* URL header */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: verdictColor }}>{verdict.toUpperCase()}</span>
+                        {verdictSource && <span style={{ fontSize: 10, color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: 999, padding: "1px 7px" }}>via {verdictSource}</span>}
+                        <span style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all", flex: 1 }}>{u.url}</span>
+                        <button type="button" onClick={() => copyToClipboard(String(u.url))} style={copyBtnStyle(copiedText === String(u.url))}>
+                          {copiedText === String(u.url) ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 8 }}>
+                        {/* Verdict details */}
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(96,165,250,0.05)" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Signals</div>
+                          <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 2 }}>
+                            VT: {u?.vt?.verdict || "unknown"} (m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, n={u?.vt?.total_vendors ?? 0})
+                            {u?.vt?.verdict === "rate_limited" && <span style={{ color: "#f87171" }}> [rate limited]</span>}
                           </div>
-                        )}
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                          Lexical ML: {String(u?.ml_url_score?.risk_level || u?.lexical_ml?.label || "unknown").toUpperCase()}
-                          {typeof u?.ml_url_score?.phishing_probability === "number"
-                            ? ` (${u.ml_url_score.phishing_probability.toFixed(3)})`
-                            : typeof u?.lexical_ml?.score === "number"
-                              ? ` (${u.lexical_ml.score.toFixed(3)})`
-                              : ""}
-                        </div>
-                        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>
-                          Sandbox: {String(u?.hybrid_analysis?.verdict || "unknown").toUpperCase()}
-                        </div>
-                      </div>
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.05)" }}>
-                        <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-                          Final URL
-                        </div>
-                        <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>
-                          {finalUrl}
-                        </div>
-                        {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
-                          <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
-                            {u?.urlscan?.page_title ? `title: ${u.urlscan.page_title}` : ""}
-                            {u?.urlscan?.page_title && u?.urlscan?.page_ip ? " | " : ""}
-                            {u?.urlscan?.page_ip ? `ip: ${u.urlscan.page_ip}` : ""}
+                          {u?.anyrun && u.anyrun.error !== "Not requested" && (
+                            <div style={{ fontSize: 10, color: anyrunVerdict === "malicious" ? "#ef4444" : anyrunVerdict === "suspicious" ? "#f59e0b" : anyrunVerdict === "clean" ? "#34d399" : "var(--text-dim)", marginTop: 3 }}>
+                              AnyRun TI: {u.anyrun.checked ? (anyrunVerdict || "unknown") + (typeof u.anyrun.threat_score === "number" ? ` (score ${u.anyrun.threat_score})` : "") : "not found in database"}
+                            </div>
+                          )}
+                          {u?.urlscan?.checked && (
+                            <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 3 }}>
+                              URLScan: {u.urlscan.verdict || "unknown"}{typeof u.urlscan.score === "number" ? ` (${u.urlscan.score})` : ""}
+                            </div>
+                          )}
+                          <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 3 }}>
+                            Lexical ML: {String(u?.ml_url_score?.risk_level || u?.lexical_ml?.label || "unknown").toUpperCase()}
+                            {typeof u?.lexical_ml?.score === "number" ? ` (${u.lexical_ml.score.toFixed(3)})` : ""}
                           </div>
-                        )}
-                        <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-dim)" }}>
-                          Redirects: {u?.url_behavior?.redirect_count ?? "N/A"}
-                          {" | "}
-                          Credential form: {u?.url_behavior?.credential_form_present ? "Yes" : "No"}
-                          {" | "}
-                          UA cloaking: {u?.url_behavior?.ua_cloaking_detected ? "Yes" : "No"}
+                        </div>
+                        {/* Final URL + behavior */}
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(16,185,129,0.04)" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Destination</div>
+                          <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>{finalUrl}</div>
+                          {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
+                            <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>
+                              {u.urlscan.page_title ? `title: ${u.urlscan.page_title}` : ""}
+                              {u.urlscan.page_title && u.urlscan.page_ip ? " | " : ""}
+                              {u.urlscan.page_ip ? `ip: ${u.urlscan.page_ip}` : ""}
+                            </div>
+                          )}
+                          <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>
+                            Redirects: {u?.url_behavior?.redirect_count ?? "N/A"}
+                            {" | "}Cred form: <span style={{ color: u?.url_behavior?.credential_form_present ? "#ef4444" : "var(--text-dim)", fontWeight: u?.url_behavior?.credential_form_present ? 700 : 400 }}>{u?.url_behavior?.credential_form_present ? "YES" : "No"}</span>
+                            {" | "}UA cloaking: {u?.url_behavior?.ua_cloaking_detected ? "Yes" : "No"}
+                          </div>
                         </div>
                       </div>
+                      {u?.screenshot?.image_base64 ? (
+                        <img src={`data:image/png;base64,${u.screenshot.image_base64}`} alt={`URL screenshot ${idx + 1}`} style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--border)", marginTop: 8 }} />
+                      ) : null}
                     </div>
-                    {u?.screenshot?.image_base64 ? (
-                      <img
-                        src={`data:image/png;base64,${u.screenshot.image_base64}`}
-                        alt={`URL screenshot ${idx + 1}`}
-                        style={{ maxWidth: "100%", borderRadius: 6, border: "1px solid var(--border)" }}
-                      />
-                    ) : (
-                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                        Screenshot unavailable: {u?.screenshot?.error || "Not present in the provided evidence."}
-                      </div>
-                    )}
-                  </div>
-                )})}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1105,6 +1133,20 @@ function findingSeverityColor(severity?: string): string {
   if (s === "medium") return "#f59e0b";
   if (s === "low") return "#60a5fa";
   return "#94a3b8";
+}
+
+function copyBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    background: active ? "rgba(52,211,153,0.15)" : "var(--bg-elevated)",
+    border: `1px solid ${active ? "rgba(52,211,153,0.4)" : "var(--border)"}`,
+    color: active ? "#34d399" : "var(--text-muted)",
+    borderRadius: 6,
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "2px 8px",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  };
 }
 
 function buildSenderDomainFindings(

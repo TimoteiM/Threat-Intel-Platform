@@ -2,10 +2,10 @@
 Lightweight email indicator checks.
 
 Policy:
-- URLs: VirusTotal only (+ optional screenshot/final URL capture)
+- URLs: VirusTotal (cached) + AnyRun TI lookup (when run_anyrun=True) + optional screenshot
 - IPs: VirusTotal + AbuseIPDB
-- Attachments: hash extraction + VirusTotal hash lookup
-- Sender domain: WHOIS evidence
+- Attachments: hash extraction + VirusTotal hash lookup + AnyRun TI lookup (when run_anyrun=True)
+- Sender domain: WHOIS evidence + live email security DNS checks (DMARC/SPF/DKIM/MX)
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import whois as python_whois
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.collectors.email_security import analyze_email_security
 from app.collectors.urlscan_collector import URLScanCollector
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
@@ -94,6 +95,24 @@ def run_email_indicator_checks(
         if isinstance(hy, dict):
             hybrid_items.append(hy)
     checks["hybrid_analysis"] = {"items": hybrid_items}
+
+    # Run live email security DNS checks for sender domain (DMARC/SPF/DKIM/MX/spoofability)
+    sender_domain_check = checks.get("sender_domain") or {}
+    query_domain = str(
+        sender_domain_check.get("query_domain")
+        or sender_domain_check.get("domain")
+        or sender_domain
+        or ""
+    ).strip()
+    if query_domain:
+        try:
+            email_security = analyze_email_security(query_domain, dns_evidence={}, timeout=3.0)
+            checks["email_security"] = email_security
+        except Exception as exc:
+            logger.warning("Email security DNS checks failed for %s: %s", query_domain, exc)
+            checks["email_security"] = {"error": str(exc), "checked": False}
+    else:
+        checks["email_security"] = {"checked": False, "error": "No sender domain available"}
 
     first_url = next((u for u in checks.get("urls") or [] if isinstance(u, dict)), {}) or {}
     risk_input = {
@@ -238,28 +257,62 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool, run
                 "error": str(exc),
             }
 
-    hybrid = {
-        "checked": False,
-        "verdict": "unknown",
-        "error": (
-            "Email investigations use a single email-level AnyRun submission."
-            if run_anyrun
-            else "Not requested"
-        ),
-    }
+    # AnyRun TI lookup per URL — fast intelligence query, no sandbox detonation
+    anyrun_url: dict[str, Any] = {"checked": False, "verdict": "unknown", "error": "Not requested"}
+    if run_anyrun:
+        anyrun_url = _anyrun_url_ti_lookup(url)
+
+    # Effective verdict: prefer AnyRun when VT is rate-limited or unknown
+    effective = _effective_url_verdict(vt=vt, urlscan=urlscan, anyrun=anyrun_url)
 
     return {
         "url": url,
         "vt": vt,
-        "effective_verdict": _effective_url_verdict(vt=vt, urlscan=urlscan),
+        "effective_verdict": effective,
         "urlscan": urlscan,
+        "anyrun": anyrun_url,
         "lexical_ml": lexical_ml,
         "ml_url_score": ml_url_score,
         "url_behavior": url_behavior,
-        "hybrid_analysis": hybrid,
+        "hybrid_analysis": anyrun_url,  # kept for backward compat with risk aggregator
         "vt_checked_on_final_url": final_vt_used,
         "screenshot": screenshot,
     }
+
+
+def _anyrun_url_ti_lookup(url: str) -> dict[str, Any]:
+    """TI-only AnyRun lookup for a URL — no sandbox submission, no extra credits."""
+    try:
+        from app.services.anyrun_service import lookup_anyrun
+        result = lookup_anyrun(
+            indicator=url,
+            indicator_type="url",
+            submit_on_not_found=False,
+            sandbox_first=False,
+        )
+        if not isinstance(result, dict):
+            return {"checked": False, "verdict": "unknown", "error": "Empty result"}
+        logger.info("AnyRun URL TI: url=%s checked=%s verdict=%s error=%s", url[:80], result.get("checked"), result.get("verdict"), result.get("error"))
+        return result
+    except Exception as exc:
+        logger.warning("AnyRun URL TI lookup failed for %s: %s", url, exc)
+        return {"checked": False, "verdict": "unknown", "error": str(exc)}
+
+
+def _anyrun_hash_ti_lookup(sha256: str) -> dict[str, Any]:
+    """TI-only AnyRun lookup for a file hash — no sandbox submission."""
+    try:
+        from app.services.anyrun_service import lookup_anyrun
+        result = lookup_anyrun(
+            indicator=sha256,
+            indicator_type="hash",
+            submit_on_not_found=False,
+            sandbox_first=False,
+        )
+        return result if isinstance(result, dict) else {"checked": False, "verdict": "unknown", "error": "Empty result"}
+    except Exception as exc:
+        logger.warning("AnyRun hash TI lookup failed for %s: %s", sha256, exc)
+        return {"checked": False, "verdict": "unknown", "error": str(exc)}
 
 
 def _urlscan_lookup(url: str) -> dict[str, Any]:
@@ -297,13 +350,39 @@ def _urlscan_lookup(url: str) -> dict[str, Any]:
         return {"checked": False, "verdict": "unknown", "error": str(exc)}
 
 
-def _effective_url_verdict(*, vt: dict[str, Any], urlscan: dict[str, Any]) -> str:
+def _effective_url_verdict(
+    *,
+    vt: dict[str, Any],
+    urlscan: dict[str, Any],
+    anyrun: dict[str, Any] | None = None,
+) -> str:
     vt_verdict = str(vt.get("verdict") or "unknown").lower()
-    if vt_verdict in {"malicious", "suspicious", "clean"}:
+    vt_malicious_count = int(vt.get("malicious_count") or 0)
+
+    if vt_verdict in {"malicious", "suspicious"}:
         return vt_verdict
+    if vt_verdict == "clean":
+        # VT confirmed clean — AnyRun alone cannot override a clean VT verdict
+        anyrun_verdict = str((anyrun or {}).get("verdict") or "unknown").lower()
+        anyrun_score = float((anyrun or {}).get("threat_score") or 0)
+        if anyrun_verdict == "malicious" and anyrun_score >= 95:
+            return "suspicious"  # Downgrade: VT says clean, AnyRun uncertain
+        return "clean"
+
+    # VT is rate-limited or unknown — use AnyRun as fallback, but with caution
+    anyrun_verdict = str((anyrun or {}).get("verdict") or "unknown").lower()
+    anyrun_score = float((anyrun or {}).get("threat_score") or 0)
+    if anyrun_verdict == "malicious":
+        # Require high confidence (≥95) to report malicious with no VT confirmation
+        # Below threshold, report suspicious so analysts can verify manually
+        return "malicious" if anyrun_score >= 95 else "suspicious"
+    if anyrun_verdict in {"suspicious", "clean"}:
+        return anyrun_verdict
+
     urlscan_verdict = str((urlscan or {}).get("verdict") or "unknown").lower()
     if urlscan_verdict in {"malicious", "suspicious", "clean"}:
         return urlscan_verdict
+
     return "unknown"
 
 
@@ -330,6 +409,12 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, ru
     items: list[dict[str, Any]] = []
     for att in attachments[: max(0, max_hashes)]:
         sha256 = str(att.get("sha256") or "").strip()
+
+        # AnyRun TI lookup for hash — fast, no sandbox credits
+        anyrun_hash: dict[str, Any] = {"checked": False, "verdict": "unknown", "error": "Not requested"}
+        if run_anyrun and sha256:
+            anyrun_hash = _anyrun_hash_ti_lookup(sha256)
+
         items.append(
             {
                 "filename": att.get("filename"),
@@ -337,19 +422,8 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, ru
                 "md5": att.get("md5"),
                 "size_bytes": att.get("size_bytes"),
                 "vt": _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"},
-                "hybrid_analysis": (
-                    {
-                        "checked": False,
-                        "verdict": "unknown",
-                        "error": (
-                            "Email investigations use a single email-level AnyRun submission."
-                            if run_anyrun
-                            else "Not requested"
-                        ),
-                    }
-                    if sha256
-                    else {"checked": False, "verdict": "unknown", "error": "Missing SHA256 hash"}
-                ),
+                "anyrun": anyrun_hash,
+                "hybrid_analysis": anyrun_hash,  # backward compat
             }
         )
     return {"present": True, "items": items}
@@ -469,7 +543,7 @@ def _should_retry_vt_on_final(vt_result: dict[str, Any], *, url: str, final_url:
     verdict = str(vt_result.get("verdict") or "unknown").lower()
     total = int(vt_result.get("total_vendors") or 0)
     # Retry when current VT signal is weak/inconclusive.
-    return verdict == "unknown" or total == 0
+    return verdict in {"unknown", "rate_limited"} or total == 0
 
 
 def _is_better_vt_result(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
@@ -488,6 +562,7 @@ def _vt_strength_score(v: dict[str, Any]) -> int:
         "suspicious": 2000,
         "clean": 1000,
         "unknown": 0,
+        "rate_limited": 0,
     }.get(verdict, 0)
     return base + (malicious * 20) + (suspicious * 5) + min(total, 500)
 

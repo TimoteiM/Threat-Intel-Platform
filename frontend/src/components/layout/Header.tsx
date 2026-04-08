@@ -55,7 +55,7 @@ export default function Header() {
               color: "var(--text)",
               fontFamily: "var(--font-sans)",
             }}>
-              Threat Investigator
+              Threat Analyzer
             </div>
             <div style={{
               fontSize: 10,
@@ -64,7 +64,7 @@ export default function Header() {
               fontFamily: "var(--font-sans)",
               fontWeight: 500,
             }}>
-              Domain Analysis Platform
+              Threat Intelligence and Investigation Platform
             </div>
           </div>
         </a>

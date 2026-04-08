@@ -3,8 +3,8 @@ import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
 
 export const metadata = {
-  title: "Threat Investigator",
-  description: "Domain threat investigation platform",
+  title: "Threat Analyzer",
+  description: "Threat intelligence and investigation platform",
 };
 
 const APP_MAX_WIDTH = 1920;
@@ -22,6 +22,5 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   );
 }
-
 
 

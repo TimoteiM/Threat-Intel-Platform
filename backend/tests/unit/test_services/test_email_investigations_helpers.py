@@ -24,6 +24,58 @@ def test_compact_checks_keeps_lexical_ml_section() -> None:
     assert compact["urls"][0]["lexical_ml"]["label"] == "low"
 
 
+def test_compact_checks_for_ai_keeps_only_risky_urls() -> None:
+    checks = {
+        "sender_domain": {},
+        "sender_ip": {},
+        "attachments": {"present": False, "items": [], "message": ""},
+        "urls": [
+            {
+                "url": "https://clean.example",
+                "vt": {"verdict": "clean"},
+                "effective_verdict": "clean",
+                "anyrun": {"verdict": "unknown"},
+                "lexical_ml": {"score": 0.12, "label": "low", "model_source": "built_in"},
+                "url_behavior": {"credential_form_present": False, "behavior_score": 0.0},
+                "screenshot": {"captured": False, "final_url": None, "error": "Not requested"},
+            },
+            {
+                "url": "https://risk.example",
+                "vt": {"verdict": "suspicious"},
+                "effective_verdict": "suspicious",
+                "anyrun": {"verdict": "unknown"},
+                "lexical_ml": {"score": 0.78, "label": "high", "model_source": "built_in"},
+                "url_behavior": {"credential_form_present": True, "behavior_score": 0.9},
+                "screenshot": {"captured": False, "final_url": None, "error": "Not requested"},
+            },
+        ],
+    }
+
+    compact = processing_svc._compact_checks_for_ai(checks)
+
+    assert [item["url"] for item in compact["urls"]] == ["https://risk.example"]
+
+
+def test_lookup_email_anyrun_marks_checked_empty_results(monkeypatch) -> None:
+    monkeypatch.setattr(
+        processing_svc,
+        "lookup_anyrun",
+        lambda **kwargs: {
+            "checked": True,
+            "verdict": "unknown",
+            "analysis_id": "task-123",
+            "raw_summary": {"source": "anyrun", "mode": "sandbox"},
+            "dynamic_io_summary": {"domains": [], "hosts": [], "mitre_attcks": []},
+        },
+    )
+
+    result = processing_svc._lookup_email_anyrun(b"payload", "sample.eml", run_anyrun=True)
+
+    assert result["checked"] is True
+    assert result["email_analysis_state"] == "completed_no_artifacts"
+    assert result["email_analysis_message"]
+
+
 def test_prepare_history_payload_keeps_lexical_ml_without_image_blob() -> None:
     payload = {
         "filename": "a.eml",
