@@ -777,3 +777,63 @@ def test_run_sandbox_uses_completed_report_after_wait(monkeypatch):
     assert out["checked"] is True
     assert out["verdict"] == "clean"
     assert out["analysis_id"] == "task-1"
+
+
+def test_run_sandbox_retries_summary_report_without_explicit_format(monkeypatch):
+    class _Connector:
+        def __init__(self):
+            self.report_calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def run_url_analysis(self, target, opt_privacy_type=None):
+            return "task-1"
+
+        def get_task_status(self, task_id):
+            yield {"status": "COMPLETED"}
+
+        def get_analysis_verdict(self, analysis_id):
+            return "No threats detected"
+
+        def get_analysis_report(self, analysis_id, report_format=None):
+            self.report_calls.append(report_format)
+            if report_format == "summary":
+                raise RuntimeError("[AnyRun Exception] Status code: 400. Description: Invalid summary type.")
+            if report_format == "ioc":
+                return {"data": []}
+            if report_format == "html":
+                return ""
+            return {
+                "data": {
+                    "status": "completed",
+                    "analysis": {"permanentUrl": "https://app.any.run/tasks/task-1", "scores": {}},
+                    "network": {"dnsRequests": [], "httpRequests": [], "connections": [], "threats": []},
+                    "counters": {},
+                    "processes": [],
+                    "summary": {},
+                }
+            }
+
+    connector = _Connector()
+    monkeypatch.setattr(svc, "_create_sandbox_connector", lambda *args, **kwargs: connector)
+
+    out = svc._run_sandbox(
+        sandbox_connector_cls=object(),
+        api_key="ak",
+        sandbox_os="windows",
+        privacy_type="owner",
+        indicator="example.test",
+        indicator_type="url",
+        file_bytes=None,
+        file_name=None,
+        timeout_seconds=45,
+    )
+
+    assert out["checked"] is True
+    assert out["verdict"] == "clean"
+    assert out["analysis_id"] == "task-1"
+    assert connector.report_calls[:2] == ["summary", None]

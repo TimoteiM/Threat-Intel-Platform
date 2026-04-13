@@ -8,10 +8,13 @@ Primary strategy:
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import ExitStack
 from typing import Any
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 from app.config import get_settings
 
@@ -297,7 +300,7 @@ def _lookup_intelligence(
                     if sconn and hasattr(sconn, "__enter__") and hasattr(sconn, "__exit__"):
                         sconn = stack.enter_context(sconn)
                     if sconn:
-                        report = sconn.get_analysis_report(analysis_id, report_format="summary")
+                        report = _get_anyrun_summary_report(sconn, analysis_id)
                         ioc_report = sconn.get_analysis_report(analysis_id, report_format="ioc")
                         html_report = sconn.get_analysis_report(analysis_id, report_format="html")
                         report_data = (report or {}).get("data") or {}
@@ -453,12 +456,36 @@ def _run_sandbox(
             if not analysis_id:
                 return _error(indicator_type, "ANY.RUN sandbox submission returned empty task id")
 
-            wait_timeout = max(90, int(timeout_seconds or 60) + 30)
+            wait_timeout = max(90, int(timeout_seconds or 60) + 60)
             final_status = _wait_status_stream(connector, analysis_id, timeout_seconds=wait_timeout)
-            report = connector.get_analysis_report(analysis_id, report_format="summary")
+            # Poll for report readiness — stream may end before the report data is ready.
+            # Budget: max(120, timeout_seconds + 60) — URL/domain tasks can take 2-3 min.
+            # Catch SDK exceptions that indicate the task is still processing (e.g.
+            # "task is still running") and continue polling rather than propagating.
+            report = None
+            poll_deadline = time.time() + max(120, int(timeout_seconds or 60) + 60)
+            while time.time() < poll_deadline:
+                try:
+                    report = _get_anyrun_summary_report(connector, analysis_id)
+                except Exception as poll_exc:
+                    _poll_exc_str = str(poll_exc).lower()
+                    if (
+                        "task is still running" in _poll_exc_str
+                        or "still running" in _poll_exc_str
+                        or "not ready" in _poll_exc_str
+                        or "pending" in _poll_exc_str
+                    ):
+                        time.sleep(5)
+                        continue
+                    raise
+                report_data = (report or {}).get("data") or {}
+                report_status = str(report_data.get("status") or "").strip().upper()
+                if report_status not in {"RUNNING", "PENDING", "QUEUED"}:
+                    break
+                time.sleep(5)
             report_data = (report or {}).get("data") or {}
             report_status = str(report_data.get("status") or "").strip().upper()
-            if final_status not in {"COMPLETED", "FAILED"} and report_status in {"RUNNING", "PENDING", "QUEUED"}:
+            if report_status in {"RUNNING", "PENDING", "QUEUED"}:
                 return _error(
                     indicator_type,
                     "ANY.RUN sandbox task is still running and the report is not ready yet.",
@@ -586,6 +613,8 @@ def _run_sandbox(
             },
         }
     except Exception as exc:
+        import traceback as _tb
+        logger.warning("AnyRun sandbox exception traceback:\n%s", _tb.format_exc())
         err = str(exc or "")
         lower_err = err.lower()
         if "task is still running" in lower_err:
@@ -652,10 +681,12 @@ def _submit_anyrun_task_with_fallback(
                         file_content=file_bytes,
                         filename=(file_name or "sample.bin"),
                         opt_privacy_type=privacy,
+                        opt_timeout=60,
                     )
                 return connector.run_file_analysis(
                     file_content=file_bytes,
                     filename=(file_name or "sample.bin"),
+                    opt_timeout=60,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -693,6 +724,15 @@ def _submit_anyrun_task_with_fallback(
             )
         }
     return {"__error__": f"ANY.RUN sandbox submission failed: {last_exc}"}
+
+
+def _get_anyrun_summary_report(connector: Any, analysis_id: str) -> Any:
+    try:
+        return connector.get_analysis_report(analysis_id, report_format="summary")
+    except Exception as exc:
+        if "invalid summary type" not in str(exc or "").lower():
+            raise
+        return connector.get_analysis_report(analysis_id)
 
 
 def _is_submission_fallback_candidate(exc: Exception) -> bool:
@@ -752,7 +792,7 @@ def _create_sandbox_connector(sandbox_connector_cls: Any, *, api_key: str, sandb
         fn = getattr(sandbox_connector_cls, method, None)
         if callable(fn):
             try:
-                return fn(api_key)
+                return fn(api_key, enable_requests=True)
             except Exception:
                 continue
     return None
@@ -763,15 +803,15 @@ def _wait_status_stream(connector: Any, task_id: str, timeout_seconds: int) -> s
     last_status: str | None = None
     try:
         statuses = connector.get_task_status(task_id)
+        for item in statuses:
+            if time.time() > deadline:
+                break
+            status = str((item or {}).get("status") or "").upper()
+            last_status = status or last_status
+            if status in {"COMPLETED", "FAILED"}:
+                break
     except Exception:
-        return None
-    for item in statuses:
-        if time.time() > deadline:
-            break
-        status = str((item or {}).get("status") or "").upper()
-        last_status = status or last_status
-        if status in {"COMPLETED", "FAILED"}:
-            break
+        pass
     return last_status
 
 
@@ -812,6 +852,8 @@ def _is_deferred_anyrun_sandbox_error(value: Any) -> bool:
         or "api is not available on the free plan" in text
         or "provider transient/server error" in text
         or "unknown error" in text
+        or "task is still running" in text
+        or "report is not ready" in text
     )
 
 
