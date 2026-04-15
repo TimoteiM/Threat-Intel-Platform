@@ -202,3 +202,115 @@ def test_opencti_collect_includes_observable_and_report_metadata(monkeypatch):
     assert ev.reports[0].report_types == ["threat-report"]
     assert ev.reports[0].created == "2025-03-10T10:00:00.000Z"
     assert ev.reports[0].modified == "2025-03-10T11:00:00.000Z"
+
+
+def test_opencti_collect_does_not_accept_unrelated_first_search_result(monkeypatch):
+    class _Settings:
+        opencti_api_url = "https://opencti.example.test"
+        opencti_api_key = "token"
+        opencti_verify_ssl = False
+
+    class _Response:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None, verify=None):
+        query = (json or {}).get("query") or ""
+        variables = (json or {}).get("variables") or {}
+
+        if "SearchObservable" in query and variables.get("search") == "topfacedating.xyz":
+            return _Response(
+                {
+                    "data": {
+                        "stixCyberObservables": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "obs-wrong",
+                                        "entity_type": "StixFile",
+                                        "observable_value": "HTTP Spy.EXE",
+                                        "x_opencti_score": 60,
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+
+        return _Response({"data": {"stixCyberObservables": {"edges": []}}})
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    collector = svc.OpenCTICollector(
+        domain="topfacedating.xyz",
+        observable_type="domain",
+        investigation_id=uuid.uuid4(),
+    )
+
+    ev = collector._collect()
+
+    assert ev.found is False
+    assert any("Observable not found in OpenCTI" in note for note in ev.notes)
+
+
+def test_opencti_collect_does_not_match_https_token_for_https_prefixed_domain_search(monkeypatch):
+    class _Settings:
+        opencti_api_url = "https://opencti.example.test"
+        opencti_api_key = "token"
+        opencti_verify_ssl = False
+
+    class _Response:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None, verify=None):
+        query = (json or {}).get("query") or ""
+        variables = (json or {}).get("variables") or {}
+
+        if "SearchObservable" in query and variables.get("search") == "https://topfacedating.xyz":
+            return _Response(
+                {
+                    "data": {
+                        "stixCyberObservables": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "obs-wrong-https",
+                                        "entity_type": "StixFile",
+                                        "observable_value": "Https",
+                                        "x_opencti_score": 60,
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+
+        return _Response({"data": {"stixCyberObservables": {"edges": []}}})
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    collector = svc.OpenCTICollector(
+        domain="topfacedating.xyz",
+        observable_type="domain",
+        investigation_id=uuid.uuid4(),
+    )
+
+    ev = collector._collect()
+
+    assert ev.found is False
+    assert any("Observable not found in OpenCTI" in note for note in ev.notes)

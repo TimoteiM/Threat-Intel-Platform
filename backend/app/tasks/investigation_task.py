@@ -18,15 +18,17 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 import redis as redis_lib
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.database import Investigation
+from app.models.database import Evidence, Investigation
 from app.models.enums import InvestigationState
 from app.collectors.registry import available_collectors, get_collector, get_collectors_for_type
 from app.db.session import sync_engine
@@ -35,6 +37,12 @@ from app.tasks.analysis_task import run_analysis
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# AnyRun sandbox soft deadline within the main collector phase.
+# If the sandbox doesn't finish within this window the investigation proceeds
+# without it and AnyRun is updated in the background when it eventually finishes.
+ANYRUN_ASYNC_DEADLINE = 90  # seconds
+ANYRUN_COLLECTOR_NAME = "hybrid_analysis"
 
 
 def _sandbox_collector_timeout(base_timeout: int) -> int:
@@ -88,6 +96,7 @@ def run_investigation(
     external_context: dict | None = None,
     requested_collectors: list[str] | None = None,
     file_artifact_id: str | None = None,
+    ai_model: str | None = None,
 ) -> str:
     """
     Main entry point — starts the full investigation pipeline.
@@ -168,7 +177,7 @@ def run_investigation(
             collectors=collector_statuses,
         )
 
-        safe_results, collector_statuses = _run_collectors_inline(
+        safe_results, collector_statuses, anyrun_bg_future = _run_collectors_inline(
             collectors_to_run=collectors_to_run,
             domain=domain,
             investigation_id=investigation_id,
@@ -207,7 +216,14 @@ def run_investigation(
             client_url=client_url,
             external_context=external_context,
             max_iterations=settings.max_analyst_iterations,
+            ai_model=ai_model,
         )
+
+        # If AnyRun was deferred, start a background thread to update evidence
+        # when the sandbox finishes (does not block the investigation completion).
+        if anyrun_bg_future is not None:
+            _start_anyrun_background_update(anyrun_bg_future, investigation_id)
+
     except Exception as exc:
         logger.exception(f"[{investigation_id}] Investigation task failed: {exc}")
         if _is_cancelled(investigation_id):
@@ -232,13 +248,17 @@ def _run_collectors_inline(
     file_artifact_id: str | None,
     external_context: dict | None,
     timeout: int,
-) -> tuple[list[dict], dict[str, str]]:
+) -> tuple[list[dict], dict[str, str], Optional["concurrent.futures.Future[dict]"]]:
     """
     Run all collectors in parallel using ThreadPoolExecutor.
 
-    Each collector is instantiated and called directly — no Celery sub-tasks.
-    Returns a list of result dicts (same format as run_collector Celery task).
-    Failed collectors are logged and excluded from the returned list.
+    AnyRun (hybrid_analysis) is given a 90-second soft deadline within the main
+    phase. If it finishes in time its result is included normally. If it exceeds
+    the deadline the investigation proceeds without it — AnyRun continues in a
+    background thread and its result is written to the DB when it eventually
+    finishes (see _anyrun_background_update).
+
+    Returns (results, collector_statuses, anyrun_background_future_or_None).
     """
     def _run_one(name: str) -> dict:
         collector_cls = get_collector(name)
@@ -273,21 +293,42 @@ def _run_collectors_inline(
             "duration_ms": meta.duration_ms,
         }
 
+    # ── Separate AnyRun from fast collectors ─────────────────────────────────
+    run_anyrun = ANYRUN_COLLECTOR_NAME in collectors_to_run
+    fast_collectors = [c for c in collectors_to_run if c != ANYRUN_COLLECTOR_NAME]
+
     results: list[dict] = []
     collector_statuses: dict[str, str] = {name: "running" for name in collectors_to_run}
     start_ts = time.monotonic()
     total_collectors = max(1, len(collectors_to_run))
-    max_workers = max(4, len(collectors_to_run))
+    max_workers = max(4, len(fast_collectors) + 1)  # +1 slot reserved for AnyRun
 
-    overall_timeout = max((_collector_timeout(name, timeout) for name in collectors_to_run), default=timeout) + 30
+    fast_overall_timeout = max(
+        (_collector_timeout(name, timeout) for name in fast_collectors),
+        default=timeout,
+    ) + 30 if fast_collectors else 30
 
+    anyrun_background_future: Optional[concurrent.futures.Future] = None
+
+    # ── Submit AnyRun to a separate long-lived executor (not joined on exit) ──
+    anyrun_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    anyrun_future:   Optional[concurrent.futures.Future] = None
+    if run_anyrun:
+        anyrun_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"anyrun-{investigation_id[:8]}",
+        )
+        anyrun_future = anyrun_executor.submit(_run_one, ANYRUN_COLLECTOR_NAME)
+        anyrun_executor.shutdown(wait=False)  # don't block on exit
+
+    # ── Run all fast collectors ───────────────────────────────────────────────
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=max_workers,
+        max_workers=max(4, len(fast_collectors)),
         thread_name_prefix=f"collector-{investigation_id[:8]}",
     ) as pool:
-        future_to_name = {pool.submit(_run_one, name): name for name in collectors_to_run}
+        future_to_name = {pool.submit(_run_one, name): name for name in fast_collectors}
         try:
-            for future in concurrent.futures.as_completed(future_to_name, timeout=overall_timeout):
+            for future in concurrent.futures.as_completed(future_to_name, timeout=fast_overall_timeout):
                 name = future_to_name[future]
                 try:
                     result = future.result()
@@ -315,14 +356,14 @@ def _run_collectors_inline(
                 )
         except concurrent.futures.TimeoutError:
             logger.error(
-                f"[{investigation_id}] Collector phase timed out after {overall_timeout}s; "
-                "continuing with completed collector results only"
+                f"[{investigation_id}] Fast collector phase timed out after {fast_overall_timeout}s"
             )
-            timed_out = [name for name, status in collector_statuses.items() if status == "running"]
+            timed_out = [name for name, status in collector_statuses.items()
+                         if status == "running" and name != ANYRUN_COLLECTOR_NAME]
+            for name in timed_out:
+                collector_statuses[name] = "failed"
+                results.append(_build_timeout_result(name))
             if timed_out:
-                for name in timed_out:
-                    collector_statuses[name] = "failed"
-                    results.append(_build_timeout_result(name))
                 _publish_progress(
                     investigation_id,
                     InvestigationState.GATHERING,
@@ -331,7 +372,58 @@ def _run_collectors_inline(
                     collectors=collector_statuses,
                     total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
                 )
-    return results, collector_statuses
+
+    # ── Check AnyRun soft deadline ────────────────────────────────────────────
+    if run_anyrun and anyrun_future is not None:
+        elapsed = time.monotonic() - start_ts
+        remaining = max(0.0, ANYRUN_ASYNC_DEADLINE - elapsed)
+        if remaining > 0:
+            try:
+                result = anyrun_future.result(timeout=remaining)
+                results.append(result)
+                collector_statuses[ANYRUN_COLLECTOR_NAME] = result.get("status", "failed")
+                logger.info(
+                    f"[{investigation_id}] AnyRun finished within deadline "
+                    f"({elapsed + (ANYRUN_ASYNC_DEADLINE - remaining):.0f}s)"
+                )
+                _publish_progress(
+                    investigation_id,
+                    InvestigationState.GATHERING,
+                    f"Collector HYBRID_ANALYSIS {collector_statuses[ANYRUN_COLLECTOR_NAME]}",
+                    55,
+                    collectors=collector_statuses,
+                    collector=ANYRUN_COLLECTOR_NAME,
+                    total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                )
+            except concurrent.futures.TimeoutError:
+                logger.info(
+                    f"[{investigation_id}] AnyRun exceeded {ANYRUN_ASYNC_DEADLINE}s deadline — "
+                    "proceeding without it, will update evidence in background"
+                )
+                collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
+                anyrun_background_future = anyrun_future
+                _publish_progress(
+                    investigation_id,
+                    InvestigationState.GATHERING,
+                    "AnyRun deferred — analysis will continue without sandbox data",
+                    55,
+                    collectors=collector_statuses,
+                    collector=ANYRUN_COLLECTOR_NAME,
+                    total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                )
+            except Exception as e:
+                logger.error(f"[{investigation_id}] AnyRun collector raised: {e}")
+                collector_statuses[ANYRUN_COLLECTOR_NAME] = "failed"
+        else:
+            # Fast collectors alone already took >90s — defer AnyRun immediately
+            logger.info(
+                f"[{investigation_id}] Fast collectors took >{ANYRUN_ASYNC_DEADLINE}s — "
+                "deferring AnyRun to background immediately"
+            )
+            collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
+            anyrun_background_future = anyrun_future
+
+    return results, collector_statuses, anyrun_background_future
 
 
 def _build_timeout_result(name: str) -> dict:
@@ -363,6 +455,118 @@ def _build_timeout_result(name: str) -> dict:
         "artifacts": {},
         "duration_ms": None,
     }
+
+
+def _start_anyrun_background_update(
+    future: "concurrent.futures.Future[dict]",
+    investigation_id: str,
+) -> None:
+    """
+    Spin up a daemon thread that waits for the deferred AnyRun future and
+    merges its result into the investigation's evidence_json once done.
+    """
+    t = threading.Thread(
+        target=_anyrun_background_update,
+        args=(future, investigation_id),
+        daemon=True,
+        name=f"anyrun-bg-{investigation_id[:8]}",
+    )
+    t.start()
+    logger.info(
+        f"[{investigation_id}] AnyRun background update thread started (thread={t.name})"
+    )
+
+
+def _anyrun_background_update(
+    future: "concurrent.futures.Future[dict]",
+    investigation_id: str,
+) -> None:
+    """
+    Daemon thread body — waits for the AnyRun future, then merges the sandbox
+    result into evidence_json in the DB and publishes an SSE event so the
+    frontend can refresh the Technical Evidence tab.
+    """
+    logger.info(f"[{investigation_id}] Waiting for deferred AnyRun result...")
+    try:
+        # Give AnyRun a generous ceiling (hard task time-limit is 660 s; we
+        # already spent ~90 s in the main phase so ~480 s remains at worst).
+        result = future.result(timeout=480)
+        logger.info(
+            f"[{investigation_id}] Deferred AnyRun finished — "
+            f"status={result.get('status')}"
+        )
+    except concurrent.futures.TimeoutError:
+        logger.warning(
+            f"[{investigation_id}] Deferred AnyRun still didn't finish after 480 s — giving up"
+        )
+        return
+    except Exception as exc:
+        logger.error(f"[{investigation_id}] Deferred AnyRun future raised: {exc}")
+        return
+
+    # ── Merge into DB evidence_json ──────────────────────────────────────────
+    try:
+        from sqlalchemy import select as sa_select
+        inv_id = uuid.UUID(investigation_id)
+        with Session(sync_engine) as session:
+            inv = session.get(Investigation, inv_id)
+            if inv is None:
+                logger.warning(
+                    f"[{investigation_id}] Investigation not found when trying to update AnyRun evidence"
+                )
+                return
+
+            # Evidence lives in the Evidence table, related 1:1 to Investigation
+            evidence_row = session.execute(
+                sa_select(Evidence).where(Evidence.investigation_id == inv_id)
+            ).scalar_one_or_none()
+
+            if evidence_row is None:
+                logger.warning(
+                    f"[{investigation_id}] No Evidence row found — cannot update AnyRun evidence"
+                )
+                return
+
+            existing: dict = {}
+            if evidence_row.evidence_json:
+                try:
+                    existing = (
+                        json.loads(evidence_row.evidence_json)
+                        if isinstance(evidence_row.evidence_json, str)
+                        else dict(evidence_row.evidence_json)
+                    )
+                except Exception:
+                    existing = {}
+
+            # Merge hybrid_analysis collector result into evidence
+            evidence_from_result = result.get("evidence", {})
+            existing[ANYRUN_COLLECTOR_NAME] = evidence_from_result
+
+            evidence_row.evidence_json = existing
+            inv.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            logger.info(
+                f"[{investigation_id}] AnyRun evidence merged into DB successfully"
+            )
+    except Exception as exc:
+        logger.error(
+            f"[{investigation_id}] Failed to persist deferred AnyRun evidence: {exc}"
+        )
+        return
+
+    # ── Notify frontend via SSE ──────────────────────────────────────────────
+    try:
+        r = redis_lib.Redis.from_url(settings.redis_url)
+        payload = {
+            "type": "evidence_updated",
+            "investigation_id": investigation_id,
+            "collector": ANYRUN_COLLECTOR_NAME,
+            "message": "AnyRun sandbox analysis complete — evidence updated",
+        }
+        r.publish(f"investigation:{investigation_id}", json.dumps(payload))
+        logger.info(f"[{investigation_id}] SSE evidence_updated published")
+    except Exception as exc:
+        logger.warning(f"[{investigation_id}] Failed to publish evidence_updated SSE: {exc}")
 
 
 def _update_state(investigation_id: str, state: InvestigationState) -> None:

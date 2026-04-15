@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { createPortal } from "react-dom";
 import dagre from "dagre";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
 import ReactFlow, {
@@ -1479,6 +1480,27 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
       setSelectedProcessManual(first || null);
     }
   }, [activeProcessList, nodeIdByRef, processViewMode, selected, selectedProcessManual, showAdvanced]);
+  React.useEffect(() => {
+    if (!showAdvanced || typeof document === "undefined") return;
+    const body = document.body;
+    const html = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousHtmlOverscroll = html.style.overscrollBehavior;
+
+    body.style.overflow = "hidden";
+    html.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+    html.style.overscrollBehavior = "none";
+
+    return () => {
+      body.style.overflow = previousBodyOverflow;
+      html.style.overflow = previousHtmlOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      html.style.overscrollBehavior = previousHtmlOverscroll;
+    };
+  }, [showAdvanced]);
 
   return (
     <div style={{ marginBottom: 10, position: "relative" }}>
@@ -1640,23 +1662,25 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
           </div>
         )}
       </div>
-      {showAdvanced && (
+      {showAdvanced && typeof document !== "undefined" && createPortal((
         <div
           style={{
             position: "fixed",
             inset: 0,
             background: "rgba(2,6,23,0.82)",
-            zIndex: 110,
+            zIndex: 2147483647,
             display: "flex",
             justifyContent: "center",
             alignItems: "stretch",
-            padding: "2vh 2vw",
+            padding: "calc(var(--app-header-height, 72px) + 12px) 2vw 2vh",
+            boxSizing: "border-box",
+            overscrollBehavior: "contain",
           }}
         >
           <div
             style={{
               width: "96vw",
-              height: "96vh",
+              height: "calc(100vh - var(--app-header-height, 72px) - 24px)",
               border: "1px solid #1b4d6b",
               borderRadius: 8,
               background: "#06314a",
@@ -1748,7 +1772,20 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
             <div style={{ minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
               {true ? (
                 <>
-                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #1b4d6b", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div
+                    style={{
+                      padding: "10px 14px",
+                      borderBottom: "1px solid #1b4d6b",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 2,
+                      background: "#06314a",
+                    }}
+                  >
                     <div style={{ minWidth: 0 }}>
                       <div style={{ color: "var(--text-primary)", fontSize: 14, fontWeight: 700, marginBottom: 2 }}>
                         Advanced details of process
@@ -2293,7 +2330,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

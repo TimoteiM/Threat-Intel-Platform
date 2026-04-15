@@ -4,10 +4,14 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
-import EnrichmentPanel from "@/components/investigation/EnrichmentPanel";
 import CollectorTimingTable from "@/components/investigation/CollectorTimingTable";
 import Spinner from "@/components/shared/Spinner";
 import TabBar from "@/components/shared/TabBar";
+import ConsoleModule from "@/components/ui/ConsoleModule";
+import MetadataGrid, { type MetadataItem } from "@/components/ui/MetadataGrid";
+import PageHero from "@/components/ui/PageHero";
+import SignalCard from "@/components/ui/SignalCard";
+import StatusPill from "@/components/ui/StatusPill";
 
 import ExecutiveSummaryTab from "@/components/report/ExecutiveSummaryTab";
 import TechnicalEvidenceTab from "@/components/report/TechnicalEvidenceTab";
@@ -34,7 +38,7 @@ const DOMAIN_TABS = [
 ] as const;
 
 // Minimal tab set for fast-path types (hash / ip / file)
-// No AI-generated narrative — just technical evidence and IOCs.
+// No AI-generated narrative - just technical evidence and IOCs.
 const FAST_PATH_TABS = [
   { id: "evidence", label: "Technical Evidence" },
   { id: "indicators", label: "Indicators & Pivots" },
@@ -55,9 +59,112 @@ const DEFAULT_COLLECTOR_ORDER = [
   "urlscan",
   "screenshot",
   "js_analysis",
+  "opencti",
 ] as const;
 
 type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
+
+const pageShellStyle: React.CSSProperties = {
+  paddingTop: 24,
+  paddingBottom: 80,
+  display: "grid",
+  gap: 18,
+};
+
+const progressTrackStyle: React.CSSProperties = {
+  height: 12,
+  background: "rgba(9, 14, 24, 0.92)",
+  borderRadius: 999,
+  overflow: "hidden",
+  border: "1px solid rgba(120, 145, 178, 0.16)",
+};
+
+function shortId(value: string) {
+  if (!value) return "-";
+  return value.length > 12 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
+}
+
+function humanizeState(state: string) {
+  return String(state || "unknown")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function resolveStateTone(state: string, report: any): "neutral" | "info" | "success" | "warning" | "danger" {
+  const normalized = String(state || "").toLowerCase();
+  if (normalized === "failed" || normalized === "error") return "danger";
+  if (normalized === "cancelled" || normalized === "canceled") return "neutral";
+  if (normalized === "concluded") return report ? "success" : "info";
+  if (normalized === "evaluating") return "warning";
+  if (normalized === "gathering") return "info";
+  return "neutral";
+}
+
+function stateAccent(state: string) {
+  const normalized = String(state || "").toLowerCase();
+  if (normalized === "failed" || normalized === "error") return "#fb7185";
+  if (normalized === "concluded") return "#38d9a9";
+  if (normalized === "evaluating") return "#fbbf24";
+  if (normalized === "gathering") return "#66a8ff";
+  return "#7891b2";
+}
+
+function getInvestigationProgressPct(state: string, ssePercent: number, reportReady: boolean) {
+  if (reportReady || state === "concluded") return 100;
+  const fallbackPercent =
+    state === "created" ? 2 :
+    state === "gathering" ? 25 :
+    state === "evaluating" ? 75 :
+    state === "failed" ? 100 :
+    0;
+  return Math.max(ssePercent || 0, fallbackPercent);
+}
+
+function actionButtonPalette(tone: "neutral" | "info" | "success" | "warning" | "danger") {
+  switch (tone) {
+    case "danger":
+      return {
+        foreground: "#fda4af",
+        background: "rgba(251, 113, 133, 0.12)",
+        border: "rgba(251, 113, 133, 0.28)",
+        hoverBackground: "rgba(251, 113, 133, 0.18)",
+        hoverBorder: "rgba(251, 113, 133, 0.42)",
+      };
+    case "success":
+      return {
+        foreground: "#9bf0d8",
+        background: "rgba(56, 217, 169, 0.10)",
+        border: "rgba(56, 217, 169, 0.26)",
+        hoverBackground: "rgba(56, 217, 169, 0.16)",
+        hoverBorder: "rgba(56, 217, 169, 0.40)",
+      };
+    case "warning":
+      return {
+        foreground: "#fde68a",
+        background: "rgba(251, 191, 36, 0.10)",
+        border: "rgba(251, 191, 36, 0.26)",
+        hoverBackground: "rgba(251, 191, 36, 0.16)",
+        hoverBorder: "rgba(251, 191, 36, 0.40)",
+      };
+    case "info":
+      return {
+        foreground: "#bfdbfe",
+        background: "rgba(102, 168, 255, 0.10)",
+        border: "rgba(102, 168, 255, 0.26)",
+        hoverBackground: "rgba(102, 168, 255, 0.16)",
+        hoverBorder: "rgba(102, 168, 255, 0.40)",
+      };
+    case "neutral":
+    default:
+      return {
+        foreground: "var(--text-secondary)",
+        background: "rgba(120, 145, 178, 0.08)",
+        border: "rgba(120, 145, 178, 0.22)",
+        hoverBackground: "rgba(120, 145, 178, 0.12)",
+        hoverBorder: "rgba(120, 145, 178, 0.34)",
+      };
+  }
+}
 
 export default function InvestigationPage() {
   const params = useParams();
@@ -96,6 +203,7 @@ export default function InvestigationPage() {
       if (evidence.threat_feeds?.meta) keys.add("threat_feeds");
       if (evidence.hybrid_analysis?.meta) keys.add("hybrid_analysis");
       if (evidence.urlscan?.meta) keys.add("urlscan");
+      if (evidence.opencti?.meta) keys.add("opencti");
     }
     const known = [...DEFAULT_COLLECTOR_ORDER].filter((k) => keys.has(k));
     const extra = Array.from(keys).filter((k) => !DEFAULT_COLLECTOR_ORDER.includes(k as any)).sort();
@@ -115,6 +223,33 @@ export default function InvestigationPage() {
     return { collector: c, status, durationMs };
   });
   const isCancellable = ["created", "gathering", "evaluating"].includes(String(detail?.state || "").toLowerCase());
+  const investigationTitle = detail?.domain || evidence?.domain || investigationId;
+  const investigationState = String(sse.state || detail?.state || "created");
+  const investigationStatusTone = resolveStateTone(investigationState, report);
+  const reportReady = Boolean(report);
+  const collectorCompleteCount = collectorRows.filter((row) => String(row.status) === "completed").length;
+  const collectorFailedCount = collectorRows.filter((row) => String(row.status) === "failed").length;
+  const collectorPendingCount = Math.max(0, collectorRows.length - collectorCompleteCount - collectorFailedCount);
+  const collectorCoverage = collectorRows.length
+    ? Math.round((collectorCompleteCount / collectorRows.length) * 100)
+    : 0;
+  const currentProgressPct = getInvestigationProgressPct(investigationState, sse.percent || 0, reportReady);
+  const stageSummary = sse.message || `Investigation in progress (${investigationState})`;
+  const elapsedSec = detail?.created_at
+    ? Math.max(0, Math.floor((nowTs - new Date(detail.created_at).getTime()) / 1000))
+    : 0;
+  const createdLabel = detail?.created_at ? new Date(detail.created_at).toLocaleString() : "-";
+  const concludedLabel = detail?.concluded_at ? new Date(detail.concluded_at).toLocaleString() : "-";
+  const investigationMetaItems: MetadataItem[] = [
+    { label: "Investigation ID", value: shortId(investigationId), hint: "Stable reference for exports and links", mono: true },
+    { label: "Observable", value: investigationTitle, hint: "Primary indicator under analysis", mono: true, span: 2 },
+    { label: "Observable Type", value: detail?.observable_type || "domain" },
+    { label: "State", value: humanizeState(investigationState) },
+    { label: "Created", value: createdLabel, hint: elapsedSec ? `${elapsedSec}s elapsed` : "Awaiting start" },
+    { label: "Completed", value: concludedLabel, hint: reportReady ? "Report ready" : "Still collecting" },
+    { label: "Collector Coverage", value: `${collectorCoverage}%`, hint: `${collectorCompleteCount} completed / ${collectorPendingCount} pending`, tone: reportReady ? "success" : "info" },
+    { label: "SSE", value: sse.connected ? "Live" : "Polling", hint: sse.connected ? "Streaming updates" : "Fallback refresh mode", tone: sse.connected ? "success" : "warning" },
+  ];
 
   // Fetch all data
   const fetchData = useCallback(async () => {
@@ -177,15 +312,6 @@ export default function InvestigationPage() {
     }
   }, [searchParams, tabs]);
 
-  const handleEnrich = useCallback(async (text: string) => {
-    try {
-      const data = JSON.parse(text);
-      await api.enrichInvestigation(investigationId, data);
-    } catch {
-      await api.enrichInvestigation(investigationId, { soc_ticket_notes: text }).catch(() => {});
-    }
-  }, [investigationId]);
-
   const handleCancel = useCallback(async () => {
     if (!investigationId || canceling || !isCancellable) return;
     setCancelError(null);
@@ -212,7 +338,45 @@ export default function InvestigationPage() {
 
   // ─── Loading state ───
   if (loading && !evidence && !report) {
-    return <Spinner message="Loading investigation..." />;
+    return (
+      <div style={pageShellStyle}>
+        <PageHero
+          eyebrow="Investigation Detail"
+          title={investigationTitle}
+          description="Loading the console shell, collector state, and report workspace."
+          status={<StatusPill tone="neutral" mono>Loading</StatusPill>}
+          badges={(
+            <>
+              <StatusPill tone="info" size="sm" outline mono>{humanizeState(investigationState)}</StatusPill>
+              <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
+                {sse.connected ? "SSE LIVE" : "POLLING"}
+              </StatusPill>
+            </>
+          )}
+          stats={(
+            <>
+              <SignalCard label="Progress" value={`${currentProgressPct}%`} caption="Preparing the investigation view" tone="info" compact />
+              <SignalCard label="Collectors" value={collectorRows.length} caption="Configured collector channels" tone="neutral" compact />
+              <SignalCard label="Report" value={reportReady ? "Ready" : "Pending"} caption="Narrative layer and exports" tone={reportReady ? "success" : "warning"} compact />
+              <SignalCard label="Elapsed" value={`${elapsedSec}s`} caption="Time since submission" tone="neutral" compact />
+            </>
+          )}
+        />
+        <div style={{ marginTop: 22 }}>
+          <ConsoleModule eyebrow="Console" title="Investigative workspace" description="The detail shell is assembling the shared analyst view.">
+            <div style={{ display: "grid", gap: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <Spinner message="Loading investigation..." />
+                <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.7 }}>
+                  Establishing live state, collector coverage, and report context.
+                </div>
+              </div>
+              <MetadataGrid items={investigationMetaItems} compact />
+            </div>
+          </ConsoleModule>
+        </div>
+      </div>
+    );
   }
 
   // ─── Waiting for results ───
@@ -238,7 +402,111 @@ export default function InvestigationPage() {
     ];
 
     return (
-      <div style={{ paddingTop: 24 }}>
+      <div style={pageShellStyle}>
+        <PageHero
+          eyebrow="Investigation Detail"
+          title={investigationTitle}
+          description={(
+            <>
+              <span>Live collection is still in flight.</span>
+              <span style={{ marginLeft: 8, color: "var(--text-dim)" }}>
+                {investigationState === "created" ? "Queued" : humanizeState(investigationState)} | SSE {sse.connected ? "live" : "reconnecting"} | {elapsedSec}s elapsed
+              </span>
+            </>
+          )}
+          status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
+          badges={(
+            <>
+              <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
+                {sse.connected ? "SSE LIVE" : "POLLING"}
+              </StatusPill>
+              <StatusPill tone={reportReady ? "success" : "warning"} size="sm" outline mono>
+                {reportReady ? "REPORT READY" : "COLLECTING"}
+              </StatusPill>
+            </>
+          )}
+          actions={(
+            <>
+              <ConsoleActionButton onClick={fetchData}>Refresh</ConsoleActionButton>
+              {isCancellable ? (
+                <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
+                  {canceling ? "Cancelling..." : "Cancel Investigation"}
+                </ConsoleActionButton>
+              ) : null}
+            </>
+          )}
+          stats={(
+            <>
+              <SignalCard label="Progress" value={String(currentProgressPct) + "%"} caption={stageSummary} tone={investigationStatusTone} accent={stateAccent(investigationState)} compact />
+              <SignalCard label="Stage" value={humanizeState(investigationState)} caption="Current orchestration state" tone={investigationStatusTone} compact />
+              <SignalCard label="Collectors" value={collectorRows.length} caption={String(collectorCompleteCount) + " complete / " + String(collectorPendingCount) + " pending"} tone="info" compact />
+              <SignalCard label="Coverage" value={String(collectorCoverage) + "%"} caption="Collector completion ratio" tone={collectorCoverage >= 75 ? "success" : "warning"} compact />
+            </>
+          )}
+        />
+        <MetadataGrid items={investigationMetaItems} title="Investigation Snapshot" eyebrow="Structured metadata" description="The shared console surface summarizes the active investigation before you enter the detailed tabs." />
+        <div style={consoleSectionSpacing}>
+          <div style={consoleGridStyle}>
+            <ConsoleModule
+              eyebrow="Pipeline"
+              title="Investigation progress"
+              description="Collectors are still running and the narrative layer has not finalized yet."
+              tone={investigationStatusTone}
+              variant="glass"
+            >
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={consoleLabelStyle}>Progress</span>
+                  <StatusPill tone={investigationStatusTone} mono>{progressPct}%</StatusPill>
+                </div>
+                <div style={progressTrackStyle}>
+                  <div
+                    style={{
+                      ...progressBarStyle,
+                      width: `${progressPct}%`,
+                      background: liveState === "failed"
+                        ? "linear-gradient(90deg, #ef4444, #f87171)"
+                        : "linear-gradient(90deg, var(--accent), #34d399)",
+                    }}
+                  />
+                </div>
+                <div style={consoleBodyStyle}>{stageText}</div>
+              </div>
+            </ConsoleModule>
+            <ConsoleModule
+              eyebrow="Stages"
+              title="Execution path"
+              description="A quick read on where the orchestration currently sits."
+              tone="info"
+              variant="dense"
+            >
+              <div style={{ display: "grid", gap: 10 }}>
+                {steps.map((step) => (
+                  <div key={step.key} style={stageRowStyle(step.active, step.done)}>
+                    <span style={stageIconStyle(step.active, step.done)}>{step.done ? "Done" : step.active ? "Live" : "Pending"}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{step.label}</span>
+                  </div>
+                ))}
+              </div>
+            </ConsoleModule>
+          </div>
+          <ConsoleModule
+            eyebrow="Telemetry"
+            title="Collector timings"
+            description="Live collector timing stays visible while the investigation is still in progress."
+            variant="solid"
+            tone="info"
+          >
+            <CollectorTimingTable
+              rows={collectorRows}
+              totalDurationMs={sse.totalElapsedMs ?? (elapsedSec * 1000)}
+              live={true}
+              title="Collector Timings"
+            />
+          </ConsoleModule>
+          {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
+        </div>
+        {false && <div style={{ paddingTop: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 20, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
             {detail?.domain || investigationId}
@@ -260,7 +528,7 @@ export default function InvestigationPage() {
           )}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 20, fontFamily: "var(--font-sans)" }}>
-          State: {liveState} · Elapsed: {elapsedSec}s · SSE: {sse.connected ? "live" : "reconnecting"}
+          State: {liveState} | Elapsed: {elapsedSec}s | SSE: {sse.connected ? "live" : "reconnecting"}
         </div>
         <div style={{
           border: "1px solid var(--border)",
@@ -346,6 +614,7 @@ export default function InvestigationPage() {
             </button>
           )}
         </div>
+        </div>}
       </div>
     );
   }
@@ -409,7 +678,136 @@ export default function InvestigationPage() {
 
   // ─── Main report view ───
   return (
-    <div style={{ paddingTop: 24, paddingBottom: 80 }}>
+    <div style={pageShellStyle}>
+      <PageHero
+        eyebrow="Investigation Detail"
+        title={investigationTitle}
+        description={(
+          <>
+            <span>Threat Analyst Console view for the active investigation.</span>
+            <span style={{ marginLeft: 8, color: "var(--text-dim)" }}>
+              {shortId(investigationId)} | {createdLabel}{detail?.concluded_at ? " | Completed " + concludedLabel : ""}
+            </span>
+          </>
+        )}
+        status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
+        badges={(
+          <>
+            {detail?.observable_type && detail.observable_type !== "domain" ? (
+              <StatusPill tone="info" size="sm" outline mono>{detail.observable_type}</StatusPill>
+            ) : null}
+            {report?.ai_model ? (
+              <StatusPill
+                tone={String(report.ai_model).startsWith("claude-") ? "warning" : "info"}
+                size="sm" outline mono
+              >
+                {String(report.ai_model).startsWith("claude-sonnet") ? "Sonnet 4.6"
+                  : String(report.ai_model).startsWith("claude-haiku") ? "Haiku 4.5"
+                  : String(report.ai_model).startsWith("claude-opus") ? "Opus 4.6"
+                  : String(report.ai_model).replace(" (default)", "")}
+              </StatusPill>
+            ) : null}
+            <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
+              {sse.connected ? "SSE LIVE" : "POLLING"}
+            </StatusPill>
+            <StatusPill tone={reportReady ? "success" : "warning"} size="sm" outline mono>
+              {reportReady ? "REPORT READY" : "COLLECTING"}
+            </StatusPill>
+          </>
+        )}
+        actions={(
+          <>
+            <ConsoleActionButton onClick={() => router.push("/")}>New Investigation</ConsoleActionButton>
+            <ConsoleActionButton onClick={() => { void handleOpenAssistant(); }}>Open in AI Assistant</ConsoleActionButton>
+            {isCancellable ? (
+              <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
+                {canceling ? "Cancelling..." : "Cancel"}
+              </ConsoleActionButton>
+            ) : null}
+            <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/pdf", "_blank"); }}>Export PDF</ConsoleActionButton>
+            <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/markdown", "_blank"); }}>Export MD</ConsoleActionButton>
+            <ConsoleActionButton onClick={() => {
+              const blob = new Blob([JSON.stringify({ evidence, report, detail }, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = (detail?.domain || "investigation") + "-full.json";
+              a.click();
+              URL.revokeObjectURL(url);
+            }}>
+              Export JSON
+            </ConsoleActionButton>
+            <ConsoleActionButton onClick={fetchData}>Refresh</ConsoleActionButton>
+          </>
+        )}
+        stats={(
+          <>
+            <SignalCard label="Progress" value={reportReady ? "100%" : String(currentProgressPct) + "%"} caption={reportReady ? "Investigation complete" : stageSummary} tone={investigationStatusTone} accent={stateAccent(investigationState)} compact />
+            <SignalCard label="Collectors" value={collectorRows.length} caption={String(collectorCompleteCount) + " complete / " + String(collectorPendingCount) + " pending"} tone="info" compact />
+            <SignalCard label="Coverage" value={String(collectorCoverage) + "%"} caption="Collector completion ratio" tone={collectorCoverage >= 75 ? "success" : "warning"} compact />
+            <SignalCard label="Workspace" value={tabs.length} caption="Available report sections" tone="neutral" compact />
+          </>
+        )}
+      />
+      <MetadataGrid items={investigationMetaItems} title="Investigation Snapshot" eyebrow="Structured metadata" description="The shared console surface summarizes the active investigation before you enter the detailed tabs." />
+      <div style={consoleSectionSpacing}>
+        {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
+
+        {evidence ? (
+          <div style={consoleGridStyle}>
+            <ConsoleModule
+              eyebrow="Pipeline"
+              title="Collector progress"
+              description="A compact execution view before you enter the detailed report sections."
+              tone="info"
+              variant="glass"
+            >
+              <ProgressTimeline
+                collectors={Object.fromEntries(
+                  collectorKeys.map((c) => {
+                    const evidenceKey = c === "asn" ? "hosting" : c;
+                    const collectorData = evidence?.[evidenceKey];
+                    const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
+                    return [c, status];
+                  })
+                )}
+                analystDone={!!report}
+              />
+            </ConsoleModule>
+            <ConsoleModule
+              eyebrow="Timing"
+              title="Collector timings"
+              description="Wall-clock timing for each collection stage."
+              tone="neutral"
+              variant="solid"
+            >
+              <CollectorTimingTable
+                rows={collectorRows}
+                totalDurationMs={
+                  detail?.created_at && detail?.concluded_at
+                    ? Math.max(0, new Date(detail.concluded_at).getTime() - new Date(detail.created_at).getTime())
+                    : undefined
+                }
+                title="Collector Timings"
+              />
+            </ConsoleModule>
+          </div>
+        ) : null}
+
+        <ConsoleModule
+          eyebrow="Report Workspace"
+          title="Analysis tabs"
+          description="Navigate the executive summary, evidence, findings, pivots, and raw data from a single investigation shell."
+          tone="info"
+          variant="glass"
+        >
+          <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+          <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>
+            {renderTab()}
+          </ErrorBoundary>
+        </ConsoleModule>
+      </div>
+      {false && <div style={{ paddingTop: 24, paddingBottom: 80 }}>
       {/* Domain header */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8,
@@ -443,7 +841,7 @@ export default function InvestigationPage() {
             fontFamily: "var(--font-sans)",
           }}>
             Investigation {String(investigationId).slice(0, 8)}...
-            {detail?.concluded_at && ` · Completed ${new Date(detail.concluded_at).toLocaleString()}`}
+            {detail?.concluded_at && ` | Completed ${new Date(detail.concluded_at).toLocaleString()}`}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -514,9 +912,6 @@ export default function InvestigationPage() {
         </>
       )}
 
-      {/* Enrichment */}
-      <EnrichmentPanel onSubmit={handleEnrich} />
-
       {/* Tabs */}
       <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
 
@@ -524,38 +919,141 @@ export default function InvestigationPage() {
       <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>
         {renderTab()}
       </ErrorBoundary>
+    </div>}
     </div>
   );
 }
 
 // ─── Helper Components ───
 
-function HeaderButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function ConsoleActionButton({ onClick, children, tone = "neutral", disabled = false }: { onClick: () => void; children: React.ReactNode; tone?: "neutral" | "info" | "success" | "warning" | "danger"; disabled?: boolean }) {
+  const palette = actionButtonPalette(tone);
+
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
-        padding: "7px 14px", background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)", color: "var(--text-secondary)",
-        fontSize: 12, fontWeight: 500, cursor: "pointer",
+        padding: "8px 14px",
+        background: disabled ? "rgba(120, 145, 178, 0.08)" : palette.background,
+        border: `1px solid ${disabled ? "rgba(120, 145, 178, 0.12)" : palette.border}`,
+        borderRadius: 12,
+        color: disabled ? "var(--text-muted)" : palette.foreground,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: disabled ? "not-allowed" : "pointer",
         fontFamily: "var(--font-sans)",
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        boxShadow: disabled ? "none" : "0 12px 24px rgba(3, 8, 20, 0.16)",
+        transition: "transform 120ms ease, border-color 120ms ease, background 120ms ease, color 120ms ease",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--accent-glow)";
-        e.currentTarget.style.borderColor = "var(--accent)";
-        e.currentTarget.style.color = "var(--accent)";
+        if (disabled) return;
+        e.currentTarget.style.transform = "translateY(-1px)";
+        e.currentTarget.style.background = palette.hoverBackground;
+        e.currentTarget.style.borderColor = palette.hoverBorder;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "var(--bg-elevated)";
-        e.currentTarget.style.borderColor = "var(--border)";
-        e.currentTarget.style.color = "var(--text-secondary)";
+        if (disabled) return;
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.background = palette.background;
+        e.currentTarget.style.borderColor = palette.border;
       }}
     >
       {children}
     </button>
   );
 }
+
+function HeaderButton(props: { onClick: () => void; children: React.ReactNode }) {
+  return <ConsoleActionButton onClick={props.onClick}>{props.children}</ConsoleActionButton>;
+}
+
+const consoleSectionSpacing: React.CSSProperties = {
+  display: "grid",
+  gap: 18,
+};
+
+const consoleGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+  gap: 18,
+  alignItems: "start",
+};
+
+const consoleLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: "var(--text-dim)",
+};
+
+const consoleBodyStyle: React.CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.7,
+  color: "var(--text-secondary)",
+};
+
+const progressBarStyle: React.CSSProperties = {
+  height: "100%",
+  transition: "width 400ms ease",
+};
+
+function stageRowStyle(active: boolean, done: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: `1px solid ${
+      active
+        ? "rgba(102, 168, 255, 0.28)"
+        : done
+        ? "rgba(56, 217, 169, 0.24)"
+        : "rgba(120, 145, 178, 0.16)"
+    }`,
+    background: active
+      ? "rgba(102, 168, 255, 0.10)"
+      : done
+      ? "rgba(56, 217, 169, 0.08)"
+      : "rgba(10, 16, 28, 0.48)",
+    color: active ? "#bfdbfe" : done ? "#9bf0d8" : "var(--text-secondary)",
+  };
+}
+
+function stageIconStyle(active: boolean, done: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 58,
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: active ? "#bfdbfe" : done ? "#9bf0d8" : "var(--text-dim)",
+    background: active
+      ? "rgba(102, 168, 255, 0.12)"
+      : done
+      ? "rgba(56, 217, 169, 0.12)"
+      : "rgba(120, 145, 178, 0.08)",
+  };
+}
+
+const inlineErrorStyle: React.CSSProperties = {
+  color: "#fda4af",
+  fontSize: 12,
+  fontWeight: 600,
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(251, 113, 133, 0.24)",
+  background: "rgba(251, 113, 133, 0.10)",
+};
 
 function NoData({ label }: { label: string }) {
   return (

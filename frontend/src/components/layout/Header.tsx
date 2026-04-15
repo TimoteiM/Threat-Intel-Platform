@@ -1,96 +1,29 @@
 "use client";
 
 import React from "react";
-
-const APP_MAX_WIDTH = 1920;
+import { APP_BRAND, APP_NAV_LINKS, APP_SUBTITLE, APP_VERSION } from "@/lib/constants";
+import BrandMark from "@/components/layout/BrandMark";
 
 export default function Header() {
   return (
-    <header
-      style={{
-        borderBottom: "1px solid var(--border)",
-        background: "rgba(15, 23, 42, 0.85)",
-        backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
-        position: "sticky",
-        top: 0,
-        zIndex: 50,
-      }}
-    >
-      <div style={{
-        maxWidth: APP_MAX_WIDTH,
-        margin: "0 auto",
-        padding: "0 16px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        height: 56,
-      }}>
-        <a
-          href="/"
-          style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}
-        >
-          <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: "linear-gradient(135deg, #60a5fa 0%, #818cf8 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 15,
-              fontWeight: 700,
-              color: "#fff",
-              boxShadow: "0 2px 8px rgba(96, 165, 250, 0.3)",
-            }}
-          >
-            ⬡
-          </div>
-          <div>
-            <div style={{
-              fontSize: 14,
-              fontWeight: 700,
-              letterSpacing: "0.02em",
-              color: "var(--text)",
-              fontFamily: "var(--font-sans)",
-            }}>
-              Threat Analyzer
-            </div>
-            <div style={{
-              fontSize: 10,
-              color: "var(--text-muted)",
-              letterSpacing: "0.01em",
-              fontFamily: "var(--font-sans)",
-              fontWeight: 500,
-            }}>
-              Threat Intelligence and Investigation Platform
-            </div>
+    <header className="app-header">
+      <div className="app-header__inner">
+        <a href="/" className="app-brand" aria-label={APP_BRAND}>
+          <BrandMark />
+          <div className="app-brand__copy">
+            <div className="app-brand__title">{APP_BRAND}</div>
+            <div className="app-brand__subtitle">{APP_SUBTITLE}</div>
           </div>
         </a>
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-        }}>
-          <NavLink href="/dashboard">Dashboard</NavLink>
-          <NavLink href="/investigations">All Cases</NavLink>
-          <NavLink href="/batches">Bulk Analysis</NavLink>
-          <NavLink href="/watchlist">Watchlist</NavLink>
-          <NavLink href="/email-investigations">Email</NavLink>
-          <NavLink href="/assistant">AI Assistant</NavLink>
-          <NavLink href="/clients">Clients</NavLink>
-          <NavLink href="/alerts">Alerts</NavLink>
-          <NavLink href="/ip-lookup">IP Lookup</NavLink>
-          <span style={{
-            fontSize: 11,
-            color: "var(--text-muted)",
-            fontFamily: "var(--font-mono)",
-            padding: "2px 8px",
-            background: "var(--bg-elevated)",
-            borderRadius: "var(--radius-sm)",
-          }}>v1.0</span>
-        </div>
+
+        <nav className="app-nav" aria-label="Primary">
+          {APP_NAV_LINKS.map((link) => (
+            <NavLink key={link.href} href={link.href}>
+              {link.label}
+            </NavLink>
+          ))}
+          <span className="app-nav__badge">{APP_VERSION}</span>
+        </nav>
       </div>
     </header>
   );
@@ -98,24 +31,7 @@ export default function Header() {
 
 function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <a
-      href={href}
-      style={{
-        color: "var(--text-dim)", textDecoration: "none",
-        fontSize: 13, fontWeight: 500,
-        fontFamily: "var(--font-sans)",
-        padding: "6px 12px",
-        borderRadius: "var(--radius-sm)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.color = "var(--accent)";
-        e.currentTarget.style.background = "var(--accent-glow)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.color = "var(--text-dim)";
-        e.currentTarget.style.background = "transparent";
-      }}
-    >
+    <a href={href} className="app-nav__link">
       {children}
     </a>
   );

@@ -1075,6 +1075,7 @@ class InvestigationCreate(BaseModel):
     client_url: Optional[str] = None          # Client URL to compare against
     external_context: Optional[ExternalContext] = None
     requested_collectors: Optional[list[str]] = None
+    ai_model: Optional[str] = None           # Override AI model: e.g. "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o-mini"
 
 
 class InvestigationResponse(BaseModel):

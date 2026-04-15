@@ -204,6 +204,7 @@ class InvestigationService:
                     if request.external_context else None
                 ),
                 requested_collectors=effective_collectors,
+                ai_model=request.ai_model,
             )
             _store_investigation_task_id(investigation_id, getattr(task, "id", None))
         except Exception as exc:

@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     brave_search_count: int = 10
     anyrun_api_key: str = ""
     anyrun_api_key_fallback: str = ""
+    opencti_api_key: str = ""
+    opencti_api_url: str = ""          # e.g. https://opencti.yourorg.com
+    opencti_verify_ssl: bool = True    # set False for self-signed/internal certs
     anyrun_sandbox_os: str = "windows"
     anyrun_privacy_type: str = "owner"
-    anyrun_timeout_url_domain_seconds: int = 45
+    anyrun_timeout_url_domain_seconds: int = 120
     anyrun_timeout_file_hash_seconds: int = 90
     anyrun_max_upload_mb: int = 100
     anyrun_parallel_limit_retries: int = 8

@@ -1,26 +1,25 @@
+import type { Metadata } from "next";
 import "@/styles/globals.css";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
+import { APP_BRAND, APP_SUBTITLE } from "@/lib/constants";
 
-export const metadata = {
-  title: "Threat Analyzer",
-  description: "Threat intelligence and investigation platform",
+export const metadata: Metadata = {
+  title: {
+    default: APP_BRAND,
+    template: `%s | ${APP_BRAND}`,
+  },
+  description: APP_SUBTITLE,
 };
-
-const APP_MAX_WIDTH = 1920;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+      <body className="app-shell">
         <Header />
-        <main style={{ flex: 1, maxWidth: APP_MAX_WIDTH, margin: "0 auto", padding: "0 16px", width: "100%" }}>
-          {children}
-        </main>
+        <main className="app-shell__main">{children}</main>
         <Footer />
       </body>
     </html>
   );
 }
-
-

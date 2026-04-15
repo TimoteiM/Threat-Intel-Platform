@@ -585,18 +585,54 @@ class OpenCTICollector(BaseCollector):
 # ── Module-level helpers ─────────────────────────────────────────────────────
 
 def _best_node(raw: dict, query_field: str, term: str) -> dict | None:
-    """Return the node whose observable_value best matches term, or the first node."""
+    """Return the node whose observable_value actually matches the searched term."""
     edges = raw.get("data", {}).get(query_field, {}).get("edges", [])
     if not edges:
         return None
-    sv = term.lower()
+    sv = term.strip().lower()
     for edge in edges:
         node = edge.get("node") or {}
-        val  = str(node.get("observable_value") or "").lower()
-        if val == sv or sv in val or val in sv:
+        val = str(node.get("observable_value") or "").strip()
+        if _observable_matches_term(val, sv):
             return node
-    # No exact/substring match — return first result (still relevant hit)
-    return edges[0].get("node") or {}
+    return None
+
+
+def _observable_matches_term(observable_value: str, searched_term: str) -> bool:
+    value = (observable_value or "").strip().lower()
+    term = (searched_term or "").strip().lower()
+    if not value or not term:
+        return False
+
+    if value == term:
+        return True
+
+    parsed_value = _parse_url_like(value)
+    parsed_term = _parse_url_like(term)
+
+    # Domain searches may legitimately match URL observables hosted on that domain.
+    if parsed_term["host"]:
+        if value == parsed_term["host"]:
+            return True
+        if parsed_value["host"] == parsed_term["host"]:
+            return True
+
+    # URL searches may also match a bare host-only observable for the same hostname.
+    if parsed_value["host"] and term == parsed_value["host"]:
+        return True
+
+    return False
+
+
+def _parse_url_like(value: str) -> dict[str, str]:
+    try:
+        parsed = urlparse(value if "://" in value else f"//{value}", scheme="")
+    except Exception:
+        return {"host": "", "path": ""}
+    return {
+        "host": (parsed.hostname or "").strip().lower(),
+        "path": (parsed.path or "").strip(),
+    }
 
 
 def _iter_nodes(node: dict, field: str):

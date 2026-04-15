@@ -131,14 +131,11 @@ export default function FindingsTab({ report, evidence }: Props) {
                     borderLeft: `3px solid ${color}`,
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: f?.ttp ? 8 : 0 }}>
                     <Badge label={f?.severity || "info"} color={color} />
                     <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
                       {f?.title || "Untitled finding"}
                     </span>
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-                    {f?.description || ""}
                   </div>
                   {f?.ttp && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>

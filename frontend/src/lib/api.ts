@@ -99,6 +99,7 @@ export function createInvestigation(data: {
   investigated_url?: string;
   client_url?: string;
   requested_collectors?: string[];
+  ai_model?: string;
 }) {
   return request<{
     investigation_id: string;

@@ -321,6 +321,7 @@ def run_analysis(
     client_url: str | None = None,
     external_context: dict | None = None,
     max_iterations: int = 3,
+    ai_model: str | None = None,
 ) -> dict:
     """
     Aggregate evidence and run Claude analysis.
@@ -838,6 +839,7 @@ def run_analysis(
                 evidence_data,
                 max_iterations=max_iterations,
                 timeout_seconds=settings.analyst_timeout_seconds,
+                ai_model=ai_model,
             )
             if _is_parser_fallback_report(report_data):
                 logger.warning(
@@ -900,6 +902,27 @@ def run_analysis(
         _time_phase("report_generation", report_phase_start)
 
     report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
+
+    # Record which AI model produced this report — set after _ensure_report_completeness
+    # so it is guaranteed to survive into the persisted report_json.
+    # Fast-path types (hash/ip/file) leave ai_model=None → frontend shows "Automated (rule-based)".
+    if observable_type in ("domain", "url"):
+        report_data["ai_model"] = ai_model or f"{settings.openai_model} (default)"
+    else:
+        report_data["ai_model"] = None
+
+    # Derive recommended_action from classification (rule-based, not AI-generated).
+    # This overrides any value the AI may have produced so the action is always consistent.
+    _classification = str(report_data.get("classification") or "inconclusive").lower()
+    _confidence = str(report_data.get("confidence") or "low").lower()
+    if _classification == "malicious":
+        report_data["recommended_action"] = "block"
+    elif _classification == "suspicious":
+        report_data["recommended_action"] = "investigate" if _confidence in ("medium", "high") else "monitor"
+    elif _classification == "benign":
+        report_data["recommended_action"] = "monitor"
+    else:
+        report_data["recommended_action"] = "investigate"
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
     phase_timings_ms["analysis_total"] = int((time.monotonic() - analysis_started) * 1000)
@@ -1740,9 +1763,14 @@ def _looks_like_ip(value: str) -> bool:
         return False
 
 
-def _run_analyst_sync(evidence_data: dict, max_iterations: int, timeout_seconds: int) -> dict:
+def _run_analyst_sync(
+    evidence_data: dict,
+    max_iterations: int,
+    timeout_seconds: int,
+    ai_model: str | None = None,
+) -> dict:
     """
-    Synchronous wrapper for the async Claude analyst call.
+    Synchronous wrapper for the async LLM analyst call.
     Celery workers are sync, so we run the async code in a new event loop.
     """
     import asyncio
@@ -1755,7 +1783,7 @@ def _run_analyst_sync(evidence_data: dict, max_iterations: int, timeout_seconds:
     try:
         report = loop.run_until_complete(
             asyncio.wait_for(
-                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations),
+                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations, ai_model=ai_model),
                 timeout=timeout_seconds,
             )
         )
@@ -2609,6 +2637,7 @@ def _run_analyst_with_compaction(
     *,
     max_iterations: int,
     timeout_seconds: int,
+    ai_model: str | None = None,
 ) -> tuple[dict, str]:
     last_error: Exception | None = None
     tiers = ("standard", "compact", "digest")
@@ -2620,6 +2649,7 @@ def _run_analyst_with_compaction(
                     analyst_input,
                     max_iterations,
                     timeout_seconds=timeout_seconds,
+                    ai_model=ai_model,
                 ),
                 tier,
             )

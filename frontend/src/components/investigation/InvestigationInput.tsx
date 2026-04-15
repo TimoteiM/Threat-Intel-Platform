@@ -14,9 +14,16 @@ interface Props {
     requestedCollectors?: string[],
     observableType?: ObservableType,
     fileToUpload?: File,
+    aiModel?: string,
   ) => void;
   loading: boolean;
 }
+
+const AI_MODELS: { id: string; label: string; provider: "openai" | "anthropic"; desc: string }[] = [
+  { id: "gpt-5-mini",               label: "GPT-5 Mini",        provider: "openai",    desc: "Fast, cost-effective OpenAI model" },
+  { id: "claude-sonnet-4-6",        label: "Sonnet 4.6",        provider: "anthropic", desc: "High accuracy, balanced speed" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5",        provider: "anthropic", desc: "Fastest Claude, lightweight" },
+];
 
 const OBSERVABLE_TYPES: { id: ObservableType; label: string; placeholder: string }[] = [
   { id: "domain", label: "Domain",  placeholder: "suspicious-site.com" },
@@ -36,16 +43,17 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "threat_feeds", label: "Threat Feeds", desc: "AbuseIPDB, PhishTank, ThreatFox" },
   { id: "brave_osint",  label: "Brave OSINT",  desc: "Public OSINT search across forums, blogs, GitHub, Reddit" },
   { id: "urlscan",      label: "URLScan",      desc: "Full page scan, screenshot, network map" },
-  { id: "hybrid_analysis", label: "AnyRun Analysis", desc: "Any.Run evidence (Hybrid fallback if needed)" },
+  { id: "hybrid_analysis", label: "AnyRun Analysis", desc: "Any.Run evidence" },
+  { id: "opencti",     label: "OpenCTI",      desc: "Threat intel platform — indicators, reports, actors" },
 ];
 
 // Which collectors support each observable type
 const COLLECTORS_PER_TYPE: Record<ObservableType, string[]> = {
-  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis"],
-  ip:     ["asn", "vt", "threat_feeds", "urlscan"],
-  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis"],
-  hash:   ["vt", "threat_feeds", "hybrid_analysis"],
-  file:   ["vt", "hybrid_analysis"],
+  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
+  ip:     ["asn", "vt", "threat_feeds", "urlscan", "opencti"],
+  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
+  hash:   ["vt", "threat_feeds", "hybrid_analysis", "opencti"],
+  file:   ["vt", "hybrid_analysis", "opencti"],
 };
 
 export default function InvestigationInput({ onSubmit, loading }: Props) {
@@ -62,6 +70,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   const [clientUrl, setClientUrl] = useState("");
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [uploadingRef, setUploadingRef] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<string>(AI_MODELS[1].id); // default: Sonnet 4.6
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sampleFileRef = useRef<HTMLInputElement>(null);
@@ -101,6 +110,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       selectedCollectors.length > 0 ? selectedCollectors : undefined,
       observableType,
       fileToUpload || undefined,
+      selectedModel,
     );
   };
 
@@ -256,6 +266,44 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
         >
           {uploadingRef ? "Uploading..." : loading ? "Investigating..." : "Investigate"}
         </button>
+      </div>
+
+      {/* ── AI Model selector ── */}
+      <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-sans)", whiteSpace: "nowrap", marginRight: 2 }}>
+          AI Model:
+        </span>
+        {AI_MODELS.map((m) => {
+          const active = selectedModel === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => setSelectedModel(m.id)}
+              title={m.desc}
+              style={{
+                padding: "4px 12px",
+                borderRadius: "var(--radius-sm)",
+                border: `1px solid ${active ? (m.provider === "anthropic" ? "#f97316" : "#60a5fa") : "var(--border)"}`,
+                background: active
+                  ? m.provider === "anthropic"
+                    ? "rgba(249,115,22,0.12)"
+                    : "rgba(96,165,250,0.12)"
+                  : "var(--bg-elevated)",
+                color: active
+                  ? m.provider === "anthropic" ? "#f97316" : "var(--accent)"
+                  : "var(--text-muted)",
+                fontSize: 10,
+                fontWeight: active ? 700 : 500,
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                transition: "all 0.15s",
+                letterSpacing: "0.03em",
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── URL input (domain + url types only) ── */}

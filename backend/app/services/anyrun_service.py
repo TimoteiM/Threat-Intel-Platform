@@ -9,6 +9,8 @@ Primary strategy:
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 from contextlib import ExitStack
 from typing import Any
@@ -17,6 +19,57 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 from app.config import get_settings
+
+# ── AnyRun sandbox scheduling ─────────────────────────────────────────────────
+#
+# Problem: N simultaneous investigations each try to submit a sandbox task.
+# AnyRun's per-account parallel limit rejects all but one per account, causing
+# 8×10 s exponential backoff loops (~250 s wasted per investigation).
+#
+# Strategy — key pool queue:
+#   A queue is pre-loaded with all configured API keys (one entry per key).
+#   Each sandbox submission checks out a key from the queue, uses it, then
+#   returns it when done. queue.get() blocks until ANY key is available,
+#   so the caller always gets the first free key — regardless of which one.
+#
+#   With 2 keys and 3 simultaneous investigations (A, B, C — different domains):
+#     • Inv-A: gets key1 immediately, submits domain A  ┐ parallel
+#     • Inv-B: gets key2 immediately, submits domain B  ┘
+#     • Inv-C: blocks on queue.get() — waits for whichever of key1/key2 is
+#              returned first, then submits domain C with that key.
+#
+#   With 3 investigations of the SAME domain (A, A, A):
+#     • Inv-1: gets key1, submits, caches result, returns key1.
+#     • Inv-2: gets key2, submits in parallel, caches result, returns key2.
+#     • Inv-3: blocks → gets key1 (whichever returns first) → cache hit →
+#              returns immediately without submitting to AnyRun at all.
+#
+# All state is process-scoped (threading) — correct for worker_pool="threads".
+
+_ANYRUN_KEY_POOL:       "queue.Queue[str] | None" = None
+_ANYRUN_POOL_LOCK:      threading.Lock = threading.Lock()
+_ANYRUN_POOL_KEY_COUNT: int = 0  # total keys ever added; 0 means "not configured"
+
+_ANYRUN_CACHE_LOCK   = threading.Lock()
+_ANYRUN_RESULT_CACHE: dict[str, tuple[float, dict]] = {}  # key → (ts, result)
+_ANYRUN_CACHE_TTL    = 600  # seconds — 10 minutes
+
+
+def _get_key_pool() -> "queue.Queue[str]":
+    """Return (and lazily initialise) the shared API key pool queue."""
+    global _ANYRUN_KEY_POOL, _ANYRUN_POOL_KEY_COUNT
+    if _ANYRUN_KEY_POOL is not None:
+        return _ANYRUN_KEY_POOL
+    with _ANYRUN_POOL_LOCK:
+        if _ANYRUN_KEY_POOL is not None:
+            return _ANYRUN_KEY_POOL
+        keys = _configured_anyrun_api_keys(get_settings())
+        pool: queue.Queue[str] = queue.Queue()
+        for k in keys:
+            pool.put(k)
+        _ANYRUN_POOL_KEY_COUNT = len(keys)
+        _ANYRUN_KEY_POOL = pool
+    return _ANYRUN_KEY_POOL
 
 
 def lookup_anyrun(
@@ -156,6 +209,23 @@ def lookup_anyrun(
     )
 
 
+def _anyrun_cache_get(cache_key: str) -> dict | None:
+    """Return a cached sandbox result if still fresh, else None."""
+    with _ANYRUN_CACHE_LOCK:
+        entry = _ANYRUN_RESULT_CACHE.get(cache_key)
+        if entry and (time.time() - entry[0]) < _ANYRUN_CACHE_TTL:
+            return entry[1]
+        if entry:
+            del _ANYRUN_RESULT_CACHE[cache_key]  # evict stale
+    return None
+
+
+def _anyrun_cache_set(cache_key: str, result: dict) -> None:
+    """Store a sandbox result in the cache."""
+    with _ANYRUN_CACHE_LOCK:
+        _ANYRUN_RESULT_CACHE[cache_key] = (time.time(), result)
+
+
 def _run_anyrun_sandbox_with_fallback(
     sandbox_connector_cls: Any,
     *,
@@ -169,24 +239,44 @@ def _run_anyrun_sandbox_with_fallback(
     file_name: str | None,
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    sandbox_result = _run_sandbox(
-        sandbox_connector_cls=sandbox_connector_cls,
-        api_key=api_key,
-        sandbox_os=sandbox_os,
-        privacy_type=privacy_type,
-        indicator=indicator,
-        indicator_type=indicator_type,
-        file_bytes=file_bytes,
-        file_name=file_name,
-        timeout_seconds=timeout_seconds,
-    )
-    if (
-        fallback_api_key
-        and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error"))
-    ):
-        fallback_result = _run_sandbox(
+    cache_key    = f"{indicator_type}:{indicator}"
+    gate_timeout = int(timeout_seconds or 60) + 120
+
+    # ── 1. Fast path: cache hit → no pool checkout needed ────────────────────
+    cached = _anyrun_cache_get(cache_key)
+    if cached is not None:
+        logger.info("AnyRun cache hit for %s — skipping submission", indicator)
+        return cached
+
+    # ── 2. Check out a key from the pool (blocks until one is free) ──────────
+    # Initialise pool first; _ANYRUN_POOL_KEY_COUNT reflects how many keys were
+    # ever configured — a count of 0 means no keys at all (different from "all
+    # keys temporarily checked out by other investigations").
+    pool = _get_key_pool()
+    if _ANYRUN_POOL_KEY_COUNT == 0:
+        return _error(indicator_type, "ANYRUN_API_KEY not configured")
+
+    try:
+        chosen_key = pool.get(block=True, timeout=gate_timeout)
+    except queue.Empty:
+        logger.warning("AnyRun key pool timeout (%ss) for %s — skipping sandbox", gate_timeout, indicator)
+        return _error(indicator_type, "AnyRun sandbox gate timeout — no API key available")
+
+    key_label = "primary" if chosen_key == api_key else "fallback"
+    logger.info("AnyRun checked out %s key for %s", key_label, indicator)
+
+    try:
+        # ── 3. Double-check cache (another thread may have finished while we waited)
+        cached = _anyrun_cache_get(cache_key)
+        if cached is not None:
+            logger.info("AnyRun cache hit (post-pool) for %s", indicator)
+            return cached
+
+        # ── 4. Submit sandbox with the checked-out key ────────────────────────
+        logger.info("AnyRun submitting sandbox for %s using %s key", indicator, key_label)
+        sandbox_result = _run_sandbox(
             sandbox_connector_cls=sandbox_connector_cls,
-            api_key=fallback_api_key,
+            api_key=chosen_key,
             sandbox_os=sandbox_os,
             privacy_type=privacy_type,
             indicator=indicator,
@@ -195,15 +285,16 @@ def _run_anyrun_sandbox_with_fallback(
             file_name=file_name,
             timeout_seconds=timeout_seconds,
         )
-        if fallback_result.get("checked"):
-            raw = fallback_result.get("raw_summary") or {}
-            fallback_result["raw_summary"] = {
-                **(raw if isinstance(raw, dict) else {}),
-                "api_key_slot": "fallback",
-            }
-            return fallback_result
-        sandbox_result = _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
-    return sandbox_result
+
+        # ── 5. Cache successful results so waiting investigations get a hit ────
+        if sandbox_result.get("checked"):
+            _anyrun_cache_set(cache_key, sandbox_result)
+
+        return sandbox_result
+
+    finally:
+        # Always return the key to the pool so the next investigation can use it
+        pool.put(chosen_key)
 
 
 def _configured_anyrun_api_keys(settings: Any) -> list[str]:
@@ -511,6 +602,14 @@ def _run_sandbox(
         connections = _ensure_list(network.get("connections"))
         network_threats = _ensure_list(network.get("threats"))
         ioc_items = _extract_iocs(ioc_report)
+        ioc_types = [str(x.get("type") or "").lower() for x in ioc_items if isinstance(x, dict)]
+        logger.debug(
+            "AnyRun sandbox IOC report: total=%d types=%s http_requests=%d dns_requests=%d",
+            len(ioc_items),
+            sorted(set(ioc_types)),
+            len(http_requests),
+            len(dns_requests),
+        )
 
         dyn_domains = []
         for entry in dns_requests:
@@ -541,6 +640,22 @@ def _run_sandbox(
             dyn_domains = _ensure_list(network.get("domains"))
         if not dyn_hosts:
             dyn_hosts = _ensure_list(network.get("hosts"))
+        # Build URL list from HTTP requests observed during sandbox execution
+        dyn_urls: list[dict[str, Any]] = []
+        for entry in http_requests:
+            if not isinstance(entry, dict):
+                continue
+            url = str(entry.get("url") or entry.get("requestUrl") or "").strip()
+            if url and url.startswith("http"):
+                dyn_urls.append(
+                    {
+                        "url": url,
+                        "method": entry.get("method") or "GET",
+                        "threatLevel": entry.get("threatLevel") or 0,
+                        "threatName": _ensure_list(entry.get("threatName")),
+                        "status": entry.get("status") or entry.get("responseCode"),
+                    }
+                )
 
         threat_score = _as_float(
             scores.get("threatScore")
@@ -567,6 +682,7 @@ def _run_sandbox(
             "dynamic_io_summary": {
                 "domains": dyn_domains,
                 "hosts": dyn_hosts,
+                "urls": dyn_urls,
                 "mitre_attcks": (report_data.get("mitre") or []),
                 "destinationIPgeo": destination_ip_geo,
                 "destinationPort": destination_ports,
@@ -713,10 +829,12 @@ def _submit_anyrun_task_with_fallback(
                         )
                     }
                 if _is_submission_fallback_candidate(exc):
+                    logger.debug("AnyRun submission fallback candidate (privacy=%s): %s", privacy, exc)
                     break
                 return {"__error__": f"ANY.RUN sandbox submission failed: {exc}"}
 
     if isinstance(last_exc, Exception) and _is_submission_fallback_candidate(last_exc):
+        logger.warning("AnyRun submission failed with null payload for both privacy variants: %s", last_exc)
         return {
             "__error__": (
                 "ANY.RUN sandbox submission failed: provider returned an empty/invalid response "

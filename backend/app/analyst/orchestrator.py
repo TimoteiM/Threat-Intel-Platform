@@ -27,25 +27,48 @@ from app.models.schemas import AnalystReport, CollectedEvidence
 logger = logging.getLogger(__name__)
 
 
+# Models that route to Anthropic — everything else goes to OpenAI
+_ANTHROPIC_MODEL_PREFIXES = ("claude-",)
+
+
+def _resolve_provider_and_model(
+    requested_model: str | None,
+    settings,
+) -> tuple[str, str]:
+    """Return (provider, model_id) based on the requested model override or settings defaults."""
+    if requested_model:
+        if any(requested_model.startswith(p) for p in _ANTHROPIC_MODEL_PREFIXES):
+            return "anthropic", requested_model
+        return "openai", requested_model
+    # Default: prefer OpenAI if key is set, else Anthropic
+    if settings.openai_api_key:
+        return "openai", settings.openai_model
+    return "anthropic", settings.anthropic_model
+
+
 async def run_analyst(
     evidence: CollectedEvidence,
     iteration: int = 0,
     max_iterations: int = 3,
     previous_response: Optional[str] = None,
+    ai_model: Optional[str] = None,
 ) -> AnalystReport:
     """
-    Call the configured OpenAI model with evidence and return a structured report.
+    Call the configured LLM with evidence and return a structured report.
 
     Args:
         evidence: Collected evidence object
         iteration: Current follow-up iteration (0 = first pass)
         max_iterations: Maximum follow-up rounds
         previous_response: Previous model response (for follow-ups)
+        ai_model: Override model ID (e.g. "claude-sonnet-4-6", "gpt-4o-mini").
+                  If None, uses the default from settings.
 
     Returns:
         AnalystReport with classification, findings, and narrative
     """
     settings = get_settings()
+    provider, model_id = _resolve_provider_and_model(ai_model, settings)
 
     system, messages = build_messages(
         evidence=evidence,
@@ -56,22 +79,53 @@ async def run_analyst(
 
     logger.info(
         f"[{evidence.investigation_id}] Calling analyst "
-        f"(iteration {iteration}/{max_iterations}, model={settings.openai_model}, provider=openai)"
+        f"(iteration {iteration}/{max_iterations}, model={model_id}, provider={provider})"
     )
 
     raw_text = ""
-    try:
-        raw_text = await _call_openai(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
+    if provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is not set — cannot call Claude model")
+        logger.info(
+            f"[{evidence.investigation_id}] Routing to Anthropic: model={model_id}, "
+            f"key={settings.anthropic_api_key[:8]}..."
+        )
+        raw_text = await _call_claude(
+            api_key=settings.anthropic_api_key,
+            model=model_id,
             system=system,
             messages=messages,
         )
-    except Exception as openai_err:
-        if settings.anthropic_api_key and settings.anthropic_model:
+        logger.info(
+            f"[{evidence.investigation_id}] Claude response received, length={len(raw_text)}"
+        )
+    else:
+        try:
+            raw_text = await _call_openai(
+                api_key=settings.openai_api_key,
+                model=model_id,
+                system=system,
+                messages=messages,
+            )
+        except Exception as openai_err:
+            if settings.anthropic_api_key and settings.anthropic_model:
+                logger.warning(
+                    f"[{evidence.investigation_id}] OpenAI analyst call failed "
+                    f"({type(openai_err).__name__}: {openai_err}). "
+                    f"Falling back to Claude model={settings.anthropic_model}."
+                )
+                raw_text = await _call_claude(
+                    api_key=settings.anthropic_api_key,
+                    model=settings.anthropic_model,
+                    system=system,
+                    messages=messages,
+                )
+            else:
+                raise
+
+        if not raw_text.strip() and settings.anthropic_api_key and settings.anthropic_model:
             logger.warning(
-                f"[{evidence.investigation_id}] OpenAI analyst call failed "
-                f"({type(openai_err).__name__}: {openai_err}). "
+                f"[{evidence.investigation_id}] OpenAI returned empty analyst output. "
                 f"Falling back to Claude model={settings.anthropic_model}."
             )
             raw_text = await _call_claude(
@@ -80,20 +134,6 @@ async def run_analyst(
                 system=system,
                 messages=messages,
             )
-        else:
-            raise
-
-    if not raw_text.strip() and settings.anthropic_api_key and settings.anthropic_model:
-        logger.warning(
-            f"[{evidence.investigation_id}] OpenAI returned empty analyst output. "
-            f"Falling back to Claude model={settings.anthropic_model}."
-        )
-        raw_text = await _call_claude(
-            api_key=settings.anthropic_api_key,
-            model=settings.anthropic_model,
-            system=system,
-            messages=messages,
-        )
 
     logger.debug(f"[{evidence.investigation_id}] Analyst raw response length: {len(raw_text)}")
 

@@ -895,6 +895,7 @@ export interface AnalystReport {
   executive_summary?: string;
   technical_narrative?: string;
   recommendations_narrative?: string;
+  ai_model?: string;
 }
 
 // --- API Responses ---

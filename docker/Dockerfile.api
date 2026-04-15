@@ -24,5 +24,10 @@ RUN playwright install chromium --with-deps
 
 COPY . .
 
+# Patch anyrun-sdk: fix file upload bug where json=params is silently ignored by requests
+# when files= is also provided, causing task parameters to be dropped and the API to return
+# an empty response (SDK null payload error).
+RUN python scripts/patch_anyrun_sdk.py
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

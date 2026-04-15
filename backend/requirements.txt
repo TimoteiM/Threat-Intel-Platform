@@ -20,6 +20,7 @@ redis>=5.2.0
 dnspython>=2.7.0
 requests>=2.32.0
 anyrun-sdk>=1.1.2
+aiohttp>=3.10.0
 cryptography>=44.0.0
 python-whois>=0.9.4
 tldextract>=5.1.0

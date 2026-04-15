@@ -8,6 +8,11 @@ import {
   listEmailInvestigationHistory,
   uploadEmailInvestigation,
 } from "@/lib/api";
+import ConsoleModule from "@/components/ui/ConsoleModule";
+import MetadataGrid from "@/components/ui/MetadataGrid";
+import PageHero from "@/components/ui/PageHero";
+import SignalCard from "@/components/ui/SignalCard";
+import StatusPill from "@/components/ui/StatusPill";
 import type {
   EmailInvestigationHistoryItem,
   EmailInvestigationResponse,
@@ -28,6 +33,7 @@ export default function EmailInvestigationsPage() {
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [includeScreenshots, setIncludeScreenshots] = useState(false);
   const [runAnyRun, setRunAnyRun] = useState(true);
+  const [activeResultTab, setActiveResultTab] = useState<"summary" | "indicators" | "anyrun">("summary");
   const [runAiInterpretation, setRunAiInterpretation] = useState(true);
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -100,6 +106,17 @@ export default function EmailInvestigationsPage() {
     [result],
   );
   const anyrunPageSize = 8;
+  const selectedHistoryItem = selectedHistoryId
+    ? historyItems.find((item) => item.id === selectedHistoryId) || null
+    : null;
+  const workflowTone = loading ? "warning" : error ? "danger" : result ? "success" : "info";
+  const workflowLabel = loading ? "Processing" : error ? "Attention needed" : result ? "Results ready" : "Awaiting sample";
+  const fileLabel = file?.name || "No file selected";
+  const fileStateLabel = file ? "File staged" : "No sample loaded";
+  const historyActiveCount = historyItems.filter((item) =>
+    ["queued", "processing", "running"].includes(String(item.status || "").toLowerCase()),
+  ).length;
+  const progressTone = loading ? "warning" : activeRunId ? "info" : "neutral";
 
   useEffect(() => {
     setAnyrunPages({
@@ -228,208 +245,350 @@ export default function EmailInvestigationsPage() {
     }).catch(() => {});
   }
 
-  return (
-    <div style={{ paddingTop: 24, paddingBottom: 48 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
-        Email Investigation
-      </h1>
-      <p style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 20 }}>
-        Upload an <code>.eml</code> or <code>.msg</code> file to extract indicators, run investigations, and generate a structured SOC resolution.
-      </p>
+  const shellFieldStyle: React.CSSProperties = {
+    display: "grid",
+    gap: 10,
+    padding: 14,
+    borderRadius: 18,
+    border: "1px solid rgba(120, 145, 178, 0.16)",
+    background: "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+  };
+  const shellLabelStyle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: "var(--text-dim)",
+  };
+  const shellInputStyle: React.CSSProperties = {
+    width: "100%",
+    background: "var(--bg-input)",
+    border: "1px solid var(--border)",
+    color: "var(--text)",
+    borderRadius: 14,
+    padding: "11px 12px",
+    fontSize: 13,
+    outline: "none",
+  };
+  const shellTextAreaStyle: React.CSSProperties = {
+    ...shellInputStyle,
+    resize: "vertical",
+    minHeight: 112,
+  };
+  const shellCheckboxStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    color: "var(--text-secondary)",
+    fontSize: 13,
+    lineHeight: 1.6,
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: "1px solid rgba(120, 145, 178, 0.12)",
+    background: "rgba(9, 15, 26, 0.42)",
+  };
 
-      <div
-        style={{
-          background: "linear-gradient(180deg, rgba(96,165,250,0.08), rgba(16,185,129,0.03))",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)",
-          padding: 14,
-          marginBottom: 18,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)", fontWeight: 700 }}>
-            Email Investigation History
-          </div>
+  return (
+    <div style={{ paddingTop: 18, paddingBottom: 44, display: "grid", gap: 18 }}>
+      <PageHero
+        eyebrow="Threat Analyst Console"
+        title="Email Investigation"
+        description="Upload an .eml or .msg sample, inspect prior runs, and follow the workflow from intake through verdict in a single console surface."
+        status={<StatusPill tone={workflowTone} mono>{workflowLabel}</StatusPill>}
+        badges={
+          <>
+            <StatusPill tone={historyActiveCount ? "warning" : "neutral"} outline mono>{`${historyItems.length} history`}</StatusPill>
+            <StatusPill tone={runAnyRun ? "success" : "neutral"} outline mono>{runAnyRun ? "AnyRun on" : "AnyRun off"}</StatusPill>
+            <StatusPill tone={runAiInterpretation ? "info" : "neutral"} outline mono>{runAiInterpretation ? "AI on" : "AI off"}</StatusPill>
+          </>
+        }
+        stats={
+          <>
+            <SignalCard
+              label="History"
+              value={historyItems.length}
+              caption={selectedHistoryItem ? selectedHistoryItem.email_subject || selectedHistoryItem.filename || "Selected run loaded" : "Archived investigations available"}
+              tone={historyItems.length ? "info" : "neutral"}
+              compact
+            />
+            <SignalCard
+              label="Upload"
+              value={file ? "Ready" : "Idle"}
+              caption={fileLabel}
+              tone={file ? "success" : "neutral"}
+              compact
+            />
+            <SignalCard
+              label="Progress"
+              value={loading ? `${progressModel.percent}%` : activeRunId ? "Polling" : "Standby"}
+              caption={loading ? progressModel.stageText : activeRunId ? "Monitoring the live run" : "No active investigation"}
+              tone={progressTone}
+              compact
+            />
+            <SignalCard
+              label="Results"
+              value={result ? "Loaded" : error ? "Attention" : "Waiting"}
+              caption={result ? result.email_subject || "Latest analysis available" : error || "Open a sample to populate the report pane"}
+              tone={result ? "success" : error ? "danger" : "neutral"}
+              compact
+            />
+          </>
+        }
+        actions={
           <button
             type="button"
             onClick={refreshHistory}
             style={{
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--border)",
-              color: "var(--text-secondary)",
-              borderRadius: "var(--radius)",
+              background: "rgba(96,165,250,0.12)",
+              border: "1px solid rgba(96,165,250,0.28)",
+              color: "var(--text-strong)",
+              borderRadius: "999px",
               fontSize: 11,
-              padding: "6px 10px",
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              padding: "8px 12px",
               cursor: "pointer",
             }}
           >
-            {loadingHistory ? "Refreshing..." : "Refresh"}
+            {loadingHistory ? "Refreshing..." : "Refresh history"}
           </button>
-        </div>
-        {!historyItems.length ? (
-          <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No previous email investigations yet.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 8, maxHeight: 220, overflowY: "auto", paddingRight: 4 }}>
-            {historyItems.map((h) => (
-              <div
-                key={h.id}
-                style={{
-                  textAlign: "left",
-                  background: selectedHistoryId === h.id ? "rgba(96,165,250,0.12)" : "var(--bg-card)",
-                  border: selectedHistoryId === h.id ? "1px solid rgba(96,165,250,0.35)" : "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
-                  padding: 10,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => openHistoryItem(h.id)}
-                  disabled={!!loadingHistoryItemId}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600, marginBottom: 3 }}>
-                    {h.email_subject || h.filename || "No subject"}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                    {h.sender_email || "Unknown sender"} | URLs: {h.urls_count} | Attachments: {h.attachments_count} | Status: {h.status || "unknown"}
-                  </div>
-                  <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
-                    {h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time"}
-                  </div>
-                </button>
-                {["queued", "processing", "running"].includes(String(h.status || "").toLowerCase()) && (
-                  <div style={{ marginTop: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => cancelRun(h.id)}
-                      disabled={cancelingRunId === h.id}
+        }
+      />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
+        <ConsoleModule
+          eyebrow="Archive"
+          title="History"
+          description="Recent runs and live cancel controls. Open a previous run to repopulate the result pane."
+          tone="info"
+          actions={<StatusPill tone={historyItems.length ? "info" : "neutral"} outline mono>{`${historyItems.length} records`}</StatusPill>}
+        >
+          <MetadataGrid
+            compact
+            columns={2}
+            items={[
+              { label: "Total", value: historyItems.length, tone: "info", mono: true },
+              { label: "Active", value: historyActiveCount, tone: historyActiveCount ? "warning" : "neutral", mono: true },
+              { label: "Selected", value: selectedHistoryItem ? selectedHistoryItem.email_subject || selectedHistoryItem.filename || selectedHistoryItem.id : "None", tone: selectedHistoryItem ? "success" : "neutral" },
+              { label: "Latest refresh", value: loadingHistory ? "Refreshing now" : "Manual refresh available", tone: "neutral" },
+            ]}
+          />
+          <div style={{ marginTop: 14 }}>
+            {!historyItems.length ? (
+              <div style={{ color: "var(--text-dim)", fontSize: 13, lineHeight: 1.7 }}>No previous email investigations yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10, maxHeight: 280, overflowY: "auto", paddingRight: 4 }}>
+                {historyItems.map((h) => {
+                  const isSelected = selectedHistoryId === h.id;
+                  const status = String(h.status || "unknown").toLowerCase();
+                  const statusTone = ["queued", "processing", "running"].includes(status) ? "warning" : status === "completed" ? "success" : status === "failed" ? "danger" : "neutral";
+                  return (
+                    <article
+                      key={h.id}
                       style={{
-                        background: "rgba(239,68,68,0.12)",
-                        border: "1px solid rgba(239,68,68,0.35)",
-                        color: "#fca5a5",
-                        borderRadius: "var(--radius)",
-                        fontSize: 11,
-                        padding: "4px 8px",
-                        cursor: cancelingRunId === h.id ? "not-allowed" : "pointer",
+                        borderRadius: 18,
+                        border: `1px solid ${isSelected ? "rgba(96,165,250,0.40)" : "rgba(120,145,178,0.16)"}`,
+                        background: isSelected ? "rgba(96,165,250,0.10)" : "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+                        padding: 12,
                       }}
                     >
-                      {cancelingRunId === h.id ? "Cancelling..." : "Cancel"}
-                    </button>
-                  </div>
-                )}
+                      <button
+                        type="button"
+                        onClick={() => openHistoryItem(h.id)}
+                        disabled={!!loadingHistoryItemId}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          padding: 0,
+                          display: "grid",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ minWidth: 0, flex: "1 1 240px" }}>
+                            <div style={{ fontSize: 13, color: "var(--text-strong)", fontWeight: 700, lineHeight: 1.4, wordBreak: "break-word" }}>
+                              {h.email_subject || h.filename || "No subject"}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4, wordBreak: "break-word" }}>
+                              {h.sender_email || "Unknown sender"}
+                            </div>
+                          </div>
+                          <StatusPill tone={statusTone} size="sm" mono>
+                            {h.status || "unknown"}
+                          </StatusPill>
+                        </div>
+                        <MetadataGrid
+                          compact
+                          columns={2}
+                          items={[
+                            { label: "URLs", value: h.urls_count, mono: true },
+                            { label: "Attachments", value: h.attachments_count, mono: true },
+                            { label: "Created", value: h.created_at ? new Date(h.created_at).toLocaleString() : "Unknown time" },
+                            { label: "Run id", value: h.id, mono: true },
+                          ]}
+                        />
+                      </button>
+                      {["queued", "processing", "running"].includes(status) && (
+                        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+                          <button
+                            type="button"
+                            onClick={() => cancelRun(h.id)}
+                            disabled={cancelingRunId === h.id}
+                            style={{
+                              background: "rgba(239,68,68,0.12)",
+                              border: "1px solid rgba(239,68,68,0.30)",
+                              color: "#fca5a5",
+                              borderRadius: 999,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              letterSpacing: "0.08em",
+                              textTransform: "uppercase",
+                              padding: "8px 12px",
+                              cursor: cancelingRunId === h.id ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {cancelingRunId === h.id ? "Cancelling..." : "Cancel run"}
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
-        )}
+        </ConsoleModule>
+
+        <ConsoleModule
+          eyebrow="Sample intake"
+          title="Upload"
+          description="Configure the email analysis before submission. The current options do not change the existing run logic."
+          tone="info"
+          actions={<StatusPill tone={file ? "success" : "neutral"} outline mono>{fileStateLabel}</StatusPill>}
+        >
+          <MetadataGrid
+            compact
+            columns={2}
+            items={[
+              { label: "Selected file", value: fileLabel, tone: file ? "success" : "neutral" },
+              { label: "Context", value: context.trim() ? `${context.trim().length} chars` : "Optional", tone: context.trim() ? "info" : "neutral", mono: true },
+              { label: "ML score", value: mlScore.trim() || "unset", tone: mlScore.trim() ? "warning" : "neutral", mono: true },
+              { label: "Screenshots", value: includeScreenshots ? "Enabled" : "Disabled", tone: includeScreenshots ? "warning" : "neutral" },
+              { label: "AnyRun", value: runAnyRun ? "Enabled" : "Disabled", tone: runAnyRun ? "success" : "neutral" },
+              { label: "AI interpretation", value: runAiInterpretation ? "Enabled" : "Disabled", tone: runAiInterpretation ? "info" : "neutral" },
+            ]}
+          />
+          <form
+            onSubmit={onSubmit}
+            style={{
+              marginTop: 16,
+              display: "grid",
+              gap: 12,
+            }}
+          >
+            <div style={shellFieldStyle}>
+              <div style={shellLabelStyle}>Email file</div>
+              <input
+                type="file"
+                accept=".eml,.msg,message/rfc822,application/vnd.ms-outlook"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                style={shellInputStyle}
+              />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+              <div style={shellFieldStyle}>
+                <div style={shellLabelStyle}>Optional investigation context</div>
+                <textarea
+                  placeholder="Add analyst context, suspected campaign notes, or any extra clues."
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                  rows={4}
+                  style={shellTextAreaStyle}
+                />
+              </div>
+              <div style={shellFieldStyle}>
+                <div style={shellLabelStyle}>Optional ML phishing score</div>
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  placeholder="0.000 - 1.000"
+                  value={mlScore}
+                  onChange={(e) => setMlScore(e.target.value)}
+                  style={shellInputStyle}
+                />
+                <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6, color: "var(--text-muted)" }}>
+                  Higher values bias the workflow toward suspicious outcomes when combined with other signals.
+                </div>
+              </div>
+            </div>
+            <div style={shellFieldStyle}>
+              <div style={shellLabelStyle}>Analysis options</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                <label style={shellCheckboxStyle}>
+                  <input type="checkbox" checked={includeScreenshots} onChange={(e) => setIncludeScreenshots(e.target.checked)} />
+                  <span>Capture screenshot for each URL destination (slower)</span>
+                </label>
+                <label style={shellCheckboxStyle}>
+                  <input type="checkbox" checked={runAnyRun} onChange={(e) => setRunAnyRun(e.target.checked)} />
+                  <span>Run Any.Run checks for URLs and attachment hashes</span>
+                </label>
+                <label style={shellCheckboxStyle}>
+                  <input type="checkbox" checked={runAiInterpretation} onChange={(e) => setRunAiInterpretation(e.target.checked)} />
+                  <span>AI-assisted interpretation (recommended)</span>
+                </label>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                type="submit"
+                disabled={!file || loading}
+                style={{
+                  background: "linear-gradient(135deg,#60a5fa,#818cf8)",
+                  border: "none",
+                  color: "#fff",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  padding: "11px 16px",
+                  cursor: !file || loading ? "not-allowed" : "pointer",
+                  opacity: !file || loading ? 0.65 : 1,
+                }}
+              >
+                {loading ? "Running investigation..." : "Upload and analyze"}
+              </button>
+              <StatusPill tone={runAnyRun ? "success" : "neutral"} outline mono>{runAnyRun ? "AnyRun enabled" : "AnyRun disabled"}</StatusPill>
+              <StatusPill tone={runAiInterpretation ? "info" : "neutral"} outline mono>{runAiInterpretation ? "AI enabled" : "AI disabled"}</StatusPill>
+            </div>
+          </form>
+        </ConsoleModule>
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)",
-          padding: 16,
-          marginBottom: 20,
-          display: "grid",
-          gap: 12,
-        }}
-      >
-        <input
-          type="file"
-          accept=".eml,.msg,message/rfc822,application/vnd.ms-outlook"
-          onChange={(e) => setFile(e.target.files?.[0] || null)}
-          style={{ fontSize: 13, color: "var(--text-dim)" }}
-        />
-        <textarea
-          placeholder="Optional investigation context"
-          value={context}
-          onChange={(e) => setContext(e.target.value)}
-          rows={3}
-          style={{
-            width: "100%",
-            resize: "vertical",
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text)",
-            borderRadius: "var(--radius)",
-            padding: 10,
-            fontSize: 13,
-          }}
-        />
-        <input
-          type="number"
-          min="0"
-          max="1"
-          step="0.001"
-          placeholder="Optional ML phishing score (0.000 - 1.000)"
-          value={mlScore}
-          onChange={(e) => setMlScore(e.target.value)}
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text)",
-            borderRadius: "var(--radius)",
-            padding: 10,
-            fontSize: 13,
-          }}
-        />
-        <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
-          <input
-            type="checkbox"
-            checked={includeScreenshots}
-            onChange={(e) => setIncludeScreenshots(e.target.checked)}
-          />
-          Capture screenshot for each URL destination (slower)
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
-          <input
-            type="checkbox"
-            checked={runAnyRun}
-            onChange={(e) => setRunAnyRun(e.target.checked)}
-          />
-          Run Any.Run checks (URLs + attachment hashes)
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 12 }}>
-          <input
-            type="checkbox"
-            checked={runAiInterpretation}
-            onChange={(e) => setRunAiInterpretation(e.target.checked)}
-          />
-          AI-assisted interpretation (recommended)
-        </label>
-        <button
-          type="submit"
-          disabled={!file || loading}
-          style={{
-            background: "linear-gradient(135deg,#60a5fa,#818cf8)",
-            border: "none",
-            color: "#fff",
-            borderRadius: "var(--radius)",
-            fontSize: 13,
-            fontWeight: 700,
-            padding: "10px 14px",
-            cursor: !file || loading ? "not-allowed" : "pointer",
-            opacity: !file || loading ? 0.65 : 1,
-          }}
-        >
-          {loading ? "Running investigation..." : "Upload and Analyze"}
-        </button>
-      </form>
-
       {error && (
-        <div style={{ color: "#f87171", marginBottom: 16, fontSize: 13 }}>
-          {error}
-        </div>
+        <ConsoleModule
+          eyebrow="Run status"
+          title="Attention"
+          description={error}
+          tone="danger"
+          variant="outline"
+        >
+          <StatusPill tone="danger" outline mono>Error surfaced by the workflow</StatusPill>
+        </ConsoleModule>
       )}
-
+      <ConsoleModule
+        eyebrow="Orchestration"
+        title="Progress"
+        description="Live upload, enrichment, and verdict state. The step list updates while the backend pipeline runs."
+        tone={progressTone}
+        actions={activeRunId ? <StatusPill tone="warning" outline mono>Cancelable</StatusPill> : <StatusPill tone="neutral" outline mono>Idle</StatusPill>}
+      >
       {loading && (
         <div
           style={{
@@ -493,7 +652,15 @@ export default function EmailInvestigationsPage() {
           )}
         </div>
       )}
+      </ConsoleModule>
 
+      <ConsoleModule
+        eyebrow="Investigation output"
+        title="Results"
+        description={result?.email_subject || "Structured resolution, indicators, and sandbox context for the current sample."}
+        tone={result ? "success" : "neutral"}
+        actions={result ? <StatusPill tone="success" outline mono>Report ready</StatusPill> : <StatusPill tone="neutral" outline mono>No report</StatusPill>}
+      >
       {result && (
         <div style={{ display: "grid", gap: 16 }}>
 
@@ -530,6 +697,41 @@ export default function EmailInvestigationsPage() {
               </div>
             );
           })()}
+
+          {/* ── Result Tab Bar ── */}
+          {(() => {
+            const tabs: { id: "summary" | "indicators" | "anyrun"; label: string }[] = [
+              { id: "summary", label: "Summary" },
+              { id: "indicators", label: "Indicators" },
+              { id: "anyrun", label: "AnyRun" },
+            ];
+            return (
+              <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", paddingBottom: 0, marginBottom: 4 }}>
+                {tabs.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setActiveResultTab(t.id)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      borderBottom: activeResultTab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
+                      color: activeResultTab === t.id ? "var(--accent)" : "var(--text-muted)",
+                      fontSize: 12,
+                      fontWeight: activeResultTab === t.id ? 700 : 400,
+                      padding: "6px 14px",
+                      cursor: "pointer",
+                      marginBottom: -1,
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+
+          {activeResultTab === "summary" && <>
 
           {/* ── Email Summary ── */}
           <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
@@ -765,7 +967,10 @@ export default function EmailInvestigationsPage() {
             </div>
           </div>
 
-          {(result?.indicator_checks as any)?.email_anyrun?.checked && <div style={{
+          </>}
+
+          {activeResultTab === "anyrun" && <>
+          <div style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius-lg)",
@@ -874,11 +1079,22 @@ export default function EmailInvestigationsPage() {
                         page={anyrunPages.domains}
                         pageSize={anyrunPageSize}
                         onPageChange={(page) => setAnyrunPages((current) => ({ ...current, domains: page }))}
-                        renderItem={(domain, idx) => (
-                          <div key={`${domain}-${idx}`} style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
-                            {domain}
-                          </div>
-                        )}
+                        renderItem={(d, idx) => {
+                          const tl = d.threatLevel ?? 0;
+                          const label = tl >= 2 ? "malicious" : tl === 1 ? "suspicious" : "clean";
+                          const labelColor = tl >= 2 ? "#ef4444" : tl === 1 ? "#f59e0b" : "#34d399";
+                          const labelBg = tl >= 2 ? "rgba(239,68,68,0.12)" : tl === 1 ? "rgba(245,158,11,0.12)" : "rgba(52,211,153,0.1)";
+                          return (
+                            <div key={`${d.name}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 2 }}>
+                              <span style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all", flex: 1 }}>
+                                {d.name}
+                              </span>
+                              <span style={{ fontSize: 9, color: labelColor, background: labelBg, border: `1px solid ${labelColor}40`, borderRadius: 999, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                {label}
+                              </span>
+                            </div>
+                          );
+                        }}
                       />
                     ) : (
                       <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No domains were surfaced by AnyRun.</div>
@@ -894,11 +1110,31 @@ export default function EmailInvestigationsPage() {
                         page={anyrunPages.hosts}
                         pageSize={anyrunPageSize}
                         onPageChange={(page) => setAnyrunPages((current) => ({ ...current, hosts: page }))}
-                        renderItem={(host, idx) => (
-                          <div key={`${host}-${idx}`} style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
-                            {host}
-                          </div>
-                        )}
+                        renderItem={(h, idx) => {
+                          const tl = h.threatLevel ?? 0;
+                          const isMalicious = tl >= 2;
+                          const isSuspicious = tl === 1;
+                          const ipColor = isMalicious ? "#ef4444" : isSuspicious ? "#f59e0b" : "var(--text-secondary)";
+                          return (
+                            <div key={`${h.display}-${idx}`} style={{ marginBottom: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ fontSize: 11, color: ipColor, fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                                  {h.display}
+                                </span>
+                                {(isMalicious || isSuspicious) && (
+                                  <span style={{ fontSize: 9, color: ipColor, background: isMalicious ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${ipColor}40`, borderRadius: 999, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                    {isMalicious ? "malicious" : "suspicious"}
+                                  </span>
+                                )}
+                              </div>
+                              {(h.asn || h.country) && (
+                                <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>
+                                  {[h.asn, h.country].filter(Boolean).join(" · ")}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }}
                       />
                     ) : (
                       <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No destination hosts were surfaced by AnyRun.</div>
@@ -969,7 +1205,23 @@ export default function EmailInvestigationsPage() {
                 </div>
               </div>
             )}
-          </div>}
+          </div>
+
+          {/* AnyRun status when not checked */}
+          {!(result?.indicator_checks as any)?.email_anyrun?.checked && (
+            <div style={{ padding: "20px 16px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-dim)", fontSize: 12, textAlign: "center" }}>
+              {!runAnyRun
+                ? "AnyRun sandbox was not requested for this investigation."
+                : (() => {
+                    const err = String((result?.indicator_checks as any)?.email_anyrun?.error || "");
+                    return err || "AnyRun sandbox analysis did not complete.";
+                  })()
+              }
+            </div>
+          )}
+          </>}
+
+          {activeResultTab === "indicators" && <>
 
           <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Attachment Hash Checks</div>
@@ -1121,8 +1373,11 @@ export default function EmailInvestigationsPage() {
               </div>
             )}
           </div>
+          </>}
+
         </div>
       )}
+      </ConsoleModule>
     </div>
   );
 }
@@ -1246,9 +1501,12 @@ function buildUrlSummary(result: EmailInvestigationResponse | null): {
   };
 }
 
+type AnyRunDomain = { name: string; threatLevel: number; threatName: string[] };
+type AnyRunHost = { display: string; ip: string; port: string; asn: string; country: string; threatLevel: number };
+
 function buildAnyRunEmailArtifacts(result: EmailInvestigationResponse | null): {
-  domains: string[];
-  hosts: string[];
+  domains: AnyRunDomain[];
+  hosts: AnyRunHost[];
   urls: string[];
   files: Array<{ name: string; value: string; category: string }>;
 } {
@@ -1256,29 +1514,75 @@ function buildAnyRunEmailArtifacts(result: EmailInvestigationResponse | null): {
   const dynamic = anyrun?.dynamic_io_summary || {};
   const raw = anyrun?.raw_summary || {};
   const iocs = Array.isArray(raw?.iocs) ? raw.iocs : [];
+  const behaviorDetails = raw?.behavior_details || {};
 
-  const domains: string[] = Array.from(new Set(
-    (Array.isArray(dynamic?.domains) ? dynamic.domains : [])
-      .map((entry: any) => String(entry?.domainName || entry?.domain || "").trim())
-      .filter(Boolean),
-  ));
+  // Build IP → {asn, country} lookup from connections (which carry ASN/country per entry)
+  const connGeo: Record<string, { asn: string; country: string }> = {};
+  for (const c of (Array.isArray(behaviorDetails?.connections) ? behaviorDetails.connections : [])) {
+    if (!c || typeof c !== "object") continue;
+    const ip = String(c?.destinationIP || c?.ip || c?.host || "").trim();
+    if (!ip) continue;
+    const asn = String(c?.asn || "").trim();
+    const country = String(c?.country || c?.geo?.country || "").trim();
+    if ((asn || country) && !connGeo[ip]) connGeo[ip] = { asn, country };
+  }
 
-  const hosts: string[] = Array.from(new Set(
-    (Array.isArray(dynamic?.hosts) ? dynamic.hosts : [])
-      .map((entry: any) => {
-        const ip = String(entry?.destinationIP || entry?.ip || entry?.host || "").trim();
-        const port = entry?.destinationPort ?? entry?.port;
-        return ip ? `${ip}${port ? `:${port}` : ""}` : "";
-      })
-      .filter(Boolean),
-  ));
+  // Domains — keep full metadata for labels
+  const domainMap: Record<string, AnyRunDomain> = {};
+  for (const entry of (Array.isArray(dynamic?.domains) ? dynamic.domains : [])) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = String(entry?.domainName || entry?.domain || "").trim();
+    if (!name) continue;
+    if (!domainMap[name]) {
+      domainMap[name] = {
+        name,
+        threatLevel: Number(entry?.threatLevel ?? 0),
+        threatName: Array.isArray(entry?.threatName) ? entry.threatName.map(String).filter(Boolean) : [],
+      };
+    }
+  }
+  const domains: AnyRunDomain[] = Object.values(domainMap);
 
-  const urls: string[] = Array.from(new Set(
-    iocs
-      .filter((item: any) => String(item?.type || "").toLowerCase() === "url")
-      .map((item: any) => String(item?.ioc || "").trim())
-      .filter(Boolean),
-  ));
+  // Hosts — enrich with ASN/country from connections
+  const hostMap: Record<string, AnyRunHost> = {};
+  for (const entry of (Array.isArray(dynamic?.hosts) ? dynamic.hosts : [])) {
+    if (!entry || typeof entry !== "object") continue;
+    const ip = String(entry?.destinationIP || entry?.ip || entry?.host || "").trim();
+    if (!ip) continue;
+    const port = String(entry?.destinationPort ?? entry?.port ?? "").trim();
+    const key = `${ip}:${port}`;
+    if (!hostMap[key]) {
+      const geo = connGeo[ip] || { asn: "", country: "" };
+      hostMap[key] = {
+        display: port ? `${ip}:${port}` : ip,
+        ip,
+        port,
+        asn: geo.asn,
+        country: geo.country,
+        threatLevel: Number(entry?.threatLevel ?? 0),
+      };
+    }
+  }
+  const hosts: AnyRunHost[] = Object.values(hostMap);
+
+  // URLs from IOC report (type may be "URL", "url", "uri", "http", "link")
+  const _urlTypes = new Set(["url", "uri", "http", "link"]);
+  const urlsFromIocs: string[] = iocs
+    .filter((item: any) => _urlTypes.has(String(item?.type || "").toLowerCase()))
+    .map((item: any) => String(item?.ioc || "").trim())
+    .filter(Boolean);
+
+  // URLs from sandbox HTTP traffic stored in dynamic_io_summary.urls
+  const urlsFromDynamic: string[] = (Array.isArray(dynamic?.urls) ? dynamic.urls : [])
+    .map((r: any) => String(r?.url || "").trim())
+    .filter((u: string) => u && u.startsWith("http"));
+
+  // URLs from sandbox HTTP traffic stored in behavior_details (fallback)
+  const urlsFromHttp: string[] = (Array.isArray(behaviorDetails?.http_requests) ? behaviorDetails.http_requests : [])
+    .map((r: any) => String(r?.url || r?.requestUrl || "").trim())
+    .filter((u: string) => u && u !== "-" && u.startsWith("http"));
+
+  const urls: string[] = Array.from(new Set([...urlsFromIocs, ...urlsFromDynamic, ...urlsFromHttp]));
 
   const fileMap: Record<string, { name: string; value: string; category: string }> = {};
   for (const item of iocs) {

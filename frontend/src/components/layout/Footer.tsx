@@ -1,159 +1,67 @@
 "use client";
 
 import React from "react";
+import {
+  APP_BRAND,
+  APP_FOOTER_LINK_GROUPS,
+  APP_SUBTITLE,
+  APP_VERSION,
+} from "@/lib/constants";
+import BrandMark from "@/components/layout/BrandMark";
 
 const YEAR = 2026;
-const APP_MAX_WIDTH = 1920;
 
 export default function Footer() {
   return (
-    <footer
-      style={{
-        borderTop: "1px solid var(--border)",
-        background: "rgba(15, 23, 42, 0.6)",
-        marginTop: 64,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: APP_MAX_WIDTH,
-          margin: "0 auto",
-          padding: "32px 16px",
-        }}
-      >
-        {/* Top row: brand + nav links */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: 32,
-            flexWrap: "wrap",
-            marginBottom: 28,
-          }}
-        >
-          {/* Brand */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 7,
-                  background: "linear-gradient(135deg, #60a5fa 0%, #818cf8 100%)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: "#fff",
-                  boxShadow: "0 2px 8px rgba(96, 165, 250, 0.25)",
-                  flexShrink: 0,
-                }}
-              >
-                ⬡
+    <footer className="app-footer">
+      <div className="app-footer__inner">
+        <div className="app-footer__grid">
+          <div className="app-footer__brand">
+            <div className="app-brand" aria-label={APP_BRAND}>
+              <BrandMark />
+              <div className="app-brand__copy">
+                <div className="app-brand__title">{APP_BRAND}</div>
+                <div className="app-brand__subtitle">{APP_SUBTITLE}</div>
               </div>
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: "var(--text)",
-                  fontFamily: "var(--font-sans)",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                Threat Analyzer
-              </span>
             </div>
-            <p
-              style={{
-                fontSize: 12,
-                color: "var(--text-muted)",
-                fontFamily: "var(--font-sans)",
-                lineHeight: 1.6,
-                maxWidth: 280,
-                margin: 0,
-              }}
-            >
-              Threat intelligence and investigation platform.
-              Evidence-based analysis with MITRE ATT&CK mapping
-              and full IOC extraction.
+
+            <p className="app-footer__description">
+              Evidence-based analysis with ATT&CK mapping, layered intelligence,
+              and a console-first experience for analysts and operators.
             </p>
           </div>
 
-          {/* Nav columns */}
-          <div
-            style={{
-              display: "flex",
-              gap: 48,
-              flexWrap: "wrap",
-            }}
-          >
-            <FooterColumn title="Platform">
-              <FooterLink href="/">New Investigation</FooterLink>
-              <FooterLink href="/investigations">All Cases</FooterLink>
-              <FooterLink href="/batches">Bulk Analysis</FooterLink>
-              <FooterLink href="/dashboard">Dashboard</FooterLink>
-            </FooterColumn>
-
-            <FooterColumn title="Tools">
-              <FooterLink href="/ip-lookup">IP Lookup</FooterLink>
-              <FooterLink href="/watchlist">Domain Watchlist</FooterLink>
-              <FooterLink href="/alerts">Alerts</FooterLink>
-              <FooterLink href="/clients">Client Management</FooterLink>
-            </FooterColumn>
-
-            <FooterColumn title="Technology">
-              <FooterExternalLink href="https://www.virustotal.com">VirusTotal</FooterExternalLink>
-              <FooterExternalLink href="https://www.abuseipdb.com">AbuseIPDB</FooterExternalLink>
-              <FooterExternalLink href="https://urlscan.io">URLScan.io</FooterExternalLink>
-              <FooterExternalLink href="https://attack.mitre.org">MITRE ATT&CK</FooterExternalLink>
-            </FooterColumn>
+          <div className="app-footer__columns">
+            {APP_FOOTER_LINK_GROUPS.map((group) => (
+              <FooterColumn key={group.title} title={group.title}>
+                {group.links.map((link) =>
+                  "external" in link && link.external ? (
+                    <FooterExternalLink key={link.href} href={link.href}>
+                      {link.label}
+                    </FooterExternalLink>
+                  ) : (
+                    <FooterLink key={link.href} href={link.href}>
+                      {link.label}
+                    </FooterLink>
+                  )
+                )}
+              </FooterColumn>
+            ))}
           </div>
         </div>
 
-        {/* Divider */}
-        <div style={{ borderTop: "1px solid var(--border-dim)", marginBottom: 20 }} />
+        <div className="app-footer__divider" />
 
-        {/* Bottom row: copyright + badges */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 12,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 11,
-              color: "var(--text-muted)",
-              fontFamily: "var(--font-sans)",
-            }}
-          >
-            &copy; {YEAR} Threat Analyzer - Timotei Moscaliuc. All rights reserved.
+        <div className="app-footer__bottom">
+          <span className="app-footer__meta">
+            &copy; {YEAR} {APP_BRAND} - Timotei Moscaliuc. All rights reserved.
           </span>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Badge color="#60a5fa">AI-Powered</Badge>
-            <Badge color="#818cf8">Evidence-Based</Badge>
-            <Badge color="#34d399">MITRE ATT&CK</Badge>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                fontFamily: "var(--font-mono)",
-                color: "var(--text-muted)",
-                padding: "2px 8px",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                letterSpacing: "0.04em",
-              }}
-            >
-              v1.0
-            </span>
+          <div className="app-footer__badges">
+            <Badge>AI Powered</Badge>
+            <Badge>Evidence Based</Badge>
+            <Badge>ATT&CK Ready</Badge>
+            <span className="app-footer__pill">{APP_VERSION}</span>
           </div>
         </div>
       </div>
@@ -161,49 +69,18 @@ export default function Footer() {
   );
 }
 
-function FooterColumn({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function FooterColumn({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div>
-      <div
-        style={{
-          fontSize: 10,
-          fontWeight: 700,
-          color: "var(--text-dim)",
-          letterSpacing: "0.07em",
-          textTransform: "uppercase",
-          fontFamily: "var(--font-sans)",
-          marginBottom: 12,
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {children}
-      </div>
+    <div className="app-footer__column">
+      <div className="app-footer__columnTitle">{title}</div>
+      {children}
     </div>
   );
 }
 
 function FooterLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <a
-      href={href}
-      style={{
-        fontSize: 12,
-        color: "var(--text-muted)",
-        textDecoration: "none",
-        fontFamily: "var(--font-sans)",
-        transition: "color 0.15s",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
-    >
+    <a href={href} className="app-footer__link">
       {children}
     </a>
   );
@@ -211,61 +88,12 @@ function FooterLink({ href, children }: { href: string; children: React.ReactNod
 
 function FooterExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      style={{
-        fontSize: 12,
-        color: "var(--text-muted)",
-        textDecoration: "none",
-        fontFamily: "var(--font-sans)",
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-        transition: "color 0.15s",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent)")}
-      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-muted)")}
-    >
+    <a href={href} className="app-footer__link" target="_blank" rel="noreferrer">
       {children}
-      <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ opacity: 0.5 }}>
-        <path d="M2 10L10 2M10 2H4M10 2V8" stroke="currentColor" strokeWidth="1.5"
-          strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
     </a>
   );
 }
 
-function Badge({ color, children }: { color: string; children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        fontSize: 10,
-        fontWeight: 600,
-        fontFamily: "var(--font-sans)",
-        color: color,
-        padding: "2px 8px",
-        background: `${color}12`,
-        border: `1px solid ${color}30`,
-        borderRadius: 20,
-        letterSpacing: "0.03em",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-      }}
-    >
-      <span
-        style={{
-          width: 4,
-          height: 4,
-          borderRadius: "50%",
-          background: color,
-          flexShrink: 0,
-          display: "inline-block",
-        }}
-      />
-      {children}
-    </span>
-  );
+function Badge({ children }: { children: React.ReactNode }) {
+  return <span className="app-footer__pill">{children}</span>;
 }

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from typing import Any
 import base64
 import json
 import re
 from email.header import decode_header
 from urllib.parse import parse_qs, unquote, urlparse
+
+logger = logging.getLogger(__name__)
 
 from app.services.anyrun_service import lookup_anyrun
 from app.services.email_ai_interpreter_service import interpret_email_results_with_ai
@@ -163,6 +167,8 @@ def _lookup_email_anyrun(payload: bytes, filename: str, *, run_anyrun: bool) -> 
     if not run_anyrun:
         return None
 
+    t = time.perf_counter()
+    logger.info("AnyRun email sandbox: submitting %s (%d bytes)", filename, len(payload))
     result = lookup_anyrun(
         indicator=filename,
         indicator_type="file",
@@ -171,6 +177,11 @@ def _lookup_email_anyrun(payload: bytes, filename: str, *, run_anyrun: bool) -> 
         submit_on_not_found=True,
         sandbox_first=True,
     )
+    elapsed = time.perf_counter() - t
+    checked = (result or {}).get("checked")
+    verdict = (result or {}).get("verdict")
+    error = (result or {}).get("error")
+    logger.info("AnyRun email sandbox: checked=%s verdict=%s error=%s elapsed=%.1fs", checked, verdict, error, elapsed)
     return {
         **(result if isinstance(result, dict) else {}),
         "file_name": filename,

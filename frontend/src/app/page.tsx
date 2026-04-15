@@ -458,6 +458,7 @@ interface SubmitArgs {
   requestedCollectors?: string[];
   observableType?: ObservableType;
   fileToUpload?: File;
+  aiModel?: string;
 }
 
 function getTypeLabel(observableType?: string): string {
@@ -713,6 +714,7 @@ export default function HomePage() {
           investigated_url:     args.investigatedUrl,
           client_url:           args.clientUrl,
           requested_collectors: args.requestedCollectors,
+          ai_model:             args.aiModel,
         });
         investigationId = result.investigation_id;
       }
@@ -734,10 +736,11 @@ export default function HomePage() {
       requestedCollectors?: string[],
       observableType?: ObservableType,
       fileToUpload?: File,
+      aiModel?: string,
     ) => {
       const args: SubmitArgs = {
         domain, context, clientDomain, investigatedUrl, clientUrl,
-        requestedCollectors, observableType, fileToUpload,
+        requestedCollectors, observableType, fileToUpload, aiModel,
       };
 
       // Duplicate check for all observable types

@@ -13,6 +13,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -48,27 +50,58 @@ def run_email_indicator_checks(
     max_urls: int = 20,
     max_attachment_hashes: int = 5,
 ) -> dict[str, Any]:
-    """Run deterministic checks for extracted email indicators."""
+    """Run deterministic checks for extracted email indicators — all I/O in parallel."""
+    t_total = time.perf_counter()
+
     sender_ip = extracted.get("sender_ip")
     sender_domain = extracted.get("sender_domain")
     urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u][: max(0, max_urls)]
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
     max_urlscan_urls = min(len(urls), 5)
 
-    checks: dict[str, Any] = {
-        "sender_domain": _check_sender_domain(sender_domain) if sender_domain else {"present": False, "message": "Not present in the provided evidence."},
-        "sender_ip": _check_ip(sender_ip) if sender_ip else {"present": False, "message": "Not present in the provided evidence."},
-        "urls": [
-            _check_url(
+    checks: dict[str, Any] = {}
+
+    # ── Phase 1: parallel I/O (sender domain WHOIS, sender IP, all URL checks, attachments) ──
+    with ThreadPoolExecutor(max_workers=min(4 + len(urls), 32)) as pool:
+        futures: dict[Any, str] = {}
+
+        if sender_domain:
+            futures[pool.submit(_timed, "sender_domain", _check_sender_domain, sender_domain)] = "sender_domain"
+        else:
+            checks["sender_domain"] = {"present": False, "message": "Not present in the provided evidence."}
+
+        if sender_ip:
+            futures[pool.submit(_timed, "sender_ip", _check_ip, sender_ip)] = "sender_ip"
+        else:
+            checks["sender_ip"] = {"present": False, "message": "Not present in the provided evidence."}
+
+        futures[pool.submit(_timed, "attachments", _check_attachments, attachments, max_hashes=max_attachment_hashes, run_anyrun=run_anyrun)] = "attachments"
+
+        url_futures: dict[Any, int] = {}
+        for idx, url in enumerate(urls):
+            f = pool.submit(
+                _timed,
+                f"url[{idx}]",
+                _check_url,
                 url,
                 include_screenshot=include_url_screenshots,
                 include_urlscan=(idx < max_urlscan_urls),
-                run_anyrun=run_anyrun,
             )
-            for idx, url in enumerate(urls)
-        ],
-        "attachments": _check_attachments(attachments, max_hashes=max_attachment_hashes, run_anyrun=run_anyrun),
-    }
+            url_futures[f] = idx
+
+        url_results: dict[int, dict[str, Any]] = {}
+        for f in as_completed({**futures, **url_futures}):
+            label, elapsed, result = f.result()
+            logger.info("  %-30s  %.1fs", label, elapsed)
+            if f in url_futures:
+                url_results[url_futures[f]] = result
+            elif label in ("sender_domain", "sender_ip", "attachments"):
+                checks[label] = result
+
+    checks["urls"] = [url_results[i] for i in range(len(urls))]
+
+    # ── Phase 2: fast local work ──
+    t2 = time.perf_counter()
     checks["content_ml"] = classify_email_content_locally(extracted)
 
     attachment_items = (checks.get("attachments") or {}).get("items") or []
@@ -96,7 +129,7 @@ def run_email_indicator_checks(
             hybrid_items.append(hy)
     checks["hybrid_analysis"] = {"items": hybrid_items}
 
-    # Run live email security DNS checks for sender domain (DMARC/SPF/DKIM/MX/spoofability)
+    # ── Phase 3: email security DNS (needs sender_domain result) ──
     sender_domain_check = checks.get("sender_domain") or {}
     query_domain = str(
         sender_domain_check.get("query_domain")
@@ -106,8 +139,10 @@ def run_email_indicator_checks(
     ).strip()
     if query_domain:
         try:
+            t_dns = time.perf_counter()
             email_security = analyze_email_security(query_domain, dns_evidence={}, timeout=3.0)
             checks["email_security"] = email_security
+            logger.info("  %-30s  %.1fs", "email_security_dns", time.perf_counter() - t_dns)
         except Exception as exc:
             logger.warning("Email security DNS checks failed for %s: %s", query_domain, exc)
             checks["email_security"] = {"error": str(exc), "checked": False}
@@ -126,7 +161,16 @@ def run_email_indicator_checks(
         "whois": ((checks.get("sender_domain") or {}).get("whois") or {}),
     }
     checks["final_risk"] = aggregate_risk(risk_input)
+
+    logger.info("email_indicator_checks TOTAL  %.1fs  (%d URLs, run_anyrun=%s)", time.perf_counter() - t_total, len(urls), run_anyrun)
     return checks
+
+
+def _timed(label: str, fn, *args, **kwargs) -> tuple[str, float, Any]:
+    """Run fn(*args, **kwargs), return (label, elapsed_seconds, result)."""
+    t = time.perf_counter()
+    result = fn(*args, **kwargs)
+    return label, time.perf_counter() - t, result
 
 
 def _check_sender_domain(domain: str) -> dict[str, Any]:
@@ -175,7 +219,7 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
         }
 
 
-def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool, run_anyrun: bool) -> dict[str, Any]:
+def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
     lexical_target = str(resolved_final_url or url)
@@ -257,12 +301,8 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool, run
                 "error": str(exc),
             }
 
-    # AnyRun TI lookup per URL — fast intelligence query, no sandbox detonation
+    # Effective verdict: VT first, URLScan fallback
     anyrun_url: dict[str, Any] = {"checked": False, "verdict": "unknown", "error": "Not requested"}
-    if run_anyrun:
-        anyrun_url = _anyrun_url_ti_lookup(url)
-
-    # Effective verdict: prefer AnyRun when VT is rate-limited or unknown
     effective = _effective_url_verdict(vt=vt, urlscan=urlscan, anyrun=anyrun_url)
 
     return {

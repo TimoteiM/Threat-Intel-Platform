@@ -165,10 +165,10 @@ class AssistantService:
                 system=system,
                 user_text=user_text,
             )
-            restored_report_markdown = self._restore_tokens(
-                report_markdown,
-                assistant_session.entries[0].token_map_json if assistant_session.entries else {},
-            )
+            merged_token_map: dict[str, str] = {}
+            for entry in assistant_session.entries:
+                merged_token_map.update(entry.token_map_json or {})
+            restored_report_markdown = self._restore_tokens(report_markdown, merged_token_map)
 
             assistant_session.result_json = {
                 "mode": assistant_session.mode,
