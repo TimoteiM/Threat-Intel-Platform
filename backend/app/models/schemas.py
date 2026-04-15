@@ -683,6 +683,76 @@ class HybridAnalysisEvidence(BaseModel):
     items: list[HybridAnalysisItem] = []
 
 
+# ─── OpenCTI ───
+
+class OpenCTIIndicator(BaseModel):
+    id: str
+    name: str
+    pattern: str = ""
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    confidence: int = 0
+    revoked: bool = False
+
+
+class OpenCTIReport(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    published: Optional[str] = None
+    author: Optional[str] = None
+    creators: list[str] = []
+    labels: list[str] = []
+    report_types: list[str] = []
+    created: Optional[str] = None
+    modified: Optional[str] = None
+
+
+class OpenCTIThreatActor(BaseModel):
+    id: str
+    name: str
+    entity_type: str = "Threat-Actor"
+    sophistication: Optional[str] = None
+    resource_level: Optional[str] = None
+
+
+class OpenCTIMalware(BaseModel):
+    id: str
+    name: str
+    malware_types: list[str] = []
+    first_seen: Optional[str] = None
+
+
+class OpenCTIAttackPattern(BaseModel):
+    id: str
+    name: str
+    mitre_id: Optional[str] = None
+
+
+class OpenCTIEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="opencti"))
+    found: bool = False
+    observable_id: Optional[str] = None
+    standard_id: Optional[str] = None
+    observable_entity_type: Optional[str] = None   # e.g. "Domain-Name", "IPv4-Addr", "Url", "StixFile"
+    observable_value: Optional[str] = None
+    score: int = 0                                  # OpenCTI x_opencti_score 0–100
+    author: Optional[str] = None
+    creators: list[str] = []
+    markings: list[str] = []
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    labels: list[str] = []
+    indicators: list[OpenCTIIndicator] = []
+    reports: list[OpenCTIReport] = []
+    threat_actors: list[OpenCTIThreatActor] = []
+    malware_families: list[OpenCTIMalware] = []
+    attack_patterns: list[OpenCTIAttackPattern] = []
+    campaigns: list[str] = []                       # campaign names
+    intrusion_sets: list[str] = []                  # intrusion set names
+    notes: list[str] = []
+
+
 class FinalRiskEvidence(BaseModel):
     risk_score: int = 0
     risk_level: str = "low"
@@ -857,6 +927,8 @@ class CollectedEvidence(BaseModel):
     attachment_analysis: Optional[AttachmentAnalysisEvidence] = None
     # Hybrid Analysis sandbox verdicts
     hybrid_analysis: Optional[HybridAnalysisEvidence] = None
+    # OpenCTI threat intelligence platform lookup
+    opencti: Optional[OpenCTIEvidence] = None
     # Composite risk aggregation output
     final_risk: Optional[FinalRiskEvidence] = None
     # Redirect destination enrichment (cross-domain redirect context)

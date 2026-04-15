@@ -559,6 +559,76 @@ export interface HybridAnalysisEvidence {
   items: HybridAnalysisItem[];
 }
 
+// --- OpenCTI ---
+
+export interface OpenCTIIndicator {
+  id: string;
+  name: string;
+  pattern: string;
+  valid_from?: string;
+  valid_until?: string;
+  confidence: number;
+  revoked: boolean;
+}
+
+export interface OpenCTIReport {
+  id: string;
+  name: string;
+  description: string;
+  published?: string;
+  author?: string;
+  creators: string[];
+  labels: string[];
+  report_types: string[];
+  created?: string;
+  modified?: string;
+}
+
+export interface OpenCTIThreatActor {
+  id: string;
+  name: string;
+  entity_type: string;
+  sophistication?: string;
+  resource_level?: string;
+}
+
+export interface OpenCTIMalware {
+  id: string;
+  name: string;
+  malware_types: string[];
+  first_seen?: string;
+}
+
+export interface OpenCTIAttackPattern {
+  id: string;
+  name: string;
+  mitre_id?: string;
+}
+
+export interface OpenCTIEvidence {
+  meta?: any;
+  found: boolean;
+  observable_id?: string;
+  standard_id?: string;
+  observable_entity_type?: string;
+  observable_value?: string;
+  score: number;
+  author?: string;
+  creators: string[];
+  markings: string[];
+  created_at?: string;
+  updated_at?: string;
+  labels: string[];
+  indicators: OpenCTIIndicator[];
+  reports: OpenCTIReport[];
+  threat_actors: OpenCTIThreatActor[];
+  malware_families: OpenCTIMalware[];
+  attack_patterns: OpenCTIAttackPattern[];
+  campaigns: string[];
+  intrusion_sets: string[];
+  notes: string[];
+}
+
 export interface FinalRiskEvidence {
   risk_score: number;
   risk_level: string;
@@ -729,6 +799,7 @@ export interface CollectedEvidence {
   content_ml?: ContentMLEvidence;
   attachment_analysis?: AttachmentAnalysisEvidence;
   hybrid_analysis?: HybridAnalysisEvidence;
+  opencti?: OpenCTIEvidence;
   final_risk?: FinalRiskEvidence;
   redirect_destination_intel?: RedirectDestinationIntelEvidence;
   threat_feeds?: ThreatFeedEvidence;

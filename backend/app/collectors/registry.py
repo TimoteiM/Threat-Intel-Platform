@@ -23,6 +23,7 @@ from app.collectors.threat_feeds_collector import ThreatFeedsCollector
 from app.collectors.brave_osint_collector import BraveOSINTCollector
 from app.collectors.urlscan_collector import URLScanCollector
 from app.collectors.hybrid_analysis_collector import HybridAnalysisCollector
+from app.collectors.opencti_collector import OpenCTICollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
@@ -37,6 +38,7 @@ COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
     "brave_osint": BraveOSINTCollector,
     "urlscan":      URLScanCollector,
     "hybrid_analysis": HybridAnalysisCollector,
+    "opencti":         OpenCTICollector,
 }
 
 

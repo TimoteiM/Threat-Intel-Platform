@@ -35,6 +35,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
   const contentMl = evidence?.content_ml || ({} as any);
   const attachmentAnalysis = evidence?.attachment_analysis || ({} as any);
   const hybridAnalysis = evidence?.hybrid_analysis || ({} as any);
+  const openCti = evidence?.opencti || null;
   const finalRisk = evidence?.final_risk || ({} as any);
   const redirectDestinationIntel =
     evidence?.redirect_destination_intel ||
@@ -191,6 +192,11 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         hasData: !!(evidence?.threat_feeds && Object.keys(evidence.threat_feeds).length > 0),
       },
       {
+        title: "OpenCTI Intelligence",
+        visible: !!openCti,
+        hasData: !!(openCti?.found || openCti?.notes?.length),
+      },
+      {
         title: "Favicon Hash Intelligence",
         visible: !isFileHash && !!evidence?.favicon_intel,
         hasData: !!(evidence?.favicon_intel && Object.keys(evidence.favicon_intel).length > 0),
@@ -206,7 +212,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         hasData: true,
       },
     ],
-    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, finalRisk, hasRedirectDestinationIntel, intel, type],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, openCti, finalRisk, hasRedirectDestinationIntel, intel, type],
   );
   const availableSections = React.useMemo(
     () => sectionDefs.filter((s) => s.visible),
@@ -1920,6 +1926,26 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
               ]}
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
             />
+            {finalRisk?.components && Object.keys(finalRisk.components).length > 0 && (
+              <EvidenceTable
+                title="Component Signals"
+                data={Object.entries(finalRisk.components)
+                  .sort((a, b) => Number(b[1]) - Number(a[1]))
+                  .map(([key, value]) => ({
+                    signal: formatRiskComponentLabel(key),
+                    contribution: typeof value === "number" ? value.toFixed(2) : "—",
+                    weight:
+                      typeof finalRisk?.weights?.[key] === "number"
+                        ? finalRisk.weights[key].toFixed(2)
+                        : "—",
+                  }))}
+                columns={[
+                  { key: "signal" },
+                  { key: "contribution" },
+                  { key: "weight" },
+                ]}
+              />
+            )}
             {arr(finalRisk?.rationale).length > 0 && (
               <EvidenceTable
                 title="Rationale"
@@ -2199,6 +2225,17 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
         </Section>
       )}
 
+      {/* OPENCTI INTELLIGENCE */}
+      {openCti && (
+        <Section title="OpenCTI Intelligence">
+          {!openCti.found ? (
+            <OpenCtiEmptyState openCti={openCti} />
+          ) : (
+            <OpenCtiConsole openCti={openCti} />
+          )}
+        </Section>
+      )}
+
       {/* FAVICON HASH INTELLIGENCE — domain-specific */}
       {!isFileHash && evidence?.favicon_intel && (
         <Section title="Favicon Hash Intelligence">
@@ -2228,6 +2265,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
             metaRow("URLSCAN", urlscan.meta),
             ...(evidence?.hybrid_analysis ? [metaRow("SANDBOX (ANY.RUN/HYBRID)", (evidence as any).hybrid_analysis?.meta)] : []),
             ...(evidence?.threat_feeds ? [metaRow("THREAT FEEDS", evidence.threat_feeds.meta)] : []),
+            ...(openCti ? [metaRow("OPENCTI", openCti.meta)] : []),
           ].filter(Boolean) as any[]}
           columns={[
             { key: "collector" },
@@ -2302,6 +2340,671 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
       borderLeft: "3px solid var(--text-muted)",
     }}>
       {children}
+    </div>
+  );
+}
+
+function openCtiTone(score: number | undefined) {
+  if ((score || 0) >= 85) {
+    return {
+      accent: "#ef4444",
+      border: "rgba(239,68,68,0.35)",
+      panel: "linear-gradient(180deg, rgba(61,15,23,0.92), rgba(35,12,18,0.96))",
+      card: "rgba(127,29,29,0.24)",
+    };
+  }
+  if ((score || 0) >= 50) {
+    return {
+      accent: "#f59e0b",
+      border: "rgba(245,158,11,0.3)",
+      panel: "linear-gradient(180deg, rgba(56,35,10,0.92), rgba(31,22,11,0.96))",
+      card: "rgba(120,80,10,0.22)",
+    };
+  }
+  return {
+    accent: "#38bdf8",
+    border: "rgba(56,189,248,0.24)",
+    panel: "linear-gradient(180deg, rgba(8,33,52,0.92), rgba(8,21,35,0.96))",
+    card: "rgba(8,55,88,0.2)",
+  };
+}
+
+function openCtiSeverityLabel(score: number | undefined): string {
+  if ((score || 0) >= 85) return "High confidence threat";
+  if ((score || 0) >= 50) return "Elevated concern";
+  return "Tracked intelligence hit";
+}
+
+function formatDateShort(value: string | undefined): string {
+  if (!value) return "—";
+  return value.slice(0, 10);
+}
+
+function buildOpenCtiSummary(openCti: any): string {
+  const parts: string[] = [];
+  if (typeof openCti?.score === "number") {
+    if (openCti.score >= 85) parts.push(`OpenCTI rates this observable as a high-confidence threat with a score of ${openCti.score}/100.`);
+    else if (openCti.score >= 50) parts.push(`OpenCTI associates this observable with elevated risk at ${openCti.score}/100.`);
+    else parts.push(`OpenCTI has prior intelligence on this observable with a score of ${openCti.score}/100.`);
+  }
+
+  const intelParts: string[] = [];
+  if (arr(openCti?.threat_actors).length) intelParts.push(`${arr(openCti.threat_actors).length} threat actor${arr(openCti.threat_actors).length === 1 ? "" : "s"}`);
+  if (arr(openCti?.malware_families).length) intelParts.push(`${arr(openCti.malware_families).length} malware famil${arr(openCti.malware_families).length === 1 ? "y" : "ies"}`);
+  if (arr(openCti?.reports).length) intelParts.push(`${arr(openCti.reports).length} report${arr(openCti.reports).length === 1 ? "" : "s"}`);
+  if (arr(openCti?.attack_patterns).length) intelParts.push(`${arr(openCti.attack_patterns).length} ATT&CK technique${arr(openCti.attack_patterns).length === 1 ? "" : "s"}`);
+  if (arr(openCti?.campaigns).length) intelParts.push(`${arr(openCti.campaigns).length} campaign${arr(openCti.campaigns).length === 1 ? "" : "s"}`);
+  if (arr(openCti?.intrusion_sets).length) intelParts.push(`${arr(openCti.intrusion_sets).length} intrusion set${arr(openCti.intrusion_sets).length === 1 ? "" : "s"}`);
+
+  if (intelParts.length) {
+    parts.push(`Linked intelligence includes ${intelParts.join(", ")}.`);
+  } else {
+    parts.push("The observable is known in OpenCTI, but linked intelligence is limited in this response.");
+  }
+
+  return parts.join(" ");
+}
+
+function formatRiskComponentLabel(key: string): string {
+  const labels: Record<string, string> = {
+    lexical_score: "Lexical Model",
+    behavior_score: "Behavior Signals",
+    content_ml_score: "Content ML",
+    attachment_score: "Attachment Analysis",
+    sandbox_score: "Sandbox Verdict",
+    infrastructure_score: "Infrastructure Reputation",
+    opencti_score: "OpenCTI Intelligence",
+  };
+  return labels[key] || key.replace(/_/g, " ");
+}
+
+function OpenCtiPill({ label, color }: { label: string; color: string }) {
+  return (
+    <span
+      style={{
+        padding: "4px 9px",
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 700,
+        color,
+        border: `1px solid ${color}55`,
+        background: `${color}12`,
+        letterSpacing: "0.01em",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function OpenCtiEmptyState({ openCti }: { openCti: any }) {
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(96,165,250,0.22)",
+        background: "linear-gradient(180deg, rgba(12,26,42,0.92), rgba(8,19,33,0.96))",
+        borderRadius: "var(--radius)",
+        padding: 18,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#c7f0ff", marginBottom: 6 }}>
+        No OpenCTI match found
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+        {openCti?.notes?.[0] || "Observable not found in OpenCTI"}
+      </div>
+    </div>
+  );
+}
+
+function OpenCtiConsole({ openCti }: { openCti: any }) {
+  const indicators = arr(openCti?.indicators);
+  const reports = arr(openCti?.reports);
+  const actors = arr(openCti?.threat_actors);
+  const malware = arr(openCti?.malware_families);
+  const attacks = arr(openCti?.attack_patterns);
+  const notes = arr(openCti?.notes);
+  const labels = arr(openCti?.labels);
+  const campaigns = arr(openCti?.campaigns);
+  const intrusionSets = arr(openCti?.intrusion_sets);
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <OpenCtiHero openCti={openCti} />
+      <OpenCtiSignalStrip openCti={openCti} />
+
+      <div
+        style={{
+          display: "grid",
+          gap: 16,
+          gridTemplateColumns: "minmax(0, 1.25fr) minmax(300px, 0.95fr)",
+          alignItems: "start",
+        }}
+      >
+        <div style={{ display: "grid", gap: 16 }}>
+          {indicators.length > 0 && (
+            <OpenCtiModule
+              title="Detection Logic"
+              eyebrow="STIX indicators and confidence"
+              accent={openCtiTone(openCti?.score).accent}
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                {indicators.map((indicator: any, index: number) => (
+                  <OpenCtiIndicatorCard key={`${indicator?.id || indicator?.name || "indicator"}-${index}`} indicator={indicator} />
+                ))}
+              </div>
+            </OpenCtiModule>
+          )}
+
+          {reports.length > 0 && (
+            <OpenCtiModule
+              title="Reporting"
+              eyebrow="Research and referenced reporting"
+              accent="#60a5fa"
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                {reports.map((report: any, index: number) => (
+                  <OpenCtiReportCard key={`${report?.id || report?.name || "report"}-${index}`} report={report} />
+                ))}
+              </div>
+            </OpenCtiModule>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gap: 16 }}>
+          <OpenCtiModule
+            title="Threat Context"
+            eyebrow="Operational relationships"
+            accent="#a78bfa"
+          >
+            <div style={{ display: "grid", gap: 14 }}>
+              <OpenCtiKeyValueGrid
+                items={[
+                  { label: "Observable", value: openCti?.observable_value || "—", mono: true },
+                  { label: "Type", value: openCti?.observable_entity_type || "—" },
+                  { label: "Author", value: openCti?.author || "—" },
+                  { label: "Creators", value: arr(openCti?.creators).length ? arr(openCti.creators).join(", ") : "—" },
+                  { label: "Marking", value: arr(openCti?.markings).length ? arr(openCti.markings).join(", ") : "—" },
+                  { label: "Created", value: fmtDate(openCti?.created_at) },
+                  { label: "Modified", value: fmtDate(openCti?.updated_at) },
+                  { label: "Standard STIX ID", value: openCti?.standard_id || "—", mono: true },
+                  { label: "Campaigns", value: campaigns.length ? campaigns.join(", ") : "—" },
+                  { label: "Intrusion Sets", value: intrusionSets.length ? intrusionSets.join(", ") : "—" },
+                ]}
+              />
+
+              {labels.length > 0 && (
+                <OpenCtiEntityGroup
+                  title="Labels"
+                  items={labels.map((label: string) => ({
+                    title: label,
+                    meta: "Observable label",
+                  }))}
+                />
+              )}
+
+              {actors.length > 0 && (
+                <OpenCtiEntityGroup
+                  title="Threat Actors"
+                  items={actors.map((actor: any) => ({
+                    title: actor?.name || "Unknown actor",
+                    meta: [actor?.entity_type, actor?.sophistication, actor?.resource_level].filter(Boolean).join(" • "),
+                  }))}
+                />
+              )}
+
+              {malware.length > 0 && (
+                <OpenCtiEntityGroup
+                  title="Malware"
+                  items={malware.map((item: any) => ({
+                    title: item?.name || "Unknown malware",
+                    meta: [arr(item?.malware_types).join(", "), formatDateShort(item?.first_seen) !== "—" ? `first seen ${formatDateShort(item?.first_seen)}` : ""]
+                      .filter(Boolean)
+                      .join(" • "),
+                  }))}
+                />
+              )}
+
+              {attacks.length > 0 && (
+                <OpenCtiEntityGroup
+                  title="ATT&CK Context"
+                  items={attacks.map((item: any) => ({
+                    title: item?.name || "Unknown technique",
+                    meta: item?.mitre_id || "MITRE mapping unavailable",
+                  }))}
+                />
+              )}
+            </div>
+          </OpenCtiModule>
+
+          {notes.length > 0 && (
+            <OpenCtiModule
+              title="Analyst Notes"
+              eyebrow="Search traces and collector caveats"
+              accent="#38bdf8"
+            >
+              <div style={{ display: "grid", gap: 10 }}>
+                {notes.map((note: string, index: number) => (
+                  <OpenCtiNoteRow key={`${note}-${index}`} note={note} />
+                ))}
+              </div>
+            </OpenCtiModule>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpenCtiHero({ openCti }: { openCti: any }) {
+  const tone = openCtiTone(openCti?.score);
+  return (
+    <div
+      style={{
+        border: `1px solid ${tone.border}`,
+        background: tone.panel,
+        borderRadius: "calc(var(--radius) + 2px)",
+        padding: 20,
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: "auto -80px -80px auto",
+          width: 220,
+          height: 220,
+          borderRadius: "50%",
+          background: `${tone.accent}15`,
+          filter: "blur(8px)",
+        }}
+      />
+      <div
+        style={{
+          position: "relative",
+          display: "grid",
+          gap: 16,
+          gridTemplateColumns: "120px minmax(0, 1fr) minmax(210px, 240px)",
+          alignItems: "stretch",
+        }}
+      >
+        <div
+          style={{
+            borderRadius: 18,
+            border: `1px solid ${tone.border}`,
+            background: tone.card,
+            display: "grid",
+            placeItems: "center",
+            padding: 12,
+            minHeight: 120,
+          }}
+        >
+          <div
+            style={{
+              width: 90,
+              height: 90,
+              borderRadius: "50%",
+              display: "grid",
+              placeItems: "center",
+              border: `6px solid ${tone.accent}`,
+              boxShadow: `0 0 0 8px ${tone.accent}15`,
+            }}
+          >
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: tone.accent, lineHeight: 1 }}>
+                {typeof openCti?.score === "number" ? openCti.score : "—"}
+              </div>
+              <div style={{ fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)", marginTop: 6 }}>
+                Threat
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <OpenCtiPill label={openCtiSeverityLabel(openCti?.score)} color={tone.accent} />
+            <OpenCtiPill label="Trusted CTI Source" color="#7dd3fc" />
+            <OpenCtiPill label={String(openCti?.observable_entity_type || "Unknown").toUpperCase()} color="#c4b5fd" />
+          </div>
+          <div style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>
+            OpenCTI hit
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.25, wordBreak: "break-word", marginBottom: 10 }}>
+            {openCti?.observable_value || "—"}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.75, maxWidth: 760 }}>
+            {buildOpenCtiSummary(openCti)}
+          </div>
+        </div>
+
+        <div
+          style={{
+            borderRadius: 16,
+            border: `1px solid ${tone.border}`,
+            background: "rgba(8, 15, 29, 0.34)",
+            padding: 16,
+            display: "grid",
+            gap: 12,
+          }}
+        >
+          <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+            Intel Snapshot
+          </div>
+          <OpenCtiKeyStat label="Reports" value={arr(openCti?.reports).length} />
+          <OpenCtiKeyStat label="Indicators" value={arr(openCti?.indicators).length} />
+          <OpenCtiKeyStat label="Linked entities" value={arr(openCti?.threat_actors).length + arr(openCti?.malware_families).length + arr(openCti?.attack_patterns).length} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpenCtiModule({
+  title,
+  eyebrow,
+  accent,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  accent: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        background: "linear-gradient(180deg, rgba(12,18,35,0.92), rgba(9,14,28,0.98))",
+        borderRadius: "calc(var(--radius) + 2px)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "14px 16px 12px",
+          borderBottom: "1px solid rgba(148,163,184,0.14)",
+          background: `linear-gradient(90deg, ${accent}1f, transparent 45%)`,
+        }}
+      >
+        <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+          {eyebrow}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>{title}</div>
+      </div>
+      <div style={{ padding: 16 }}>{children}</div>
+    </div>
+  );
+}
+
+function OpenCtiSignalStrip({ openCti }: { openCti: any }) {
+  const tone = openCtiTone(openCti?.score);
+  const signals = [
+    { label: "Indicators", value: arr(openCti?.indicators).length, color: tone.accent },
+    { label: "Reports", value: arr(openCti?.reports).length, color: "#60a5fa" },
+    { label: "Actors", value: arr(openCti?.threat_actors).length, color: "#f472b6" },
+    { label: "Malware", value: arr(openCti?.malware_families).length, color: "#fb7185" },
+    { label: "ATT&CK", value: arr(openCti?.attack_patterns).length, color: "#a78bfa" },
+    { label: "Campaigns", value: arr(openCti?.campaigns).length + arr(openCti?.intrusion_sets).length, color: "#34d399" },
+  ];
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 10,
+        gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+      }}
+    >
+      {signals.map((signal) => (
+        <div
+          key={signal.label}
+          style={{
+            padding: "14px 14px 12px",
+            borderRadius: 14,
+            border: `1px solid ${signal.color}33`,
+            background: `linear-gradient(180deg, ${signal.color}16, rgba(15,23,42,0.6))`,
+          }}
+        >
+          <div style={{ fontSize: 24, fontWeight: 800, color: signal.color, lineHeight: 1, marginBottom: 8 }}>
+            {signal.value}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            {signal.label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OpenCtiKeyValueGrid({
+  items,
+}: {
+  items: Array<{ label: string; value: string; mono?: boolean }>;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 10,
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+      }}
+    >
+      {items.map((item) => (
+        <div
+          key={item.label}
+          style={{
+            padding: "12px 13px",
+            borderRadius: 12,
+            background: "rgba(15,23,42,0.6)",
+            border: "1px solid rgba(148,163,184,0.12)",
+          }}
+        >
+          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+            {item.label}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-primary)",
+              lineHeight: 1.6,
+              wordBreak: "break-word",
+              fontFamily: item.mono ? "var(--font-mono)" : "var(--font-sans)",
+            }}
+          >
+            {item.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OpenCtiKeyStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>{value}</div>
+    </div>
+  );
+}
+
+function OpenCtiIndicatorCard({ indicator }: { indicator: any }) {
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(148,163,184,0.14)",
+        background: "rgba(8,15,29,0.7)",
+        borderRadius: 14,
+        padding: 14,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ minWidth: 0, flex: "1 1 320px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", marginBottom: 6, wordBreak: "break-word" }}>
+            {indicator?.name || "Unnamed indicator"}
+          </div>
+          <div
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              background: "rgba(15,23,42,0.9)",
+              border: "1px solid rgba(96,165,250,0.18)",
+              fontSize: 12,
+              lineHeight: 1.65,
+              color: "#dbeafe",
+              fontFamily: "var(--font-mono)",
+              wordBreak: "break-word",
+            }}
+          >
+            {indicator?.pattern || "—"}
+          </div>
+        </div>
+        <div style={{ display: "grid", gap: 8, minWidth: 170 }}>
+          <OpenCtiMiniBadge label="Confidence" value={indicator?.confidence ?? "—"} />
+          <OpenCtiMiniBadge label="Valid From" value={formatDateShort(indicator?.valid_from)} />
+          <OpenCtiMiniBadge label="Revoked" value={indicator?.revoked ? "Yes" : "No"} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpenCtiMiniBadge({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div
+      style={{
+        padding: "10px 11px",
+        borderRadius: 12,
+        background: "rgba(15,23,42,0.65)",
+        border: "1px solid rgba(148,163,184,0.12)",
+      }}
+    >
+      <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-primary)", fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
+function OpenCtiEntityGroup({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<{ title: string; meta: string }>;
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+        {title}
+      </div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {items.map((item, index) => (
+          <div
+            key={`${item.title}-${index}`}
+            style={{
+              padding: "12px 13px",
+              borderRadius: 12,
+              border: "1px solid rgba(148,163,184,0.12)",
+              background: "rgba(15,23,42,0.58)",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 4 }}>{item.title}</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.55 }}>{item.meta || "No additional context"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OpenCtiReportCard({ report }: { report: any }) {
+  const labels = arr(report?.labels);
+  const creators = arr(report?.creators);
+  const reportTypes = arr(report?.report_types);
+  return (
+    <div
+      style={{
+        borderRadius: 14,
+        border: "1px solid rgba(148,163,184,0.14)",
+        background: "linear-gradient(180deg, rgba(15,23,42,0.78), rgba(9,14,28,0.92))",
+        padding: 15,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)", flex: "1 1 320px" }}>
+          {report?.name || "Untitled report"}
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "#bfdbfe",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            padding: "6px 8px",
+            borderRadius: 999,
+            border: "1px solid rgba(96,165,250,0.2)",
+            background: "rgba(59,130,246,0.10)",
+          }}
+        >
+          {formatDateShort(report?.published)}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.75 }}>
+        {report?.description || "No report description available."}
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gap: 10,
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          marginTop: 14,
+        }}
+      >
+        <OpenCtiMiniBadge label="Author" value={report?.author || "—"} />
+        <OpenCtiMiniBadge label="Creators" value={creators.length ? creators.join(", ") : "—"} />
+        <OpenCtiMiniBadge label="Report Type" value={reportTypes.length ? reportTypes.join(", ") : "—"} />
+        <OpenCtiMiniBadge label="Created" value={fmtDate(report?.created)} />
+        <OpenCtiMiniBadge label="Modified" value={fmtDate(report?.modified)} />
+      </div>
+      {labels.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+          {labels.map((label: string, index: number) => (
+            <OpenCtiPill key={`${label}-${index}`} label={label} color="#f472b6" />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OpenCtiNoteRow({ note }: { note: string }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "10px minmax(0, 1fr)",
+        gap: 10,
+        alignItems: "start",
+        padding: "10px 0",
+        borderBottom: "1px solid rgba(148,163,184,0.1)",
+      }}
+    >
+      <div
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          marginTop: 5,
+          background: "#38bdf8",
+          boxShadow: "0 0 0 4px rgba(56,189,248,0.12)",
+        }}
+      />
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>{note}</div>
     </div>
   );
 }

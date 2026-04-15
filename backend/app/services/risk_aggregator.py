@@ -8,12 +8,13 @@ from typing import Any
 
 
 DEFAULT_WEIGHTS = {
-    "lexical_score": 0.25,
-    "behavior_score": 0.20,
-    "content_ml_score": 0.15,
-    "attachment_score": 0.15,
+    "lexical_score": 0.20,
+    "behavior_score": 0.16,
+    "content_ml_score": 0.12,
+    "attachment_score": 0.12,
     "sandbox_score": 0.10,
     "infrastructure_score": 0.15,
+    "opencti_score": 0.15,
 }
 
 
@@ -28,6 +29,7 @@ def aggregate_risk(evidence: dict[str, Any], *, weights: dict[str, float] | None
     attachment = _attachment_score(evidence.get("attachment_analysis") or {})
     sandbox = _sandbox_score(evidence.get("hybrid_analysis") or {})
     infra = _infrastructure_score(evidence)
+    opencti = _opencti_score(evidence)
 
     final = (
         lexical * w["lexical_score"]
@@ -36,8 +38,11 @@ def aggregate_risk(evidence: dict[str, Any], *, weights: dict[str, float] | None
         + attachment * w["attachment_score"]
         + sandbox * w["sandbox_score"]
         + infra * w["infrastructure_score"]
+        + opencti * w["opencti_score"]
     )
     risk_score = int(round(max(0.0, min(1.0, final)) * 100))
+    opencti_floor = _opencti_risk_floor(evidence)
+    risk_score = max(risk_score, opencti_floor)
     level = "high" if risk_score >= 70 else ("medium" if risk_score >= 35 else "low")
 
     rationale: list[str] = []
@@ -53,6 +58,12 @@ def aggregate_risk(evidence: dict[str, Any], *, weights: dict[str, float] | None
         rationale.append("Hybrid Analysis indicates suspicious/malicious behavior")
     if infra >= 0.55:
         rationale.append("Infrastructure/reputation collectors indicate elevated risk")
+    if opencti >= 0.55:
+        rationale.append("OpenCTI indicates known malicious or previously tracked infrastructure")
+    if opencti_floor >= 70:
+        rationale.append("Risk floor raised to high by trusted OpenCTI intelligence")
+    elif opencti_floor >= 35:
+        rationale.append("Risk floor raised to medium by trusted OpenCTI intelligence")
     if not rationale:
         rationale.append("No strong malicious signal; monitor and corroborate with external context")
 
@@ -68,6 +79,7 @@ def aggregate_risk(evidence: dict[str, Any], *, weights: dict[str, float] | None
             "attachment_score": round(attachment, 4),
             "sandbox_score": round(sandbox, 4),
             "infrastructure_score": round(infra, 4),
+            "opencti_score": round(opencti, 4),
         },
         "weights": w,
         "rationale": rationale,
@@ -143,3 +155,59 @@ def _infrastructure_score(evidence: dict[str, Any]) -> float:
 
     return max(0.0, min(1.0, score))
 
+
+def _opencti_score(evidence: dict[str, Any]) -> float:
+    best = 0.0
+    for item in _opencti_items(evidence):
+        best = max(best, _single_opencti_score(item))
+    return best
+
+
+def _opencti_richness(opencti: dict[str, Any]) -> int:
+    buckets = [
+        opencti.get("reports") or [],
+        opencti.get("threat_actors") or [],
+        opencti.get("malware_families") or [],
+        opencti.get("attack_patterns") or [],
+        opencti.get("campaigns") or [],
+        opencti.get("intrusion_sets") or [],
+    ]
+    return sum(1 for bucket in buckets if isinstance(bucket, list) and len(bucket) > 0)
+
+
+def _opencti_risk_floor(evidence: dict[str, Any]) -> int:
+    best = 0
+    for item in _opencti_items(evidence):
+        if not item.get("found"):
+            continue
+        score = int(item.get("score") or 0)
+        richness = _opencti_richness(item)
+        component = _single_opencti_score(item)
+        if score >= 85 or component >= 0.85 or (score >= 75 and richness >= 2):
+            best = max(best, 70)
+        elif score >= 50 and richness >= 1:
+            best = max(best, 35)
+    return best
+
+
+def _opencti_items(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for key in ("opencti", "opencti_observables"):
+        raw = evidence.get(key)
+        if isinstance(raw, dict):
+            items.append(raw)
+        elif isinstance(raw, list):
+            items.extend(item for item in raw if isinstance(item, dict))
+    return items
+
+
+def _single_opencti_score(opencti: dict[str, Any]) -> float:
+    if not isinstance(opencti, dict) or not opencti.get("found"):
+        return 0.0
+
+    score = max(0.0, min(1.0, float(opencti.get("score") or 0.0) / 100.0))
+    richness = _opencti_richness(opencti)
+    bonus = min(0.25, richness * 0.05)
+    found_bonus = 0.1
+
+    return max(0.0, min(1.0, score * 0.7 + found_bonus + bonus))
