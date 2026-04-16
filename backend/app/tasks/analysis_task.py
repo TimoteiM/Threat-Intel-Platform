@@ -321,7 +321,6 @@ def run_analysis(
     client_url: str | None = None,
     external_context: dict | None = None,
     max_iterations: int = 3,
-    ai_model: str | None = None,
 ) -> dict:
     """
     Aggregate evidence and run Claude analysis.
@@ -834,12 +833,12 @@ def run_analysis(
         report_phase_start = time.monotonic()
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
                           "Evidence collected. Running analyst...", 90)
+        actual_model = ""  # updated by _run_analyst_with_compaction; fallback paths leave it blank
         try:
-            report_data, analyst_tier = _run_analyst_with_compaction(
+            report_data, analyst_tier, actual_model = _run_analyst_with_compaction(
                 evidence_data,
                 max_iterations=max_iterations,
                 timeout_seconds=settings.analyst_timeout_seconds,
-                ai_model=ai_model,
             )
             if _is_parser_fallback_report(report_data):
                 logger.warning(
@@ -907,7 +906,7 @@ def run_analysis(
     # so it is guaranteed to survive into the persisted report_json.
     # Fast-path types (hash/ip/file) leave ai_model=None → frontend shows "Automated (rule-based)".
     if observable_type in ("domain", "url"):
-        report_data["ai_model"] = ai_model or f"{settings.openai_model} (default)"
+        report_data["ai_model"] = actual_model
     else:
         report_data["ai_model"] = None
 
@@ -1767,11 +1766,11 @@ def _run_analyst_sync(
     evidence_data: dict,
     max_iterations: int,
     timeout_seconds: int,
-    ai_model: str | None = None,
-) -> dict:
+) -> tuple[dict, str]:
     """
     Synchronous wrapper for the async LLM analyst call.
     Celery workers are sync, so we run the async code in a new event loop.
+    Returns (report_dict, actual_model_id).
     """
     import asyncio
     from app.models.schemas import CollectedEvidence
@@ -1781,9 +1780,9 @@ def _run_analyst_sync(
 
     loop = asyncio.new_event_loop()
     try:
-        report = loop.run_until_complete(
+        report, actual_model = loop.run_until_complete(
             asyncio.wait_for(
-                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations, ai_model=ai_model),
+                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations),
                 timeout=timeout_seconds,
             )
         )
@@ -1797,7 +1796,7 @@ def _run_analyst_sync(
         except Exception:
             pass  # ATT&CK enrichment is non-critical
 
-        return report_dict
+        return report_dict, actual_model
     finally:
         loop.close()
 
@@ -2637,22 +2636,21 @@ def _run_analyst_with_compaction(
     *,
     max_iterations: int,
     timeout_seconds: int,
-    ai_model: str | None = None,
-) -> tuple[dict, str]:
+) -> tuple[dict, str, str]:
+    """
+    Returns (report_dict, compaction_tier, actual_model_id).
+    """
     last_error: Exception | None = None
     tiers = ("standard", "compact", "digest")
     for tier in tiers:
         analyst_input = _build_analyst_input_evidence(evidence_data, tier=tier)
         try:
-            return (
-                _run_analyst_sync(
-                    analyst_input,
-                    max_iterations,
-                    timeout_seconds=timeout_seconds,
-                    ai_model=ai_model,
-                ),
-                tier,
+            report_dict, actual_model = _run_analyst_sync(
+                analyst_input,
+                max_iterations,
+                timeout_seconds=timeout_seconds,
             )
+            return report_dict, tier, actual_model
         except Exception as exc:
             if not _is_prompt_too_long_error(exc) or tier == tiers[-1]:
                 raise

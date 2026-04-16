@@ -96,7 +96,7 @@ def run_investigation(
     external_context: dict | None = None,
     requested_collectors: list[str] | None = None,
     file_artifact_id: str | None = None,
-    ai_model: str | None = None,
+    ai_model: str | None = None,  # kept for backward compat with queued tasks; ignored
 ) -> str:
     """
     Main entry point — starts the full investigation pipeline.
@@ -216,7 +216,6 @@ def run_investigation(
             client_url=client_url,
             external_context=external_context,
             max_iterations=settings.max_analyst_iterations,
-            ai_model=ai_model,
         )
 
         # If AnyRun was deferred, start a background thread to update evidence

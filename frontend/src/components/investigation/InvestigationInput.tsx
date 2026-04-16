@@ -14,16 +14,9 @@ interface Props {
     requestedCollectors?: string[],
     observableType?: ObservableType,
     fileToUpload?: File,
-    aiModel?: string,
   ) => void;
   loading: boolean;
 }
-
-const AI_MODELS: { id: string; label: string; provider: "openai" | "anthropic"; desc: string }[] = [
-  { id: "gpt-5-mini",               label: "GPT-5 Mini",        provider: "openai",    desc: "Fast, cost-effective OpenAI model" },
-  { id: "claude-sonnet-4-6",        label: "Sonnet 4.6",        provider: "anthropic", desc: "High accuracy, balanced speed" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5",        provider: "anthropic", desc: "Fastest Claude, lightweight" },
-];
 
 const OBSERVABLE_TYPES: { id: ObservableType; label: string; placeholder: string }[] = [
   { id: "domain", label: "Domain",  placeholder: "suspicious-site.com" },
@@ -70,7 +63,6 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   const [clientUrl, setClientUrl] = useState("");
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [uploadingRef, setUploadingRef] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string>(AI_MODELS[1].id); // default: Sonnet 4.6
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sampleFileRef = useRef<HTMLInputElement>(null);
@@ -110,7 +102,6 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       selectedCollectors.length > 0 ? selectedCollectors : undefined,
       observableType,
       fileToUpload || undefined,
-      selectedModel,
     );
   };
 
@@ -268,43 +259,6 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
         </button>
       </div>
 
-      {/* ── AI Model selector ── */}
-      <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
-        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-sans)", whiteSpace: "nowrap", marginRight: 2 }}>
-          AI Model:
-        </span>
-        {AI_MODELS.map((m) => {
-          const active = selectedModel === m.id;
-          return (
-            <button
-              key={m.id}
-              onClick={() => setSelectedModel(m.id)}
-              title={m.desc}
-              style={{
-                padding: "4px 12px",
-                borderRadius: "var(--radius-sm)",
-                border: `1px solid ${active ? (m.provider === "anthropic" ? "#f97316" : "#60a5fa") : "var(--border)"}`,
-                background: active
-                  ? m.provider === "anthropic"
-                    ? "rgba(249,115,22,0.12)"
-                    : "rgba(96,165,250,0.12)"
-                  : "var(--bg-elevated)",
-                color: active
-                  ? m.provider === "anthropic" ? "#f97316" : "var(--accent)"
-                  : "var(--text-muted)",
-                fontSize: 10,
-                fontWeight: active ? 700 : 500,
-                fontFamily: "var(--font-mono)",
-                cursor: "pointer",
-                transition: "all 0.15s",
-                letterSpacing: "0.03em",
-              }}
-            >
-              {m.label}
-            </button>
-          );
-        })}
-      </div>
 
       {/* ── URL input (domain + url types only) ── */}
       {observableType === "domain" && (
