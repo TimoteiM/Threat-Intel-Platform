@@ -222,7 +222,9 @@ class LinuxConnector(BaseSandboxConnector):
         if self._enable_requests:
             file_content, filename = await self._get_file_payload(file_content, filename, filepath)
             files = {filename: (filename, file_content)}
-            response_data = await self._make_request_async('POST', url, json=params, files=files)
+            # Use form_data= so parameters are sent as multipart form fields alongside the file.
+            # Passing json= is silently ignored by requests when files= is also provided.
+            response_data = await self._make_request_async('POST', url, form_data=params, files=files)
         else:
             body = await self._generate_multipart_request_body(
                 file_content=file_content,
@@ -231,7 +233,7 @@ class LinuxConnector(BaseSandboxConnector):
                 **params
             )
             response_data = await self._make_request_async('POST', url, data=body)
-        return response_data.get('data').get('taskid')
+        return (response_data or {}).get('data', {}).get('taskid')
 
     def run_url_analysis(
         self,

@@ -306,6 +306,10 @@ class WatchlistEntry(Base):
     next_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Risk score history: [{score, at, investigation_id}, ...] (last 30 runs)
+    risk_score_history: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Diff vs previous run: structured changes detected on last re-check
+    evidence_diff_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     alerts: Mapped[list[WatchlistAlert]] = relationship(
         back_populates="watchlist_entry", cascade="all, delete-orphan"

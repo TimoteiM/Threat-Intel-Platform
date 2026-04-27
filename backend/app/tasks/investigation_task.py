@@ -28,7 +28,7 @@ import redis as redis_lib
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models.database import Evidence, Investigation
+from app.models.database import Evidence, Investigation, WatchlistEntry
 from app.models.enums import InvestigationState
 from app.collectors.registry import available_collectors, get_collector, get_collectors_for_type
 from app.db.session import sync_engine
@@ -39,8 +39,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # AnyRun sandbox soft deadline within the main collector phase.
-# If the sandbox doesn't finish within this window the investigation proceeds
-# without it and AnyRun is updated in the background when it eventually finishes.
+# Non-domain investigations may still proceed without it and merge the result
+# later in the background. Domain investigations block on the full AnyRun
+# collector result so scoring includes the final lookup/sandbox evidence.
 ANYRUN_ASYNC_DEADLINE = 90  # seconds
 ANYRUN_COLLECTOR_NAME = "hybrid_analysis"
 
@@ -74,6 +75,10 @@ def _collector_timeout(name: str, base_timeout: int) -> int:
     if name == "hybrid_analysis":
         return _sandbox_collector_timeout(base_timeout)
     return base_timeout
+
+
+def _requires_blocking_anyrun(observable_type: str) -> bool:
+    return str(observable_type or "").strip().lower() == "domain"
 
 
 @celery_app.task(
@@ -217,6 +222,8 @@ def run_investigation(
             external_context=external_context,
             max_iterations=settings.max_analyst_iterations,
         )
+
+        _update_watchlist_after_conclusion(investigation_id, domain)
 
         # If AnyRun was deferred, start a background thread to update evidence
         # when the sandbox finishes (does not block the investigation completion).
@@ -375,7 +382,13 @@ def _run_collectors_inline(
     # ── Check AnyRun soft deadline ────────────────────────────────────────────
     if run_anyrun and anyrun_future is not None:
         elapsed = time.monotonic() - start_ts
-        remaining = max(0.0, ANYRUN_ASYNC_DEADLINE - elapsed)
+        blocking_anyrun = _requires_blocking_anyrun(observable_type)
+        anyrun_wait_budget = (
+            _collector_timeout(ANYRUN_COLLECTOR_NAME, timeout)
+            if blocking_anyrun
+            else ANYRUN_ASYNC_DEADLINE
+        )
+        remaining = max(0.0, anyrun_wait_budget - elapsed)
         if remaining > 0:
             try:
                 result = anyrun_future.result(timeout=remaining)
@@ -383,7 +396,7 @@ def _run_collectors_inline(
                 collector_statuses[ANYRUN_COLLECTOR_NAME] = result.get("status", "failed")
                 logger.info(
                     f"[{investigation_id}] AnyRun finished within deadline "
-                    f"({elapsed + (ANYRUN_ASYNC_DEADLINE - remaining):.0f}s)"
+                    f"({elapsed + (anyrun_wait_budget - remaining):.0f}s)"
                 )
                 _publish_progress(
                     investigation_id,
@@ -395,32 +408,56 @@ def _run_collectors_inline(
                     total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
                 )
             except concurrent.futures.TimeoutError:
-                logger.info(
-                    f"[{investigation_id}] AnyRun exceeded {ANYRUN_ASYNC_DEADLINE}s deadline — "
-                    "proceeding without it, will update evidence in background"
-                )
-                collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
-                anyrun_background_future = anyrun_future
-                _publish_progress(
-                    investigation_id,
-                    InvestigationState.GATHERING,
-                    "AnyRun deferred — analysis will continue without sandbox data",
-                    55,
-                    collectors=collector_statuses,
-                    collector=ANYRUN_COLLECTOR_NAME,
-                    total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
-                )
+                if blocking_anyrun:
+                    logger.warning(
+                        f"[{investigation_id}] AnyRun exceeded blocking budget of {anyrun_wait_budget}s "
+                        "for a domain investigation - marking collector failed"
+                    )
+                    collector_statuses[ANYRUN_COLLECTOR_NAME] = "failed"
+                    results.append(_build_timeout_result(ANYRUN_COLLECTOR_NAME))
+                    _publish_progress(
+                        investigation_id,
+                        InvestigationState.GATHERING,
+                        "AnyRun timed out before final scoring",
+                        55,
+                        collectors=collector_statuses,
+                        collector=ANYRUN_COLLECTOR_NAME,
+                        total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                    )
+                else:
+                    logger.info(
+                        f"[{investigation_id}] AnyRun exceeded {ANYRUN_ASYNC_DEADLINE}s deadline - "
+                        "proceeding without it, will update evidence in background"
+                    )
+                    collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
+                    anyrun_background_future = anyrun_future
+                    _publish_progress(
+                        investigation_id,
+                        InvestigationState.GATHERING,
+                        "AnyRun deferred - analysis will continue without sandbox data",
+                        55,
+                        collectors=collector_statuses,
+                        collector=ANYRUN_COLLECTOR_NAME,
+                        total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+                    )
             except Exception as e:
                 logger.error(f"[{investigation_id}] AnyRun collector raised: {e}")
                 collector_statuses[ANYRUN_COLLECTOR_NAME] = "failed"
         else:
-            # Fast collectors alone already took >90s — defer AnyRun immediately
-            logger.info(
-                f"[{investigation_id}] Fast collectors took >{ANYRUN_ASYNC_DEADLINE}s — "
-                "deferring AnyRun to background immediately"
-            )
-            collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
-            anyrun_background_future = anyrun_future
+            if blocking_anyrun:
+                logger.warning(
+                    f"[{investigation_id}] Fast collectors consumed the AnyRun blocking budget "
+                    f"({anyrun_wait_budget}s) for a domain investigation - marking AnyRun failed"
+                )
+                collector_statuses[ANYRUN_COLLECTOR_NAME] = "failed"
+                results.append(_build_timeout_result(ANYRUN_COLLECTOR_NAME))
+            else:
+                logger.info(
+                    f"[{investigation_id}] Fast collectors took >{ANYRUN_ASYNC_DEADLINE}s - "
+                    "deferring AnyRun to background immediately"
+                )
+                collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
+                anyrun_background_future = anyrun_future
 
     return results, collector_statuses, anyrun_background_future
 
@@ -566,6 +603,92 @@ def _anyrun_background_update(
         logger.info(f"[{investigation_id}] SSE evidence_updated published")
     except Exception as exc:
         logger.warning(f"[{investigation_id}] Failed to publish evidence_updated SSE: {exc}")
+
+
+def _update_watchlist_after_conclusion(investigation_id: str, domain: str) -> None:
+    """
+    After an investigation concludes, update the matching watchlist entry (if any):
+    - Append the new risk score to risk_score_history (last 30 kept)
+    - Compute an evidence diff against the previous concluded investigation and
+      store it in evidence_diff_json
+    """
+    from sqlalchemy import select as sa_select
+    from app.services.evidence_diff_service import diff_evidence
+
+    try:
+        inv_id = uuid.UUID(investigation_id)
+        with Session(sync_engine) as session:
+            # Find watchlist entry for this domain
+            watchlist_entry = session.execute(
+                sa_select(WatchlistEntry).where(WatchlistEntry.domain == domain)
+            ).scalar_one_or_none()
+            if watchlist_entry is None:
+                return
+
+            # Get the 2 most recent concluded investigations for this domain
+            concluded_invs = session.execute(
+                sa_select(Investigation)
+                .where(
+                    Investigation.domain == domain,
+                    Investigation.state == "concluded",
+                )
+                .order_by(Investigation.concluded_at.desc())
+                .limit(2)
+            ).scalars().all()
+
+            curr_inv = next((i for i in concluded_invs if i.id == inv_id), None)
+            if curr_inv is None:
+                # Investigation not yet marked concluded — use first from list
+                curr_inv = concluded_invs[0] if concluded_invs else None
+            if curr_inv is None:
+                return
+
+            # ── Risk score history ────────────────────────────────────────────
+            history: list = list(watchlist_entry.risk_score_history or [])
+            history.append({
+                "score": curr_inv.risk_score,
+                "at": curr_inv.concluded_at.isoformat() if curr_inv.concluded_at else datetime.now(timezone.utc).isoformat(),
+                "investigation_id": str(curr_inv.id),
+            })
+            watchlist_entry.risk_score_history = history[-30:]  # keep last 30
+
+            # ── Evidence diff ─────────────────────────────────────────────────
+            prev_inv = next((i for i in concluded_invs if i.id != curr_inv.id), None)
+            if prev_inv is not None:
+                curr_evidence = session.execute(
+                    sa_select(Evidence).where(Evidence.investigation_id == curr_inv.id)
+                ).scalar_one_or_none()
+                prev_evidence = session.execute(
+                    sa_select(Evidence).where(Evidence.investigation_id == prev_inv.id)
+                ).scalar_one_or_none()
+
+                if curr_evidence and prev_evidence:
+                    curr_json = (
+                        json.loads(curr_evidence.evidence_json)
+                        if isinstance(curr_evidence.evidence_json, str)
+                        else (curr_evidence.evidence_json or {})
+                    )
+                    prev_json = (
+                        json.loads(prev_evidence.evidence_json)
+                        if isinstance(prev_evidence.evidence_json, str)
+                        else (prev_evidence.evidence_json or {})
+                    )
+                    changes = diff_evidence(prev_json, curr_json)
+                    watchlist_entry.evidence_diff_json = {
+                        "computed_at": datetime.now(timezone.utc).isoformat(),
+                        "prev_investigation_id": str(prev_inv.id),
+                        "curr_investigation_id": str(curr_inv.id),
+                        "has_changes": bool(changes),
+                        "changes": changes,
+                    }
+
+            session.commit()
+            logger.info(
+                f"[{investigation_id}] Watchlist history updated for {domain} "
+                f"(score={curr_inv.risk_score}, diff_computed={prev_inv is not None})"
+            )
+    except Exception as exc:
+        logger.warning(f"[{investigation_id}] Watchlist post-conclusion update failed: {exc}")
 
 
 def _update_state(investigation_id: str, state: InvestigationState) -> None:

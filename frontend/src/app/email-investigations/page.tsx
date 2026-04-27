@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelEmailInvestigationRun,
   getEmailInvestigationRun,
@@ -20,6 +20,8 @@ import type {
 } from "@/lib/types";
 
 export default function EmailInvestigationsPage() {
+  const HISTORY_PAGE_SIZE = 20;
+  const HISTORY_CLASSIFICATIONS = ["all", "malicious", "suspicious", "benign", "inconclusive", "unknown"] as const;
   const [file, setFile] = useState<File | null>(null);
   const [context, setContext] = useState("");
   const [mlScore, setMlScore] = useState("");
@@ -30,6 +32,11 @@ export default function EmailInvestigationsPage() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<EmailInvestigationResponse | null>(null);
   const [historyItems, setHistoryItems] = useState<EmailInvestigationHistoryItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [historyClassification, setHistoryClassification] = useState<string>("all");
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [includeScreenshots, setIncludeScreenshots] = useState(false);
   const [runAnyRun, setRunAnyRun] = useState(true);
@@ -39,6 +46,7 @@ export default function EmailInvestigationsPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null);
   const [loadingNow, setLoadingNow] = useState<number>(Date.now());
+  const historySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [anyrunPages, setAnyrunPages] = useState({
     domains: 1,
     hosts: 1,
@@ -117,6 +125,9 @@ export default function EmailInvestigationsPage() {
     ["queued", "processing", "running"].includes(String(item.status || "").toLowerCase()),
   ).length;
   const progressTone = loading ? "warning" : activeRunId ? "info" : "neutral";
+  const historyPages = Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE));
+  const historyShowingFrom = historyTotal === 0 ? 0 : historyPage * HISTORY_PAGE_SIZE + 1;
+  const historyShowingTo = Math.min((historyPage + 1) * HISTORY_PAGE_SIZE, historyTotal);
 
   useEffect(() => {
     setAnyrunPages({
@@ -127,13 +138,26 @@ export default function EmailInvestigationsPage() {
     });
   }, [result?.run_id, result?.history_id, result?.created_at]);
 
+  useEffect(() => {
+    return () => {
+      if (historySearchTimer.current) clearTimeout(historySearchTimer.current);
+    };
+  }, []);
+
   async function refreshHistory() {
     setLoadingHistory(true);
     try {
-      const res = await listEmailInvestigationHistory({ limit: 20, offset: 0 });
+      const res = await listEmailInvestigationHistory({
+        limit: HISTORY_PAGE_SIZE,
+        offset: historyPage * HISTORY_PAGE_SIZE,
+        search: historySearchQuery || undefined,
+        classification: historyClassification !== "all" ? historyClassification : undefined,
+      });
       setHistoryItems((res?.items || []) as EmailInvestigationHistoryItem[]);
+      setHistoryTotal(Number(res?.total || 0));
     } catch {
       // Keep page usable even if history fetch fails.
+      setHistoryTotal(0);
     } finally {
       setLoadingHistory(false);
     }
@@ -141,7 +165,7 @@ export default function EmailInvestigationsPage() {
 
   useEffect(() => {
     refreshHistory();
-  }, []);
+  }, [historyPage, historySearchQuery, historyClassification]);
 
   async function openHistoryItem(id: string) {
     setLoadingHistoryItemId(id);
@@ -298,6 +322,7 @@ export default function EmailInvestigationsPage() {
         badges={
           <>
             <StatusPill tone={historyActiveCount ? "warning" : "neutral"} outline mono>{`${historyItems.length} history`}</StatusPill>
+            {historyClassification !== "all" ? <StatusPill tone={historyClassification === "malicious" ? "danger" : historyClassification === "suspicious" ? "warning" : historyClassification === "benign" ? "success" : "neutral"} outline mono>{historyClassification}</StatusPill> : null}
             <StatusPill tone={runAnyRun ? "success" : "neutral"} outline mono>{runAnyRun ? "AnyRun on" : "AnyRun off"}</StatusPill>
             <StatusPill tone={runAiInterpretation ? "info" : "neutral"} outline mono>{runAiInterpretation ? "AI on" : "AI off"}</StatusPill>
           </>
@@ -306,9 +331,9 @@ export default function EmailInvestigationsPage() {
           <>
             <SignalCard
               label="History"
-              value={historyItems.length}
+              value={historyTotal}
               caption={selectedHistoryItem ? selectedHistoryItem.email_subject || selectedHistoryItem.filename || "Selected run loaded" : "Archived investigations available"}
-              tone={historyItems.length ? "info" : "neutral"}
+              tone={historyTotal ? "info" : "neutral"}
               compact
             />
             <SignalCard
@@ -362,19 +387,84 @@ export default function EmailInvestigationsPage() {
           title="History"
           description="Recent runs and live cancel controls. Open a previous run to repopulate the result pane."
           tone="info"
-          actions={<StatusPill tone={historyItems.length ? "info" : "neutral"} outline mono>{`${historyItems.length} records`}</StatusPill>}
+          actions={<StatusPill tone={historyTotal ? "info" : "neutral"} outline mono>{`${historyTotal} records`}</StatusPill>}
         >
           <MetadataGrid
             compact
             columns={2}
             items={[
-              { label: "Total", value: historyItems.length, tone: "info", mono: true },
+              { label: "Total", value: historyTotal, tone: "info", mono: true },
               { label: "Active", value: historyActiveCount, tone: historyActiveCount ? "warning" : "neutral", mono: true },
               { label: "Selected", value: selectedHistoryItem ? selectedHistoryItem.email_subject || selectedHistoryItem.filename || selectedHistoryItem.id : "None", tone: selectedHistoryItem ? "success" : "neutral" },
-              { label: "Latest refresh", value: loadingHistory ? "Refreshing now" : "Manual refresh available", tone: "neutral" },
+              { label: "Classification", value: historyClassification === "all" ? "All" : historyClassification, tone: historyClassification === "all" ? "neutral" : historyClassification === "malicious" ? "danger" : historyClassification === "suspicious" ? "warning" : historyClassification === "benign" ? "success" : "neutral", mono: true },
+              { label: "Search", value: historySearchQuery || "All archived emails", tone: historySearchQuery ? "warning" : "neutral" },
+              { label: "Page", value: `${historyPage + 1} / ${historyPages}`, tone: "neutral", mono: true },
             ]}
           />
           <div style={{ marginTop: 14 }}>
+            <div style={{ display: "grid", gap: 12, marginBottom: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", gap: 10, alignItems: "end" }}>
+                <div style={{ ...shellFieldStyle, padding: 12 }}>
+                  <div style={shellLabelStyle}>Search history</div>
+                  <input
+                    type="text"
+                    value={historySearch}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setHistorySearch(value);
+                      if (historySearchTimer.current) clearTimeout(historySearchTimer.current);
+                      historySearchTimer.current = setTimeout(() => {
+                        setHistorySearchQuery(value.trim());
+                        setHistoryPage(0);
+                      }, 250);
+                    }}
+                    placeholder="Search by subject, filename, sender email, or sender domain"
+                    style={shellInputStyle}
+                  />
+                </div>
+                <div style={{ ...shellFieldStyle, padding: 12, minWidth: 160 }}>
+                  <div style={shellLabelStyle}>Classification</div>
+                  <select
+                    value={historyClassification}
+                    onChange={(e) => {
+                      setHistoryClassification(e.target.value);
+                      setHistoryPage(0);
+                    }}
+                    style={shellInputStyle}
+                  >
+                    {HISTORY_CLASSIFICATIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option === "all" ? "All" : option[0].toUpperCase() + option.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistorySearch("");
+                    setHistorySearchQuery("");
+                    setHistoryClassification("all");
+                    setHistoryPage(0);
+                  }}
+                  style={{
+                    background: "rgba(120,145,178,0.12)",
+                    border: "1px solid rgba(120,145,178,0.24)",
+                    color: "var(--text-secondary)",
+                    borderRadius: 14,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                    minHeight: 52,
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
             {!historyItems.length ? (
               <div style={{ color: "var(--text-dim)", fontSize: 13, lineHeight: 1.7 }}>No previous email investigations yet.</div>
             ) : (
@@ -383,6 +473,11 @@ export default function EmailInvestigationsPage() {
                   const isSelected = selectedHistoryId === h.id;
                   const status = String(h.status || "unknown").toLowerCase();
                   const statusTone = ["queued", "processing", "running"].includes(status) ? "warning" : status === "completed" ? "success" : status === "failed" ? "danger" : "neutral";
+                  const classification = String(h.classification || "unknown").toLowerCase();
+                  const classificationTone =
+                    classification === "malicious" ? "danger" :
+                    classification === "suspicious" ? "warning" :
+                    classification === "benign" ? "success" : "neutral";
                   return (
                     <article
                       key={h.id}
@@ -417,9 +512,14 @@ export default function EmailInvestigationsPage() {
                               {h.sender_email || "Unknown sender"}
                             </div>
                           </div>
-                          <StatusPill tone={statusTone} size="sm" mono>
-                            {h.status || "unknown"}
-                          </StatusPill>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <StatusPill tone={classificationTone} size="sm" mono>
+                              {classification}
+                            </StatusPill>
+                            <StatusPill tone={statusTone} size="sm" mono>
+                              {h.status || "unknown"}
+                            </StatusPill>
+                          </div>
                         </div>
                         <MetadataGrid
                           compact
@@ -460,6 +560,19 @@ export default function EmailInvestigationsPage() {
                 })}
               </div>
             )}
+            {historyTotal > 0 ? (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(120,145,178,0.12)" }}>
+                <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                  {historyShowingFrom}-{historyShowingTo} of {historyTotal}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setHistoryPage(0)} disabled={historyPage === 0} style={historyPaginationButtonStyle(historyPage === 0)}>&laquo;</button>
+                  <button type="button" onClick={() => setHistoryPage((prev) => Math.max(0, prev - 1))} disabled={historyPage === 0} style={historyPaginationButtonStyle(historyPage === 0)}>Prev</button>
+                  <button type="button" onClick={() => setHistoryPage((prev) => Math.min(historyPages - 1, prev + 1))} disabled={historyPage >= historyPages - 1} style={historyPaginationButtonStyle(historyPage >= historyPages - 1)}>Next</button>
+                  <button type="button" onClick={() => setHistoryPage(historyPages - 1)} disabled={historyPage >= historyPages - 1} style={historyPaginationButtonStyle(historyPage >= historyPages - 1)}>&raquo;</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </ConsoleModule>
 
@@ -706,22 +819,47 @@ export default function EmailInvestigationsPage() {
               { id: "anyrun", label: "AnyRun" },
             ];
             return (
-              <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", paddingBottom: 0, marginBottom: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  borderBottom: "1px solid rgba(120, 145, 178, 0.22)",
+                  paddingBottom: 8,
+                  marginBottom: 10,
+                }}
+              >
                 {tabs.map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => setActiveResultTab(t.id)}
                     style={{
-                      background: "none",
-                      border: "none",
-                      borderBottom: activeResultTab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
-                      color: activeResultTab === t.id ? "var(--accent)" : "var(--text-muted)",
-                      fontSize: 12,
-                      fontWeight: activeResultTab === t.id ? 700 : 400,
-                      padding: "6px 14px",
+                      background:
+                        activeResultTab === t.id
+                          ? "linear-gradient(180deg, rgba(102,168,255,0.18) 0%, rgba(102,168,255,0.08) 100%)"
+                          : "rgba(15, 23, 42, 0.72)",
+                      border: activeResultTab === t.id
+                        ? "1px solid rgba(102,168,255,0.52)"
+                        : "1px solid rgba(120,145,178,0.22)",
+                      borderBottom: activeResultTab === t.id
+                        ? "1px solid rgba(102,168,255,0.65)"
+                        : "1px solid rgba(120,145,178,0.22)",
+                      color: activeResultTab === t.id ? "#d8e9ff" : "var(--text-secondary)",
+                      fontSize: 14,
+                      letterSpacing: "0.04em",
+                      fontWeight: activeResultTab === t.id ? 800 : 600,
+                      lineHeight: 1.1,
+                      padding: "10px 18px",
+                      minWidth: 132,
+                      borderRadius: 12,
+                      boxShadow: activeResultTab === t.id
+                        ? "0 10px 24px rgba(37, 99, 235, 0.18)"
+                        : "none",
                       cursor: "pointer",
                       marginBottom: -1,
+                      textTransform: "uppercase",
+                      transition: "background 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease",
                     }}
                   >
                     {t.label}
@@ -1380,6 +1518,22 @@ export default function EmailInvestigationsPage() {
       </ConsoleModule>
     </div>
   );
+}
+
+function historyPaginationButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    padding: "8px 12px",
+    background: "rgba(10, 16, 28, 0.72)",
+    border: "1px solid rgba(120, 145, 178, 0.18)",
+    borderRadius: 12,
+    color: disabled ? "var(--text-dim)" : "var(--text-strong)",
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: disabled ? "default" : "pointer",
+    fontFamily: "var(--font-mono)",
+    opacity: disabled ? 0.45 : 1,
+    minWidth: 46,
+  };
 }
 
 function findingSeverityColor(severity?: string): string {

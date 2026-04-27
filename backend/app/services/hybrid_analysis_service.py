@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import LookupCache
-from app.services.anyrun_service import lookup_anyrun
+from app.services.anyrun_service import (
+    lookup_anyrun,
+    _requires_domain_intelligence_for_indicator,
+)
 
 HYBRID_CACHE_TTL_HOURS = 24
 DEFAULT_BASE_URL = "https://hybrid-analysis.com/api/v2"
@@ -42,8 +45,15 @@ def lookup_hybrid_analysis(
     key = _cache_key(indicator=indicator, indicator_type=indicator_type)
     cached = _cache_get(key)
     if cached and prefer_anyrun and anyrun_key and indicator_type in {"url", "hash"}:
+        require_domain_intel = _requires_domain_intelligence_for_indicator(
+            indicator=indicator,
+            indicator_type=indicator_type,
+            submit_on_not_found=submit_on_not_found,
+        )
         cached_source = str(((cached.get("raw_summary") or {}).get("source") or "")).strip().lower()
         if "anyrun" not in cached_source:
+            cached = None
+        elif require_domain_intel and not _has_complete_domain_anyrun_payload(cached):
             cached = None
         elif indicator_type == "url" and submit_on_not_found and sandbox_first and not _has_meaningful_behavior_details(cached):
             cached = None
@@ -54,10 +64,17 @@ def lookup_hybrid_analysis(
             cached_analysis_id = str(cached.get("analysis_id") or "").strip()
             cached_mode = str(((cached.get("raw_summary") or {}).get("mode") or "")).strip().lower()
             sandbox_deferred = bool(((cached.get("raw_summary") or {}).get("sandbox_deferred")))
-            if not cached_analysis_id:
+            # A result with additional_items that includes a sandbox row is fully enriched —
+            # accept it even when the primary mode is "lookup" (TI MALICIOUS takes precedence).
+            _has_sandbox_additional = any(
+                str(((x.get("raw_summary") or {}).get("mode") or "")).strip().lower() == "sandbox"
+                for x in list(cached.get("additional_items") or [])
+                if isinstance(x, dict)
+            )
+            if not cached_analysis_id and not _has_sandbox_additional:
                 # Lookup-only Any.Run cache (no task/report id) cannot provide process graph/details.
                 cached = None
-            elif cached_mode not in {"sandbox", "lookup_deferred"}:
+            elif cached_mode not in {"sandbox", "lookup_deferred"} and not _has_sandbox_additional:
                 # URL/domain investigations with enrichment enabled require sandbox-detail payloads.
                 cached = None
             elif cached_mode == "lookup_deferred" and not sandbox_deferred:
@@ -562,6 +579,20 @@ def _cache_set(key: str, value: dict[str, Any], *, source: str, ttl_hours: int) 
         db.commit()
 
 
+def evict_anyrun_cache(indicator: str, indicator_type: str) -> None:
+    """Delete the DB lookup-cache row and the in-memory AnyRun cache for this indicator."""
+    from app.services.anyrun_service import _anyrun_cache_evict  # avoid circular at module level
+    key = _cache_key(indicator=indicator, indicator_type=indicator_type)
+    with Session(sync_engine) as db:
+        row = db.execute(
+            select(LookupCache).where(LookupCache.cache_key == key)
+        ).scalar_one_or_none()
+        if row:
+            db.delete(row)
+            db.commit()
+    _anyrun_cache_evict(f"{indicator_type}:{indicator}")
+
+
 def _normalize_base_url(base_url: str) -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -606,6 +637,35 @@ def _is_sparse_anyrun_cache(cached: dict[str, Any]) -> bool:
     hosts_count = len(hosts) if isinstance(hosts, list) else 0
     analysis_id = str(cached.get("analysis_id") or "").strip()
     return not analysis_id and details_count == 0 and domains_count == 0 and hosts_count == 0
+
+
+def _has_complete_domain_anyrun_payload(cached: dict[str, Any]) -> bool:
+    if not isinstance(cached, dict):
+        return False
+    di = cached.get("domain_intelligence")
+    if not isinstance(di, dict):
+        return False
+    domain_ready = bool(di.get("checked")) or bool(str(di.get("error") or "").strip())
+    if not domain_ready:
+        return False
+    return _has_companion_sandbox_outcome(cached)
+
+
+def _has_companion_sandbox_outcome(cached: dict[str, Any]) -> bool:
+    raw = cached.get("raw_summary") or {}
+    if str(raw.get("mode") or "").strip().lower() == "sandbox":
+        return True
+    if str(raw.get("sandbox_error") or "").strip():
+        return True
+    for item in cached.get("additional_items") or []:
+        if not isinstance(item, dict):
+            continue
+        item_raw = item.get("raw_summary") or {}
+        if str(item_raw.get("mode") or "").strip().lower() == "sandbox":
+            return True
+        if str(item.get("error") or "").strip():
+            return True
+    return False
 
 
 def _is_stale_anyrun_sandbox_cache(cached: dict[str, Any]) -> bool:

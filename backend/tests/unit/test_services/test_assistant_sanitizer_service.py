@@ -54,6 +54,27 @@ def test_sanitize_entry_replaces_host_fields() -> None:
     assert result.summary["hosts"] == 3
 
 
+def test_sanitize_entry_ignores_generic_release_word_after_server_prefix() -> None:
+    text = 'agentOsRevision":"Oracle Server release 8.10 5.15.0-317.197.5.1.el8uek.x86_64"'
+
+    result = sanitizer.sanitize_entry(text, {})
+
+    assert "release" in result.sanitized_text
+    assert "[HOST_" not in result.sanitized_text
+    assert result.summary.get("hosts", 0) == 0
+
+
+def test_sanitize_entry_replaces_json_style_agent_computer_name() -> None:
+    text = 'agentComputerName":"onvmbp01.onenet.be"'
+
+    result = sanitizer.sanitize_entry(text, {})
+
+    assert "onvmbp01.onenet.be" not in result.sanitized_text
+    assert '[HOST_1]"' in result.sanitized_text
+    assert result.token_map["[HOST_1]"] == "onvmbp01.onenet.be"
+    assert result.summary["hosts"] == 1
+
+
 def test_sanitize_entries_fail_closed_on_internal_error() -> None:
     class BadStr(str):
         def replace(self, old: str, new: str, count: int = -1):  # type: ignore[override]

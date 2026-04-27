@@ -24,6 +24,9 @@ import AnyRunProcessGraphTab from "@/components/report/AnyRunProcessGraphTab";
 import * as api from "@/lib/api";
 import { useSSE } from "@/hooks/useSSE";
 import { CollectorStatus } from "@/lib/types";
+import completionRefresh from "./completionRefresh";
+
+const { shouldTriggerDomainCompletionRefresh } = completionRefresh;
 
 // Full tab set for domain / URL investigations (Claude analysis available)
 const DOMAIN_TABS = [
@@ -186,6 +189,7 @@ export default function InvestigationPage() {
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [nowTs, setNowTs] = useState(Date.now());
+  const completionRefreshInFlight = React.useRef(false);
   const sse = useSSE(investigationId || null);
   const collectorKeys = React.useMemo(() => {
     const keys = new Set<string>(DEFAULT_COLLECTOR_ORDER as unknown as string[]);
@@ -252,9 +256,12 @@ export default function InvestigationPage() {
   ];
 
   // Fetch all data
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (options?: { silent?: boolean }) => {
     if (!investigationId) return;
-    setLoading(true);
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -267,10 +274,16 @@ export default function InvestigationPage() {
       const rep = await api.getReport(investigationId).catch(() => null);
       setReport(rep);
 
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
+      return { detail: det, evidence: ev, report: rep };
     } catch (e: any) {
       setError(e?.message || "Failed to load");
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
+      return null;
     }
   }, [investigationId]);
 
@@ -284,6 +297,42 @@ export default function InvestigationPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [fetchData, detail?.state, sse.connected]);
+
+  useEffect(() => {
+    if (!shouldTriggerDomainCompletionRefresh({
+      observableType: detail?.observable_type,
+      reportReady,
+      liveState: sse.state || detail?.state,
+      ssePercent: sse.percent || 0,
+      sseDone: sse.done,
+      refreshInFlight: completionRefreshInFlight.current,
+    })) {
+      return;
+    }
+
+    let cancelled = false;
+    completionRefreshInFlight.current = true;
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    (async () => {
+      try {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const refreshed = await fetchData({ silent: true });
+          if (cancelled || refreshed?.report) {
+            break;
+          }
+          await sleep(1000);
+        }
+      } finally {
+        completionRefreshInFlight.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.observable_type, detail?.state, fetchData, reportReady, sse.done, sse.percent, sse.state]);
 
   // Reset activeTab when observable type loads and the current tab isn't in the tab set
   useEffect(() => {
@@ -311,6 +360,10 @@ export default function InvestigationPage() {
       setActiveTab(qTab as TabId);
     }
   }, [searchParams, tabs]);
+
+  const handleRefresh = useCallback(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleCancel = useCallback(async () => {
     if (!investigationId || canceling || !isCancellable) return;
@@ -427,7 +480,7 @@ export default function InvestigationPage() {
           )}
           actions={(
             <>
-              <ConsoleActionButton onClick={fetchData}>Refresh</ConsoleActionButton>
+              <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
               {isCancellable ? (
                 <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
                   {canceling ? "Cancelling..." : "Cancel Investigation"}
@@ -582,7 +635,7 @@ export default function InvestigationPage() {
             <div style={{ color: "#f87171", fontSize: 12, marginBottom: 8 }}>{cancelError}</div>
           )}
           <button
-            onClick={fetchData}
+            onClick={handleRefresh}
             style={{
               padding: "8px 20px", background: "var(--bg-elevated)",
               border: "1px solid var(--border)",
@@ -626,7 +679,7 @@ export default function InvestigationPage() {
         case "summary":
           return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":
           return report ? <FindingsTab report={report} evidence={evidence} /> : <NoData label="report" />;
         case "indicators":
@@ -737,7 +790,7 @@ export default function InvestigationPage() {
             }}>
               Export JSON
             </ConsoleActionButton>
-            <ConsoleActionButton onClick={fetchData}>Refresh</ConsoleActionButton>
+            <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
           </>
         )}
         stats={(
@@ -878,7 +931,7 @@ export default function InvestigationPage() {
           }}>
             Export JSON
           </HeaderButton>
-          <HeaderButton onClick={fetchData}>Refresh</HeaderButton>
+          <HeaderButton onClick={handleRefresh}>Refresh</HeaderButton>
         </div>
       </div>
       {cancelError && (
@@ -1162,5 +1215,3 @@ class ErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
-
-

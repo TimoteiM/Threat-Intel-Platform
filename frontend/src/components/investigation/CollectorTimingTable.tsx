@@ -54,7 +54,7 @@ export default function CollectorTimingTable({
           {title}
         </div>
         <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-          Total: {typeof totalDurationMs === "number" ? `${Math.max(0, Math.round(totalDurationMs / 1000))}s` : "running"}
+          Elapsed: {typeof totalDurationMs === "number" ? `${Math.max(0, Math.round(totalDurationMs / 1000))}s` : "running"}
           {live ? " · live" : ""}
         </div>
       </div>

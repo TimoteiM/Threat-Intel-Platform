@@ -232,13 +232,15 @@ export async function uploadEmailInvestigation(
 }
 
 export async function listEmailInvestigationHistory(
-  params?: { limit?: number; offset?: number },
-): Promise<{ items: any[]; limit: number; offset: number }> {
+  params?: { limit?: number; offset?: number; search?: string; classification?: string },
+): Promise<{ items: any[]; total: number; limit: number; offset: number }> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.classification && params.classification !== "all") qs.set("classification", params.classification);
   const query = qs.toString();
-  return request<{ items: any[]; limit: number; offset: number }>(
+  return request<{ items: any[]; total: number; limit: number; offset: number }>(
     `/email-investigations/history${query ? `?${query}` : ""}`,
   );
 }
@@ -265,7 +267,13 @@ export interface PaginatedResponse<T> {
 }
 
 export function listInvestigations(params?: {
-  limit?: number; offset?: number; state?: string; search?: string; observable_type?: string;
+  limit?: number;
+  offset?: number;
+  state?: string;
+  search?: string;
+  observable_type?: string;
+  classification?: string;
+  dedupe?: boolean;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
@@ -273,6 +281,8 @@ export function listInvestigations(params?: {
   if (params?.state) qs.set("state", params.state);
   if (params?.search) qs.set("search", params.search);
   if (params?.observable_type) qs.set("observable_type", params.observable_type);
+  if (params?.classification) qs.set("classification", params.classification);
+  if (params?.dedupe) qs.set("dedupe", "true");
   const query = qs.toString();
   return request<PaginatedResponse<any>>(`/investigations${query ? `?${query}` : ""}`);
 }
@@ -284,6 +294,13 @@ export function getInvestigation(id: string) {
 export function cancelInvestigation(id: string) {
   return request<any>(`/investigations/${id}/cancel`, {
     method: "POST",
+  });
+}
+
+export function rerunCollector(id: string, collector: string) {
+  return request<any>(`/investigations/${id}/rerun-collector`, {
+    method: "POST",
+    body: JSON.stringify({ collector }),
   });
 }
 

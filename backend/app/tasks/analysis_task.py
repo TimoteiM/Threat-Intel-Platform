@@ -1084,20 +1084,71 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         phishtank_positive = bool(phishtank.get("in_database"))
         phishtank_verified = bool(phishtank.get("verified"))
 
-        if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_listed:
+        http_early = evidence_data.get("http") or {}
+        http_phishing = list(http_early.get("phishing_indicators") or [])
+        http_has_login = bool(http_early.get("has_login_form"))
+        # A "strong" HTTP phishing signal: credential/payment fields, brand impersonation,
+        # or external form POST — each is a high-confidence individual indicator.
+        _strong_http_phishing_keywords = (
+            "credential", "payment", "brand impersonation", "form posts to external"
+        )
+        http_strong_signals = [
+            s for s in http_phishing
+            if any(kw in s.lower() for kw in _strong_http_phishing_keywords)
+        ]
+        http_phishing_score = len(http_strong_signals) * 2 + len(http_phishing)
+
+        # AnyRun TI/sandbox verdict — extract best verdict across all items
+        hybrid_evidence = evidence_data.get("hybrid_analysis") or {}
+        anyrun_verdict = ""
+        anyrun_threat_names: list[str] = []
+        _hybrid_items = hybrid_evidence.get("items") if isinstance(hybrid_evidence, dict) else None
+        if isinstance(_hybrid_items, list):
+            for _item in _hybrid_items:
+                if not isinstance(_item, dict):
+                    continue
+                _v = str(_item.get("verdict") or "").strip().lower()
+                _names = list(_item.get("threat_names") or [])
+                if _v == "malicious":
+                    anyrun_verdict = "malicious"
+                    anyrun_threat_names = anyrun_threat_names or _names
+                elif _v in {"suspicious"} and anyrun_verdict != "malicious":
+                    anyrun_verdict = "suspicious"
+                    anyrun_threat_names = anyrun_threat_names or _names
+        anyrun_malicious = anyrun_verdict == "malicious"
+        anyrun_suspicious = anyrun_verdict == "suspicious"
+
+        if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_listed or anyrun_malicious:
             classification = "malicious"
             confidence = "high"
             risk_score = 90
             recommended_action = "block"
-        elif vt_malicious >= 2 or vt_suspicious >= 5 or len(intel_hits) >= 2:
+        elif http_strong_signals and (http_has_login or len(http_phishing) >= 2):
+            # Static analysis detected credential harvesting with no external feed confirmation —
+            # classify as malicious phishing even when sandbox says clean.
+            classification = "malicious"
+            confidence = "medium"
+            risk_score = 82
+            recommended_action = "block"
+        elif vt_malicious >= 2 or vt_suspicious >= 5 or len(intel_hits) >= 2 or anyrun_suspicious:
             classification = "suspicious"
             confidence = "medium"
             risk_score = 60
+            recommended_action = "investigate"
+        elif http_phishing_score >= 3 or (http_strong_signals and http_has_login):
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = 65
             recommended_action = "investigate"
         elif phishtank_positive:
             classification = "inconclusive"
             confidence = "low"
             risk_score = 30
+            recommended_action = "investigate"
+        elif http_phishing_score >= 1:
+            classification = "suspicious"
+            confidence = "low"
+            risk_score = 40
             recommended_action = "investigate"
         else:
             classification = "benign"
@@ -1105,6 +1156,9 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             risk_score = 15
             recommended_action = "monitor"
 
+        if anyrun_verdict:
+            names_str = (", ".join(anyrun_threat_names[:4]) + " ") if anyrun_threat_names else ""
+            key_evidence.append(f"AnyRun TI verdict: {anyrun_verdict.upper()} — {names_str}community threat intelligence")
         if vt_found:
             key_evidence.append(f"VirusTotal: {vt_malicious} malicious, {vt_suspicious} suspicious of {vt_total}")
         if intel_hits:
@@ -1118,6 +1172,8 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
                 "PhishTank match"
                 + (" (verified)" if phishtank_verified else " (unverified)")
             )
+        for sig in http_strong_signals:
+            key_evidence.append(f"Static HTTP: {sig}")
 
         whois = evidence_data.get("whois") or {}
         http = evidence_data.get("http") or {}
@@ -1131,6 +1187,19 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         email_spoofability = email_sec.get("spoofability_score")
         js_total = js.get("total_requests", 0)
         js_external = js.get("external_requests", 0)
+
+        if anyrun_verdict:
+            _names_desc = (f" Threat categories: {', '.join(anyrun_threat_names[:6])}." if anyrun_threat_names else "")
+            findings.append({
+                "id": "anyrun_verdict",
+                "title": f"AnyRun threat intelligence: {anyrun_verdict.upper()}",
+                "description": (
+                    f"AnyRun community threat intelligence classified this indicator as {anyrun_verdict}.{_names_desc}"
+                    " This verdict is based on prior sandbox submissions and community reporting."
+                ),
+                "severity": "critical" if anyrun_malicious else "high",
+                "evidence_refs": ["hybrid_analysis.items"],
+            })
 
         if phishtank_positive:
             findings.append({
@@ -1151,6 +1220,20 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
                 "description": f"VT reports {vt_malicious} malicious and {vt_suspicious} suspicious detections.",
                 "severity": "high" if vt_malicious >= 3 else "medium",
                 "evidence_refs": ["vt.malicious_count", "vt.suspicious_count"],
+            })
+
+        if http_phishing:
+            severity = "high" if http_strong_signals else "medium"
+            desc_parts = [f"Static HTTP analysis identified {len(http_phishing)} phishing indicator(s):"]
+            desc_parts += [f"  • {s}" for s in http_phishing[:6]]
+            if http_has_login:
+                desc_parts.append("  • Password input field present on page")
+            findings.append({
+                "id": "static_http_phishing",
+                "title": "Static HTTP phishing indicators detected",
+                "description": " ".join(desc_parts),
+                "severity": severity,
+                "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
             })
 
         if email_spoofability in {"high", "medium"}:
@@ -1266,6 +1349,13 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             exec_bits.append("Key evidence: " + "; ".join(key_evidence[:4]))
         executive_summary = " ".join(exec_bits)
 
+        _anyrun_narrative = ""
+        if anyrun_verdict:
+            _names_str = (", ".join(anyrun_threat_names[:4]) if anyrun_threat_names else "")
+            _anyrun_narrative = (
+                f" AnyRun TI verdict: {anyrun_verdict.upper()}"
+                + (f" ({_names_str})" if _names_str else "") + "."
+            )
         technical_narrative = (
             f"Network and web telemetry show reachable={bool(http.get('reachable'))}, "
             f"redirects={len(http.get('redirect_chain') or [])}, and JS activity "
@@ -1273,7 +1363,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             f"Email posture is spoofability={email_spoofability or 'unknown'}. "
             f"Threat feeds: PhishTank={phishtank_positive} "
             f"(verified={phishtank_verified}), OpenPhish={openphish_listed}, "
-            f"ThreatFox matches={len(tf_matches)}. "
+            f"ThreatFox matches={len(tf_matches)}.{_anyrun_narrative} "
             f"Pipeline timings (ms): report_generation={pipeline.get('report_generation')}, "
             f"browser_postprocessing={pipeline.get('browser_postprocessing')}."
         )
@@ -1361,22 +1451,17 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
             add_ioc("url", final_url, "HTTP final URL", "medium")
     elif observable_type == "url":
         add_ioc("url", observable, "Investigated URL", "high")
+        try:
+            from urllib.parse import urlparse as _urlparse
+            _hostname = (_urlparse(observable).hostname or "").strip()
+            if _hostname:
+                add_ioc("domain", _hostname, "Hostname extracted from investigated URL", "high")
+        except Exception:
+            pass
     elif observable_type == "ip":
         add_ioc("ip", observable, "Investigated IP", "high")
     elif observable_type in ("hash", "file"):
-        # Keep the investigated hash/file identifier as a primary pivot IOC.
         add_ioc("hash", observable, "Investigated sample/hash", "high")
-    elif observable_type == "domain":
-        add_ioc("domain", observable, "Investigated domain", "high")
-    elif observable_type == "url":
-        add_ioc("url", observable, "Investigated URL", "high")
-        try:
-            from urllib.parse import urlparse
-            hostname = (urlparse(observable).hostname or "").strip()
-            if hostname:
-                add_ioc("domain", hostname, "Hostname extracted from investigated URL", "high")
-        except Exception:
-            pass
 
     http = evidence_data.get("http") or {}
     final_url = (http.get("final_url") or "").strip()
@@ -1414,6 +1499,28 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
     abuse = threat_feeds.get("abuseipdb") or {}
     if abuse.get("ip"):
         add_ioc("ip", abuse["ip"], "AbuseIPDB lookup target", "medium")
+
+    # AnyRun sandbox IOC report — domains/IPs/URLs observed during live detonation.
+    hybrid = evidence_data.get("hybrid_analysis") or {}
+    for _item in (hybrid.get("items") or [])[:3]:
+        if not isinstance(_item, dict):
+            continue
+        _raw = _item.get("raw_summary") or {}
+        for _ioc in (_raw.get("iocs") or [])[:50]:
+            if not isinstance(_ioc, dict):
+                continue
+            _ioc_val = str(_ioc.get("ioc") or _ioc.get("value") or "").strip()
+            _ioc_cat = str(_ioc.get("category") or "").strip().lower()
+            _ioc_type = str(_ioc.get("type") or "").strip().lower()
+            if not _ioc_val:
+                continue
+            # Map AnyRun IOC categories to standard types
+            if _ioc_cat in {"domain", "domains"} or _ioc_type in {"domain", "hostname"}:
+                add_ioc("domain", _ioc_val, "AnyRun sandbox — contacted domain", "medium")
+            elif _ioc_cat in {"ip", "network"} or _ioc_type in {"ip", "ipv4", "ipv6"}:
+                add_ioc("ip", _ioc_val, "AnyRun sandbox — contacted IP", "medium")
+            elif _ioc_cat in {"url", "http"} or _ioc_type == "url":
+                add_ioc("url", _ioc_val, "AnyRun sandbox — HTTP request", "medium")
 
     return iocs
 

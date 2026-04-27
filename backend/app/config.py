@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5-mini"
     # Optional Anthropic fallback fields (used only when OpenAI fails/returns empty output)
     anthropic_api_key: str = ""
-    anthropic_model: str = ""
+    anthropic_model: str = "claude-haiku-4-5-20251001"
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
     phishtank_api_key: str = ""
@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     anyrun_privacy_type: str = "owner"
     anyrun_timeout_url_domain_seconds: int = 120
     anyrun_timeout_file_hash_seconds: int = 90
+    anyrun_url_sandbox_analysis_timeout: int = 120  # opt_timeout sent to AnyRun for URL/domain tasks
+    anyrun_url_sandbox_mitm: bool = True            # HTTPS MITM proxy — captures form POSTs on phishing pages
     anyrun_max_upload_mb: int = 100
     anyrun_parallel_limit_retries: int = 8
     anyrun_parallel_backoff_seconds: int = 10

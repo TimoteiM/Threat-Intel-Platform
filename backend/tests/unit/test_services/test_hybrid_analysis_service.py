@@ -214,6 +214,149 @@ def test_lookup_keeps_anyrun_when_sandbox_is_deferred(monkeypatch):
     assert called["retry"] is False
 
 
+def test_domain_lookup_ignores_incomplete_cached_anyrun_payload(monkeypatch):
+    cached = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "malicious",
+        "analysis_id": "cached-task",
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "sandbox",
+            "behavior_details": {
+                "dns_requests": ["example.test"],
+                "http_requests": [],
+                "connections": [],
+                "network_threats": [],
+                "processes": [],
+                "process_details": [],
+            },
+        },
+        "dynamic_io_summary": {"domains": ["example.test"], "hosts": [], "http_requests": [], "connections": []},
+    }
+
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: cached)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    calls = {"anyrun": 0}
+
+    def fake_lookup_anyrun(**kwargs):
+        calls["anyrun"] += 1
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "fresh-task",
+            "domain_intelligence": {
+                "checked": True,
+                "indicator_type": "domain",
+                "verdict": "malicious",
+                "analysis_id": "domain-task",
+            },
+            "raw_summary": {"source": "anyrun", "mode": "sandbox"},
+        }
+
+    monkeypatch.setattr(svc, "lookup_anyrun", fake_lookup_anyrun)
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: {"checked": False, "verdict": "unknown", "error": "should not be used"},
+    )
+
+    out = svc.lookup_hybrid_analysis(
+        indicator="https://example.test",
+        indicator_type="url",
+        submit_on_not_found=True,
+    )
+
+    assert calls["anyrun"] == 1
+    assert out["analysis_id"] == "fresh-task"
+    assert out["domain_intelligence"]["analysis_id"] == "domain-task"
+    assert out["cache_hit"] is False
+
+
+def test_domain_lookup_ignores_cached_anyrun_without_companion_sandbox(monkeypatch):
+    cached = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "malicious",
+        "analysis_id": "lookup-task",
+        "domain_intelligence": {
+            "checked": True,
+            "indicator_type": "domain",
+            "verdict": "malicious",
+            "analysis_id": "domain-task",
+        },
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "lookup",
+        },
+    }
+
+    monkeypatch.setattr(svc, "_cache_get", lambda _key: cached)
+    monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        hybrid_analysis_api_key = "hk"
+        hybrid_analysis_base_url = "https://hybrid-analysis.com/api/v2"
+        hybrid_analysis_environment_id = 160
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    calls = {"anyrun": 0}
+
+    def fake_lookup_anyrun(**kwargs):
+        calls["anyrun"] += 1
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "fresh-lookup-task",
+            "domain_intelligence": {
+                "checked": True,
+                "indicator_type": "domain",
+                "verdict": "malicious",
+                "analysis_id": "fresh-domain-task",
+            },
+            "additional_items": [
+                {
+                    "checked": True,
+                    "indicator_type": "url",
+                    "verdict": "clean",
+                    "analysis_id": "fresh-sandbox-task",
+                    "raw_summary": {"source": "anyrun", "mode": "sandbox"},
+                }
+            ],
+            "raw_summary": {"source": "anyrun", "mode": "lookup"},
+        }
+
+    monkeypatch.setattr(svc, "lookup_anyrun", fake_lookup_anyrun)
+    monkeypatch.setattr(
+        svc,
+        "_retry_lookup",
+        lambda **kwargs: {"checked": False, "verdict": "unknown", "error": "should not be used"},
+    )
+
+    out = svc.lookup_hybrid_analysis(
+        indicator="https://example.test",
+        indicator_type="url",
+        submit_on_not_found=True,
+    )
+
+    assert calls["anyrun"] == 1
+    assert out["analysis_id"] == "fresh-lookup-task"
+    assert out["additional_items"][0]["analysis_id"] == "fresh-sandbox-task"
+
+
 def test_behavior_rich_anyrun_result_does_not_require_sandbox_first():
     result = {
         "checked": True,

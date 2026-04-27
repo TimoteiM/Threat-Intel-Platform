@@ -65,11 +65,12 @@ class InvestigationRepository:
 
     async def list_all(
         self,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
         state: Optional[str] = None,
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
     ) -> Sequence[Investigation]:
         query = select(Investigation).order_by(Investigation.created_at.desc())
         if state:
@@ -78,7 +79,10 @@ class InvestigationRepository:
             query = query.where(Investigation.domain.ilike(f"%{search}%"))
         if observable_type:
             query = query.where(Investigation.observable_type == observable_type)
-        query = query.limit(limit).offset(offset)
+        if classification:
+            query = query.where(Investigation.classification == classification)
+        if limit is not None:
+            query = query.limit(limit).offset(offset)
         result = await self.session.execute(query)
         return result.scalars().all()
 
@@ -87,6 +91,7 @@ class InvestigationRepository:
         state: Optional[str] = None,
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
     ) -> int:
         query = select(func.count(Investigation.id))
         if state:
@@ -95,6 +100,8 @@ class InvestigationRepository:
             query = query.where(Investigation.domain.ilike(f"%{search}%"))
         if observable_type:
             query = query.where(Investigation.observable_type == observable_type)
+        if classification:
+            query = query.where(Investigation.classification == classification)
         result = await self.session.execute(query)
         return result.scalar() or 0
 

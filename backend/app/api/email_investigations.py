@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Path as FastAPIPath, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.config import get_settings
 from app.dependencies import DBSession
@@ -23,6 +23,18 @@ settings = get_settings()
 
 _EMAIL_UPLOAD_DIR = (Path(settings.artifact_local_path) / "email-intake").resolve()
 _EMAIL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _history_verdict_from_result(result_json: dict[str, Any] | None) -> str:
+    payload = result_json or {}
+    resolution = payload.get("resolution") or {}
+    verdict = (
+        resolution.get("overall_verdict")
+        or resolution.get("classification")
+        or (resolution.get("conclusion") or {}).get("classification")
+        or "unknown"
+    )
+    return str(verdict).strip().lower() or "unknown"
 
 
 @router.get("/upload")
@@ -120,12 +132,44 @@ async def list_email_investigation_history(
     db: DBSession,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None),
+    classification: str | None = Query(default=None),
 ) -> dict[str, Any]:
     try:
+        normalized_search = (search or "").strip()
+        normalized_classification = (classification or "").strip().lower()
+        filters = []
+        if normalized_search:
+            pattern = f"%{normalized_search}%"
+            filters.append(
+                or_(
+                    EmailInvestigationRun.filename.ilike(pattern),
+                    EmailInvestigationRun.email_subject.ilike(pattern),
+                    EmailInvestigationRun.sender_email.ilike(pattern),
+                    EmailInvestigationRun.sender_domain.ilike(pattern),
+                )
+            )
+        if normalized_classification:
+            filters.append(
+                func.lower(
+                    func.coalesce(
+                        EmailInvestigationRun.result_json["resolution"]["overall_verdict"].astext,
+                        EmailInvestigationRun.result_json["resolution"]["classification"].astext,
+                        "unknown",
+                    )
+                ) == normalized_classification
+            )
+
+        query = select(EmailInvestigationRun)
+        count_query = select(func.count(EmailInvestigationRun.id))
+        for clause in filters:
+            query = query.where(clause)
+            count_query = count_query.where(clause)
+
         rows = (
             (
                 await db.execute(
-                    select(EmailInvestigationRun)
+                    query
                     .order_by(EmailInvestigationRun.created_at.desc())
                     .limit(limit)
                     .offset(offset)
@@ -134,9 +178,10 @@ async def list_email_investigation_history(
             .scalars()
             .all()
         )
+        total = int((await db.execute(count_query)).scalar() or 0)
     except Exception as exc:
         logger.warning("Email history list unavailable: %s", exc)
-        return {"items": [], "limit": limit, "offset": offset}
+        return {"items": [], "total": 0, "limit": limit, "offset": offset}
     items = [
         {
             "id": str(r.id),
@@ -149,13 +194,14 @@ async def list_email_investigation_history(
             "sender_domain": r.sender_domain,
             "sender_ip": r.sender_ip,
             "resolution_source": r.resolution_source,
+            "classification": _history_verdict_from_result(r.result_json),
             "error": (r.result_json or {}).get("error"),
             "urls_count": int((r.result_json or {}).get("urls_count") or 0),
             "attachments_count": int((r.result_json or {}).get("attachments_count") or 0),
         }
         for r in rows
     ]
-    return {"items": items, "limit": limit, "offset": offset}
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/history/{run_id}")

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as api from "@/lib/api";
 import type { AssistantEntry, AssistantMode, AssistantSessionDetail, AssistantSessionListItem } from "@/lib/types";
 import AssistantSessionList from "./AssistantSessionList";
@@ -27,6 +27,8 @@ function newEntry(index: number): AssistantEntry {
 }
 
 export default function AssistantWorkspace() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const requestedSessionId = searchParams.get("session");
   const pageSize = 10;
@@ -95,6 +97,16 @@ export default function AssistantWorkspace() {
     }
   }
 
+  function resetWorkspace() {
+    setActiveSession(null);
+    setMode("alert_analysis");
+    setTitle("");
+    setEntries([newEntry(0)]);
+    if (requestedSessionId) {
+      router.replace(pathname, { scroll: false });
+    }
+  }
+
   const canRun = useMemo(
     () => entries.some((entry) => entry.raw_text.trim().length > 0),
     [entries],
@@ -126,7 +138,7 @@ export default function AssistantWorkspace() {
           entry_index: index,
         });
       }
-      const completed = await api.runAssistantSession(session.id, { model: "gpt-5-mini" });
+      const completed = await api.runAssistantSession(session.id);
       setActiveSession(completed);
       setSessionSearch("");
       setAppliedSessionSearch("");
@@ -197,16 +209,6 @@ export default function AssistantWorkspace() {
           </StatusPill>
         }
         badges={heroBadges}
-        actions={
-          <button
-            type="button"
-            onClick={() => void handleCreateAndRun()}
-            disabled={!canRun || loading}
-            style={runButtonStyle(!canRun || loading)}
-          >
-            {loading ? "Running..." : "Create and Run"}
-          </button>
-        }
         stats={heroStats}
       />
 
@@ -231,7 +233,7 @@ export default function AssistantWorkspace() {
             />
           }
           style={railModuleStyle}
-        >
+          >
           <AssistantSessionList
             sessions={sessions}
             activeSessionId={activeSession?.id}
@@ -247,32 +249,33 @@ export default function AssistantWorkspace() {
           />
         </ConsoleModule>
 
-        <ConsoleModule
-          eyebrow="Operational workspace"
-          title="Compose Analysis"
-          description="Keep the current prompt and entry flow, but frame it like an analyst workstation with clear state and mode controls."
-          tone="info"
-          variant="solid"
-          compact
-          actions={
-            <div style={modeSwitcherStyle}>
-              <button type="button" onClick={() => setMode("alert_analysis")} style={modeButtonStyle(mode === "alert_analysis")}>
-                <StatusPill tone={mode === "alert_analysis" ? "warning" : "neutral"} size="sm" outline>
-                  Alert analysis
-                </StatusPill>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("incident_correlation")}
-                style={modeButtonStyle(mode === "incident_correlation")}
-              >
-                <StatusPill tone={mode === "incident_correlation" ? "success" : "neutral"} size="sm" outline>
-                  Incident correlation
-                </StatusPill>
-              </button>
+        <div style={mainColumnStyle}>
+          <div style={workspaceBodyStyle}>
+            <div style={modeSwitcherShellStyle}>
+              <div style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                <div style={modeLabelStyle}>Compose Analysis</div>
+                <div style={modeHelperStyle}>
+                  Keep the current prompt flow, switch modes quickly, and write directly into the alert input below.
+                </div>
+              </div>
+              <div style={modeSwitcherStyle}>
+                <button
+                  type="button"
+                  onClick={() => setMode("alert_analysis")}
+                  style={modeButtonStyle(mode === "alert_analysis", "warning")}
+                >
+                  <span style={modeButtonLabelStyle(mode === "alert_analysis")}>Alert Analysis</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("incident_correlation")}
+                  style={modeButtonStyle(mode === "incident_correlation", "success")}
+                >
+                  <span style={modeButtonLabelStyle(mode === "incident_correlation")}>Incident Correlation</span>
+                </button>
+              </div>
             </div>
-          }
-          footer={
+
             <MetadataGrid
               compact
               items={[
@@ -281,10 +284,7 @@ export default function AssistantWorkspace() {
                 { label: "Entries", value: `${visibleEntryCount}/${entries.length}`, tone: canRun ? "success" : "warning" },
               ]}
             />
-          }
-          style={centerModuleStyle}
-        >
-          <div style={workspaceBodyStyle}>
+
             <AssistantEditor
               mode={mode}
               title={title}
@@ -297,35 +297,60 @@ export default function AssistantWorkspace() {
               }
               onAddEntry={() => setEntries((prev) => [...prev, newEntry(prev.length)])}
             />
-          </div>
-        </ConsoleModule>
 
-        <ConsoleModule
-          eyebrow="Analyst output"
-          title="Generated Intelligence"
-          description="Results are still produced exactly as before, but the shell now reads like a premium review surface."
-          tone={workspaceTone}
-          variant="solid"
-          compact
-          actions={
-            <StatusPill tone={workspaceTone} outline>
-              {loading ? "Running" : activeSession ? "Loaded" : "Awaiting run"}
-            </StatusPill>
-          }
-          footer={
-            <MetadataGrid
-              compact
-              columns={2}
-              items={[
-                { label: "Mode", value: modeLabel, tone: mode === "alert_analysis" ? "warning" : "success" },
-                { label: "Readiness", value: canRun ? "Prepared" : "Idle", tone: canRun ? "success" : "neutral" },
-              ]}
-            />
-          }
-          style={railModuleStyle}
-        >
-          <AssistantResult session={activeSession} />
-        </ConsoleModule>
+            <div style={runRowStyle}>
+              <div style={runPrimaryStyle}>
+                <button
+                  type="button"
+                  onClick={() => void handleCreateAndRun()}
+                  disabled={!canRun || loading}
+                  style={runButtonStyle(!canRun || loading)}
+                >
+                  {loading ? "Running..." : "Create and Run"}
+                </button>
+                {!canRun && !loading && (
+                  <span style={runHintStyle}>Add alert text above to enable</span>
+                )}
+              </div>
+              {activeSession ? (
+                <button
+                  type="button"
+                  onClick={resetWorkspace}
+                  disabled={loading}
+                  style={secondaryButtonStyle(loading)}
+                >
+                  New log analysis
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <ConsoleModule
+            eyebrow="Analyst output"
+            title="Generated Intelligence"
+            description="Results are still produced exactly as before, but the shell now reads like a premium review surface."
+            tone={workspaceTone}
+            variant="solid"
+            compact
+            actions={
+              <StatusPill tone={workspaceTone} outline>
+                {loading ? "Running" : activeSession ? "Loaded" : "Awaiting run"}
+              </StatusPill>
+            }
+            footer={
+              <MetadataGrid
+                compact
+                columns={2}
+                items={[
+                  { label: "Mode", value: modeLabel, tone: mode === "alert_analysis" ? "warning" : "success" },
+                  { label: "Readiness", value: canRun ? "Prepared" : "Idle", tone: canRun ? "success" : "neutral" },
+                ]}
+              />
+            }
+          >
+            <AssistantResult session={activeSession} />
+          </ConsoleModule>
+        </div>
       </div>
     </div>
   );
@@ -341,20 +366,23 @@ const workspaceStyle: React.CSSProperties = {
 };
 
 const railLayoutStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "stretch",
-  flexWrap: "wrap",
+  display: "grid",
+  gridTemplateColumns: "320px minmax(0, 1fr)",
+  alignItems: "start",
   gap: 16,
 };
 
 const railModuleStyle: React.CSSProperties = {
-  flex: "1 1 320px",
-  minWidth: 300,
+  width: "100%",
+  minWidth: 0,
 };
 
-const centerModuleStyle: React.CSSProperties = {
-  flex: "1.65 1 520px",
-  minWidth: 320,
+const mainColumnStyle: React.CSSProperties = {
+  width: "100%",
+  minWidth: 0,
+  display: "grid",
+  gap: 16,
+  alignContent: "start",
 };
 
 const workspaceBodyStyle: React.CSSProperties = {
@@ -362,24 +390,105 @@ const workspaceBodyStyle: React.CSSProperties = {
   gap: 16,
 };
 
-const modeSwitcherStyle: React.CSSProperties = {
+const runRowStyle: React.CSSProperties = {
   display: "flex",
-  flexWrap: "wrap",
-  gap: 10,
   alignItems: "center",
-  justifyContent: "flex-end",
+  justifyContent: "space-between",
+  gap: 14,
+  flexWrap: "wrap",
 };
 
-function modeButtonStyle(active: boolean): React.CSSProperties {
+const runPrimaryStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+  flexWrap: "wrap",
+};
+
+const runHintStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--text-dim)",
+  fontStyle: "italic",
+};
+
+const modeSwitcherShellStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 14,
+  padding: "4px 2px 2px",
+};
+
+const modeLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: "var(--text-dim)",
+};
+
+const modeHelperStyle: React.CSSProperties = {
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  lineHeight: 1.7,
+  maxWidth: 520,
+};
+
+const modeSwitcherStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  padding: 6,
+  borderRadius: 18,
+  background: "linear-gradient(180deg, rgba(10, 16, 28, 0.96), rgba(7, 11, 20, 0.98))",
+  border: "1px solid rgba(120, 145, 178, 0.16)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02), 0 18px 36px rgba(3, 8, 20, 0.2)",
+};
+
+function modeButtonStyle(active: boolean, tone: "warning" | "success"): React.CSSProperties {
+  const palette = tone === "warning"
+    ? {
+        background: "linear-gradient(180deg, rgba(251, 191, 36, 0.2), rgba(245, 158, 11, 0.12))",
+        border: "rgba(251, 191, 36, 0.34)",
+        shadow: "0 16px 28px rgba(245, 158, 11, 0.18)",
+        color: "#fde68a",
+      }
+    : {
+        background: "linear-gradient(180deg, rgba(56, 217, 169, 0.18), rgba(16, 185, 129, 0.12))",
+        border: "rgba(56, 217, 169, 0.3)",
+        shadow: "0 16px 28px rgba(16, 185, 129, 0.16)",
+        color: "#9bf0d8",
+      };
+
   return {
     appearance: "none",
-    border: "none",
-    background: "transparent",
-    padding: 0,
+    border: `1px solid ${active ? palette.border : "transparent"}`,
+    background: active ? palette.background : "transparent",
+    padding: "14px 20px",
     cursor: "pointer",
-    borderRadius: 999,
+    borderRadius: 14,
     outline: "none",
-    boxShadow: active ? "0 0 0 1px rgba(102, 168, 255, 0.26)" : "none",
+    minWidth: 200,
+    minHeight: 56,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+    transition: "background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease",
+    boxShadow: active ? palette.shadow : "none",
+    transform: active ? "translateY(-1px)" : "none",
+    color: active ? palette.color : "var(--text-secondary)",
+  };
+}
+
+function modeButtonLabelStyle(active: boolean): React.CSSProperties {
+  return {
+    fontSize: active ? 13 : 12,
+    fontWeight: active ? 800 : 700,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    lineHeight: 1.2,
   };
 }
 
@@ -400,6 +509,26 @@ function runButtonStyle(disabled: boolean): React.CSSProperties {
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.6 : 1,
     boxShadow: disabled ? "none" : "0 16px 34px rgba(3, 8, 20, 0.24)",
+  };
+}
+
+function secondaryButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    appearance: "none",
+    border: "1px solid rgba(120, 145, 178, 0.24)",
+    background: disabled
+      ? "rgba(15, 23, 42, 0.7)"
+      : "linear-gradient(180deg, rgba(18, 28, 46, 0.96), rgba(10, 16, 28, 0.98))",
+    color: "var(--text-secondary)",
+    borderRadius: 999,
+    padding: "10px 14px",
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.6 : 1,
+    marginLeft: "auto",
   };
 }
 

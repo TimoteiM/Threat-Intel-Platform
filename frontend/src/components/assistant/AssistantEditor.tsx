@@ -52,7 +52,7 @@ export default function AssistantEditor({
       </ConsoleModule>
 
       <div style={{ display: "grid", gap: 12 }}>
-        {visibleEntries.map((entry, index) => (
+          {visibleEntries.map((entry, index) => (
           <ConsoleModule
             key={entry.id || index}
             eyebrow={mode === "alert_analysis" ? "Alert Input" : `Entry ${index + 1}`}
@@ -70,12 +70,21 @@ export default function AssistantEditor({
               </StatusPill>
             }
           >
-            <textarea
-              value={entry.raw_text}
-              onChange={(e) => onEntryChange(index, e.target.value)}
-              rows={mode === "alert_analysis" ? 14 : 8}
-              style={textareaStyle}
-            />
+            <div style={{ display: "grid", gap: 12 }}>
+              {index === 0 ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label style={fieldLabelStyle}>Title</label>
+                  <input value={title} onChange={(e) => onTitleChange(e.target.value)} placeholder="Optional title" style={titleInputStyle} />
+                </div>
+              ) : null}
+
+              <textarea
+                value={entry.raw_text}
+                onChange={(e) => onEntryChange(index, e.target.value)}
+                rows={mode === "alert_analysis" ? 14 : 8}
+                style={textareaStyle}
+              />
+            </div>
           </ConsoleModule>
         ))}
       </div>
@@ -101,18 +110,6 @@ const fieldLabelStyle: React.CSSProperties = {
   color: "var(--text-dim)",
 };
 
-const titleInputStyle: React.CSSProperties = {
-  width: "100%",
-  border: "1px solid rgba(120, 145, 178, 0.18)",
-  borderRadius: 14,
-  background: "linear-gradient(180deg, rgba(16, 26, 44, 0.94), rgba(11, 17, 29, 0.98))",
-  color: "var(--text-strong)",
-  padding: "12px 14px",
-  fontSize: 14,
-  outline: "none",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
-};
-
 const textareaStyle: React.CSSProperties = {
   width: "100%",
   minHeight: 160,
@@ -125,6 +122,18 @@ const textareaStyle: React.CSSProperties = {
   resize: "vertical",
   fontFamily: "var(--font-mono)",
   lineHeight: 1.75,
+  outline: "none",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+};
+
+const titleInputStyle: React.CSSProperties = {
+  width: "100%",
+  border: "1px solid rgba(120, 145, 178, 0.18)",
+  borderRadius: 14,
+  background: "linear-gradient(180deg, rgba(16, 26, 44, 0.94), rgba(11, 17, 29, 0.98))",
+  color: "var(--text-strong)",
+  padding: "12px 14px",
+  fontSize: 14,
   outline: "none",
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
 };

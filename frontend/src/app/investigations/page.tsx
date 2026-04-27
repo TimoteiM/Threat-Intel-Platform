@@ -13,12 +13,15 @@ import StatusPill from "@/components/ui/StatusPill";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const FILTERS = ["all", "created", "gathering", "evaluating", "concluded", "failed"] as const;
+const CLASSIFICATION_FILTERS = ["all", "malicious", "suspicious", "benign", "inconclusive"] as const;
 
 export default function InvestigationsListPage() {
   const router = useRouter();
   const [investigations, setInvestigations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
+  const [classificationFilter, setClassificationFilter] = useState<string>("all");
+  const [hideDuplicates, setHideDuplicates] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -45,7 +48,9 @@ export default function InvestigationsListPage() {
     setLoading(true);
     const params: any = { limit: pageSize, offset: page * pageSize };
     if (filter !== "all") params.state = filter;
+    if (classificationFilter !== "all") params.classification = classificationFilter;
     if (debouncedSearch) params.search = debouncedSearch;
+    if (hideDuplicates) params.dedupe = true;
 
     listInvestigations(params)
       .then((data) => {
@@ -54,15 +59,19 @@ export default function InvestigationsListPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [filter, debouncedSearch, page, pageSize]);
+  }, [filter, classificationFilter, hideDuplicates, debouncedSearch, page, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const showingFrom = total === 0 ? 0 : page * pageSize + 1;
   const showingTo = Math.min((page + 1) * pageSize, total);
   const filterLabel = formatFilterLabel(filter);
-  const filteredHint = debouncedSearch
-    ? `Matching "${debouncedSearch}"`
-    : `Viewing ${filterLabel.toLowerCase()} cases`;
+  const classificationLabel = formatFilterLabel(classificationFilter);
+  const filteredHint = buildFilteredHint({
+    search: debouncedSearch,
+    stateLabel: filterLabel,
+    classificationLabel,
+    hideDuplicates,
+  });
 
   return (
     <div style={{ paddingTop: 12, paddingBottom: 40 }}>
@@ -72,13 +81,17 @@ export default function InvestigationsListPage() {
         description={
           <>
             A premium, scan-friendly catalog of cases with the same fetch, search, filter, and pagination behavior you already use.
-            {debouncedSearch ? ` Search is narrowed to "${debouncedSearch}".` : ` Browse the active ${filterLabel.toLowerCase()} queue.`}
+            {debouncedSearch
+              ? ` Search is narrowed to "${debouncedSearch}".`
+              : ` Browse the ${buildQueueSummary(filterLabel, classificationLabel, hideDuplicates)}.`}
           </>
         }
         status={<StatusPill tone="info" mono>{total} total</StatusPill>}
         badges={
           <>
             <StatusPill tone={getFilterTone(filter)} mono>{filterLabel}</StatusPill>
+            <StatusPill tone={getClassificationTone(classificationFilter)} mono>{classificationLabel}</StatusPill>
+            {hideDuplicates ? <StatusPill tone="info" mono>Duplicates hidden</StatusPill> : null}
             {debouncedSearch ? <StatusPill tone="warning" mono>Search active</StatusPill> : <StatusPill tone="neutral" mono>Catalog view</StatusPill>}
           </>
         }
@@ -113,15 +126,15 @@ export default function InvestigationsListPage() {
               tone="neutral"
               label="Filter"
               value={filterLabel}
-              caption={debouncedSearch ? `Search: ${debouncedSearch}` : "No search term"}
+              caption={classificationFilter === "all" ? "All classifications" : classificationLabel}
               trend="flat"
             />
             <SignalCard
               compact
-              tone="info"
-              label="Page Size"
-              value={pageSize}
-              caption="Items per page"
+              tone={hideDuplicates ? "info" : "neutral"}
+              label="Duplicates"
+              value={hideDuplicates ? "Hidden" : "Shown"}
+              caption={`Page size ${pageSize}`}
               trend="flat"
             />
           </>
@@ -133,7 +146,7 @@ export default function InvestigationsListPage() {
       <ConsoleModule
         eyebrow="Query surface"
         title="Search and filters"
-        description="Keep the investigation queue tight with a debounced domain search, state filters, and a simple per-page selector."
+        description="Keep the investigation queue tight with a debounced search, state and classification filters, duplicate suppression, and a simple per-page selector."
         variant="glass"
         actions={
           <StatusPill tone="neutral" size="sm" mono>
@@ -161,16 +174,18 @@ export default function InvestigationsListPage() {
             columns={2}
             items={[
               { label: "Active state", value: filterLabel, tone: getFilterTone(filter), mono: true },
+              { label: "Classification", value: classificationLabel, tone: getClassificationTone(classificationFilter), mono: true },
               { label: "Page size", value: `${pageSize} rows`, tone: "info", mono: true },
+              { label: "Duplicates", value: hideDuplicates ? "Newest only" : "All cases", tone: hideDuplicates ? "info" : "neutral", mono: true },
               { label: "Page", value: `${page + 1} / ${totalPages}`, tone: "neutral", mono: true },
-              { label: "Query", value: debouncedSearch || "All domains", tone: debouncedSearch ? "warning" : "neutral", mono: true },
+              { label: "Query", value: debouncedSearch || "All investigated values", tone: debouncedSearch ? "warning" : "neutral", mono: true },
             ]}
           />
         </div>
 
         <div style={{ height: 14 }} />
 
-        <div className="filter-row" aria-label="Investigation state filters">
+        <div className="filter-row" aria-label="Investigation filters">
           {FILTERS.map((state) => {
             const active = filter === state;
             return (
@@ -188,6 +203,37 @@ export default function InvestigationsListPage() {
           })}
 
           <div className="page-size-wrap">
+            <div className="select-wrap">
+              <span className="console-label" style={{ marginBottom: 0 }}>
+                Classification
+              </span>
+              <select
+                value={classificationFilter}
+                onChange={(e) => {
+                  setClassificationFilter(e.target.value);
+                  setPage(0);
+                }}
+                style={selectStyle()}
+              >
+                {CLASSIFICATION_FILTERS.map((option) => (
+                  <option key={option} value={option}>
+                    {formatFilterLabel(option)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHideDuplicates((prev) => !prev);
+                setPage(0);
+              }}
+              style={filterButtonStyle(hideDuplicates, "neutral")}
+            >
+              {hideDuplicates ? "Newest only" : "Hide duplicates"}
+            </button>
+
             <span className="console-label" style={{ marginBottom: 0 }}>
               Per page
             </span>
@@ -356,6 +402,8 @@ export default function InvestigationsListPage() {
             </span>
             <span className="pagination-summary__hint">
               {filterLabel} queue, page {page + 1} of {totalPages}
+              {classificationFilter !== "all" ? ` • ${classificationLabel}` : ""}
+              {hideDuplicates ? " • duplicates hidden" : ""}
             </span>
           </div>
 
@@ -449,6 +497,13 @@ export default function InvestigationsListPage() {
           align-items: center;
           gap: 10px;
           margin-left: auto;
+          flex-wrap: wrap;
+        }
+
+        .select-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
           flex-wrap: wrap;
         }
 
@@ -831,6 +886,35 @@ function getFilterTone(filter: string) {
   }
 }
 
+function buildFilteredHint({
+  search,
+  stateLabel,
+  classificationLabel,
+  hideDuplicates,
+}: {
+  search: string;
+  stateLabel: string;
+  classificationLabel: string;
+  hideDuplicates: boolean;
+}) {
+  const parts = [
+    search ? `Matching "${search}"` : `Viewing ${stateLabel.toLowerCase()} cases`,
+    classificationLabel !== "All" ? `${classificationLabel.toLowerCase()} classification` : null,
+    hideDuplicates ? "newest unique values only" : null,
+  ].filter(Boolean);
+  return parts.join(" • ");
+}
+
+function buildQueueSummary(stateLabel: string, classificationLabel: string, hideDuplicates: boolean) {
+  const parts = [
+    stateLabel.toLowerCase(),
+    classificationLabel !== "All" ? classificationLabel.toLowerCase() : null,
+    hideDuplicates ? "deduped" : null,
+    "queue",
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+
 function filterToneColors(tone: ReturnType<typeof getFilterTone>) {
   switch (tone) {
     case "success":
@@ -881,6 +965,8 @@ function getClassificationTone(classification: string) {
       return "warning";
     case "benign":
       return "success";
+    case "all":
+      return "neutral";
     case "inconclusive":
     default:
       return "neutral";

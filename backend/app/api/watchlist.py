@@ -86,6 +86,8 @@ def _serialize_entry(e, latest=None, inv_count=0) -> dict:
         "next_check_at": e.next_check_at.isoformat() if e.next_check_at else None,
         "latest_investigation": latest,
         "investigation_count": inv_count,
+        "risk_score_history": e.risk_score_history or [],
+        "evidence_diff_json": e.evidence_diff_json,
     }
 
 

@@ -89,6 +89,7 @@ def lookup_anyrun(
     privacy_type = str(getattr(settings, "anyrun_privacy_type", "owner") or "owner").strip().lower()
     timeout_url_domain = int(getattr(settings, "anyrun_timeout_url_domain_seconds", 45) or 45)
     timeout_file_hash = int(getattr(settings, "anyrun_timeout_file_hash_seconds", 90) or 90)
+    sandbox_analysis_timeout = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
     if not api_key:
         return _error(indicator_type, "ANYRUN_API_KEY not configured")
 
@@ -128,32 +129,62 @@ def lookup_anyrun(
         if sandbox_result.get("checked"):
             return sandbox_result
 
-    # 1) TI lookup (url/hash)
+    require_domain_intel = _requires_domain_intelligence_for_indicator(
+        indicator=value,
+        indicator_type=indicator_type,
+        submit_on_not_found=submit_on_not_found,
+    )
+
+    # Closure initialised here so it's available to the sandbox-fallback path (path 2) as well.
+    domain_intel: dict[str, Any] | None = None
+
+    def _attach_domain_intel(result: dict[str, Any]) -> dict[str, Any]:
+        if domain_intel is None:
+            return result
+        r = dict(result)
+        r["domain_intelligence"] = domain_intel
+        return r
+
+    # 1) TI lookup + sandbox run in parallel for URLs so both rows are always available.
+    #    For hashes, TI only (sandbox needs file bytes which may be absent).
     if indicator_type in {"url", "hash"}:
-        lookup_result = _lookup_intelligence(
-            LookupConnector,
-            SandboxConnector,
-            api_key,
-            indicator=value,
-            indicator_type=indicator_type,
-            sandbox_os=sandbox_os,
+        import concurrent.futures as _cf
+
+        # Extract hostname for domain TI lookup (URL only)
+        _hostname = ""
+        if indicator_type == "url":
+            try:
+                _hostname = (urlparse(value).hostname or "").strip().lower()
+            except Exception:
+                pass
+
+        _can_sandbox = bool(
+            submit_on_not_found
+            and (indicator_type == "url" or (indicator_type == "hash" and file_bytes))
         )
-        if lookup_result.get("checked"):
-            lookup_analysis_id = str(lookup_result.get("analysis_id") or "").strip()
-            force_hash_sandbox = bool(indicator_type == "hash" and submit_on_not_found and file_bytes)
-            needs_enriched_sandbox = (
-                _is_sparse_lookup_result(lookup_result)
-                or (indicator_type == "url" and not lookup_analysis_id)
-                or force_hash_sandbox
+
+        _workers = 1 + (1 if _hostname else 0) + (1 if _can_sandbox else 0)
+        _executor = _cf.ThreadPoolExecutor(max_workers=_workers)
+        try:
+            # Always run URL/hash TI lookup
+            _ti_future = _executor.submit(
+                _lookup_intelligence,
+                LookupConnector, SandboxConnector, api_key,
+                indicator=value, indicator_type=indicator_type, sandbox_os=sandbox_os,
             )
-            if (
-                submit_on_not_found
-                and indicator_type in {"url", "hash"}
-                and needs_enriched_sandbox
-            ):
-                if indicator_type == "hash" and not file_bytes:
-                    return lookup_result
-                sandbox_result = _run_anyrun_sandbox_with_fallback(
+            # Domain TI lookup in parallel (URL only)
+            _domain_future = (
+                _executor.submit(
+                    _lookup_intelligence,
+                    LookupConnector, SandboxConnector, api_key,
+                    indicator=_hostname, indicator_type="domain", sandbox_os=sandbox_os,
+                ) if _hostname else None
+            )
+            # Sandbox also runs in parallel (URL only, not hash — hash sandbox needs file bytes
+            # and is handled below when TI returns not-found)
+            _sandbox_future = (
+                _executor.submit(
+                    _run_anyrun_sandbox_with_fallback,
                     SandboxConnector,
                     api_key=api_key,
                     fallback_api_key=fallback_api_key,
@@ -164,49 +195,182 @@ def lookup_anyrun(
                     file_bytes=file_bytes,
                     file_name=file_name,
                     timeout_seconds=sandbox_timeout,
-                )
-                if sandbox_result.get("checked"):
+                ) if _can_sandbox and indicator_type == "url" else None
+            )
+
+            lookup_result = _ti_future.result(timeout=sandbox_timeout + 10)
+
+            if _domain_future is not None:
+                try:
+                    _di = _domain_future.result(timeout=timeout_url_domain)
+                    if isinstance(_di, dict) and (_di.get("checked") or require_domain_intel):
+                        _di = dict(_di)
+                        _di["hostname"] = _hostname  # carried so frontend can label the section
+                        domain_intel = _di
+                except Exception as exc:
+                    if require_domain_intel:
+                        domain_intel = {
+                            "checked": False,
+                            "indicator_type": "domain",
+                            "verdict": "unknown",
+                            "error": f"Any.Run domain intelligence lookup failed: {exc}",
+                            "hostname": _hostname,
+                            "raw_summary": {"source": "anyrun", "mode": "lookup"},
+                        }
+
+            sandbox_result: dict[str, Any] | None = None
+            if _sandbox_future is not None:
+                try:
+                    # Use the actual sandbox analysis timeout (120s) + buffer, not the
+                    # collector-level sandbox_timeout (45s) which is far too short for live detonation.
+                    _sr = _sandbox_future.result(timeout=sandbox_analysis_timeout + 30)
+                    if isinstance(_sr, dict):
+                        sandbox_result = _sr
+                except Exception:
+                    pass
+        finally:
+            _executor.shutdown(wait=False)
+
+        logger.info(
+            "AnyRun branch outcomes for %s: lookup_checked=%s lookup_verdict=%s domain_checked=%s sandbox_checked=%s sandbox_error=%s",
+            value,
+            bool(lookup_result.get("checked")),
+            str(lookup_result.get("verdict") or "").strip().lower(),
+            bool((domain_intel or {}).get("checked")),
+            bool((sandbox_result or {}).get("checked")),
+            str((sandbox_result or {}).get("error") or "").strip(),
+        )
+
+        if lookup_result.get("checked"):
+            lookup_verdict = str(lookup_result.get("verdict") or "").strip().lower()
+            lookup_analysis_id = str(lookup_result.get("analysis_id") or "").strip()
+            lookup_is_malicious = lookup_verdict == "malicious"
+            force_hash_sandbox = bool(indicator_type == "hash" and submit_on_not_found and file_bytes)
+
+            if sandbox_result is not None and sandbox_result.get("checked"):
+                # Both TI and sandbox completed — decide which is primary.
+                # TI MALICIOUS takes precedence; sandbox provides behavioral context.
+                if lookup_is_malicious:
+                    primary = _attach_domain_intel(lookup_result)
+                    primary = dict(primary)
+                    primary["additional_items"] = [dict(sandbox_result)]
+                else:
+                    # Sandbox is primary (has behavioral data); TI is supplementary
                     raw = sandbox_result.get("raw_summary") or {}
                     sandbox_result["raw_summary"] = {
                         **(raw if isinstance(raw, dict) else {}),
                         "lookup_fallback_used": True,
                         "lookup_summary": (lookup_result.get("raw_summary") or {}),
-                        "api_key_slot": str((raw or {}).get("api_key_slot") or "primary"),
                     }
-                    return sandbox_result
-                if lookup_result.get("checked") and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error")):
-                    raw = lookup_result.get("raw_summary") or {}
+                    primary = _attach_domain_intel(sandbox_result)
+                    if lookup_result.get("checked"):
+                        primary = dict(primary)
+                        primary["additional_items"] = [dict(lookup_result)]
+                return primary
+
+            # Sandbox didn't run or failed — handle TI result alone
+            if lookup_is_malicious:
+                primary = _attach_domain_intel(lookup_result)
+                if isinstance(sandbox_result, dict):
+                    primary = dict(primary)
+                    primary["additional_items"] = [dict(sandbox_result)]
+                return primary
+
+            needs_enriched_sandbox = (
+                _is_sparse_lookup_result(lookup_result)
+                or (indicator_type == "url" and not lookup_analysis_id)
+                or force_hash_sandbox
+            )
+            if submit_on_not_found and indicator_type == "hash" and needs_enriched_sandbox:
+                if not file_bytes:
+                    return _attach_domain_intel(lookup_result)
+                # Hash sandbox (needs file bytes — wasn't run in parallel above)
+                hash_sandbox = _run_anyrun_sandbox_with_fallback(
+                    SandboxConnector,
+                    api_key=api_key, fallback_api_key=fallback_api_key,
+                    sandbox_os=sandbox_os, privacy_type=privacy_type,
+                    indicator=value, indicator_type=indicator_type,
+                    file_bytes=file_bytes, file_name=file_name,
+                    timeout_seconds=sandbox_timeout,
+                )
+                if hash_sandbox.get("checked"):
+                    raw = hash_sandbox.get("raw_summary") or {}
+                    hash_sandbox["raw_summary"] = {
+                        **(raw if isinstance(raw, dict) else {}),
+                        "lookup_fallback_used": True,
+                        "lookup_summary": (lookup_result.get("raw_summary") or {}),
+                    }
+                    primary = _attach_domain_intel(hash_sandbox)
+                    if lookup_result.get("checked"):
+                        primary = dict(primary)
+                        primary["additional_items"] = [dict(lookup_result)]
+                    return primary
+                if _is_deferred_anyrun_sandbox_error(hash_sandbox.get("error")):
                     lookup_result = dict(lookup_result)
+                    raw = lookup_result.get("raw_summary") or {}
                     lookup_result["raw_summary"] = {
                         **(raw if isinstance(raw, dict) else {}),
-                        "source": "anyrun",
-                        "mode": "lookup_deferred",
+                        "source": "anyrun", "mode": "lookup_deferred",
                         "sandbox_deferred": True,
-                        "sandbox_error": str(sandbox_result.get("error") or "").strip(),
+                        "sandbox_error": str(hash_sandbox.get("error") or "").strip(),
                     }
-                    return lookup_result
-                # Do not silently degrade to lookup-only when sandbox enrichment is required.
-                return sandbox_result
-            return lookup_result
+                    return _attach_domain_intel(lookup_result)
+                return _attach_domain_intel(hash_sandbox)
+
+            return _attach_domain_intel(lookup_result)
+
         not_found = "not found" in str(lookup_result.get("error") or "").lower() or "no info" in str(lookup_result.get("error") or "").lower()
         if not submit_on_not_found or (indicator_type == "hash" and not file_bytes):
-            return lookup_result
+            # Reuse parallel sandbox result if available, otherwise return TI-only result
+            if sandbox_result is not None:
+                return _attach_domain_intel(sandbox_result)
+            return _attach_domain_intel(lookup_result)
         if not not_found:
-            return lookup_result
+            # TI returned an error that isn't "not found" — reuse sandbox if available
+            if sandbox_result is not None:
+                return _attach_domain_intel(sandbox_result)
+            return _attach_domain_intel(lookup_result)
 
-    # 2) Sandbox submission fallback
-    return _run_anyrun_sandbox_with_fallback(
-        SandboxConnector,
-        api_key=api_key,
-        fallback_api_key=fallback_api_key,
-        sandbox_os=sandbox_os,
-        privacy_type=privacy_type,
-        indicator=value,
-        indicator_type=indicator_type,
-        file_bytes=file_bytes,
-        file_name=file_name,
-        timeout_seconds=sandbox_timeout,
+        # TI said "not found" — reuse the already-collected parallel sandbox result
+        # instead of submitting a redundant second sandbox task.
+        if sandbox_result is not None:
+            return _attach_domain_intel(sandbox_result)
+
+    # 2) Sandbox submission fallback (domain observable_type or URL genuinely not yet run)
+    return _attach_domain_intel(
+        _run_anyrun_sandbox_with_fallback(
+            SandboxConnector,
+            api_key=api_key,
+            fallback_api_key=fallback_api_key,
+            sandbox_os=sandbox_os,
+            privacy_type=privacy_type,
+            indicator=value,
+            indicator_type=indicator_type,
+            file_bytes=file_bytes,
+            file_name=file_name,
+            timeout_seconds=sandbox_timeout,
+        )
     )
+
+
+def _requires_domain_intelligence_for_indicator(
+    *,
+    indicator: str,
+    indicator_type: str,
+    submit_on_not_found: bool,
+) -> bool:
+    if indicator_type != "url" or not submit_on_not_found:
+        return False
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        parsed = _urlparse(str(indicator or "").strip())
+    except Exception:
+        return False
+
+    hostname = str(parsed.hostname or "").strip().lower()
+    path = str(parsed.path or "").strip()
+    return bool(hostname and "." in hostname and path in {"", "/"} and not parsed.params and not parsed.query and not parsed.fragment)
 
 
 def _anyrun_cache_get(cache_key: str) -> dict | None:
@@ -224,6 +388,12 @@ def _anyrun_cache_set(cache_key: str, result: dict) -> None:
     """Store a sandbox result in the cache."""
     with _ANYRUN_CACHE_LOCK:
         _ANYRUN_RESULT_CACHE[cache_key] = (time.time(), result)
+
+
+def _anyrun_cache_evict(cache_key: str) -> None:
+    """Remove a single entry from the in-memory cache."""
+    with _ANYRUN_CACHE_LOCK:
+        _ANYRUN_RESULT_CACHE.pop(cache_key, None)
 
 
 def _run_anyrun_sandbox_with_fallback(
@@ -254,13 +424,13 @@ def _run_anyrun_sandbox_with_fallback(
     # keys temporarily checked out by other investigations").
     pool = _get_key_pool()
     if _ANYRUN_POOL_KEY_COUNT == 0:
-        return _error(indicator_type, "ANYRUN_API_KEY not configured")
+        return _error(indicator_type, "ANYRUN_API_KEY not configured", mode="sandbox")
 
     try:
         chosen_key = pool.get(block=True, timeout=gate_timeout)
     except queue.Empty:
         logger.warning("AnyRun key pool timeout (%ss) for %s — skipping sandbox", gate_timeout, indicator)
-        return _error(indicator_type, "AnyRun sandbox gate timeout — no API key available")
+        return _error(indicator_type, "AnyRun sandbox gate timeout — no API key available", mode="sandbox")
 
     key_label = "primary" if chosen_key == api_key else "fallback"
     logger.info("AnyRun checked out %s key for %s", key_label, indicator)
@@ -348,6 +518,8 @@ def _lookup_intelligence(
             kwargs: dict[str, Any] = {"lookup_depth": 180}
             if indicator_type == "url":
                 kwargs["url"] = indicator
+            elif indicator_type == "domain":
+                kwargs["domain_name"] = indicator
             else:
                 kwargs["sha256"] = indicator
             data = conn.get_intelligence(**kwargs)
@@ -359,7 +531,9 @@ def _lookup_intelligence(
         verdict = _normalize_lookup_verdict(threat_level)
         related_tasks = _ensure_list(data.get("sourceTasks") or data.get("relatedTasks"))
         related_incidents = _ensure_list(data.get("relatedIncidents"))
-        threat_names = _ensure_list(data.get("threatName") or summary.get("threatName") or summary.get("threatNames"))
+        threat_names = _normalize_anyrun_labels(
+            data.get("threatName") or summary.get("threatName") or summary.get("threatNames")
+        )
         destination_ip_geo = _ensure_list(data.get("destinationIPgeo") or data.get("destination_ip_geo"))
         destination_ports = _extract_ports(data)
         analysis_id = None
@@ -406,7 +580,7 @@ def _lookup_intelligence(
                         )
                         destination_ports = _extract_ports(report_data) or _extract_ports(network) or destination_ports
                         related_incidents = _ensure_list(report_data.get("relatedIncidents")) or related_incidents
-                        threat_names = _ensure_list(report_data.get("threatName")) or threat_names
+                        threat_names = _normalize_anyrun_labels(report_data.get("threatName")) or threat_names
                         related_tasks = _ensure_list(report_data.get("relatedTasks")) or related_tasks
                         processes = _ensure_list(report_data.get("processes"))
                         dns_requests = _ensure_list(network.get("dnsRequests"))
@@ -478,13 +652,20 @@ def _lookup_intelligence(
                 "source": "anyrun",
                 "mode": "lookup",
                 "summary": summary,
-                "anyrun_ai_summary": _derive_anyrun_summary(report_excerpt.get("analysis") or {}, report_excerpt.get("network") or {}, {}),
+                "anyrun_ai_summary": _derive_lookup_summary(
+                    verdict, threat_score, threat_names,
+                    tags=_normalize_anyrun_labels(summary.get("tags") or []),
+                    analysis_id=analysis_id,
+                    analysis_link=analysis_link,
+                    related_tasks_count=len(related_tasks) if isinstance(related_tasks, list) else 0,
+                    related_incidents=related_incidents,
+                ),
                 "threatName": threat_names,
                 "destinationIPgeo": destination_ip_geo,
                 "destinationPort": destination_ports,
                 "relatedTasks": related_tasks,
                 "relatedIncidents": related_incidents,
-                "tags": summary.get("tags") or [],
+                "tags": _normalize_anyrun_labels(summary.get("tags") or []),
                 "related_tasks_count": len(related_tasks) if isinstance(related_tasks, list) else 0,
                 "iocs": ioc_items[:500],
                 "report_excerpt": report_excerpt,
@@ -528,7 +709,7 @@ def _run_sandbox(
         with ExitStack() as stack:
             connector = _create_sandbox_connector(sandbox_connector_cls, api_key=api_key, sandbox_os=sandbox_os)
             if connector is None:
-                return _error(indicator_type, "Failed to initialize ANY.RUN sandbox connector")
+                return _error(indicator_type, "Failed to initialize ANY.RUN sandbox connector", mode="sandbox")
             if hasattr(connector, "__enter__") and hasattr(connector, "__exit__"):
                 connector = stack.enter_context(connector)
 
@@ -541,11 +722,11 @@ def _run_sandbox(
                 file_name=file_name,
             )
             if isinstance(task_id, dict) and task_id.get("__error__"):
-                return _error(indicator_type, str(task_id.get("__error__")))
+                return _error(indicator_type, str(task_id.get("__error__")), mode="sandbox")
 
             analysis_id = str(task_id or "").strip()
             if not analysis_id:
-                return _error(indicator_type, "ANY.RUN sandbox submission returned empty task id")
+                return _error(indicator_type, "ANY.RUN sandbox submission returned empty task id", mode="sandbox")
 
             wait_timeout = max(90, int(timeout_seconds or 60) + 60)
             final_status = _wait_status_stream(connector, analysis_id, timeout_seconds=wait_timeout)
@@ -747,12 +928,13 @@ def _run_sandbox(
             return _error(
                 indicator_type,
                 "ANY.RUN sandbox submission failed: API returned non-JSON response (often HTTP 413 file too large or plan restriction).",
+                mode="sandbox",
             )
         if "413" in lower_err:
-            return _error(indicator_type, "ANY.RUN sandbox submission failed: file too large for this API tier (HTTP 413).")
+            return _error(indicator_type, "ANY.RUN sandbox submission failed: file too large for this API tier (HTTP 413).", mode="sandbox")
         if "parallel task limit" in lower_err:
-            return _error(indicator_type, "ANY.RUN sandbox submission deferred: parallel task limit reached")
-        return _error(indicator_type, f"ANY.RUN sandbox submission failed: {exc}")
+            return _error(indicator_type, "ANY.RUN sandbox submission deferred: parallel task limit reached", mode="sandbox")
+        return _error(indicator_type, f"ANY.RUN sandbox submission failed: {exc}", mode="sandbox")
 
 
 def _submit_anyrun_task_with_fallback(
@@ -781,6 +963,8 @@ def _submit_anyrun_task_with_fallback(
     base_parallel_backoff_seconds = int(getattr(settings, "anyrun_parallel_backoff_seconds", 10) or 10)
     max_transient_retries = int(getattr(settings, "anyrun_transient_retries", 3) or 3)
     base_transient_backoff_seconds = int(getattr(settings, "anyrun_transient_backoff_seconds", 6) or 6)
+    url_analysis_timeout = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
+    url_mitm = bool(getattr(settings, "anyrun_url_sandbox_mitm", True))
 
     for privacy in attempts:
         parallel_retry = 0
@@ -789,9 +973,14 @@ def _submit_anyrun_task_with_fallback(
             try:
                 if indicator_type == "url":
                     target = _normalize_submission_url(indicator)
+                    url_kwargs: dict[str, Any] = {
+                        "opt_timeout": url_analysis_timeout,
+                        "opt_automated_interactivity": True,
+                        "opt_network_mitm": url_mitm,
+                    }
                     if privacy:
-                        return connector.run_url_analysis(target, opt_privacy_type=privacy)
-                    return connector.run_url_analysis(target)
+                        url_kwargs["opt_privacy_type"] = privacy
+                    return connector.run_url_analysis(target, **url_kwargs)
                 if privacy:
                     return connector.run_file_analysis(
                         file_content=file_bytes,
@@ -1102,6 +1291,87 @@ def _extract_iocs(ioc_report: Any) -> list[dict[str, Any]]:
                 if isinstance(v, list):
                     return [x for x in v if isinstance(x, dict)]
     return []
+
+
+def _normalize_anyrun_labels(values: Any) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for value in _ensure_list(values):
+        text = ""
+        if isinstance(value, str):
+            text = value.strip()
+        elif isinstance(value, dict):
+            for key in ("threatName", "name", "tag", "title", "label", "value"):
+                candidate = str(value.get(key) or "").strip()
+                if candidate:
+                    text = candidate
+                    break
+        elif value is not None:
+            text = str(value).strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        labels.append(text)
+    return labels
+
+
+def _derive_lookup_summary(
+    verdict: str,
+    threat_score: float | None,
+    threat_names: list[str],
+    tags: list[str],
+    analysis_id: str | None,
+    analysis_link: str | None,
+    related_tasks_count: int = 0,
+    related_incidents: list[Any] | None = None,
+) -> str:
+    """Build a human-readable summary for TI lookup results (no live sandbox data)."""
+    try:
+        parts: list[str] = []
+        verdict_label = (verdict or "unknown").capitalize()
+        score_str = f" (threat score: {int(threat_score)}/100)" if threat_score else ""
+        parts.append(f"AnyRun threat intelligence verdict: {verdict_label}{score_str}.")
+
+        # Combine threat categories and tags — deduplicated, most informative first
+        all_labels: list[str] = []
+        seen_lower: set[str] = set()
+        for label in list(threat_names or []) + list(tags or []):
+            s = str(label or "").strip()
+            if s and s.lower() not in seen_lower:
+                seen_lower.add(s.lower())
+                all_labels.append(s)
+        if all_labels:
+            parts.append(f"Threat categories / tags: {', '.join(all_labels[:10])}.")
+
+        if related_tasks_count:
+            parts.append(f"Community sandbox submissions for this indicator: {related_tasks_count}.")
+
+        inc_titles = []
+        for inc in list(related_incidents or [])[:3]:
+            if isinstance(inc, dict):
+                t = str(inc.get("title") or inc.get("name") or "").strip()
+                if t:
+                    inc_titles.append(t)
+        if inc_titles:
+            parts.append(f"Related incidents: {'; '.join(inc_titles)}.")
+
+        if analysis_id:
+            parts.append(
+                f"Prior analysis: {analysis_link or ('https://app.any.run/tasks/' + analysis_id)}."
+                " Behavioral details (process tree, network traffic) are not available in lookup-only results"
+                " — submit the sandbox for live execution data."
+            )
+        else:
+            parts.append(
+                "No prior sandbox analysis found for this indicator."
+                " Verdict is based on AnyRun threat intelligence community data."
+            )
+        return " ".join(parts)
+    except Exception:
+        return ""
 
 
 def _derive_anyrun_summary(analysis: dict[str, Any], network: dict[str, Any], report_data: dict[str, Any]) -> str:
@@ -1697,9 +1967,22 @@ def _is_sparse_lookup_result(result: dict[str, Any]) -> bool:
     behavior_details = raw.get("behavior_details") or {}
     process_details = _ensure_list((behavior_details or {}).get("process_details"))
     processes = _ensure_list((behavior_details or {}).get("processes"))
+    dns_requests = _ensure_list((behavior_details or {}).get("dns_requests"))
+    http_requests = _ensure_list((behavior_details or {}).get("http_requests"))
+    connections = _ensure_list((behavior_details or {}).get("connections"))
     analysis_id = str(result.get("analysis_id") or "").strip()
+    has_behavior = (
+        len(processes) > 0
+        or len(process_details) > 0
+        or len(dns_requests) > 0
+        or len(http_requests) > 0
+        or len(connections) > 0
+    )
+    # A linked analysis_id without actual behavioral rows means AnyRun has a prior
+    # record for this indicator but the lookup endpoint didn't return live detail.
+    # Treat this as sparse so a fresh sandbox submission is triggered to fill the gap.
     if analysis_id:
-        return False
+        return not has_behavior
     return (
         len(details) == 0
         and len(domains) == 0
@@ -1707,18 +1990,17 @@ def _is_sparse_lookup_result(result: dict[str, Any]) -> bool:
         and len(ports) == 0
         and len(geo) == 0
         and len(related_tasks) == 0
-        and len(processes) == 0
-        and len(process_details) == 0
+        and not has_behavior
     )
 
 
-def _error(indicator_type: str, message: str) -> dict[str, Any]:
+def _error(indicator_type: str, message: str, mode: str = "lookup") -> dict[str, Any]:
     return {
         "checked": False,
         "indicator_type": indicator_type,
         "verdict": "unknown",
         "error": message,
-        "raw_summary": {"source": "anyrun"},
+        "raw_summary": {"source": "anyrun", "mode": mode},
     }
 
 

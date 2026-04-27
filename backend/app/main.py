@@ -55,12 +55,12 @@ async def lifespan(app: FastAPI):
 
     logger.info("Threat Investigation Platform starting")
     logger.info(f"Environment: {settings.app_env}")
-    logger.info(f"Analyst model: {settings.openai_model}")
-    claude_fallback_enabled = bool(settings.anthropic_api_key and settings.anthropic_model)
-    if claude_fallback_enabled:
-        logger.info(f"Claude fallback: enabled (model={settings.anthropic_model})")
+    logger.info(f"Primary AI model: {settings.anthropic_model}")
+    openai_fallback_enabled = bool(settings.openai_api_key and settings.openai_model)
+    if openai_fallback_enabled:
+        logger.info(f"OpenAI fallback: enabled (model={settings.openai_model})")
     else:
-        logger.info("Claude fallback: disabled (set ANTHROPIC_API_KEY and ANTHROPIC_MODEL)")
+        logger.info("OpenAI fallback: disabled (set OPENAI_API_KEY and OPENAI_MODEL)")
     yield
     logger.info("Shutting down")
 

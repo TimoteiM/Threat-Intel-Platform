@@ -15,11 +15,60 @@ interface Props {
   evidence: CollectedEvidence;
   domain?: string;
   observableType?: string;
+  investigationId?: string;
+  onRefresh?: () => void;
 }
 
 const EvidenceSplitContext = React.createContext<{ activeTitle: string | null } | null>(null);
 
-export default function TechnicalEvidenceTab({ evidence, domain, observableType }: Props) {
+function CollectorRerunButton({ investigationId, collector, onRefresh, label }: {
+  investigationId?: string;
+  collector: string;
+  onRefresh?: () => void;
+  label: string;
+}) {
+  const [running, setRunning] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState(false);
+
+  const handleClick = React.useCallback(async () => {
+    if (!investigationId || running) return;
+    setRunning(true);
+    setError(null);
+    setDone(false);
+    try {
+      const { rerunCollector } = await import("@/lib/api");
+      await rerunCollector(investigationId, collector);
+      // Fast collectors (http, dns, etc.) finish in a few seconds — refresh once after a short wait
+      setTimeout(() => { onRefresh?.(); setDone(true); setRunning(false); }, 5_000);
+    } catch (e: any) {
+      setError(e?.message || "Re-run failed");
+      setRunning(false);
+    }
+  }, [investigationId, collector, onRefresh, running]);
+
+  if (!investigationId) return null;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <button
+        onClick={handleClick}
+        disabled={running}
+        title={`Re-run ${label}`}
+        style={{
+          fontSize: 10, padding: "2px 8px", borderRadius: 4,
+          cursor: running ? "wait" : "pointer", border: "1px solid var(--border, #334155)",
+          background: "transparent", color: running ? "var(--text-muted)" : "var(--accent)",
+        }}
+      >
+        {running ? "Running…" : `↺ Re-run ${label}`}
+      </button>
+      {done && !running && <span style={{ fontSize: 10, color: "#16a34a" }}>Updated</span>}
+      {error && <span style={{ fontSize: 10, color: "#ef4444" }}>{error}</span>}
+    </span>
+  );
+}
+
+export default function TechnicalEvidenceTab({ evidence, domain, observableType, investigationId, onRefresh }: Props) {
   const dns = evidence?.dns || ({} as any);
   const tls = evidence?.tls || ({} as any);
   const http = evidence?.http || ({} as any);
@@ -601,7 +650,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
       </Section>
 
       {/* HTTP */}
-      <Section title="HTTP Response">
+      <Section title="HTTP Response" action={<CollectorRerunButton investigationId={investigationId} collector="http" onRefresh={onRefresh} label="HTTP Analysis" />}>
         {http.reachable === false && !http.final_url ? (
           <EmptyNote>Domain not reachable over HTTP/HTTPS</EmptyNote>
         ) : (
@@ -1909,7 +1958,11 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType 
       )}
 
       <Section title="AnyRun Analysis">
-        <AnyRunInteractiveEvidence hybridAnalysis={hybridAnalysis} />
+        <AnyRunInteractiveEvidence
+          hybridAnalysis={hybridAnalysis}
+          investigationId={investigationId}
+          onRefresh={onRefresh}
+        />
       </Section>
 
       <Section title="Final Risk Aggregation">
@@ -2314,18 +2367,22 @@ function metaRow(name: string, meta: any) {
   };
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   const split = React.useContext(EvidenceSplitContext);
   if (split?.activeTitle && split.activeTitle !== title) return null;
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
-        fontSize: 13, fontWeight: 600, color: "var(--accent)",
-        letterSpacing: "0.01em", marginBottom: 14,
-        paddingBottom: 8, borderBottom: "1px solid var(--border)",
-        fontFamily: "var(--font-sans)",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 14, paddingBottom: 8, borderBottom: "1px solid var(--border)",
       }}>
-        {title}
+        <div style={{
+          fontSize: 13, fontWeight: 600, color: "var(--accent)",
+          letterSpacing: "0.01em", fontFamily: "var(--font-sans)",
+        }}>
+          {title}
+        </div>
+        {action && <div>{action}</div>}
       </div>
       {children}
     </div>

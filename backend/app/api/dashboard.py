@@ -5,6 +5,7 @@ Dashboard analytics endpoint — aggregated stats across all investigations.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Iterable
 
 from fastapi import APIRouter
 from sqlalchemy import func, case, text
@@ -113,18 +114,9 @@ async def get_stats(session: DBSession):
         )
         .where(Investigation.classification == "malicious")
         .order_by(Investigation.created_at.desc())
-        .limit(10)
+        .limit(100)
     )
-    recent_malicious = [
-        {
-            "id": str(row.id),
-            "domain": row.domain,
-            "risk_score": row.risk_score,
-            "classification": row.classification,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
-        for row in recent_result
-    ]
+    recent_malicious = _build_recent_malicious(recent_result)
 
     return {
         "total_investigations": total_investigations,
@@ -135,6 +127,30 @@ async def get_stats(session: DBSession):
         "top_hosting_providers": top_hosting,
         "recent_malicious": recent_malicious,
     }
+
+
+def _build_recent_malicious(rows: Iterable) -> list[dict]:
+    recent_malicious: list[dict] = []
+    seen_domains: set[str] = set()
+
+    for row in rows:
+        normalized_domain = (row.domain or "").strip().lower()
+        if not normalized_domain or normalized_domain in seen_domains:
+            continue
+        seen_domains.add(normalized_domain)
+        recent_malicious.append(
+            {
+                "id": str(row.id),
+                "domain": row.domain,
+                "risk_score": row.risk_score,
+                "classification": row.classification,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+        if len(recent_malicious) == 10:
+            break
+
+    return recent_malicious
 
 
 async def _get_top_jsonb_field(

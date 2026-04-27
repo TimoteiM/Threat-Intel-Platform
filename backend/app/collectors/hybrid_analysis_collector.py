@@ -48,20 +48,37 @@ class HybridAnalysisCollector(BaseCollector):
             file_bytes=file_bytes,
             file_name=file_name,
             submit_on_not_found=submit_on_not_found,
-            sandbox_first=bool(self.observable_type in {"domain", "url"}),
+            # TI lookup must run first so existing MALICIOUS community reports are
+            # trusted over a fresh sandbox that may return CLEAN (e.g. phishing pages
+            # that require user interaction). sandbox_first would bypass TI entirely.
+            sandbox_first=False,
         )
-        item = HybridAnalysisItem(
-            checked=bool(result.get("checked")),
-            indicator_type=str(result.get("indicator_type") or indicator_type),
-            verdict=str(result.get("verdict") or "unknown"),
-            analysis_id=result.get("analysis_id"),
-            threat_score=result.get("threat_score"),
-            error=result.get("error"),
-            cache_hit=result.get("cache_hit"),
-            dynamic_io_summary=result.get("dynamic_io_summary") or {},
-            raw_summary=result.get("raw_summary") or {},
-        )
-        evidence.items = [item]
+        def _make_item(r: dict, *, is_primary: bool = True) -> HybridAnalysisItem:
+            raw = r.get("raw_summary") or {}
+            # Tags live in raw_summary.tags (AnyRun community tags like "phishing", "credential-harvesting")
+            _tags = list(raw.get("tags") or [])
+            return HybridAnalysisItem(
+                checked=bool(r.get("checked")),
+                indicator_type=str(r.get("indicator_type") or indicator_type),
+                verdict=str(r.get("verdict") or "unknown"),
+                analysis_id=r.get("analysis_id"),
+                analysis_link=r.get("analysis_link"),
+                threat_score=r.get("threat_score"),
+                threat_names=list(r.get("threat_names") or []),
+                tags=_tags,
+                error=r.get("error"),
+                cache_hit=r.get("cache_hit"),
+                dynamic_io_summary=r.get("dynamic_io_summary") or {},
+                raw_summary=raw,
+                # domain_intelligence only on the primary row to avoid duplication
+                domain_intelligence=r.get("domain_intelligence") or None if is_primary else None,
+            )
+
+        items = [_make_item(result, is_primary=True)]
+        for extra in list(result.get("additional_items") or []):
+            items.append(_make_item(extra, is_primary=False))
+
+        evidence.items = items
         return evidence
 
     def _empty_evidence(self, meta: CollectorMeta) -> HybridAnalysisEvidence:

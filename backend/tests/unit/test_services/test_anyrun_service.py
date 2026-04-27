@@ -72,6 +72,37 @@ def test_lookup_intelligence_maps_expected_fields():
     assert out["dynamic_io_summary"]["destinationPort"] == [443, 8080]
 
 
+def test_lookup_intelligence_normalizes_object_shaped_labels(monkeypatch):
+    class _ObjectLabelLookupConnector(_LookupConnector):
+        def get_intelligence(self, **kwargs):
+            return {
+                "summary": {
+                    "threatLevel": 2,
+                    "detectedType": "phishing",
+                    "lastSeen": "2026-03-11T12:00:00Z",
+                    "tags": [{"count": 2, "threatName": "phishing"}, {"name": "credential theft"}],
+                },
+                "threatName": [{"count": 3, "threatName": "phishing-kit"}, {"label": "brand abuse"}],
+                "relatedTasks": [{"id": "task-1", "related": "https://app.any.run/tasks/task-1"}],
+                "relatedIncidents": [],
+            }
+
+    out = svc._lookup_intelligence(
+        _ObjectLabelLookupConnector,
+        _SandboxConnector,
+        "k",
+        indicator="https://bad.example",
+        indicator_type="url",
+        sandbox_os="windows",
+    )
+
+    assert out["checked"] is True
+    assert out["raw_summary"]["threatName"] == ["phishing-kit", "brand abuse"]
+    assert out["raw_summary"]["tags"] == ["phishing", "credential theft"]
+    assert "phishing-kit" in out["raw_summary"]["anyrun_ai_summary"]
+    assert "credential theft" in out["raw_summary"]["anyrun_ai_summary"]
+
+
 def test_extract_ports_from_nested_payload():
     payload = {
         "destinationPort": ["443", "bad", 8080],
@@ -615,6 +646,149 @@ def test_lookup_anyrun_does_not_use_fallback_key_for_non_deferred_primary_error(
     assert calls == ["ak-primary"]
     assert out["checked"] is False
     assert "provider returned 500" in out["error"]
+
+
+def test_lookup_anyrun_attaches_domain_intelligence_to_first_domain_result(monkeypatch):
+    _install_fake_anyrun_sdk(monkeypatch)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        anyrun_api_key_fallback = ""
+        anyrun_sandbox_os = "windows"
+        anyrun_privacy_type = "owner"
+        anyrun_timeout_url_domain_seconds = 45
+        anyrun_timeout_file_hash_seconds = 90
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    def fake_lookup_intelligence(*args, **kwargs):
+        if kwargs["indicator_type"] == "domain":
+            return {
+                "checked": True,
+                "indicator_type": "domain",
+                "verdict": "malicious",
+                "analysis_id": "domain-task-1",
+                "raw_summary": {"source": "anyrun", "mode": "lookup"},
+            }
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "url-task-1",
+            "raw_summary": {"source": "anyrun", "mode": "lookup"},
+        }
+
+    monkeypatch.setattr(svc, "_lookup_intelligence", fake_lookup_intelligence)
+
+    out = svc.lookup_anyrun(
+        indicator="https://onvmbp01.onenet.be",
+        indicator_type="url",
+        submit_on_not_found=True,
+    )
+
+    assert out["checked"] is True
+    assert out["analysis_id"] == "url-task-1"
+    assert out["domain_intelligence"]["checked"] is True
+    assert out["domain_intelligence"]["analysis_id"] == "domain-task-1"
+
+
+def test_lookup_anyrun_marks_domain_intelligence_failure_explicitly(monkeypatch):
+    _install_fake_anyrun_sdk(monkeypatch)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        anyrun_api_key_fallback = ""
+        anyrun_sandbox_os = "windows"
+        anyrun_privacy_type = "owner"
+        anyrun_timeout_url_domain_seconds = 45
+        anyrun_timeout_file_hash_seconds = 90
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    def fake_lookup_intelligence(*args, **kwargs):
+        if kwargs["indicator_type"] == "domain":
+            return {
+                "checked": False,
+                "indicator_type": "domain",
+                "verdict": "unknown",
+                "error": "domain lookup timed out",
+                "raw_summary": {"source": "anyrun", "mode": "lookup"},
+            }
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "url-task-1",
+            "raw_summary": {"source": "anyrun", "mode": "lookup"},
+        }
+
+    monkeypatch.setattr(svc, "_lookup_intelligence", fake_lookup_intelligence)
+
+    out = svc.lookup_anyrun(
+        indicator="https://onvmbp01.onenet.be",
+        indicator_type="url",
+        submit_on_not_found=True,
+    )
+
+    assert out["checked"] is True
+    assert out["domain_intelligence"]["checked"] is False
+    assert "timed out" in out["domain_intelligence"]["error"]
+
+
+def test_lookup_anyrun_keeps_lookup_and_sandbox_when_both_complete(monkeypatch):
+    _install_fake_anyrun_sdk(monkeypatch)
+
+    class _Settings:
+        anyrun_api_key = "ak"
+        anyrun_api_key_fallback = ""
+        anyrun_sandbox_os = "windows"
+        anyrun_privacy_type = "owner"
+        anyrun_timeout_url_domain_seconds = 45
+        anyrun_timeout_file_hash_seconds = 90
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    def fake_lookup_intelligence(*args, **kwargs):
+        if kwargs["indicator_type"] == "domain":
+            return {
+                "checked": True,
+                "indicator_type": "domain",
+                "verdict": "malicious",
+                "analysis_id": "domain-task-1",
+                "raw_summary": {"source": "anyrun", "mode": "lookup"},
+            }
+        return {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "malicious",
+            "analysis_id": "lookup-task-1",
+            "raw_summary": {"source": "anyrun", "mode": "lookup"},
+        }
+
+    monkeypatch.setattr(svc, "_lookup_intelligence", fake_lookup_intelligence)
+    monkeypatch.setattr(
+        svc,
+        "_run_anyrun_sandbox_with_fallback",
+        lambda *args, **kwargs: {
+            "checked": True,
+            "indicator_type": "url",
+            "verdict": "clean",
+            "analysis_id": "sandbox-task-1",
+            "raw_summary": {"source": "anyrun", "mode": "sandbox"},
+        },
+    )
+
+    out = svc.lookup_anyrun(
+        indicator="https://onvmbp01.onenet.be",
+        indicator_type="url",
+        submit_on_not_found=True,
+    )
+
+    assert out["checked"] is True
+    assert out["analysis_id"] == "lookup-task-1"
+    assert len(out["additional_items"]) == 1
+    assert out["additional_items"][0]["analysis_id"] == "sandbox-task-1"
+    assert out["additional_items"][0]["raw_summary"]["mode"] == "sandbox"
 
 
 def test_parallel_limit_error_helper_matches_provider_error_text():

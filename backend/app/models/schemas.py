@@ -671,11 +671,15 @@ class HybridAnalysisItem(BaseModel):
     indicator_type: Optional[str] = None
     verdict: str = "unknown"
     analysis_id: Optional[str] = None
+    analysis_link: Optional[str] = None
     threat_score: Optional[float] = None
+    threat_names: list[str] = []
+    tags: list[str] = []
     error: Optional[str] = None
     cache_hit: Optional[bool] = None
     dynamic_io_summary: dict[str, Any] = {}
     raw_summary: dict[str, Any] = {}
+    domain_intelligence: Optional[dict[str, Any]] = None
 
 
 class HybridAnalysisEvidence(BaseModel):
@@ -1030,7 +1034,7 @@ class AssistantEntryCreate(BaseModel):
 
 
 class AssistantSessionRunRequest(BaseModel):
-    model: str = "gpt-5-mini"
+    model: Optional[str] = None
 
 
 class AssistantEntryRead(BaseModel):

@@ -20,6 +20,9 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+PRIMARY_MODEL = "claude-haiku-4-5-20251001"
+FALLBACK_MODEL = "gpt-5-mini"
+
 
 SYSTEM_PROMPT = """You are a Senior SOC Analyst AI performing structured email threat investigations.
 
@@ -122,28 +125,38 @@ async def interpret_email_results_with_ai(
         f"```json\n{json.dumps(payload, ensure_ascii=True, indent=2)}\n```"
     )
 
-    try:
-        text = await _call_openai(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
-            system=SYSTEM_PROMPT,
-            user_text=user_text,
-        )
-    except Exception as openai_err:
-        if settings.anthropic_api_key and settings.anthropic_model:
-            logger.warning(
-                "OpenAI email interpretation failed (%s: %s). Falling back to Claude.",
-                type(openai_err).__name__,
-                openai_err,
-            )
+    text = ""
+    if settings.anthropic_api_key:
+        try:
             text = await _call_claude(
                 api_key=settings.anthropic_api_key,
-                model=settings.anthropic_model,
+                model=PRIMARY_MODEL,
                 system=SYSTEM_PROMPT,
                 user_text=user_text,
             )
-        else:
-            raise
+            if not (text or "").strip():
+                logger.warning("Claude Haiku email interpretation returned empty output. Falling back to GPT-5 Mini.")
+                text = ""
+        except Exception as anthropic_err:
+            logger.warning(
+                "Claude Haiku email interpretation failed (%s: %s). Falling back to GPT-5 Mini.",
+                type(anthropic_err).__name__,
+                anthropic_err,
+            )
+            text = ""
+
+    if not (text or "").strip():
+        if not settings.openai_api_key:
+            raise ValueError(
+                "Both primary (Haiku) and fallback (GPT-5 Mini) are unavailable: "
+                "ANTHROPIC_API_KEY and OPENAI_API_KEY are both unset."
+            )
+        text = await _call_openai(
+            api_key=settings.openai_api_key,
+            model=FALLBACK_MODEL,
+            system=SYSTEM_PROMPT,
+            user_text=user_text,
+        )
 
     return _parse_interpreter_output((text or "").strip())
 

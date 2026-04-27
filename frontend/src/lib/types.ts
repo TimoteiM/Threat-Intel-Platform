@@ -1206,6 +1206,7 @@ export interface EmailInvestigationHistoryItem {
   sender_domain?: string;
   sender_ip?: string;
   resolution_source: string;
+  classification?: string;
   error?: string | null;
   urls_count: number;
   attachments_count: number;

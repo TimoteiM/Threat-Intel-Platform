@@ -8,13 +8,28 @@ from collections import defaultdict
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 SID_RE = re.compile(r"\bS-\d-(?:\d+-){1,14}\d+\b", re.IGNORECASE)
-ACCOUNT_RE = re.compile(r"\b(?:user(?:name)?|account|admin|operator)\b", re.IGNORECASE)
+# Captures the VALUE in key="VALUE" patterns for user/username/srcuser/dstuser fields.
+# Uses a lookahead so the closing quote is not consumed and remains in the text.
+KEYED_ACCOUNT_RE = re.compile(
+    r'(?P<prefix>\b(?:(?:src|dst)?user(?:name)?)\s*=\s*"?)(?P<value>[A-Za-z0-9][A-Za-z0-9._@-]{0,252})(?="|\s|$)',
+    re.IGNORECASE,
+)
 KEYED_HOST_RE = re.compile(
-    r"(?P<prefix>\b(?:hostname|computer|host|server|device|workstation)\s*[=:]\s*)(?P<value>[A-Z0-9._-]+)",
+    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:hostname|computername|computer|host|server|device|workstation))(?:(?:\\?")?\s*:\s*(?:\\?")|\s*[=:]\s*))(?P<value>[A-Z0-9._-]+)',
     re.IGNORECASE,
 )
 FREEFORM_HOST_RE = re.compile(
     r"(?P<prefix>\b(?:host|server|device|workstation)\s+)(?P<value>[A-Z0-9][A-Z0-9._-]{1,253})",
+    re.IGNORECASE,
+)
+SIMPLE_HOST_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,251}[A-Z0-9])?$", re.IGNORECASE)
+FQDN_LABEL_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?$", re.IGNORECASE)
+# Bare FQDNs not preceded by a keyword (e.g. "onvmbp01.onenet.be" appearing inline).
+# Requires at least 3 labels (2+ dots) to avoid matching .NET type references.
+# Must not be preceded by @ (emails already handled) or letters/digits (mid-word match).
+BARE_FQDN_RE = re.compile(
+    r"(?<![/@\w])(?!(?:\d{1,3}\.){3}\d{1,3}\b)"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}[a-z]{2,}(?![\w])",
     re.IGNORECASE,
 )
 
@@ -55,6 +70,16 @@ def sanitize_entries(
             entry_summary: dict[str, int] = defaultdict(int)
             sanitized_text = _replace_keyed_host_pattern(
                 sanitized_text,
+                KEYED_ACCOUNT_RE,
+                "ACCOUNT",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
                 KEYED_HOST_RE,
                 "HOST",
                 shared_token_map,
@@ -77,7 +102,6 @@ def sanitize_entries(
                 ("emails", EMAIL_RE),
                 ("ips", IP_RE),
                 ("sids", SID_RE),
-                ("accounts", ACCOUNT_RE),
             ):
                 sanitized_text = _replace_pattern(
                     sanitized_text,
@@ -89,6 +113,18 @@ def sanitize_entries(
                     entry_summary,
                     batch_summary,
                 )
+            # Bare FQDNs not caught by keyed/freeform patterns — run after emails
+            # and IPs are already tokenised so their placeholders don't re-match.
+            sanitized_text = _replace_pattern(
+                sanitized_text,
+                BARE_FQDN_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
             sanitized_entries.append(
                 SanitizedEntry(
                     raw_text=str(entry),
@@ -153,7 +189,7 @@ def _replace_keyed_host_pattern(
 
     def repl(match: re.Match[str]) -> str:
         original = match.group("value")
-        if EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original):
+        if EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original) or not _looks_like_host(original):
             return match.group(0)
         token = reverse_token_map.get(original)
         if token is None:
@@ -166,6 +202,30 @@ def _replace_keyed_host_pattern(
         return f"{match.group('prefix')}{token}"
 
     return pattern.sub(repl, text)
+
+
+def _looks_like_host(value: str) -> bool:
+    candidate = value.strip().strip("\"'")
+    if not candidate or len(candidate) > 253:
+        return False
+    if EMAIL_RE.fullmatch(candidate) or IP_RE.fullmatch(candidate):
+        return False
+    if "." in candidate:
+        labels = candidate.split(".")
+        if len(labels) < 2:
+            return False
+        if any(not label or len(label) > 63 for label in labels):
+            return False
+        if any("_" in label or not FQDN_LABEL_RE.fullmatch(label) for label in labels):
+            return False
+        if not any(any(ch.isalpha() for ch in label) for label in labels):
+            return False
+        return any(ch.isalpha() for ch in labels[-1]) and len(labels[-1]) >= 2
+    if "_" in candidate or not SIMPLE_HOST_RE.fullmatch(candidate):
+        return False
+    if candidate.isdigit():
+        return False
+    return any(ch.isalpha() for ch in candidate) and any(ch.isdigit() for ch in candidate)
 
 
 def _seed_counters(shared_token_map: dict[str, str]) -> dict[str, int]:

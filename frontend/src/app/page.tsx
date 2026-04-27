@@ -97,9 +97,14 @@ const COLLECTORS = [
   { label: "WHOIS Registration",   color: "#fbbf24" },
   { label: "ASN & Geolocation",    color: "#60a5fa" },
   { label: "VirusTotal",           color: "#f87171" },
+  { label: "URLScan",              color: "#60a5fa" },
   { label: "AbuseIPDB",            color: "#fb923c" },
   { label: "PhishTank",            color: "#f87171" },
   { label: "ThreatFox",            color: "#fb923c" },
+  { label: "Google Safe Browsing", color: "#34d399" },
+  { label: "OpenCTI",              color: "#a78bfa" },
+  { label: "AnyRun Sandbox",       color: "#f87171" },
+  { label: "Brave OSINT",          color: "#94a3b8" },
   { label: "Email Security",       color: "#34d399" },
   { label: "Screenshot Analysis",  color: "#a78bfa" },
   { label: "Typosquatting",        color: "#fbbf24" },
@@ -109,6 +114,7 @@ const COLLECTORS = [
   { label: "Infra Pivot",          color: "#a78bfa" },
   { label: "MITRE ATT&CK",         color: "#f87171" },
   { label: "Favicon Intel",        color: "#fbbf24" },
+  { label: "Subdomain Enum",       color: "#60a5fa" },
 ];
 
 function CollectorStrip() {
@@ -157,22 +163,22 @@ const STEPS = [
   {
     icon: "⬡",
     iconBg: "linear-gradient(135deg, #60a5fa, #818cf8)",
-    title: "Submit a Domain",
-    desc: "Enter any suspicious domain. Optionally compare against your legitimate brand to detect impersonation.",
-    tags: ["+ typosquatting check", "+ visual comparison"],
+    title: "Submit an Observable",
+    desc: "Enter a domain, IP, URL, file hash, or email address. Domains also support typosquatting and visual brand comparison.",
+    tags: ["domain · ip · url · hash · email", "+ typosquatting check"],
   },
   {
     icon: "◎",
     iconBg: "linear-gradient(135deg, #34d399, #60a5fa)",
-    title: "10+ Collectors Run",
-    desc: "DNS, HTTP, TLS, WHOIS, VirusTotal, AbuseIPDB, screenshots, email security and more — all in parallel.",
-    tags: ["≈ 60–90 seconds", "parallel execution"],
+    title: "20+ Collectors Run",
+    desc: "DNS, HTTP, TLS, WHOIS, VirusTotal, AbuseIPDB, URLScan, OpenCTI, AnyRun, ThreatFox and more — all in parallel.",
+    tags: ["≈ 2–90 seconds", "parallel execution"],
   },
   {
     icon: "◈",
     iconBg: "linear-gradient(135deg, #a78bfa, #f87171)",
     title: "AI Analysis",
-    desc: "Claude applies a strict 5-step methodology and classifies the domain with MITRE ATT&CK-mapped findings.",
+    desc: "Claude applies a strict methodology and classifies the observable with MITRE ATT&CK-mapped findings and IOCs.",
     tags: ["Benign · Suspicious · Malicious", "IOCs extracted"],
   },
 ];
@@ -822,18 +828,18 @@ export default function HomePage() {
           lineHeight: 1.2,
           marginBottom: 10,
         }}>
-          Domain Threat Investigation
+          Threat Intelligence Platform
         </h1>
 
         <p style={{
           fontSize: 14,
           color: "var(--text-dim)",
           fontFamily: "var(--font-sans)",
-          maxWidth: 480,
+          maxWidth: 520,
           margin: "0 auto 24px",
           lineHeight: 1.6,
         }}>
-          Submit a domain and get a full analyst-grade report in under 2 minutes —
+          Submit a domain, IP, URL, file hash, or email and get a full analyst-grade report —
           classification, IOCs, findings, and actionable SOC steps.
         </p>
 

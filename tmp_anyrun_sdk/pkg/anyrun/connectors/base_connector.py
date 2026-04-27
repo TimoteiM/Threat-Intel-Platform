@@ -104,6 +104,7 @@ class AnyRunConnector:
         url: str,
         json: Optional[dict] = None,
         data: Union[dict, aiohttp.MultipartWriter, None] = None,
+        form_data: Optional[dict] = None,
         files: Optional[dict[str, tuple[str, bytes]]] = None,
         parse_response: bool = True,
         request_timeout: Optional[int] = None
@@ -113,8 +114,11 @@ class AnyRunConnector:
 
         :param method: HTTP method
         :param url: Request url
-        :param json: Request json
-        :param data: Request data
+        :param json: Request json body (ignored by requests when files= is also provided)
+        :param data: Request data (used as URL query params for the requests path, body for aiohttp)
+        :param form_data: Multipart form fields sent alongside files (requests path only).
+            Use this instead of json= when uploading files so that task parameters are included
+            in the multipart body rather than being silently dropped.
         :param files: Request files (only for the requests package)
         :param parse_response: Enable/disable API response parsing. If enabled, returns response.json() object dict
             else aiohttp.ClientResponse instance
@@ -126,12 +130,20 @@ class AnyRunConnector:
 
         try:
             if self._enable_requests:
+                # When form_data + files are provided, convert values to strings and filter None
+                # (matches aiohttp multipart writer behaviour which also skips falsy values)
+                effective_form_data: Optional[dict] = None
+                if form_data is not None and files:
+                    effective_form_data = {
+                        k: str(v) for k, v in form_data.items() if v is not None
+                    }
                 response: requests.Response = requests.request(
                     method,
                     url,
                     headers=self._headers,
-                    json=json,
+                    json=json if not files else None,
                     params=data,
+                    data=effective_form_data,
                     files=files,
                     verify=self._verify_ssl,
                     proxies=self._generate_proxy_config() if self._proxy else None,
@@ -240,8 +252,14 @@ class AnyRunConnector:
         if status in (HTTPStatus.OK, HTTPStatus.CREATED, HTTPStatus.ACCEPTED):
             return response_data
 
+        if not isinstance(response_data, dict):
+            raise RunTimeException(
+                f'ANY.RUN API returned status {status} with an empty or non-JSON response body.',
+                status or HTTPStatus.BAD_REQUEST
+            )
+
         raise RunTimeException(
-            response_data.get('message') or response_data.get('description'),
+            response_data.get('message') or response_data.get('description') or f'HTTP {status}',
             status or HTTPStatus.BAD_REQUEST
         )
 

@@ -23,6 +23,8 @@ import {
 
 type Props = {
   hybridAnalysis: any;
+  investigationId?: string;
+  onRefresh?: () => void;
 };
 
 type GridCol = {
@@ -34,6 +36,32 @@ type GridCol = {
 
 function arr(v: any): any[] {
   return Array.isArray(v) ? v : [];
+}
+
+function anyrunLabelText(value: any): string {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object") {
+    for (const key of ["threatName", "name", "tag", "title", "label", "value"]) {
+      const text = String(value?.[key] ?? "").trim();
+      if (text) return text;
+    }
+    return "";
+  }
+  return String(value ?? "").trim();
+}
+
+function normalizedAnyrunLabels(values: any): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of arr(values)) {
+    const text = anyrunLabelText(value);
+    if (!text) continue;
+    const lowered = text.toLowerCase();
+    if (seen.has(lowered)) continue;
+    seen.add(lowered);
+    out.push(text);
+  }
+  return out;
 }
 
 function isFlagged(item: any): boolean {
@@ -427,11 +455,9 @@ const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: 
   const suspicious = Boolean(data?.suspicious) || Boolean(proc?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35;
   const selected = Boolean(data?.__selected);
 
-  const threatNames: string[] = Array.isArray(proc?.threat_name)
-    ? proc.threat_name
-    : Array.isArray(proc?.threatName)
-    ? proc.threatName
-    : [];
+  const threatNames = normalizedAnyrunLabels(
+    Array.isArray(proc?.threat_name) ? proc.threat_name : Array.isArray(proc?.threatName) ? proc.threatName : []
+  );
 
   let statusText = "no specs";
   let statusColor = "#5fa8c5";
@@ -2055,8 +2081,29 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                                       </div>
                                     ) : (
                                       detailRows.slice(0, 4).map((detail, detailIndex) => (
-                                        <div key={`overview-detail-${index}-${detailIndex}`} style={{ color: "var(--text-secondary)", fontSize: 12, marginBottom: detailIndex === 3 ? 0 : 4 }}>
-                                          <strong>{detail.key}:</strong> {detail.value}
+                                        <div
+                                          key={`overview-detail-${index}-${detailIndex}`}
+                                          style={{
+                                            color: "var(--text-secondary)",
+                                            fontSize: 12,
+                                            marginBottom: detailIndex === 3 ? 0 : 6,
+                                            lineHeight: 1.5,
+                                            display: "grid",
+                                            gap: 2,
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <strong>{detail.key}:</strong>
+                                          <div
+                                            style={{
+                                              maxWidth: "100%",
+                                              overflowWrap: "anywhere",
+                                              wordBreak: "break-word",
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {detail.value}
+                                          </div>
                                         </div>
                                       ))
                                     )}
@@ -2135,8 +2182,28 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                                         );
                                       }
                                       return rows.map((row, rowIdx) => (
-                                        <div key={`deep-row-${i}-${rowIdx}`} style={{ marginBottom: rowIdx === rows.length - 1 ? 0 : 4, color: "var(--text-secondary)" }}>
-                                          <strong>{row.key}:</strong> {row.value}
+                                        <div
+                                          key={`deep-row-${i}-${rowIdx}`}
+                                          style={{
+                                            marginBottom: rowIdx === rows.length - 1 ? 0 : 6,
+                                            color: "var(--text-secondary)",
+                                            lineHeight: 1.5,
+                                            display: "grid",
+                                            gap: 2,
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <strong>{row.key}:</strong>
+                                          <div
+                                            style={{
+                                              maxWidth: "100%",
+                                              overflowWrap: "anywhere",
+                                              wordBreak: "break-word",
+                                              whiteSpace: "pre-wrap",
+                                            }}
+                                          >
+                                            {row.value}
+                                          </div>
                                         </div>
                                       ));
                                     })()}
@@ -2312,8 +2379,28 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                                   );
                                 }
                                 return rows.map((row, rowIdx) => (
-                                  <div key={`deep-row-${i}-${rowIdx}`} style={{ marginBottom: rowIdx === rows.length - 1 ? 0 : 4, color: "var(--text-secondary)" }}>
-                                    <strong>{row.key}:</strong> {row.value}
+                                  <div
+                                    key={`deep-row-${i}-${rowIdx}`}
+                                    style={{
+                                      marginBottom: rowIdx === rows.length - 1 ? 0 : 6,
+                                      color: "var(--text-secondary)",
+                                      lineHeight: 1.5,
+                                      display: "grid",
+                                      gap: 2,
+                                      minWidth: 0,
+                                    }}
+                                  >
+                                    <strong>{row.key}:</strong>
+                                    <div
+                                      style={{
+                                        maxWidth: "100%",
+                                        overflowWrap: "anywhere",
+                                        wordBreak: "break-word",
+                                        whiteSpace: "pre-wrap",
+                                      }}
+                                    >
+                                      {row.value}
+                                    </div>
                                   </div>
                                 ));
                               })()}
@@ -2506,7 +2593,65 @@ function DataGrid({
   );
 }
 
-export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
+export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigationId, onRefresh }: Props) {
+  const [rerunConfirm, setRerunConfirm] = React.useState(false);
+  const [rerunning, setRerunning] = React.useState(false);
+  const [rerunError, setRerunError] = React.useState<string | null>(null);
+  const [rerunStarted, setRerunStarted] = React.useState(false);
+  const [rerunElapsed, setRerunElapsed] = React.useState(0);
+  const RERUN_TIMEOUT = 180; // seconds
+  const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const tickRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = React.useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
+  }, []);
+
+  // Stop polling when evidence is no longer cached (re-run completed)
+  React.useEffect(() => {
+    if (!rerunStarted) return;
+    const isCached = arr(hybridAnalysis?.items).some((i: any) => i?.cache_hit);
+    if (!isCached) {
+      stopPolling();
+      setRerunStarted(false);
+      setRerunElapsed(0);
+    }
+  }, [hybridAnalysis, rerunStarted, stopPolling]);
+
+  // Cleanup on unmount
+  React.useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const handleRerun = React.useCallback(async () => {
+    if (!investigationId) return;
+    setRerunning(true);
+    setRerunError(null);
+    try {
+      const { rerunCollector } = await import("@/lib/api");
+      await rerunCollector(investigationId, "hybrid_analysis");
+      setRerunStarted(true);
+      setRerunConfirm(false);
+      setRerunElapsed(0);
+
+      // 1-second tick for progress bar
+      tickRef.current = setInterval(() => {
+        setRerunElapsed((prev) => {
+          if (prev >= RERUN_TIMEOUT) { stopPolling(); return prev; }
+          return prev + 1;
+        });
+      }, 1_000);
+
+      // Refresh evidence every 10 s
+      pollRef.current = setInterval(() => {
+        onRefresh?.();
+      }, 10_000);
+    } catch (e: any) {
+      setRerunError(e?.message || "Re-run failed");
+    } finally {
+      setRerunning(false);
+    }
+  }, [investigationId, onRefresh, stopPolling]);
+
   const items = arr(hybridAnalysis?.items);
   if (!items.length) {
     return (
@@ -2549,6 +2694,73 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
         ]}
         showHeader
       />
+
+      {/* Re-run button — shown when the result is cached and a fresh sandbox is possible */}
+      {investigationId && items.some((i: any) => i?.cache_hit) && (
+        <div style={{ marginBottom: 12 }}>
+          {!rerunStarted ? (
+            !rerunConfirm ? (
+              <button
+                onClick={() => { setRerunConfirm(true); setRerunError(null); }}
+                style={{
+                  fontSize: 11, padding: "4px 12px", borderRadius: 4, cursor: "pointer",
+                  background: "var(--color-accent, #2563eb)", color: "#fff", border: "none",
+                }}
+              >
+                Re-run live sandbox (bypass cache)
+              </button>
+            ) : (
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                background: "var(--bg-card, #1e293b)", border: "1px solid var(--border, #334155)",
+                borderRadius: 6, padding: "6px 12px", fontSize: 11,
+              }}>
+                <span>Submit a fresh AnyRun sandbox task? This may take 2–3 minutes.</span>
+                <button
+                  onClick={handleRerun}
+                  disabled={rerunning}
+                  style={{
+                    padding: "3px 10px", borderRadius: 4, cursor: rerunning ? "wait" : "pointer",
+                    background: "#16a34a", color: "#fff", border: "none", fontSize: 11,
+                  }}
+                >
+                  {rerunning ? "Submitting…" : "Confirm"}
+                </button>
+                <button
+                  onClick={() => setRerunConfirm(false)}
+                  disabled={rerunning}
+                  style={{
+                    padding: "3px 10px", borderRadius: 4, cursor: "pointer",
+                    background: "transparent", color: "var(--text-muted)", border: "1px solid var(--border, #334155)", fontSize: 11,
+                  }}
+                >
+                  Cancel
+                </button>
+                {rerunError && <span style={{ color: "#ef4444" }}>{rerunError}</span>}
+              </div>
+            )
+          ) : (
+            <div style={{ fontSize: 11 }}>
+              <div style={{ marginBottom: 4, color: "var(--text-muted)" }}>
+                {rerunElapsed >= RERUN_TIMEOUT
+                  ? "Sandbox timed out — result may still arrive. Refresh manually."
+                  : `Sandbox running… ${rerunElapsed}s / ${RERUN_TIMEOUT}s`}
+              </div>
+              <div style={{
+                height: 4, borderRadius: 2, background: "var(--border, #334155)",
+                width: 240, overflow: "hidden",
+              }}>
+                <div style={{
+                  height: "100%", borderRadius: 2,
+                  background: rerunElapsed >= RERUN_TIMEOUT ? "#ef4444" : "#2563eb",
+                  width: `${Math.min(100, (rerunElapsed / RERUN_TIMEOUT) * 100)}%`,
+                  transition: "width 1s linear",
+                }} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {items.map((item: any, idx: number) => {
         const raw = item?.raw_summary || {};
@@ -2616,7 +2828,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
           type: t?.class || t?.category || t?.type || "-",
           indicator: t?.indicator || t?.domain || t?.destinationIP || t?.url || "-",
           threat_level: t?.threatLevel ?? t?.priority ?? t?.severity ?? "-",
-          threat_name: arr(t?.threatName).join(", ") || t?.name || "-",
+          threat_name: normalizedAnyrunLabels(t?.threatName).join(", ") || t?.name || "-",
           description: t?.description || t?.msg || "-",
         }));
 
@@ -2638,6 +2850,58 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
                 {" "}Reason: {anyrunFallbackError}
               </div>
             )}
+            {(() => {
+              const tiThreatNames = normalizedAnyrunLabels(raw?.threatName || item?.threat_names);
+              const tiTags = normalizedAnyrunLabels(raw?.tags);
+              const allLabels = _uniq([...tiThreatNames, ...tiTags]).filter(Boolean);
+              const relatedTasksCount = Number(raw?.related_tasks_count || 0);
+              const relatedIncidents: any[] = arr(raw?.relatedIncidents).slice(0, 5);
+              if (!allLabels.length && !relatedTasksCount && !relatedIncidents.length) return null;
+              return (
+                <div style={{ marginBottom: 10, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  {allLabels.map((label: string, i: number) => (
+                    <span
+                      key={i}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: "rgba(239,68,68,0.12)",
+                        color: "#ef4444",
+                        border: "1px solid rgba(239,68,68,0.30)",
+                        letterSpacing: "0.02em",
+                      }}
+                    >
+                      {label}
+                    </span>
+                  ))}
+                  {relatedTasksCount > 0 && (
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", marginLeft: 4 }}>
+                      {relatedTasksCount} community submission{relatedTasksCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {relatedIncidents.map((inc: any, i: number) => {
+                    const title = String(inc?.title || inc?.name || "").trim();
+                    return title ? (
+                      <span
+                        key={`inc-${i}`}
+                        style={{
+                          padding: "2px 8px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          background: "rgba(245,158,11,0.10)",
+                          color: "#f59e0b",
+                          border: "1px solid rgba(245,158,11,0.25)",
+                        }}
+                      >
+                        {title}
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              );
+            })()}
             <EvidenceTable
               title={`Any.Run Evidence #${idx + 1}`}
               data={[
@@ -2657,25 +2921,62 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
               columns={[{ key: "field" }, { key: "value", wrap: true }]}
             />
 
-            {!showSandboxSections && (
-              <div
-                style={{
-                  marginBottom: 12,
-                  padding: "10px 12px",
-                  border: "1px solid rgba(96,165,250,0.20)",
-                  background: "rgba(96,165,250,0.07)",
-                  color: "var(--text-secondary)",
-                  borderRadius: 8,
-                  fontSize: 12,
-                  lineHeight: 1.6,
-                }}
-              >
-                This result comes from Any.Run lookup intelligence only. The official SDK returns rich behavior details
-                only after a real sandbox task ID and completed report are available. This entry did not produce a
-                completed sandbox report, so process, DNS, connection, and HTTP behavior details are not available
-                here.
-              </div>
-            )}
+            {!showSandboxSections && (() => {
+              const itemVerdict = String(item?.verdict || "").toLowerCase();
+              const isMaliciousLookup = itemVerdict === "malicious";
+              return (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: "10px 12px",
+                    border: isMaliciousLookup
+                      ? "1px solid rgba(239,68,68,0.30)"
+                      : "1px solid rgba(96,165,250,0.20)",
+                    background: isMaliciousLookup
+                      ? "rgba(239,68,68,0.07)"
+                      : "rgba(96,165,250,0.07)",
+                    color: "var(--text-secondary)",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {isMaliciousLookup ? (
+                    <>
+                      <strong style={{ color: "var(--red, #ef4444)" }}>MALICIOUS</strong> verdict confirmed by AnyRun
+                      threat intelligence community. This indicator was previously analysed and classified as malicious
+                      by community sandbox submissions. Live behavioral data (process tree, DNS, HTTP) is not available
+                      in this lookup-only result — submit to sandbox for execution details.
+                    </>
+                  ) : (
+                    <>
+                      This result comes from Any.Run lookup intelligence only. The official SDK returns rich behavior
+                      details only after a real sandbox task ID and completed report are available. This entry did not
+                      produce a completed sandbox report, so process, DNS, connection, and HTTP behavior details are not
+                      available here.
+                    </>
+                  )}
+                  <div style={{
+                    marginTop: 10,
+                    paddingTop: 8,
+                    borderTop: "1px solid rgba(245,158,11,0.20)",
+                    color: "rgba(245,158,11,0.85)",
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 6,
+                  }}>
+                    <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠ Analyst note:</span>
+                    <span>
+                      Phishing pages that require user interaction (form submission, credential entry) may evade
+                      automated sandbox detection and return a CLEAN or UNKNOWN verdict. A negative or inconclusive
+                      result does <strong>not</strong> rule out phishing. Correlate with threat intelligence tags,
+                      domain age, certificate details, and visual inspection before clearing.
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             {anyrunAiSummary && (
               <EvidenceTable
@@ -2684,6 +2985,63 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
                 columns={[{ key: "summary", wrap: true }]}
               />
             )}
+
+            {/* Domain-level TI intelligence (shown alongside URL result when available) */}
+            {(() => {
+              const di = item?.domain_intelligence;
+              if (!di || !di.checked) return null;
+              const diSummary = di?.raw_summary?.summary || {};
+              const diVerdict = String(di?.verdict || "unknown").toUpperCase();
+              const diLink = di?.analysis_id
+                ? (typeof di?.analysis_link === "string" && di.analysis_link.startsWith("http")
+                    ? di.analysis_link
+                    : `https://app.any.run/tasks/${di.analysis_id}`)
+                : null;
+              const domainLabel = String(di?.hostname || "domain lookup");
+              const verdictColor = diVerdict === "MALICIOUS" ? "var(--red, #ef4444)"
+                : diVerdict === "SUSPICIOUS" ? "var(--yellow, #f59e0b)"
+                : "var(--text-secondary)";
+              return (
+                <div style={{
+                  marginBottom: 12,
+                  padding: "10px 14px",
+                  border: `1px solid ${diVerdict === "MALICIOUS" ? "rgba(239,68,68,0.35)" : "rgba(96,165,250,0.20)"}`,
+                  background: diVerdict === "MALICIOUS" ? "rgba(239,68,68,0.06)" : "rgba(96,165,250,0.05)",
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}>
+                  <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 8, fontSize: 12 }}>
+                    Domain Intelligence ({domainLabel})
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", color: "var(--text-secondary)" }}>
+                    <span style={{ fontWeight: 500 }}>Verdict</span>
+                    <span style={{ color: verdictColor, fontWeight: 600 }}>{diVerdict}</span>
+                    {di?.threat_score != null && <>
+                      <span style={{ fontWeight: 500 }}>Threat Score</span>
+                      <span>{di.threat_score}</span>
+                    </>}
+                    {diSummary?.lastSeen && <>
+                      <span style={{ fontWeight: 500 }}>Last Seen</span>
+                      <span>{diSummary.lastSeen}</span>
+                    </>}
+                    {diLink && <>
+                      <span style={{ fontWeight: 500 }}>Task URL</span>
+                      <a href={diLink} target="_blank" rel="noopener noreferrer"
+                        style={{ color: "var(--accent)", wordBreak: "break-all" }}>{diLink}</a>
+                    </>}
+                  </div>
+                  {di?.threat_names?.length > 0 && (
+                    <div style={{ marginTop: 6, color: "var(--text-secondary)" }}>
+                      <span style={{ fontWeight: 500 }}>Threat Names: </span>
+                      {normalizedAnyrunLabels(di.threat_names).join(", ")}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-muted)", fontStyle: "italic" }}>
+                    This domain-level intelligence was retrieved separately from the URL analysis above.
+                  </div>
+                </div>
+              );
+            })()}
 
             {showSandboxSections && (
               <div
@@ -2847,6 +3205,29 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis }: Props) {
                 columns={[{ key: "field" }, { key: "value" }]}
               />
             )}
+
+            {showSandboxSections && (
+              <div style={{
+                marginTop: 10,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "1px solid rgba(245,158,11,0.22)",
+                background: "rgba(245,158,11,0.05)",
+                color: "rgba(245,158,11,0.80)",
+                fontSize: 11,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 6,
+              }}>
+                <span style={{ fontWeight: 700, flexShrink: 0 }}>⚠ Analyst note:</span>
+                <span>
+                  Phishing pages requiring active user interaction (form fill, credential submission) may not trigger
+                  malicious behaviour during automated sandbox detonation. A CLEAN or UNKNOWN sandbox verdict does{" "}
+                  <strong>not</strong> rule out phishing — cross-reference threat intelligence tags, domain age, TLS
+                  certificate, and visual page inspection before clearing.
+                </span>
+              </div>
+            )}
           </div>
         );
       })}
@@ -2914,6 +3295,7 @@ function AnalystPair({
           color: "var(--text-secondary)",
           fontSize: 12,
           lineHeight: 1.45,
+          overflowWrap: "anywhere",
           wordBreak: long ? "break-all" : "break-word",
         }}
       >

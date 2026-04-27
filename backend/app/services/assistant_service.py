@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
+import anthropic
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.models.database import AssistantEntry, AssistantSession, Investigation
@@ -14,6 +18,11 @@ from app.services.assistant_prompt_service import (
     build_incident_correlation_prompt,
 )
 from app.services.assistant_sanitizer_service import sanitize_entries
+
+logger = logging.getLogger(__name__)
+
+PRIMARY_MODEL = "claude-haiku-4-5-20251001"
+FALLBACK_MODEL = "gpt-5-mini"
 
 
 class AssistantService:
@@ -138,6 +147,10 @@ class AssistantService:
 
             assistant_session.sanitization_summary_json = sanitization.summary
 
+            merged_token_map: dict[str, str] = {}
+            for entry in assistant_session.entries:
+                merged_token_map.update(entry.token_map_json or {})
+
             sanitized_entries = [
                 {
                     "entry_label": entry.entry_label,
@@ -152,30 +165,32 @@ class AssistantService:
                     title=assistant_session.title,
                     sanitized_entries=sanitized_entries,
                     raw_entries=raw_entries,
+                    token_map=merged_token_map,
                 )
             else:
                 system, user_text = build_alert_analysis_prompt(
                     title=assistant_session.title,
                     sanitized_entries=sanitized_entries,
                     raw_entries=raw_entries,
+                    token_map=merged_token_map,
                 )
 
-            report_markdown = await self._call_openai(
-                model=model or self.settings.openai_model,
+            report_markdown = await self._call_with_fallback(
+                model=model,
                 system=system,
                 user_text=user_text,
             )
-            merged_token_map: dict[str, str] = {}
-            for entry in assistant_session.entries:
-                merged_token_map.update(entry.token_map_json or {})
-            restored_report_markdown = self._restore_tokens(report_markdown, merged_token_map)
+            # Restore any tokens Claude used inline, then append the full identifier
+            # table so analysts always see every resolved value.
+            restored = self._restore_tokens(report_markdown, merged_token_map)
+            final_report = self._append_resolved_identifiers(restored, merged_token_map)
 
             assistant_session.result_json = {
                 "mode": assistant_session.mode,
                 "title": assistant_session.title,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
-            assistant_session.report_markdown = restored_report_markdown
+            assistant_session.report_markdown = final_report
             assistant_session.status = "completed"
             assistant_session.completed_at = datetime.now(timezone.utc)
             await self.session.commit()
@@ -222,9 +237,35 @@ class AssistantService:
         )
         return result.scalar_one_or_none()
 
-    async def _call_openai(self, *, model: str, system: str, user_text: str) -> str:
-        from openai import AsyncOpenAI
+    async def _call_with_fallback(self, *, model: str | None, system: str, user_text: str) -> str:
+        if model:
+            if model.startswith("claude-"):
+                return await self._call_claude(model=model, system=system, user_text=user_text)
+            return await self._call_openai(model=model, system=system, user_text=user_text)
 
+        if self.settings.anthropic_api_key:
+            try:
+                logger.info("Assistant primary model=%s", PRIMARY_MODEL)
+                text = await self._call_claude(model=PRIMARY_MODEL, system=system, user_text=user_text)
+                if text.strip():
+                    return text
+                logger.warning("Assistant Haiku returned empty output; falling back to GPT-5 Mini")
+            except Exception as exc:
+                logger.warning(
+                    "Assistant Haiku call failed (%s: %s); falling back to GPT-5 Mini",
+                    type(exc).__name__,
+                    exc,
+                )
+
+        if not self.settings.openai_api_key:
+            raise ValueError(
+                "Both primary (Haiku) and fallback (GPT-5 Mini) are unavailable: "
+                "ANTHROPIC_API_KEY and OPENAI_API_KEY are both unset."
+            )
+        logger.info("Assistant fallback model=%s", FALLBACK_MODEL)
+        return await self._call_openai(model=FALLBACK_MODEL, system=system, user_text=user_text)
+
+    async def _call_openai(self, *, model: str, system: str, user_text: str) -> str:
         client = AsyncOpenAI(api_key=self.settings.openai_api_key)
         response = await client.responses.create(
             model=model,
@@ -245,6 +286,16 @@ class AssistantService:
                     chunks.append(text)
         return "\n".join(chunks).strip()
 
+    async def _call_claude(self, *, model: str, system: str, user_text: str) -> str:
+        client = anthropic.AsyncAnthropic(api_key=self.settings.anthropic_api_key)
+        response = await client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=system,
+            messages=[{"role": "user", "content": user_text}],
+        )
+        return response.content[0].text if response and response.content else ""
+
     async def export_session_markdown(self, session_id: UUID) -> str:
         assistant_session = await self._get_session(session_id)
         if assistant_session is None:
@@ -256,3 +307,34 @@ class AssistantService:
         for token, original in sorted(token_map.items(), key=lambda item: len(item[0]), reverse=True):
             restored = restored.replace(token, original)
         return restored
+
+    _TOKEN_CATEGORY: dict[str, str] = {
+        "IP": "IP Address",
+        "HOST": "Hostname",
+        "EMAIL": "Email Address",
+        "ACCOUNT": "Account",
+        "SID": "Security Identifier",
+    }
+    _TOKEN_RE = re.compile(r"^\[([A-Z]+)_(\d+)\]$")
+
+    def _append_resolved_identifiers(self, report: str, token_map: dict[str, str]) -> str:
+        if not token_map:
+            return report
+        rows: list[str] = []
+        for token in sorted(token_map.keys()):
+            m = self._TOKEN_RE.match(token)
+            if m:
+                category = self._TOKEN_CATEGORY.get(m.group(1), m.group(1).title())
+                value = token_map[token]
+                rows.append(f"| `{token}` | {category} | `{value}` |")
+        if not rows:
+            return report
+        table = (
+            "\n\n---\n\n## Resolved Identifiers\n\n"
+            "Sensitive values were redacted before AI analysis. "
+            "The table below maps every redacted token to its original value:\n\n"
+            "| Token | Category | Value |\n"
+            "|-------|----------|-------|\n"
+            + "\n".join(rows)
+        )
+        return report + table

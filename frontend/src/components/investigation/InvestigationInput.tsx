@@ -95,9 +95,9 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
 
     onSubmit(
       domain.trim(),
-      context.trim() || undefined,
+      undefined,
       clientDomain.trim() || undefined,
-      investigatedUrl.trim() || undefined,
+      undefined,
       clientUrl.trim() || undefined,
       selectedCollectors.length > 0 ? selectedCollectors : undefined,
       observableType,
@@ -261,7 +261,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
 
 
       {/* ── URL input (domain + url types only) ── */}
-      {observableType === "domain" && (
+      {false && observableType === "domain" && (
         <div style={{ marginTop: 10 }}>
           <input
             type="text"
@@ -304,9 +304,9 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
             : `▸ Select analyzers${selectedCollectors.length > 0 ? ` (${selectedCollectors.length} selected)` : ""}`}
         </button>
 
-        <button onClick={() => setShowContext(!showContext)} style={toggleStyle}>
+        {false && <button onClick={() => setShowContext(!showContext)} style={toggleStyle}>
           {showContext ? "▾ Hide context" : "▸ Add context (ticket, SOC notes, CTI)"}
-        </button>
+        </button>}
       </div>
 
       {/* ── Analyzer picker ── */}
@@ -526,7 +526,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
         </div>
       )}
 
-      {showContext && (
+      {false && showContext && (
         <textarea
           placeholder="Paste SOC ticket notes, OpenCTI observables, or any additional context..."
           value={context}

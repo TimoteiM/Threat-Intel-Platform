@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
 import redis as redis_lib
 from sqlalchemy import select
@@ -71,6 +71,37 @@ def _ensure_baseline_collectors(
             seen.add(baseline)
 
     return normalized
+
+
+def _dedupe_investigations(rows: Iterable[Investigation]) -> list[Investigation]:
+    """Keep the newest investigation per investigated value."""
+    sorted_rows = sorted(
+        rows,
+        key=lambda inv: (
+            inv.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            str(inv.id or ""),
+        ),
+        reverse=True,
+    )
+
+    deduped: list[Investigation] = []
+    seen: set[str] = set()
+    for inv in sorted_rows:
+        key = str(getattr(inv, "domain", "") or "").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(inv)
+    return deduped
+
+
+def _filter_investigations_by_classification(
+    rows: Iterable[Investigation],
+    classification: Optional[str] = None,
+) -> list[Investigation]:
+    if not classification:
+        return list(rows)
+    return [inv for inv in rows if getattr(inv, "classification", None) == classification]
 
 
 class InvestigationService:
@@ -329,21 +360,63 @@ class InvestigationService:
         state: Optional[str] = None,
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        dedupe: bool = False,
     ) -> Sequence[Investigation]:
         """List investigations with optional filtering."""
-        return await self.repo.list_all(
-            limit=limit, offset=offset, state=state, search=search,
+        if not dedupe:
+            return await self.repo.list_all(
+                limit=limit,
+                offset=offset,
+                state=state,
+                search=search,
+                observable_type=observable_type,
+                classification=classification,
+            )
+
+        rows = await self.repo.list_all(
+            limit=None,
+            offset=0,
+            state=state,
+            search=search,
             observable_type=observable_type,
+            classification=classification,
         )
+        deduped = _dedupe_investigations(
+            _filter_investigations_by_classification(rows, classification)
+        )
+        return deduped[offset: offset + limit]
 
     async def count(
         self,
         state: Optional[str] = None,
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        dedupe: bool = False,
     ) -> int:
         """Count investigations matching filters."""
-        return await self.repo.count(state=state, search=search, observable_type=observable_type)
+        if not dedupe:
+            return await self.repo.count(
+                state=state,
+                search=search,
+                observable_type=observable_type,
+                classification=classification,
+            )
+
+        rows = await self.repo.list_all(
+            limit=None,
+            offset=0,
+            state=state,
+            search=search,
+            observable_type=observable_type,
+            classification=classification,
+        )
+        return len(
+            _dedupe_investigations(
+                _filter_investigations_by_classification(rows, classification)
+            )
+        )
 
     async def get_evidence(self, investigation_id: str) -> Optional[dict]:
         """Get collected evidence for an investigation."""

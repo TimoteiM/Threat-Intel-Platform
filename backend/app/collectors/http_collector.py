@@ -47,6 +47,50 @@ BRAND_PHRASES = [
     "unauthorized access",
 ]
 
+# Well-known brands — if mentioned in page content but domain doesn't belong to them,
+# it's a strong impersonation signal.
+KNOWN_BRANDS = [
+    "microsoft", "outlook", "office 365", "onedrive", "sharepoint",
+    "google", "gmail", "google drive", "google docs",
+    "apple", "icloud", "apple id",
+    "paypal",
+    "amazon", "aws",
+    "facebook", "instagram", "whatsapp", "meta",
+    "linkedin",
+    "dropbox",
+    "netflix",
+    "bank of america", "chase", "wells fargo", "citibank", "barclays",
+    "dhl", "fedex", "ups", "usps",
+]
+
+# Input field names that indicate credential/payment harvesting.
+# Matched against name=, id=, and type= attributes of <input> tags.
+# Includes email-only harvesters — a very common phishing pattern where a single
+# email field is the entire credential collection mechanism.
+CREDENTIAL_FIELD_RE = re.compile(
+    r'<input[^>]+(?:name|id)\s*=\s*["\']?'
+    r'(?:password|passwd|pass|pwd|cc|card(?:_?num(?:ber)?)?|cvv|cvc|'
+    r'card(?:_?expir(?:y|ation)?|_?exp)|ssn|social(?:_?security)?|'
+    r'pin|secret|credit|'
+    r'email|e-mail|mail|user(?:name)?|login|account)',
+    re.I,
+)
+
+# Separately detect type="email" inputs — single-field email harvesters
+EMAIL_INPUT_RE = re.compile(r'<input[^>]+type\s*=\s*["\']?email', re.I)
+
+# Suspicious path segments in the URL itself.
+SUSPICIOUS_PATH_KEYWORDS = {
+    "login", "signin", "sign-in", "logon", "log-in",
+    "verify", "verification", "validate", "validation",
+    "secure", "security", "auth", "authenticate",
+    "account", "accounts", "update", "confirm", "confirmation",
+    "banking", "payment", "checkout", "billing", "invoice",
+    "webmail", "roundcube", "owa", "autodiscover",
+    "recover", "recovery", "reset", "unlock",
+    "review", "reviews",  # common in fake review/survey phishing
+}
+
 # Phishing kit indicators (regex patterns)
 PHISHING_PATTERNS = [
     (re.compile(r'\beval\s*\(', re.I), "eval() call — potential JS obfuscation"),
@@ -55,6 +99,10 @@ PHISHING_PATTERNS = [
     (re.compile(r'\bunescape\s*\(', re.I), "unescape() — URL decoding obfuscation"),
     (re.compile(r'document\.write\s*\(', re.I), "document.write — dynamic content injection"),
     (re.compile(r'api\.telegram\.org/bot', re.I), "Telegram Bot API — credential exfiltration"),
+    # JS-based form submission to external endpoints (fetch / XHR / axios)
+    (re.compile(r'''(?:fetch|axios\.post|axios\.put|jQuery\.ajax|\$\.ajax|\$\.post)\s*\(\s*['"]https?://''', re.I),
+     "JS HTTP call to hardcoded external URL — possible credential exfiltration"),
+    (re.compile(r'new\s+XMLHttpRequest', re.I), "XMLHttpRequest — JS-based form submission"),
 ]
 
 # Simple technology detection patterns
@@ -178,10 +226,14 @@ class HTTPCollector(BaseCollector):
                 headers={"X-Redirect-Type": "client-side (JavaScript/meta-refresh)"},
             ))
 
-        # Login form detection
-        evidence.has_login_form = bool(re.search(
-            r'type\s*=\s*["\']?password', body, re.I
-        ))
+        # Login / credential form detection — password fields OR email-only harvesters
+        has_password_field = bool(re.search(r'type\s*=\s*["\']?password', body, re.I))
+        has_email_field = bool(EMAIL_INPUT_RE.search(body))
+        evidence.has_login_form = has_password_field or has_email_field
+        if has_email_field and not has_password_field:
+            evidence.phishing_indicators.append(
+                "Email-only input form — typical single-step credential harvester"
+            )
         evidence.has_input_fields = "<input" in body_lower
 
         # Security headers
@@ -207,12 +259,11 @@ class HTTPCollector(BaseCollector):
                 evidence.phishing_indicators.append(desc)
 
         # Check for form actions posting to external domains
+        own_host = self.target_domain
         form_actions = re.findall(
             r'<form[^>]+action\s*=\s*["\']?(https?://[^"\'\s>]+)',
             body, re.I,
         )
-        # For URL type, compare against the hostname, not the full URL string
-        own_host = self.target_domain
         for action_url in form_actions:
             try:
                 action_domain = urlparse(action_url).hostname
@@ -222,6 +273,35 @@ class HTTPCollector(BaseCollector):
                     )
             except Exception:
                 pass
+
+        # Credential/payment/account field detection (name/id attributes)
+        if CREDENTIAL_FIELD_RE.search(body):
+            evidence.phishing_indicators.append(
+                "Credential or account input fields detected (email/username/password/card)"
+            )
+
+        # Suspicious keywords in the URL path
+        try:
+            url_path = urlparse(evidence.final_url or "").path.lower()
+            hit_keywords = [kw for kw in SUSPICIOUS_PATH_KEYWORDS if kw in url_path]
+            if hit_keywords:
+                evidence.phishing_indicators.append(
+                    f"Suspicious path keywords in URL: {', '.join(hit_keywords)}"
+                )
+        except Exception:
+            pass
+
+        # Brand impersonation: known brand name in page but domain doesn't belong to it
+        own_host_lower = own_host.lower() if own_host else ""
+        for brand in KNOWN_BRANDS:
+            if brand in body_lower:
+                # Only flag if the domain clearly doesn't belong to that brand
+                brand_slug = brand.split()[0]  # e.g. "microsoft", "google", "paypal"
+                if brand_slug not in own_host_lower:
+                    evidence.phishing_indicators.append(
+                        f"Brand impersonation: '{brand}' referenced on non-{brand_slug} domain"
+                    )
+                    break  # one brand match is enough to flag
 
         # ── Content analysis: external resources ──
         resource_domains: set[str] = set()

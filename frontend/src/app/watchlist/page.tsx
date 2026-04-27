@@ -33,6 +33,106 @@ const SCHEDULE_BADGE_STYLE = {
   border: "rgba(129,140,248,0.2)",
 };
 
+/* ─── Sparkline ─── */
+
+function RiskSparkline({ history }: { history: Array<{ score: number; at: string }> }) {
+  if (history.length < 2) return null;
+  const W = 80, H = 24, PAD = 2;
+  const scores = history.map((h) => h.score);
+  const min = Math.min(...scores, 0);
+  const max = Math.max(...scores, 1);
+  const xStep = (W - PAD * 2) / (scores.length - 1);
+  const toY = (s: number) => PAD + ((max - s) / (max - min)) * (H - PAD * 2);
+  const points = scores.map((s, i) => `${PAD + i * xStep},${toY(s)}`).join(" ");
+  const last = scores[scores.length - 1];
+  const color = last >= 70 ? "#ef4444" : last >= 40 ? "#f59e0b" : "#10b981";
+  return (
+    <svg width={W} height={H} style={{ display: "block", flexShrink: 0 }}>
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        opacity={0.8}
+      />
+      <circle
+        cx={PAD + (scores.length - 1) * xStep}
+        cy={toY(last)}
+        r={2.5}
+        fill={color}
+      />
+    </svg>
+  );
+}
+
+/* ─── Diff panel ─── */
+
+const DIFF_LABELS: Record<string, string> = {
+  risk_score: "Risk score",
+  dns_ips: "DNS IPs",
+  whois_registrar: "Registrar",
+  whois_org: "Registrant org",
+  whois_country: "Country",
+  hosting_ip: "Hosting IP",
+  vt_malicious: "VT detections",
+  threatfox_added: "ThreatFox hits",
+};
+
+function DiffPanel({ diff }: { diff: Record<string, any> }) {
+  const changes = diff?.changes ?? {};
+  const keys = Object.keys(changes);
+  if (keys.length === 0) return (
+    <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)", paddingTop: 2 }}>
+      No changes detected vs prior run
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {keys.map((key) => {
+        const val = changes[key];
+        const label = DIFF_LABELS[key] ?? key;
+        let text = "";
+        let color = "#f59e0b";
+        if (key === "risk_score" || key === "vt_malicious") {
+          const delta = val.delta ?? 0;
+          text = `${label}: ${val.prev ?? "?"} → ${val.curr ?? "?"} (${delta >= 0 ? "+" : ""}${delta})`;
+          color = delta > 0 ? "#ef4444" : "#10b981";
+        } else if (key === "dns_ips") {
+          const parts = [];
+          if (val.added?.length) parts.push(`+${val.added.length} IP`);
+          if (val.removed?.length) parts.push(`-${val.removed.length} IP`);
+          text = `${label}: ${parts.join(", ")}`;
+        } else if (key === "threatfox_added") {
+          text = `${label}: +${val.length}`;
+          color = "#ef4444";
+        } else {
+          text = `${label} changed`;
+        }
+        return (
+          <span
+            key={key}
+            title={JSON.stringify(val, null, 2)}
+            style={{
+              fontSize: 9, padding: "2px 7px",
+              background: `${color}18`,
+              color,
+              border: `1px solid ${color}40`,
+              borderRadius: "var(--radius-sm)",
+              fontFamily: "var(--font-mono)",
+              fontWeight: 600,
+              cursor: "help",
+            }}
+          >
+            {text}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── Helpers ─── */
 
 function timeAgo(dateStr: string | null): string {
@@ -613,7 +713,7 @@ export default function WatchlistPage() {
                     display: "flex", alignItems: "center", gap: 12,
                     padding: "8px 12px",
                     background: "var(--bg-input)",
-                    borderRadius: "var(--radius-sm)",
+                    borderRadius: entry.evidence_diff_json ? "var(--radius-sm) var(--radius-sm) 0 0" : "var(--radius-sm)",
                     fontSize: 11, fontFamily: "var(--font-mono)",
                   }}>
                     <span style={{ color: "var(--text-muted)", fontSize: 9, fontWeight: 600, letterSpacing: "0.06em" }}>
@@ -643,6 +743,9 @@ export default function WatchlistPage() {
                           /100
                         </span>
                       </span>
+                    )}
+                    {entry.risk_score_history?.length >= 2 && (
+                      <RiskSparkline history={entry.risk_score_history} />
                     )}
 
                     <span style={{
@@ -686,6 +789,27 @@ export default function WatchlistPage() {
                         VIEW REPORT
                       </button>
                     )}
+                  </div>
+                )}
+
+                {/* Evidence diff row */}
+                {entry.evidence_diff_json && (
+                  <div style={{
+                    display: "flex", alignItems: "flex-start", gap: 10,
+                    padding: "6px 12px 8px",
+                    background: "rgba(245,158,11,0.04)",
+                    border: "1px solid rgba(245,158,11,0.14)",
+                    borderTop: "none",
+                    borderRadius: "0 0 var(--radius-sm) var(--radius-sm)",
+                    fontSize: 10, fontFamily: "var(--font-mono)",
+                  }}>
+                    <span style={{
+                      color: "var(--text-muted)", fontSize: 9, fontWeight: 700,
+                      letterSpacing: "0.06em", paddingTop: 1, flexShrink: 0,
+                    }}>
+                      DIFF
+                    </span>
+                    <DiffPanel diff={entry.evidence_diff_json} />
                   </div>
                 )}
               </div>
