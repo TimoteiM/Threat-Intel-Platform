@@ -1217,3 +1217,23 @@ class ClientAlertListResponse(BaseModel):
     total: int
 
 
+class APIProviderHealth(BaseModel):
+    provider: str = Field(..., min_length=1)
+    display_name: str = Field(..., min_length=1)
+    configured: bool
+    status: str = Field(..., min_length=1)
+    remaining: Optional[float] = None
+    limit: Optional[float] = None
+    unit: Optional[str] = None
+    reset_at: Optional[datetime] = None
+    low_quota_threshold: Optional[float] = None
+    last_checked_at: Optional[datetime] = None
+    source: Optional[str] = None
+    error: Optional[str] = None
+
+
+class APIHealthResponse(BaseModel):
+    providers: list[APIProviderHealth] = Field(default_factory=list)
+    generated_at: datetime
+
+

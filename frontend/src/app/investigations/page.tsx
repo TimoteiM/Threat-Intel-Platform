@@ -10,6 +10,7 @@ import ConsoleModule from "@/components/ui/ConsoleModule";
 import MetadataGrid from "@/components/ui/MetadataGrid";
 import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
+import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const FILTERS = ["all", "created", "gathering", "evaluating", "concluded", "failed"] as const;
@@ -17,6 +18,7 @@ const CLASSIFICATION_FILTERS = ["all", "malicious", "suspicious", "benign", "inc
 
 export default function InvestigationsListPage() {
   const router = useRouter();
+  const { settings } = useSettingsPreferences();
   const [investigations, setInvestigations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
@@ -74,7 +76,10 @@ export default function InvestigationsListPage() {
   });
 
   return (
-    <div style={{ paddingTop: 12, paddingBottom: 40 }}>
+    <div
+      style={{ paddingTop: 12, paddingBottom: 40 }}
+      data-density={settings.listDensity}
+    >
       <PageHero
         eyebrow="Investigations catalog"
         title="Investigations"
@@ -527,6 +532,10 @@ export default function InvestigationsListPage() {
           margin-top: 12px;
         }
 
+        div[data-density="compact"] .catalog-list {
+          gap: 8px;
+        }
+
         .catalog-row {
           display: grid;
           grid-template-columns: minmax(0, 2.1fr) minmax(150px, 0.9fr) minmax(90px, 0.55fr) minmax(120px, 0.7fr) minmax(120px, 0.85fr);
@@ -543,6 +552,11 @@ export default function InvestigationsListPage() {
           cursor: pointer;
           width: 100%;
           font-family: var(--font-sans);
+        }
+
+        div[data-density="compact"] .catalog-row {
+          padding: 12px 14px;
+          border-radius: 16px;
         }
 
         .catalog-row:hover {
@@ -575,6 +589,11 @@ export default function InvestigationsListPage() {
           font-weight: 700;
           color: var(--text-strong);
           word-break: break-word;
+        }
+
+        div[data-density="compact"] .row-domain__value,
+        div[data-density="compact"] .mobile-card__domain {
+          font-size: 14px;
         }
 
         .row-cell {
@@ -636,6 +655,11 @@ export default function InvestigationsListPage() {
           width: 100%;
           color: var(--text-strong);
           cursor: pointer;
+        }
+
+        div[data-density="compact"] .mobile-card {
+          gap: 10px;
+          padding: 14px;
         }
 
         .mobile-card__top {

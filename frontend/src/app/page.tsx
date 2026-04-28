@@ -6,6 +6,7 @@ import InvestigationInput from "@/components/investigation/InvestigationInput";
 import { createInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
 import type { ObservableType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
+import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -674,6 +675,7 @@ function DuplicateModal({
 
 export default function HomePage() {
   const router = useRouter();
+  const { settings } = useSettingsPreferences();
   const [loading, setLoading] = useState(false);
   const [recent, setRecent] = useState<any[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, threats: 0, suspicious: 0 });
@@ -747,6 +749,11 @@ export default function HomePage() {
       };
 
       // Duplicate check for all observable types
+      if (!settings.duplicateCheckWarning) {
+        await doCreate(args);
+        return;
+      }
+
       try {
         const effectiveType = observableType || "domain";
         const data = await listInvestigations({
@@ -769,7 +776,7 @@ export default function HomePage() {
 
       await doCreate(args);
     },
-    [doCreate],
+    [doCreate, settings.duplicateCheckWarning],
   );
 
   const totalHighRisk = stats.threats + stats.suspicious;

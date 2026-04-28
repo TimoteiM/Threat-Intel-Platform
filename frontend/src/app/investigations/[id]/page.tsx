@@ -25,6 +25,7 @@ import * as api from "@/lib/api";
 import { useSSE } from "@/hooks/useSSE";
 import { CollectorStatus } from "@/lib/types";
 import completionRefresh from "./completionRefresh";
+import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
 const { shouldTriggerDomainCompletionRefresh } = completionRefresh;
 
@@ -173,6 +174,7 @@ export default function InvestigationPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { settings } = useSettingsPreferences();
   const investigationId = params?.id as string;
 
   const [detail, setDetail] = useState<any>(null);
@@ -289,6 +291,9 @@ export default function InvestigationPage() {
 
   useEffect(() => {
     fetchData();
+    if (!settings.investigationAutoRefresh) {
+      return;
+    }
     // Poll every 5s only when SSE is disconnected (fallback mode).
     const interval = setInterval(() => {
       if (sse.connected) return;
@@ -296,9 +301,12 @@ export default function InvestigationPage() {
       fetchData();
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchData, detail?.state, sse.connected]);
+  }, [fetchData, detail?.state, settings.investigationAutoRefresh, sse.connected]);
 
   useEffect(() => {
+    if (!settings.investigationAutoRefresh) {
+      return;
+    }
     if (!shouldTriggerDomainCompletionRefresh({
       observableType: detail?.observable_type,
       reportReady,
@@ -332,7 +340,16 @@ export default function InvestigationPage() {
     return () => {
       cancelled = true;
     };
-  }, [detail?.observable_type, detail?.state, fetchData, reportReady, sse.done, sse.percent, sse.state]);
+  }, [
+    detail?.observable_type,
+    detail?.state,
+    fetchData,
+    reportReady,
+    settings.investigationAutoRefresh,
+    sse.done,
+    sse.percent,
+    sse.state,
+  ]);
 
   // Reset activeTab when observable type loads and the current tab isn't in the tab set
   useEffect(() => {

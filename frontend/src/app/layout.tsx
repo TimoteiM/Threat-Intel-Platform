@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "@/styles/globals.css";
 import Header from "@/components/layout/Header";
 import Footer from "@/components/layout/Footer";
+import SettingsPreferencesProvider from "@/components/settings/SettingsPreferencesProvider";
+import ThemeScript from "@/components/settings/ThemeScript";
 import { APP_BRAND, APP_SUBTITLE } from "@/lib/constants";
 
 export const metadata: Metadata = {
@@ -14,11 +16,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="app-shell">
-        <Header />
-        <main className="app-shell__main">{children}</main>
-        <Footer />
+        <ThemeScript />
+        <SettingsPreferencesProvider>
+          <Header />
+          <main className="app-shell__main">{children}</main>
+          <Footer />
+        </SettingsPreferencesProvider>
       </body>
     </html>
   );

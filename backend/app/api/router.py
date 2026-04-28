@@ -22,6 +22,7 @@ from app.api.ip_lookup import router as ip_lookup_router
 from app.api.clients import router as clients_router, alerts_router as client_alerts_router
 from app.api.email_investigations import router as email_investigations_router
 from app.api.assistant import router as assistant_router
+from app.api.admin import router as admin_router
 
 api_router = APIRouter()
 
@@ -44,3 +45,4 @@ api_router.include_router(clients_router)
 api_router.include_router(client_alerts_router)
 api_router.include_router(email_investigations_router)
 api_router.include_router(assistant_router)
+api_router.include_router(admin_router)

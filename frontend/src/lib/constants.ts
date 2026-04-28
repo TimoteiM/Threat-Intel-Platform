@@ -33,6 +33,7 @@ export const APP_NAV_LINKS = [
   { href: "/clients", label: "Clients" },
   { href: "/alerts", label: "Alerts" },
   { href: "/ip-lookup", label: "IP Lookup" },
+  { href: "/settings", label: "Settings" },
 ] as const;
 
 export const APP_FOOTER_LINK_GROUPS = [

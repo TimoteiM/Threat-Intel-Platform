@@ -5,6 +5,8 @@
  * so /api/* → http://localhost:8000/api/*
  */
 
+import type { APIHealthResponse } from "./types";
+
 const BASE = "/api";
 const DIRECT_BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
 const DEFAULT_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
@@ -416,6 +418,10 @@ export function getBatchCampaigns(id: string) {
 
 export function getDashboardStats() {
   return request<any>("/dashboard/stats");
+}
+
+export function getAPIHealth() {
+  return request<APIHealthResponse>("/admin/api-health");
 }
 
 // ─── Watchlist ───

@@ -1023,6 +1023,36 @@ export interface DashboardStats {
   recent_malicious: RecentMalicious[];
 }
 
+// --- Settings / API Health ---
+
+export type APIHealthStatus =
+  | "healthy"
+  | "low_quota"
+  | "rate_limited"
+  | "unavailable"
+  | "not_configured"
+  | "unsupported";
+
+export interface APIProviderHealth {
+  provider: string;
+  display_name: string;
+  configured: boolean;
+  status: APIHealthStatus;
+  remaining?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  reset_at?: string | null;
+  low_quota_threshold?: number | null;
+  last_checked_at?: string | null;
+  source?: string | null;
+  error?: string | null;
+}
+
+export interface APIHealthResponse {
+  providers: APIProviderHealth[];
+  generated_at: string;
+}
+
 // --- Watchlist ---
 
 export type WatchlistStatus = "active" | "paused" | "removed";
