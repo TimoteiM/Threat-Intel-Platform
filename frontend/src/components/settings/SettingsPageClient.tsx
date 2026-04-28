@@ -4,7 +4,8 @@ import React from "react";
 
 import { getAPIHealth } from "@/lib/api";
 import { APP_VERSION } from "@/lib/constants";
-import type { APIHealthResponse, APIProviderHealth, APIHealthStatus, ThemePreference, ListDensity } from "@/lib/types";
+import { type ListDensity, type ThemePreference } from "@/lib/settings";
+import type { APIHealthResponse, APIProviderHealth, APIHealthStatus } from "@/lib/types";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
 const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
