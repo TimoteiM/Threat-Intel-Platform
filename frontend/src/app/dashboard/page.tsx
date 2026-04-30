@@ -34,12 +34,12 @@ const CHART_COLORS = {
 };
 
 const CHART_TOOLTIP_STYLE: React.CSSProperties = {
-  background: "rgba(10, 16, 28, 0.98)",
-  border: "1px solid rgba(120, 145, 178, 0.22)",
+  background: "var(--panel-card-bg)",
+  border: "1px solid var(--panel-divider-strong)",
   borderRadius: 14,
   fontSize: 12,
   color: "var(--text-strong)",
-  boxShadow: "0 20px 44px rgba(3, 8, 20, 0.34)",
+  boxShadow: "var(--panel-shadow-card)",
 };
 
 export default function DashboardPage() {
@@ -332,7 +332,7 @@ export default function DashboardPage() {
             <div style={{ display: "grid", gap: 14 }}>
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={riskData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(120, 145, 178, 0.10)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--panel-grid-stroke)" />
                   <XAxis dataKey="bucket" tick={{ fill: "var(--text-dim)", fontSize: 11 }} />
                   <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} allowDecimals={false} />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} itemStyle={{ color: "var(--text-strong)" }} />
@@ -375,7 +375,7 @@ export default function DashboardPage() {
         >
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={timelineData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(120, 145, 178, 0.10)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--panel-grid-stroke)" />
               <XAxis dataKey="date" tick={{ fill: "var(--text-dim)", fontSize: 10 }} />
               <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} allowDecimals={false} />
               <Tooltip contentStyle={CHART_TOOLTIP_STYLE} itemStyle={{ color: "var(--text-strong)" }} />
@@ -525,8 +525,8 @@ function EmptyPanel({ title, description }: { title: React.ReactNode; descriptio
         gap: 8,
         padding: 18,
         borderRadius: 18,
-        border: "1px dashed rgba(120, 145, 178, 0.18)",
-        background: "rgba(9, 14, 24, 0.64)",
+        border: "1px dashed var(--panel-divider-strong)",
+        background: "var(--panel-empty-bg)",
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-strong)" }}>{title}</div>
@@ -567,7 +567,7 @@ const legendSwatchStyle: React.CSSProperties = {
   height: 12,
   borderRadius: 4,
   flex: "0 0 auto",
-  boxShadow: "0 0 0 4px rgba(255, 255, 255, 0.02)",
+  boxShadow: "0 0 0 4px var(--accent-glow)",
 };
 
 const legendLabelStyle: React.CSSProperties = {
@@ -618,5 +618,5 @@ const heroActionStyle: React.CSSProperties = {
   textTransform: "uppercase",
   cursor: "pointer",
   fontFamily: "var(--font-sans)",
-  boxShadow: "0 14px 30px rgba(3, 8, 20, 0.20)",
+  boxShadow: "var(--panel-shadow-soft)",
 };

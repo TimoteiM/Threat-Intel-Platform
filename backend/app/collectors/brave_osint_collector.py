@@ -11,6 +11,7 @@ import requests
 from app.collectors.base import BaseCollector
 from app.config import get_settings
 from app.models.schemas import BraveOSINTEvidence, BraveOSINTResult, CollectorMeta
+from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def search_brave(
     count: int,
     timeout: int,
 ) -> list[dict[str, Any]]:
+    record_provider_request("brave_search")
     response = requests.get(
         base_url,
         headers={

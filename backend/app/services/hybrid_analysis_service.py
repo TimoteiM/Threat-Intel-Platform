@@ -20,6 +20,7 @@ from app.services.anyrun_service import (
     lookup_anyrun,
     _requires_domain_intelligence_for_indicator,
 )
+from app.services.provider_usage_metrics import record_provider_request
 
 HYBRID_CACHE_TTL_HOURS = 24
 DEFAULT_BASE_URL = "https://hybrid-analysis.com/api/v2"
@@ -38,6 +39,7 @@ def lookup_hybrid_analysis(
     """
     indicator_type: "url" | "hash"
     """
+    record_provider_request("hybrid_analysis")
     settings = get_settings()
     anyrun_key = (getattr(settings, "anyrun_api_key", "") or "").strip()
     api_key = (getattr(settings, "hybrid_analysis_api_key", "") or "").strip()

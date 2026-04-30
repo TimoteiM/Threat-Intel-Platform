@@ -122,11 +122,11 @@ function sessionButtonStyle(active: boolean): React.CSSProperties {
     borderRadius: 16,
     border: `1px solid ${active ? "rgba(102, 168, 255, 0.52)" : "rgba(120, 145, 178, 0.18)"}`,
     background: active
-      ? "linear-gradient(180deg, rgba(19, 34, 58, 0.96), rgba(11, 18, 31, 0.98))"
-      : "linear-gradient(180deg, rgba(16, 26, 44, 0.86), rgba(11, 17, 29, 0.96))",
+      ? "rgba(96, 165, 250, 0.10)"
+      : "var(--panel-card-bg)",
     color: "var(--text)",
     cursor: "pointer",
-    boxShadow: active ? "0 18px 34px rgba(3, 8, 20, 0.24)" : "0 12px 24px rgba(3, 8, 20, 0.14)",
+    boxShadow: active ? "var(--panel-shadow-card)" : "var(--panel-shadow-soft)",
     transform: "translateY(0)",
     transition: "border-color 120ms ease, background 120ms ease, box-shadow 120ms ease, transform 120ms ease",
   };
@@ -135,8 +135,8 @@ function sessionButtonStyle(active: boolean): React.CSSProperties {
 function pageButtonStyle(enabled: boolean): React.CSSProperties {
   return {
     flex: 1,
-    border: `1px solid ${enabled ? "rgba(120, 145, 178, 0.20)" : "rgba(120, 145, 178, 0.12)"}`,
-    background: enabled ? "linear-gradient(180deg, rgba(16, 26, 44, 0.90), rgba(11, 17, 29, 0.98))" : "rgba(11, 17, 29, 0.72)",
+    border: `1px solid ${enabled ? "var(--panel-divider-strong)" : "var(--panel-divider)"}`,
+    background: enabled ? "var(--panel-card-bg)" : "var(--bg-elevated)",
     color: "var(--text)",
     borderRadius: 14,
     padding: "10px 12px",
@@ -210,8 +210,8 @@ const metaStyle: React.CSSProperties = {
 const searchInputStyle: React.CSSProperties = {
   width: "100%",
   borderRadius: 14,
-  border: "1px solid rgba(120, 145, 178, 0.18)",
-  background: "linear-gradient(180deg, rgba(16, 26, 44, 0.94), rgba(11, 17, 29, 0.98))",
+  border: "1px solid var(--panel-divider-strong)",
+  background: "var(--panel-card-bg)",
   color: "var(--text-strong)",
   padding: "12px 14px",
   fontSize: 13,
@@ -238,7 +238,7 @@ const sessionSublineStyle: React.CSSProperties = {
 };
 
 const separatorStyle: React.CSSProperties = {
-  color: "rgba(120, 145, 178, 0.45)",
+  color: "var(--text-muted)",
 };
 
 const pillRowStyle: React.CSSProperties = {
@@ -249,11 +249,11 @@ const pillRowStyle: React.CSSProperties = {
 };
 
 const emptyStateStyle: React.CSSProperties = {
-  border: "1px dashed rgba(120, 145, 178, 0.18)",
+  border: "1px dashed var(--panel-divider-strong)",
   borderRadius: 16,
   padding: 14,
   color: "var(--text-dim)",
   fontSize: 12,
   lineHeight: 1.7,
-  background: "rgba(9, 14, 24, 0.56)",
+  background: "var(--panel-empty-bg)",
 };

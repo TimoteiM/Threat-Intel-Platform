@@ -59,10 +59,10 @@ export default function IntelTable({
         className={className}
         style={{
           borderRadius: 20,
-          border: "1px solid rgba(120, 145, 178, 0.16)",
-          background: "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+          border: "1px solid var(--panel-divider-strong)",
+          background: "var(--panel-card-bg)",
           padding: 18,
-          boxShadow: "0 18px 44px rgba(3, 8, 20, 0.18)",
+          boxShadow: "var(--panel-shadow-card)",
           ...style,
         }}
       >
@@ -86,15 +86,15 @@ export default function IntelTable({
       className={className}
       style={{
         borderRadius: 20,
-        border: "1px solid rgba(120, 145, 178, 0.16)",
-        background: "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+        border: "1px solid var(--panel-divider-strong)",
+        background: "var(--panel-card-bg)",
         overflow: "hidden",
-        boxShadow: "0 18px 44px rgba(3, 8, 20, 0.18)",
+        boxShadow: "var(--panel-shadow-card)",
         ...style,
       }}
     >
       {(title || eyebrow || description || actions) ? (
-        <div style={{ padding: 18, borderBottom: showHeader ? "1px solid rgba(120, 145, 178, 0.12)" : "none" }}>
+        <div style={{ padding: 18, borderBottom: showHeader ? "1px solid var(--panel-divider)" : "none" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
             <div style={{ minWidth: 0 }}>
               {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
@@ -122,7 +122,7 @@ export default function IntelTable({
                       letterSpacing: "0.14em",
                       textTransform: "uppercase",
                       color: "var(--text-dim)",
-                      borderBottom: "1px solid rgba(120, 145, 178, 0.14)",
+                      borderBottom: "1px solid var(--panel-divider-strong)",
                       whiteSpace: "nowrap",
                       fontFamily: "var(--font-mono)",
                       width: column.width,
@@ -142,7 +142,7 @@ export default function IntelTable({
                 <tr
                   key={key}
                   style={{
-                    background: index % 2 === 0 ? "transparent" : "rgba(120, 145, 178, 0.04)",
+                    background: index % 2 === 0 ? "transparent" : "var(--panel-row-alt)",
                   }}
                 >
                   {columns.map((column, cellIndex) => {
@@ -153,7 +153,7 @@ export default function IntelTable({
                         key={`${key}-${column.key}`}
                         style={{
                           padding: `${padY}px ${padX}px`,
-                          borderBottom: "1px solid rgba(120, 145, 178, 0.10)",
+                          borderBottom: "1px solid var(--panel-divider-soft)",
                           color: cellIndex === 0 ? "var(--text-secondary)" : "var(--text)",
                           textAlign: column.align || "left",
                           whiteSpace: column.wrap ? "normal" : "nowrap",
@@ -257,8 +257,8 @@ function EmptyState({ title, description }: { title: React.ReactNode; descriptio
         gap: 8,
         padding: 18,
         borderRadius: 16,
-        border: "1px dashed rgba(120, 145, 178, 0.18)",
-        background: "rgba(9, 14, 24, 0.64)",
+        border: "1px dashed var(--panel-divider-strong)",
+        background: "var(--panel-empty-bg)",
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-strong)" }}>{title}</div>

@@ -21,6 +21,7 @@ import requests
 from app.collectors.base import BaseCollector
 from app.config import get_settings
 from app.models.schemas import CollectorMeta, URLScanEvidence
+from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ class URLScanCollector(BaseCollector):
 
         for query in queries:
             try:
+                record_provider_request("urlscan")
                 resp = requests.get(
                     f"{URLSCAN_API}/search/",
                     params={"q": query, "size": 5},
@@ -137,6 +139,7 @@ class URLScanCollector(BaseCollector):
                     if isinstance(result_url, str) and result_url.startswith("/"):
                         result_url = f"https://urlscan.io{result_url}"
                     try:
+                        record_provider_request("urlscan")
                         result_resp = requests.get(
                             str(result_url),
                             headers=headers,
@@ -191,6 +194,7 @@ class URLScanCollector(BaseCollector):
         visibility: str,
     ) -> tuple[str | None, str | None]:
         try:
+            record_provider_request("urlscan")
             submit_resp = requests.post(
                 f"{URLSCAN_API}/scan/",
                 headers=headers,
@@ -215,6 +219,7 @@ class URLScanCollector(BaseCollector):
         for attempt in range(4):
             time.sleep(3)
             try:
+                record_provider_request("urlscan")
                 result_resp = requests.get(
                     f"{URLSCAN_API}/result/{scan_uuid}/",
                     timeout=self.timeout,

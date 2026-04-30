@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.collectors.base import BaseCollector
+from app.services.provider_usage_metrics import record_provider_request
 from app.config import get_settings
 from app.models.schemas import (
     CollectorMeta,
@@ -417,6 +418,7 @@ class OpenCTICollector(BaseCollector):
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+        record_provider_request("opencti")
         resp = requests.post(
             endpoint, headers=headers,
             json={"query": query, "variables": variables},

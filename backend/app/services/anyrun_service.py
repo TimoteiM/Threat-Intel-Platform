@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 from app.config import get_settings
+from app.services.provider_usage_metrics import record_provider_request
 
 # ── AnyRun sandbox scheduling ─────────────────────────────────────────────────
 #
@@ -81,6 +82,7 @@ def lookup_anyrun(
     submit_on_not_found: bool = False,
     sandbox_first: bool = False,
 ) -> dict[str, Any]:
+    record_provider_request("anyrun")
     settings = get_settings()
     api_keys = _configured_anyrun_api_keys(settings)
     api_key = api_keys[0] if api_keys else ""
@@ -317,7 +319,11 @@ def lookup_anyrun(
                     return _attach_domain_intel(lookup_result)
                 return _attach_domain_intel(hash_sandbox)
 
-            return _attach_domain_intel(lookup_result)
+            primary = _attach_domain_intel(lookup_result)
+            if isinstance(sandbox_result, dict) and not sandbox_result.get("checked"):
+                primary = dict(primary)
+                primary["additional_items"] = [dict(sandbox_result)]
+            return primary
 
         not_found = "not found" in str(lookup_result.get("error") or "").lower() or "no info" in str(lookup_result.get("error") or "").lower()
         if not submit_on_not_found or (indicator_type == "hash" and not file_bytes):
@@ -481,6 +487,14 @@ def _configured_anyrun_api_keys(settings: Any) -> list[str]:
     return keys
 
 
+def _anyrun_key_scope(api_key: str) -> str:
+    keys = _configured_anyrun_api_keys(get_settings())
+    for index, configured_key in enumerate(keys, start=1):
+        if api_key == configured_key:
+            return f"key_{index}"
+    return "unknown_key"
+
+
 def _merge_deferred_sandbox_errors(primary_result: dict[str, Any], fallback_result: dict[str, Any]) -> dict[str, Any]:
     primary_error = str(primary_result.get("error") or "").strip()
     fallback_error = str(fallback_result.get("error") or "").strip()
@@ -511,6 +525,7 @@ def _lookup_intelligence(
     sandbox_os: str,
 ) -> dict[str, Any]:
     try:
+        record_provider_request("anyrun", scope=_anyrun_key_scope(api_key))
         with ExitStack() as stack:
             conn = lookup_connector_cls(api_key)
             if hasattr(conn, "__enter__") and hasattr(conn, "__exit__"):
@@ -946,6 +961,10 @@ def _submit_anyrun_task_with_fallback(
     file_bytes: bytes | None,
     file_name: str | None,
 ) -> Any:
+    record_provider_request("anyrun")
+    connector_key = getattr(connector, "api_key", None) or getattr(connector, "_api_key", None) or ""
+    if connector_key:
+        record_provider_request("anyrun", scope=_anyrun_key_scope(str(connector_key)))
     settings = get_settings()
     if indicator_type in {"hash", "file"} and not file_bytes:
         return {"__error__": f"ANY.RUN {indicator_type} sandbox submission requires uploaded file bytes"}
@@ -1035,10 +1054,18 @@ def _submit_anyrun_task_with_fallback(
 
 def _get_anyrun_summary_report(connector: Any, analysis_id: str) -> Any:
     try:
+        record_provider_request("anyrun")
+        connector_key = getattr(connector, "api_key", None) or getattr(connector, "_api_key", None) or ""
+        if connector_key:
+            record_provider_request("anyrun", scope=_anyrun_key_scope(str(connector_key)))
         return connector.get_analysis_report(analysis_id, report_format="summary")
     except Exception as exc:
         if "invalid summary type" not in str(exc or "").lower():
             raise
+        record_provider_request("anyrun")
+        connector_key = getattr(connector, "api_key", None) or getattr(connector, "_api_key", None) or ""
+        if connector_key:
+            record_provider_request("anyrun", scope=_anyrun_key_scope(str(connector_key)))
         return connector.get_analysis_report(analysis_id)
 
 

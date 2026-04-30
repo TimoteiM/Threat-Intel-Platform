@@ -14,7 +14,7 @@ const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg:
   rate_limited: { label: "Rate Limited", color: "#fb7185", bg: "rgba(251,113,133,0.14)" },
   unavailable: { label: "Unavailable", color: "#fb923c", bg: "rgba(251,146,60,0.14)" },
   not_configured: { label: "Not Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
-  unsupported: { label: "Unsupported", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
+  configured: { label: "Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
 };
 
 const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; description: string }> = [
@@ -29,8 +29,11 @@ const DENSITY_OPTIONS: Array<{ value: ListDensity; label: string }> = [
 ];
 
 function formatQuota(provider: APIProviderHealth): string {
+  if (provider.limit != null && provider.remaining != null && provider.limit_period) {
+    return `${provider.remaining} / ${provider.limit} requests per ${provider.limit_period}`.trim();
+  }
   if (provider.remaining == null && provider.limit == null) {
-    return "Telemetry unavailable";
+    return provider.status === "configured" ? "Local usage only" : "Telemetry unavailable";
   }
   if (provider.remaining != null && provider.limit != null) {
     return `${provider.remaining} / ${provider.limit} ${provider.unit || ""}`.trim();
@@ -39,6 +42,15 @@ function formatQuota(provider: APIProviderHealth): string {
     return `${provider.remaining} ${provider.unit || "remaining"}`.trim();
   }
   return `${provider.limit} ${provider.unit || "limit"}`.trim();
+}
+
+function formatProviderLabel(provider: APIProviderHealth): string {
+  return provider.display_name || provider.provider;
+}
+
+function formatInteger(value?: number | null): string {
+  if (value == null || Number.isNaN(value)) return "0";
+  return new Intl.NumberFormat().format(value);
 }
 
 function formatDateTime(value?: string | null): string {
@@ -191,7 +203,7 @@ export default function SettingsPageClient() {
 
       <SectionCard
         title="API Health"
-        description="Read-only quota visibility for the providers that power enrichment and verdicting."
+        description="Provider quota visibility where available, plus app-local request counts for every configured integration."
         action={(
           <button
             onClick={() => void loadHealth(true)}
@@ -263,13 +275,78 @@ export default function SettingsPageClient() {
 
                   <div style={{ display: "grid", gap: 6, fontSize: 12, color: "var(--text-dim)" }}>
                     <InfoRow label="Configured" value={provider.configured ? "Yes" : "No"} />
+                    <InfoRow label="Requests today" value={formatInteger(provider.requests_today)} />
+                    <InfoRow label="Requests this month" value={formatInteger(provider.requests_this_month)} />
                     <InfoRow label="Last checked" value={formatDateTime(provider.last_checked_at)} />
                     <InfoRow label="Reset at" value={formatDateTime(provider.reset_at)} />
+                    <InfoRow label="Limit period" value={provider.limit_period || "N/A"} />
                     <InfoRow label="Source" value={provider.source || "N/A"} />
                   </div>
 
                   {provider.error ? (
                     <div style={{ fontSize: 12, color: "#fb923c", lineHeight: 1.5 }}>{provider.error}</div>
+                  ) : null}
+
+                  {provider.details && provider.details.length > 0 ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                        marginTop: 4,
+                        paddingTop: 12,
+                        borderTop: "1px solid var(--border)",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+                        Key windows
+                      </div>
+                      {provider.details.map((detail) => {
+                        const detailStatus = STATUS_STYLES[detail.status];
+                        return (
+                          <div
+                            key={detail.provider}
+                            style={{
+                              background: "var(--bg-card)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--radius)",
+                              padding: "12px 12px 10px",
+                              display: "grid",
+                              gap: 8,
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{formatProviderLabel(detail)}</div>
+                              <span
+                                style={{
+                                  padding: "4px 9px",
+                                  borderRadius: 999,
+                                  background: detailStatus.bg,
+                                  color: detailStatus.color,
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.05em",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                {detailStatus.label}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                              {formatQuota(detail)}
+                            </div>
+                            <div style={{ display: "grid", gap: 5, fontSize: 12, color: "var(--text-dim)" }}>
+                              <InfoRow label="Requests today" value={formatInteger(detail.requests_today)} />
+                              <InfoRow label="Requests this month" value={formatInteger(detail.requests_this_month)} />
+                              <InfoRow label="Limit period" value={detail.limit_period || "N/A"} />
+                              <InfoRow label="Source" value={detail.source || "N/A"} />
+                            </div>
+                            {detail.error ? (
+                              <div style={{ fontSize: 12, color: "#fb923c", lineHeight: 1.5 }}>{detail.error}</div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : null}
                 </article>
               );

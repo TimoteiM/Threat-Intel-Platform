@@ -45,7 +45,7 @@ export default function ConsoleModule({
         position: "relative",
         overflow: "hidden",
         borderRadius: 22,
-        border: `1px solid ${variant === "outline" ? toneColor.border : "rgba(120, 145, 178, 0.18)"}`,
+        border: `1px solid ${variant === "outline" ? toneColor.border : "var(--panel-divider-strong)"}`,
         background: surface.background,
         boxShadow: surface.shadow,
         ...style,
@@ -82,7 +82,7 @@ export default function ConsoleModule({
             justifyContent: "space-between",
             gap: 16,
             padding: `${padding}px ${padding}px ${compact ? 14 : 16}px`,
-            borderBottom: "1px solid rgba(120, 145, 178, 0.12)",
+            borderBottom: "1px solid var(--panel-divider)",
           }}
         >
           <div style={{ minWidth: 0 }}>
@@ -150,7 +150,7 @@ export default function ConsoleModule({
             padding: `0 ${padding}px ${padding}px`,
           }}
         >
-          <div style={{ borderTop: "1px solid rgba(120, 145, 178, 0.12)", paddingTop: 14 }}>{footer}</div>
+          <div style={{ borderTop: "1px solid var(--panel-divider)", paddingTop: 14 }}>{footer}</div>
         </footer>
       ) : null}
     </section>
@@ -169,16 +169,16 @@ function resolveToneColor(tone: ConsoleTone, accent?: string) {
 
   switch (tone) {
     case "success":
-      return { accent: "var(--green)", glow: "rgba(56, 217, 169, 0.12)", border: "rgba(56, 217, 169, 0.28)", eyebrow: "#94f3d2" };
+      return { accent: "var(--green)", glow: "rgba(56, 217, 169, 0.12)", border: "rgba(56, 217, 169, 0.28)", eyebrow: "var(--tone-success-eyebrow)" };
     case "warning":
-      return { accent: "var(--yellow)", glow: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.28)", eyebrow: "#fde68a" };
+      return { accent: "var(--yellow)", glow: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.28)", eyebrow: "var(--tone-warning-eyebrow)" };
     case "danger":
-      return { accent: "var(--red)", glow: "rgba(251, 113, 133, 0.12)", border: "rgba(251, 113, 133, 0.28)", eyebrow: "#fda4af" };
+      return { accent: "var(--red)", glow: "rgba(251, 113, 133, 0.12)", border: "rgba(251, 113, 133, 0.28)", eyebrow: "var(--tone-danger-eyebrow)" };
     case "neutral":
       return { accent: "var(--text-muted)", glow: "rgba(120, 145, 178, 0.08)", border: "rgba(120, 145, 178, 0.18)", eyebrow: "var(--text-muted)" };
     case "info":
     default:
-      return { accent: "var(--accent)", glow: "rgba(102, 168, 255, 0.14)", border: "rgba(102, 168, 255, 0.28)", eyebrow: "#bfdbfe" };
+      return { accent: "var(--accent)", glow: "rgba(102, 168, 255, 0.14)", border: "rgba(102, 168, 255, 0.28)", eyebrow: "var(--tone-info-eyebrow)" };
   }
 }
 
@@ -186,24 +186,24 @@ function resolveSurface(variant: ConsoleModuleVariant) {
   switch (variant) {
     case "glass":
       return {
-        background: "linear-gradient(180deg, rgba(28, 43, 66, 0.82), rgba(18, 29, 46, 0.94))",
-        shadow: "0 24px 68px rgba(3, 8, 20, 0.34)",
+        background: "var(--panel-glass-bg)",
+        shadow: "var(--panel-shadow-glass)",
       };
     case "outline":
       return {
-        background: "rgba(18, 29, 46, 0.76)",
+        background: "var(--panel-outline-bg)",
         shadow: "none",
       };
     case "dense":
       return {
-        background: "linear-gradient(180deg, rgba(24, 38, 58, 0.92), rgba(17, 28, 43, 0.98))",
-        shadow: "0 16px 38px rgba(3, 8, 20, 0.26)",
+        background: "var(--panel-dense-bg)",
+        shadow: "var(--panel-shadow-soft)",
       };
     case "solid":
     default:
       return {
-        background: "linear-gradient(180deg, rgba(28, 43, 66, 0.96), rgba(18, 29, 46, 0.98))",
-        shadow: "0 24px 56px rgba(3, 8, 20, 0.32)",
+        background: "var(--panel-solid-bg)",
+        shadow: "var(--panel-shadow-module)",
       };
   }
 }

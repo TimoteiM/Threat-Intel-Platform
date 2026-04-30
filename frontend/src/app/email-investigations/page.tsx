@@ -274,8 +274,8 @@ export default function EmailInvestigationsPage() {
     gap: 10,
     padding: 14,
     borderRadius: 18,
-    border: "1px solid rgba(120, 145, 178, 0.16)",
-    background: "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+    border: "1px solid var(--panel-divider-strong)",
+    background: "var(--panel-card-bg)",
   };
   const shellLabelStyle: React.CSSProperties = {
     fontSize: 11,
@@ -309,7 +309,7 @@ export default function EmailInvestigationsPage() {
     padding: "10px 12px",
     borderRadius: 14,
     border: "1px solid rgba(120, 145, 178, 0.12)",
-    background: "rgba(9, 15, 26, 0.42)",
+    background: "var(--panel-empty-bg)",
   };
 
   return (
@@ -448,8 +448,8 @@ export default function EmailInvestigationsPage() {
                     setHistoryPage(0);
                   }}
                   style={{
-                    background: "rgba(120,145,178,0.12)",
-                    border: "1px solid rgba(120,145,178,0.24)",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--panel-divider-strong)",
                     color: "var(--text-secondary)",
                     borderRadius: 14,
                     fontSize: 11,
@@ -483,8 +483,8 @@ export default function EmailInvestigationsPage() {
                       key={h.id}
                       style={{
                         borderRadius: 18,
-                        border: `1px solid ${isSelected ? "rgba(96,165,250,0.40)" : "rgba(120,145,178,0.16)"}`,
-                        background: isSelected ? "rgba(96,165,250,0.10)" : "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+                        border: `1px solid ${isSelected ? "rgba(96,165,250,0.40)" : "var(--panel-divider-strong)"}`,
+                        background: isSelected ? "rgba(96,165,250,0.10)" : "var(--panel-card-bg)",
                         padding: 12,
                       }}
                     >
@@ -1523,8 +1523,8 @@ export default function EmailInvestigationsPage() {
 function historyPaginationButtonStyle(disabled: boolean): React.CSSProperties {
   return {
     padding: "8px 12px",
-    background: "rgba(10, 16, 28, 0.72)",
-    border: "1px solid rgba(120, 145, 178, 0.18)",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--panel-divider-strong)",
     borderRadius: 12,
     color: disabled ? "var(--text-dim)" : "var(--text-strong)",
     fontSize: 11,

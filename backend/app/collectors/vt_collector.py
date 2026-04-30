@@ -32,6 +32,7 @@ import requests
 from app.collectors.base import BaseCollector
 from app.config import get_settings
 from app.models.schemas import CollectorMeta, VTEvidence, VTVendorResult
+from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 _VT_KEY_LOCK = threading.Lock()
@@ -80,6 +81,7 @@ class VTCollector(BaseCollector):
         """Query VT API v3 for domain report."""
         evidence = VTEvidence()
 
+        record_provider_request("virustotal")
         resp = requests.get(
             f"https://www.virustotal.com/api/v3/domains/{self.domain}",
             headers={"x-apikey": api_key},
@@ -107,6 +109,7 @@ class VTCollector(BaseCollector):
         """Query VT API v3 for IP address report."""
         evidence = VTEvidence()
 
+        record_provider_request("virustotal")
         resp = requests.get(
             f"https://www.virustotal.com/api/v3/ip_addresses/{self.domain}",
             headers={"x-apikey": api_key},
@@ -139,6 +142,7 @@ class VTCollector(BaseCollector):
         url_id = base64.urlsafe_b64encode(self.domain.encode()).decode().rstrip("=")
 
         # First try to get existing report
+        record_provider_request("virustotal")
         resp = requests.get(
             f"https://www.virustotal.com/api/v3/urls/{url_id}",
             headers=headers,
@@ -147,6 +151,7 @@ class VTCollector(BaseCollector):
 
         if resp.status_code == 404:
             # No existing report — submit for fresh scan
+            record_provider_request("virustotal")
             submit_resp = requests.post(
                 "https://www.virustotal.com/api/v3/urls",
                 headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
@@ -166,6 +171,7 @@ class VTCollector(BaseCollector):
             # Poll for result (max 30s)
             for _ in range(6):
                 time.sleep(5)
+                record_provider_request("virustotal")
                 poll_resp = requests.get(
                     f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
                     headers=headers,
@@ -220,6 +226,7 @@ class VTCollector(BaseCollector):
                 evidence.notes.append(f"Could not extract a valid hash from: {self.domain[:80]}")
                 return evidence
 
+        record_provider_request("virustotal")
         resp = requests.get(
             f"https://www.virustotal.com/api/v3/files/{hash_value}",
             headers={"x-apikey": api_key},

@@ -21,6 +21,7 @@ import requests
 
 from app.collectors.base import BaseCollector
 from app.config import get_settings
+from app.services.provider_usage_metrics import record_provider_request
 from app.models.schemas import (
     AbuseIPDBResult,
     CollectorMeta,
@@ -189,6 +190,7 @@ class ThreatFeedsCollector(BaseCollector):
 
     def _query_abuseipdb(self, ip: str, api_key: str) -> AbuseIPDBResult | None:
         """Check IP against AbuseIPDB."""
+        record_provider_request("abuseipdb")
         resp = requests.get(
             "https://api.abuseipdb.com/api/v2/check",
             headers={"Key": api_key, "Accept": "application/json"},
@@ -232,6 +234,7 @@ class ThreatFeedsCollector(BaseCollector):
             params["app_key"] = settings.phishtank_api_key
 
         try:
+            record_provider_request("phishtank")
             resp = requests.post(
                 "https://checkurl.phishtank.com/checkurl/",
                 data=params,
@@ -262,6 +265,7 @@ class ThreatFeedsCollector(BaseCollector):
             "query": "search_ioc",
             "search_term": domain,
         }
+        record_provider_request("threatfox")
         resp = requests.post(
             "https://threatfox-api.abuse.ch/api/v1/",
             json=payload,
@@ -295,6 +299,7 @@ class ThreatFeedsCollector(BaseCollector):
     def _query_openphish(self, domain: str) -> bool:
         """Check domain against OpenPhish community feed."""
         try:
+            record_provider_request("openphish")
             resp = requests.get(
                 "https://openphish.com/feed.txt",
                 timeout=self.timeout,
@@ -312,6 +317,7 @@ class ThreatFeedsCollector(BaseCollector):
 
     def _query_google_safe_browsing(self, url: str, api_key: str) -> GoogleSafeBrowsingResult:
         try:
+            record_provider_request("google_safe_browsing")
             resp = requests.post(
                 f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={api_key}",
                 json={

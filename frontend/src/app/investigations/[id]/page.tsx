@@ -77,10 +77,10 @@ const pageShellStyle: React.CSSProperties = {
 
 const progressTrackStyle: React.CSSProperties = {
   height: 12,
-  background: "rgba(9, 14, 24, 0.92)",
+  background: "var(--bg-elevated)",
   borderRadius: 999,
   overflow: "hidden",
-  border: "1px solid rgba(120, 145, 178, 0.16)",
+  border: "1px solid var(--panel-divider-strong)",
 };
 
 function shortId(value: string) {
@@ -1089,7 +1089,7 @@ function stageRowStyle(active: boolean, done: boolean): React.CSSProperties {
       ? "rgba(102, 168, 255, 0.10)"
       : done
       ? "rgba(56, 217, 169, 0.08)"
-      : "rgba(10, 16, 28, 0.48)",
+      : "var(--panel-empty-bg)",
     color: active ? "#bfdbfe" : done ? "#9bf0d8" : "var(--text-secondary)",
   };
 }

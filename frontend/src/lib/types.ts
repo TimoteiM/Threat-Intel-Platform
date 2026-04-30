@@ -1031,7 +1031,7 @@ export type APIHealthStatus =
   | "rate_limited"
   | "unavailable"
   | "not_configured"
-  | "unsupported";
+  | "configured";
 
 export interface APIProviderHealth {
   provider: string;
@@ -1045,7 +1045,11 @@ export interface APIProviderHealth {
   low_quota_threshold?: number | null;
   last_checked_at?: string | null;
   source?: string | null;
+  requests_today?: number;
+  requests_this_month?: number;
+  limit_period?: string | null;
   error?: string | null;
+  details?: APIProviderHealth[];
 }
 
 export interface APIHealthResponse {

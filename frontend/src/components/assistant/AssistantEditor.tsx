@@ -113,9 +113,9 @@ const fieldLabelStyle: React.CSSProperties = {
 const textareaStyle: React.CSSProperties = {
   width: "100%",
   minHeight: 160,
-  border: "1px solid rgba(120, 145, 178, 0.18)",
+  border: "1px solid var(--panel-divider-strong)",
   borderRadius: 16,
-  background: "linear-gradient(180deg, rgba(8, 13, 24, 0.92), rgba(6, 10, 18, 0.98))",
+  background: "var(--panel-card-bg)",
   color: "var(--text-strong)",
   padding: 14,
   fontSize: 13,
@@ -123,26 +123,26 @@ const textareaStyle: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
   lineHeight: 1.75,
   outline: "none",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 
 const titleInputStyle: React.CSSProperties = {
   width: "100%",
-  border: "1px solid rgba(120, 145, 178, 0.18)",
+  border: "1px solid var(--panel-divider-strong)",
   borderRadius: 14,
-  background: "linear-gradient(180deg, rgba(16, 26, 44, 0.94), rgba(11, 17, 29, 0.98))",
+  background: "var(--panel-card-bg)",
   color: "var(--text-strong)",
   padding: "12px 14px",
   fontSize: 14,
   outline: "none",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 
 const addButtonStyle: React.CSSProperties = {
   padding: "11px 14px",
   borderRadius: 14,
   border: "1px solid rgba(102, 168, 255, 0.34)",
-  background: "linear-gradient(180deg, rgba(19, 34, 58, 0.96), rgba(11, 18, 31, 0.98))",
+  background: "var(--panel-card-bg)",
   color: "var(--text-strong)",
   cursor: "pointer",
   alignSelf: "flex-start",

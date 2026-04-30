@@ -17,6 +17,7 @@ import anthropic
 from openai import AsyncOpenAI
 
 from app.config import get_settings
+from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,7 @@ def _parse_interpreter_output(text: str) -> dict[str, Any]:
 
 async def _call_openai(api_key: str, model: str, system: str, user_text: str) -> str:
     client = AsyncOpenAI(api_key=api_key)
+    record_provider_request("openai")
     response = await client.responses.create(
         model=model,
         input=[
@@ -316,6 +318,7 @@ async def _call_openai(api_key: str, model: str, system: str, user_text: str) ->
 
 async def _call_claude(api_key: str, model: str, system: str, user_text: str) -> str:
     client = anthropic.AsyncAnthropic(api_key=api_key)
+    record_provider_request("anthropic")
     response = await client.messages.create(
         model=model,
         max_tokens=3000,

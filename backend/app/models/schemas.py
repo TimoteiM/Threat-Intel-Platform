@@ -1229,7 +1229,11 @@ class APIProviderHealth(BaseModel):
     low_quota_threshold: Optional[float] = None
     last_checked_at: Optional[datetime] = None
     source: Optional[str] = None
+    requests_today: int = 0
+    requests_this_month: int = 0
+    limit_period: Optional[str] = None
     error: Optional[str] = None
+    details: list["APIProviderHealth"] = Field(default_factory=list)
 
 
 class APIHealthResponse(BaseModel):

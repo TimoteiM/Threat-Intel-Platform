@@ -53,18 +53,21 @@ def test_api_health_response_schema_serializes_normalized_provider_list() -> Non
                 error=None,
             ),
             schemas.APIProviderHealth(
-                provider="abuseipdb",
-                display_name="AbuseIPDB",
-                configured=False,
-                status="not_configured",
+                provider="opencti",
+                display_name="OpenCTI",
+                configured=True,
+                status="configured",
                 remaining=None,
                 limit=None,
-                unit="requests_day",
+                unit=None,
                 reset_at=None,
-                low_quota_threshold=25,
+                low_quota_threshold=None,
                 last_checked_at=last_checked_at,
-                source="config",
-                error="Missing API key",
+                source="configuration",
+                requests_today=5,
+                requests_this_month=42,
+                limit_period=None,
+                error="Quota telemetry not exposed by this integration yet",
             ),
         ],
     )
@@ -92,8 +95,10 @@ def test_api_health_response_schema_serializes_normalized_provider_list() -> Non
     )
     assert dumped["providers"][0]["source"] == "header_quota"
     assert dumped["providers"][0]["error"] is None
-    assert dumped["providers"][1]["status"] == "not_configured"
-    assert dumped["providers"][1]["configured"] is False
+    assert dumped["providers"][1]["status"] == "configured"
+    assert dumped["providers"][1]["configured"] is True
+    assert dumped["providers"][1]["requests_today"] == 5
+    assert dumped["providers"][1]["requests_this_month"] == 42
 
 
 def test_api_health_response_schema_requires_provider_identifier() -> None:
@@ -131,6 +136,14 @@ def test_get_api_health_returns_normalized_response(monkeypatch):
                 configured=False,
                 status="not_configured",
                 source="configuration",
+            ),
+            schemas.APIProviderHealth(
+                provider="opencti",
+                display_name="OpenCTI",
+                configured=True,
+                status="configured",
+                source="configuration",
+                error="Quota telemetry not exposed by this integration yet",
             ),
         ],
         generated_at=datetime.now(timezone.utc),

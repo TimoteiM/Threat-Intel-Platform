@@ -38,8 +38,8 @@ export default function SignalCard({
         overflow: "hidden",
         borderRadius: 18,
         border: `1px solid ${colors.border}`,
-        background: "linear-gradient(180deg, rgba(17, 28, 46, 0.95), rgba(10, 16, 28, 0.98))",
-        boxShadow: "0 18px 44px rgba(3, 8, 20, 0.22)",
+        background: "var(--panel-card-bg)",
+        boxShadow: "var(--panel-shadow-card)",
         padding: compact ? 14 : 18,
         ...style,
       }}

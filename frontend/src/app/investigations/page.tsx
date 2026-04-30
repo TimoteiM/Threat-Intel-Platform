@@ -543,9 +543,9 @@ export default function InvestigationsListPage() {
           align-items: center;
           padding: 16px 14px;
           border-radius: 18px;
-          border: 1px solid rgba(120, 145, 178, 0.16);
-          background: linear-gradient(180deg, rgba(17, 28, 46, 0.92), rgba(10, 16, 28, 0.98));
-          box-shadow: 0 16px 34px rgba(3, 8, 20, 0.16);
+          border: 1px solid var(--panel-divider-strong);
+          background: var(--panel-card-bg);
+          box-shadow: var(--panel-shadow-soft);
           color: var(--text-strong);
           text-align: left;
           transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
@@ -562,8 +562,8 @@ export default function InvestigationsListPage() {
         .catalog-row:hover {
           transform: translateY(-1px);
           border-color: rgba(102, 168, 255, 0.28);
-          box-shadow: 0 20px 44px rgba(3, 8, 20, 0.24);
-          background: linear-gradient(180deg, rgba(19, 31, 50, 0.98), rgba(10, 16, 28, 1));
+          box-shadow: var(--panel-shadow-card);
+          background: var(--bg-card-hover);
         }
 
         .catalog-row:focus-visible,
@@ -648,9 +648,9 @@ export default function InvestigationsListPage() {
           gap: 12px;
           padding: 16px;
           border-radius: 18px;
-          border: 1px solid rgba(120, 145, 178, 0.16);
-          background: linear-gradient(180deg, rgba(17, 28, 46, 0.94), rgba(10, 16, 28, 0.98));
-          box-shadow: 0 16px 34px rgba(3, 8, 20, 0.16);
+          border: 1px solid var(--panel-divider-strong);
+          background: var(--panel-card-bg);
+          box-shadow: var(--panel-shadow-soft);
           text-align: left;
           width: 100%;
           color: var(--text-strong);
@@ -691,7 +691,7 @@ export default function InvestigationsListPage() {
           gap: 16px;
           font-size: 12px;
           color: var(--text-secondary);
-          border-top: 1px solid rgba(120, 145, 178, 0.12);
+          border-top: 1px solid var(--panel-divider);
           padding-top: 12px;
         }
 
@@ -707,7 +707,7 @@ export default function InvestigationsListPage() {
           align-items: center;
           margin-top: 18px;
           padding-top: 14px;
-          border-top: 1px solid rgba(120, 145, 178, 0.12);
+          border-top: 1px solid var(--panel-divider);
           flex-wrap: wrap;
         }
 
@@ -815,8 +815,8 @@ function buttonStyle(variant: "primary" | "secondary") {
     background:
       variant === "primary"
         ? "linear-gradient(135deg, #3b82f6, #2563eb)"
-        : "rgba(10, 16, 28, 0.72)",
-    color: "#fff",
+        : "var(--bg-elevated)",
+    color: variant === "primary" ? "#fff" : "var(--text-strong)",
     fontSize: 11,
     fontWeight: 800,
     cursor: "pointer",
@@ -847,7 +847,7 @@ function filterButtonStyle(active: boolean, tone: ReturnType<typeof getFilterTon
 function paginationButtonStyle(disabled: boolean, active = false) {
   return {
     padding: "7px 11px",
-    background: active ? "var(--accent)" : "rgba(10, 16, 28, 0.72)",
+    background: active ? "var(--accent)" : "var(--bg-elevated)",
     border: `1px solid ${active ? "var(--accent)" : "rgba(120, 145, 178, 0.18)"}`,
     borderRadius: 12,
     color: active ? "#fff" : disabled ? "var(--text-dim)" : "var(--text)",
@@ -864,22 +864,22 @@ function searchInputStyle(): React.CSSProperties {
   return {
     width: "100%",
     padding: "12px 16px",
-    background: "rgba(10, 16, 28, 0.72)",
-    border: "1px solid rgba(120, 145, 178, 0.22)",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--panel-divider-strong)",
     borderRadius: 16,
     color: "var(--text-strong)",
     fontSize: 13,
     fontFamily: "var(--font-mono)",
     outline: "none",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
   };
 }
 
 function selectStyle(): React.CSSProperties {
   return {
     padding: "10px 12px",
-    background: "rgba(10, 16, 28, 0.72)",
-    border: "1px solid rgba(120, 145, 178, 0.22)",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--panel-divider-strong)",
     borderRadius: 14,
     color: "var(--text-strong)",
     fontSize: 12,

@@ -441,9 +441,9 @@ const modeSwitcherStyle: React.CSSProperties = {
   justifyContent: "flex-end",
   padding: 6,
   borderRadius: 18,
-  background: "linear-gradient(180deg, rgba(10, 16, 28, 0.96), rgba(7, 11, 20, 0.98))",
-  border: "1px solid rgba(120, 145, 178, 0.16)",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02), 0 18px 36px rgba(3, 8, 20, 0.2)",
+  background: "var(--panel-card-bg)",
+  border: "1px solid var(--panel-divider-strong)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), var(--panel-shadow-soft)",
 };
 
 function modeButtonStyle(active: boolean, tone: "warning" | "success"): React.CSSProperties {
@@ -497,7 +497,7 @@ function runButtonStyle(disabled: boolean): React.CSSProperties {
     appearance: "none",
     border: "1px solid rgba(102, 168, 255, 0.34)",
     background: disabled
-      ? "rgba(15, 23, 42, 0.7)"
+      ? "var(--bg-elevated)"
       : "linear-gradient(180deg, rgba(102, 168, 255, 0.24), rgba(59, 130, 246, 0.16))",
     color: "var(--text-strong)",
     borderRadius: 999,
@@ -508,7 +508,7 @@ function runButtonStyle(disabled: boolean): React.CSSProperties {
     textTransform: "uppercase",
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.6 : 1,
-    boxShadow: disabled ? "none" : "0 16px 34px rgba(3, 8, 20, 0.24)",
+    boxShadow: disabled ? "none" : "var(--panel-shadow-card)",
   };
 }
 
@@ -517,8 +517,8 @@ function secondaryButtonStyle(disabled: boolean): React.CSSProperties {
     appearance: "none",
     border: "1px solid rgba(120, 145, 178, 0.24)",
     background: disabled
-      ? "rgba(15, 23, 42, 0.7)"
-      : "linear-gradient(180deg, rgba(18, 28, 46, 0.96), rgba(10, 16, 28, 0.98))",
+      ? "var(--bg-elevated)"
+      : "var(--panel-card-bg)",
     color: "var(--text-secondary)",
     borderRadius: 999,
     padding: "10px 14px",

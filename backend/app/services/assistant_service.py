@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.models.database import AssistantEntry, AssistantSession, Investigation
+from app.services.provider_usage_metrics import record_provider_request
 from app.services.assistant_prompt_service import (
     build_alert_analysis_prompt,
     build_incident_correlation_prompt,
@@ -267,6 +268,7 @@ class AssistantService:
 
     async def _call_openai(self, *, model: str, system: str, user_text: str) -> str:
         client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        record_provider_request("openai")
         response = await client.responses.create(
             model=model,
             input=[
@@ -288,6 +290,7 @@ class AssistantService:
 
     async def _call_claude(self, *, model: str, system: str, user_text: str) -> str:
         client = anthropic.AsyncAnthropic(api_key=self.settings.anthropic_api_key)
+        record_provider_request("anthropic")
         response = await client.messages.create(
             model=model,
             max_tokens=4096,

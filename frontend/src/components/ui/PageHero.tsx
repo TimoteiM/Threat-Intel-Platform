@@ -40,8 +40,8 @@ export default function PageHero({
         overflow: "hidden",
         borderRadius: 26,
         border: `1px solid ${colors.border}`,
-        background: "linear-gradient(180deg, rgba(17, 28, 46, 0.98), rgba(10, 16, 28, 0.96))",
-        boxShadow: "0 28px 70px rgba(3, 8, 20, 0.34)",
+        background: "var(--panel-card-bg)",
+        boxShadow: "var(--panel-shadow-hero)",
         padding: 24,
         ...style,
       }}
@@ -128,16 +128,16 @@ function resolveToneColor(tone: ConsoleTone, accent?: string) {
 
   switch (tone) {
     case "success":
-      return { eyebrow: "#94f3d2", border: "rgba(56, 217, 169, 0.24)" };
+      return { eyebrow: "var(--tone-success-eyebrow)", border: "rgba(56, 217, 169, 0.24)" };
     case "warning":
-      return { eyebrow: "#fde68a", border: "rgba(251, 191, 36, 0.24)" };
+      return { eyebrow: "var(--tone-warning-eyebrow)", border: "rgba(251, 191, 36, 0.24)" };
     case "danger":
-      return { eyebrow: "#fda4af", border: "rgba(251, 113, 133, 0.24)" };
+      return { eyebrow: "var(--tone-danger-eyebrow)", border: "rgba(251, 113, 133, 0.24)" };
     case "neutral":
       return { eyebrow: "var(--text-muted)", border: "rgba(120, 145, 178, 0.16)" };
     case "info":
     default:
-      return { eyebrow: "#bfdbfe", border: "rgba(102, 168, 255, 0.26)" };
+      return { eyebrow: "var(--tone-info-eyebrow)", border: "rgba(102, 168, 255, 0.26)" };
   }
 }
 

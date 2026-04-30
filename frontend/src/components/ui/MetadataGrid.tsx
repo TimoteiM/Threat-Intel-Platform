@@ -63,10 +63,10 @@ export default function MetadataGrid({
               style={{
                 gridColumn: item.span ? `span ${item.span}` : "auto",
                 borderRadius: 18,
-                border: "1px solid rgba(120, 145, 178, 0.16)",
-                background: "linear-gradient(180deg, rgba(16, 26, 44, 0.92), rgba(11, 17, 29, 0.98))",
+                border: "1px solid var(--panel-divider-strong)",
+                background: "var(--panel-card-bg)",
                 padding: compact ? 14 : 16,
-                boxShadow: "0 14px 30px rgba(3, 8, 20, 0.18)",
+                boxShadow: "var(--panel-shadow-soft)",
               }}
             >
               <div
@@ -127,13 +127,13 @@ function valueNeedsWrap(value: React.ReactNode) {
 function toneColorFor(tone: ConsoleTone) {
   switch (tone) {
     case "success":
-      return { label: "#9bf0d8" };
+      return { label: "var(--tone-success-eyebrow)" };
     case "warning":
-      return { label: "#fde68a" };
+      return { label: "var(--tone-warning-eyebrow)" };
     case "danger":
-      return { label: "#fda4af" };
+      return { label: "var(--tone-danger-eyebrow)" };
     case "info":
-      return { label: "#bfdbfe" };
+      return { label: "var(--tone-info-eyebrow)" };
     case "neutral":
     default:
       return { label: "var(--text-dim)" };

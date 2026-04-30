@@ -33,6 +33,7 @@ from app.models.database import LookupCache
 from app.services.content_ml_service import classify_email_content_locally
 from app.services.ml_attachment_analyzer import analyze_attachments_static
 from app.services.ml_url_model import score_url
+from app.services.provider_usage_metrics import record_provider_request
 from app.services.risk_aggregator import aggregate_risk
 from app.services.url_lexical_ml_service import assess_url_lexical_risk
 from app.services.url_behavior_analyzer import analyze_url_behavior
@@ -552,6 +553,7 @@ def _abuseipdb_lookup(ip: str) -> dict[str, Any]:
     if not api_key:
         return {"checked": False, "error": "ABUSEIPDB_API_KEY not configured"}
     try:
+        record_provider_request("abuseipdb")
         resp = requests.get(
             "https://api.abuseipdb.com/api/v2/check",
             headers={"Key": api_key, "Accept": "application/json"},

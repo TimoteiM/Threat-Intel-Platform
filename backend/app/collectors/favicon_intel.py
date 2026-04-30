@@ -18,6 +18,7 @@ from typing import Any
 import requests
 
 from app.config import get_settings
+from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ def collect_favicon_intel(
 
 def _query_shodan_favicon(favicon_hash: str, api_key: str) -> dict[str, Any]:
     """Query Shodan search API for a given favicon hash."""
+    record_provider_request("shodan")
     resp = requests.get(
         "https://api.shodan.io/shodan/host/search",
         params={

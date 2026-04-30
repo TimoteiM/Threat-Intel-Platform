@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     google_safe_browsing_api_key: str = ""
     url_lexical_model_path: str = ""
     url_lexical_use_lightgbm: bool = False
+    api_health_daily_limit_overrides: str = ""
+    api_health_monthly_limit_overrides: str = ""
 
     # —— Database ———
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"
@@ -132,6 +134,32 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"
+
+    @property
+    def api_health_daily_limit_overrides_map(self) -> dict[str, float]:
+        return _parse_limit_overrides(self.api_health_daily_limit_overrides)
+
+    @property
+    def api_health_monthly_limit_overrides_map(self) -> dict[str, float]:
+        return _parse_limit_overrides(self.api_health_monthly_limit_overrides)
+
+
+def _parse_limit_overrides(raw: str) -> dict[str, float]:
+    overrides: dict[str, float] = {}
+    for part in (raw or "").split(","):
+        item = part.strip()
+        if not item or ":" not in item:
+            continue
+        provider, limit = item.split(":", 1)
+        provider_key = provider.strip().lower()
+        limit_text = limit.strip()
+        if not provider_key or not limit_text:
+            continue
+        try:
+            overrides[provider_key] = float(limit_text)
+        except ValueError:
+            continue
+    return overrides
 
 
 @lru_cache()

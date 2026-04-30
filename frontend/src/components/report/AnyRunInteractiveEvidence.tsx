@@ -2924,17 +2924,29 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
             {!showSandboxSections && (() => {
               const itemVerdict = String(item?.verdict || "").toLowerCase();
               const isMaliciousLookup = itemVerdict === "malicious";
+              const isSandboxFailure = !item?.checked && modeLower === "sandbox";
+              const sandboxError = String(item?.error || "").trim();
+              const domainIntel = item?.domain_intelligence;
+              const domainIntelVerdict = String(domainIntel?.verdict || "").toLowerCase();
+              const domainIntelMalicious = domainIntel?.checked && domainIntelVerdict === "malicious";
+              const domainIntelHostname = String(domainIntel?.hostname || "").trim();
+              const borderColor = isMaliciousLookup || domainIntelMalicious
+                ? "1px solid rgba(239,68,68,0.30)"
+                : isSandboxFailure
+                  ? "1px solid rgba(245,158,11,0.30)"
+                  : "1px solid rgba(96,165,250,0.20)";
+              const bgColor = isMaliciousLookup || domainIntelMalicious
+                ? "rgba(239,68,68,0.07)"
+                : isSandboxFailure
+                  ? "rgba(245,158,11,0.07)"
+                  : "rgba(96,165,250,0.07)";
               return (
                 <div
                   style={{
                     marginBottom: 12,
                     padding: "10px 12px",
-                    border: isMaliciousLookup
-                      ? "1px solid rgba(239,68,68,0.30)"
-                      : "1px solid rgba(96,165,250,0.20)",
-                    background: isMaliciousLookup
-                      ? "rgba(239,68,68,0.07)"
-                      : "rgba(96,165,250,0.07)",
+                    border: borderColor,
+                    background: bgColor,
                     color: "var(--text-secondary)",
                     borderRadius: 8,
                     fontSize: 12,
@@ -2947,6 +2959,29 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
                       threat intelligence community. This indicator was previously analysed and classified as malicious
                       by community sandbox submissions. Live behavioral data (process tree, DNS, HTTP) is not available
                       in this lookup-only result — submit to sandbox for execution details.
+                    </>
+                  ) : isSandboxFailure ? (
+                    <>
+                      <strong style={{ color: "#f59e0b" }}>Sandbox attempt failed.</strong>{" "}
+                      AnyRun submitted this indicator to the sandbox but did not receive a completed report.
+                      {sandboxError && (
+                        <span style={{ display: "block", marginTop: 4, fontStyle: "italic", opacity: 0.85 }}>
+                          Reason: {sandboxError}
+                        </span>
+                      )}
+                      {domainIntelMalicious && domainIntelHostname && (
+                        <span style={{ display: "block", marginTop: 6, color: "#ef4444", fontWeight: 600 }}>
+                          Domain intelligence for {domainIntelHostname} shows MALICIOUS — see the Domain Intelligence section below.
+                        </span>
+                      )}
+                    </>
+                  ) : domainIntelMalicious ? (
+                    <>
+                      URL lookup returned a <strong>CLEAN</strong> verdict from AnyRun intelligence. However,{" "}
+                      <strong style={{ color: "#ef4444" }}>domain intelligence
+                      {domainIntelHostname ? ` for ${domainIntelHostname}` : ""} shows MALICIOUS</strong> — see the
+                      Domain Intelligence section below. Phishing pages that evade automated URL scanning are commonly
+                      flagged at the domain level rather than the URL level.
                     </>
                   ) : (
                     <>
