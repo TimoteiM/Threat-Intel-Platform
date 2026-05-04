@@ -679,6 +679,7 @@ class HybridAnalysisItem(BaseModel):
     cache_hit: Optional[bool] = None
     dynamic_io_summary: dict[str, Any] = {}
     raw_summary: dict[str, Any] = {}
+    sandbox_intelligence: dict[str, Any] = {}
     domain_intelligence: Optional[dict[str, Any]] = None
 
 

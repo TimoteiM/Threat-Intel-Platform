@@ -553,6 +553,7 @@ export interface HybridAnalysisItem {
   cache_hit?: boolean;
   dynamic_io_summary?: Record<string, any>;
   raw_summary?: Record<string, any>;
+  sandbox_intelligence?: Record<string, any>;
 }
 
 export interface HybridAnalysisEvidence {

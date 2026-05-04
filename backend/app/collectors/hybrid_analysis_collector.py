@@ -14,6 +14,7 @@ from app.collectors.base import BaseCollector
 from app.db.session import sync_engine
 from app.models.database import Artifact
 from app.models.schemas import CollectorMeta, HybridAnalysisEvidence, HybridAnalysisItem
+from app.services.anyrun_intelligence import build_anyrun_sandbox_intelligence
 from app.services.hybrid_analysis_service import lookup_hybrid_analysis
 
 
@@ -57,6 +58,7 @@ class HybridAnalysisCollector(BaseCollector):
             raw = r.get("raw_summary") or {}
             # Tags live in raw_summary.tags (AnyRun community tags like "phishing", "credential-harvesting")
             _tags = list(raw.get("tags") or [])
+            sandbox_intelligence = build_anyrun_sandbox_intelligence(r)
             return HybridAnalysisItem(
                 checked=bool(r.get("checked")),
                 indicator_type=str(r.get("indicator_type") or indicator_type),
@@ -70,6 +72,7 @@ class HybridAnalysisCollector(BaseCollector):
                 cache_hit=r.get("cache_hit"),
                 dynamic_io_summary=r.get("dynamic_io_summary") or {},
                 raw_summary=raw,
+                sandbox_intelligence=sandbox_intelligence,
                 # domain_intelligence only on the primary row to avoid duplication
                 domain_intelligence=r.get("domain_intelligence") or None if is_primary else None,
             )

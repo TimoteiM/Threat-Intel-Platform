@@ -114,6 +114,9 @@ type ProcessEventRow = {
 
 type EventCategoryKey =
   | "modified_files"
+  | "created_files"
+  | "dropped_files"
+  | "deleted_files"
   | "registry_changes"
   | "synchronization"
   | "http_requests"
@@ -128,6 +131,9 @@ const EVENT_CATEGORY_META: Array<{
   description: string;
 }> = [
   { key: "modified_files", label: "Modified files", description: "File-system changes made by the process" },
+  { key: "created_files", label: "Created files", description: "Files created by the process" },
+  { key: "dropped_files", label: "Dropped files", description: "Files dropped by the process" },
+  { key: "deleted_files", label: "Deleted files", description: "Files deleted by the process" },
   { key: "registry_changes", label: "Registry changes", description: "Registry writes or modifications" },
   { key: "synchronization", label: "Synchronization", description: "Mutexes, events, and sync primitives" },
   { key: "http_requests", label: "HTTP requests", description: "Web requests issued by the process" },
@@ -910,7 +916,12 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
     const eventCounts = (matchedDetail?.event_counts || {}) as Record<string, number>;
     const networkThreatCount = _num(eventCounts.network_threats);
     const connCount = _num(eventCounts.connections) + _num(eventCounts.http_requests) + _num(eventCounts.dns_requests) + networkThreatCount;
-    const fileCount = _num(eventCounts.modified_files) + _num(eventCounts.registry_changes);
+    const fileCount =
+      _num(eventCounts.modified_files) +
+      _num(eventCounts.created_files) +
+      _num(eventCounts.dropped_files) +
+      _num(eventCounts.deleted_files) +
+      _num(eventCounts.registry_changes);
     const mitreTags = _extractMitreTagsFromProc(matchedDetail || p);
     const threatScore = _num(matchedDetail?.threat_score ?? p?.threatScore ?? p?.score);
     const threatLevel = _num(matchedDetail?.threat_level ?? p?.threatLevel ?? p?.scores?.verdict?.threatLevel);
@@ -1446,6 +1457,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
   const selectedEventCounts = React.useMemo(() => {
     const counts: Record<EventCategoryKey, number> = {
       modified_files: 0,
+      created_files: 0,
+      dropped_files: 0,
+      deleted_files: 0,
       registry_changes: 0,
       synchronization: 0,
       http_requests: 0,

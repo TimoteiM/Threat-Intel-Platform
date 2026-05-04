@@ -344,6 +344,16 @@ def _build_evidence_sections(evidence: dict[str, Any]) -> list[dict[str, Any]]:
                 ],
             ),
         ))
+        sandbox_summary, sandbox_rows = _anyrun_sandbox_intelligence_export(items)
+        if sandbox_summary or sandbox_rows:
+            sections.append(_section(
+                "AnyRun Sandbox Intelligence Extracts",
+                rows=sandbox_summary,
+                table=_simple_table(
+                    ["Type", "Value", "Process / Source", "Context"],
+                    sandbox_rows,
+                ),
+            ))
 
     opencti = evidence.get("opencti") or {}
     if opencti:
@@ -566,6 +576,74 @@ def _dict_summary_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
         if len(rows) >= 12:
             break
     return rows
+
+
+def _anyrun_sandbox_intelligence_export(items: list[Any]) -> tuple[list[dict[str, Any]], list[list[Any]]]:
+    counts = {
+        "Processes": 0,
+        "Hosts": 0,
+        "IPs": 0,
+        "Files": 0,
+        "Suspicious Commands": 0,
+        "Extracted IOCs": 0,
+        "Screenshots": 0,
+    }
+    table_rows: list[list[Any]] = []
+    seen: set[tuple[str, str]] = set()
+    narrative = ""
+
+    def add_row(kind: str, value: Any, source: Any, context: Any) -> None:
+        text = _clean_text(value)
+        if not text:
+            return
+        key = (kind, text.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        table_rows.append([kind, text, source, context])
+
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        intel = item.get("sandbox_intelligence") or {}
+        if not isinstance(intel, dict):
+            continue
+        summary = intel.get("summary") or {}
+        counts["Processes"] += _safe_count(summary.get("process_count"))
+        counts["Hosts"] += _safe_count(summary.get("contacted_host_count"))
+        counts["IPs"] += _safe_count(summary.get("contacted_ip_count"))
+        counts["Files"] += _safe_count(summary.get("dropped_file_count"))
+        counts["Suspicious Commands"] += _safe_count(summary.get("suspicious_command_count"))
+        counts["Extracted IOCs"] += _safe_count(summary.get("extracted_ioc_count"))
+        counts["Screenshots"] += _safe_count(summary.get("screenshot_count"))
+
+        tree = intel.get("process_tree_summary") or {}
+        if not narrative and tree.get("narrative"):
+            narrative = str(tree.get("narrative") or "")
+        for row in (tree.get("high_risk_processes") or [])[:5]:
+            add_row("Process", row.get("name"), f"PID {row.get('pid') or '-'}", row.get("command_line"))
+        for row in (intel.get("contacted_hosts") or [])[:8]:
+            add_row("Domain", row.get("host"), row.get("process") or row.get("source"), row.get("threat_name") or row.get("url"))
+        for row in (intel.get("contacted_ips") or [])[:8]:
+            add_row("IP", row.get("ip"), row.get("process") or row.get("source"), f"{row.get('protocol') or ''}/{row.get('port') or ''}".strip("/"))
+        for row in (intel.get("dropped_files") or [])[:8]:
+            add_row("File", row.get("path") or row.get("name"), row.get("process"), row.get("sha256") or row.get("sha1") or row.get("md5") or row.get("action"))
+        for row in (intel.get("suspicious_commands") or [])[:8]:
+            add_row("Command", row.get("command_line"), row.get("process"), row.get("reason"))
+        for row in (intel.get("extracted_iocs") or [])[:12]:
+            add_row(str(row.get("type") or "IOC").upper(), row.get("value"), row.get("source") or "AnyRun", row.get("context"))
+
+    summary_rows = [_kv(label, value) for label, value in counts.items() if value]
+    if narrative:
+        summary_rows.insert(0, _kv("Process Tree", narrative))
+    return summary_rows, table_rows[:40]
+
+
+def _safe_count(value: Any) -> int:
+    try:
+        return int(float(str(value)))
+    except Exception:
+        return 0
 
 
 def _kv(label: str, value: Any, *, mono: bool = False) -> dict[str, Any]:

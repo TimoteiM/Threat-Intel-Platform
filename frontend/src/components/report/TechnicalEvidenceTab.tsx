@@ -10,6 +10,7 @@ import ThreatFeedsSection from "@/components/report/ThreatFeedsSection";
 import FaviconIntelSection from "@/components/report/FaviconIntelSection";
 import CertTimelineSection from "@/components/report/CertTimelineSection";
 import AnyRunInteractiveEvidence from "@/components/report/AnyRunInteractiveEvidence";
+import AnyRunSandboxIntelligence from "@/components/report/AnyRunSandboxIntelligence";
 
 interface Props {
   evidence: CollectedEvidence;
@@ -1958,6 +1959,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
       )}
 
       <Section title="AnyRun Analysis">
+        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} />
         <AnyRunInteractiveEvidence
           hybridAnalysis={hybridAnalysis}
           investigationId={investigationId}

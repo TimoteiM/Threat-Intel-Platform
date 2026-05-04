@@ -2,6 +2,7 @@
 
 import React from "react";
 import { AnyRunGraph } from "@/components/report/AnyRunInteractiveEvidence";
+import AnyRunSandboxIntelligence from "@/components/report/AnyRunSandboxIntelligence";
 import { useSearchParams } from "next/navigation";
 
 type Props = {
@@ -42,6 +43,7 @@ export default function AnyRunProcessGraphTab({ evidence }: Props) {
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
         Dedicated process tree view (AnyRun source preferred). Use mouse wheel to zoom and drag to pan.
       </div>
+      <AnyRunSandboxIntelligence hybridAnalysis={{ items: renderList }} />
       {renderList.map((item: any, idx: number) => {
         const raw = item?.raw_summary || {};
         const source = String(raw?.source || "hybrid").toUpperCase();

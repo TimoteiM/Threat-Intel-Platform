@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import time
 from contextlib import ExitStack
@@ -645,6 +646,7 @@ def _lookup_intelligence(
                             },
                             "ioc_count": len(ioc_items),
                             "html_report_bytes": len(html_report) if isinstance(html_report, str) else None,
+                            "screenshots": _extract_screenshot_thumbnails(report_data, html_report),
                         }
             except Exception as exc:
                 report_excerpt = {"report_error": str(exc)}
@@ -684,6 +686,7 @@ def _lookup_intelligence(
                 "related_tasks_count": len(related_tasks) if isinstance(related_tasks, list) else 0,
                 "iocs": ioc_items[:500],
                 "report_excerpt": report_excerpt,
+                "screenshots": (report_excerpt.get("screenshots") or [])[:12],
                 "behavior_details": behavior_details,
                 "behavior_graph": _build_behavior_graph(
                     processes=_ensure_list((behavior_details or {}).get("processes")),
@@ -891,6 +894,8 @@ def _run_sandbox(
                 "permanentUrl": analysis.get("permanentUrl"),
                 "behavior_graph_url": ((analysis.get("reports") or {}).get("graph")),
                 "ioc_report_url": ((analysis.get("reports") or {}).get("IOC")),
+                "report_links": (analysis.get("reports") or {}),
+                "screenshots": _extract_screenshot_thumbnails(report_data, html_report),
                 "iocs": ioc_items[:500],
                 "html_report_bytes": len(html_report) if isinstance(html_report, str) else None,
                 "behavior_counts": {
@@ -1318,6 +1323,63 @@ def _extract_iocs(ioc_report: Any) -> list[dict[str, Any]]:
                 if isinstance(v, list):
                     return [x for x in v if isinstance(x, dict)]
     return []
+
+
+def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[dict[str, Any]]:
+    screenshots: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(url: Any, label: str = "ANY.RUN screenshot") -> None:
+        text = str(url or "").strip()
+        if not text:
+            return
+        if text.startswith("//"):
+            text = f"https:{text}"
+        if not (text.startswith("http://") or text.startswith("https://") or text.startswith("data:image/")):
+            return
+        if text.startswith("data:image/") and len(text) > 250_000:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        screenshots.append({"label": label[:80], "url": text})
+
+    def walk(value: Any, label: str = "ANY.RUN screenshot") -> None:
+        if isinstance(value, dict):
+            for key, inner in value.items():
+                key_label = str(key or "")
+                lowered = key_label.lower()
+                next_label = key_label if key_label else label
+                if any(token in lowered for token in ("screen", "shot", "thumb", "image", "png", "jpg", "jpeg", "webp")):
+                    walk(inner, next_label)
+                elif isinstance(inner, (dict, list, tuple)):
+                    walk(inner, label)
+            return
+        if isinstance(value, (list, tuple)):
+            for inner in value:
+                walk(inner, label)
+            return
+        add(value, label)
+
+    if isinstance(report_data, dict):
+        analysis = report_data.get("analysis") or {}
+        walk((analysis or {}).get("reports") or {}, "ANY.RUN report image")
+        walk(report_data.get("screenshots") or report_data.get("images") or [], "ANY.RUN screenshot")
+
+    if isinstance(html_report, str) and html_report:
+        for match in re.finditer(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", html_report, flags=re.I):
+            tag = match.group(0).lower()
+            src = match.group(1)
+            if any(token in tag for token in ("screen", "shot", "thumb", "task", "image")):
+                add(src, "ANY.RUN HTML thumbnail")
+        for match in re.finditer(r"https?://[^\s\"'<>]+?\.(?:png|jpe?g|webp)(?:\?[^\s\"'<>]*)?", html_report, flags=re.I):
+            url = match.group(0)
+            lowered = url.lower()
+            if any(token in lowered for token in ("screen", "shot", "thumb", "task", "image")):
+                add(url, "ANY.RUN HTML image")
+
+    return screenshots[:12]
 
 
 def _normalize_anyrun_labels(values: Any) -> list[str]:
@@ -1910,6 +1972,9 @@ def _extract_process_details(
 
         events = {
             "modified_files": _take_list(proc.get("modifiedFiles") or proc.get("files_modified")),
+            "created_files": _take_list(proc.get("createdFiles") or proc.get("files_created")),
+            "dropped_files": _take_list(proc.get("droppedFiles") or proc.get("files_dropped")),
+            "deleted_files": _take_list(proc.get("deletedFiles") or proc.get("files_deleted")),
             "registry_changes": _take_list(proc.get("registryChanges") or proc.get("registry")),
             "synchronization": _take_list(proc.get("synchronization")),
             "dns_requests": ev_dns,

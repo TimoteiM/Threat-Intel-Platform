@@ -1505,6 +1505,19 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
     for _item in (hybrid.get("items") or [])[:3]:
         if not isinstance(_item, dict):
             continue
+        _sandbox_intel = _item.get("sandbox_intelligence") or {}
+        for _ioc in (_sandbox_intel.get("extracted_iocs") or [])[:100]:
+            if not isinstance(_ioc, dict):
+                continue
+            _ioc_type = str(_ioc.get("type") or "").strip().lower()
+            _ioc_val = str(_ioc.get("value") or "").strip()
+            if _ioc_type in {"domain", "ip", "url", "hash", "email"}:
+                add_ioc(
+                    _ioc_type,
+                    _ioc_val,
+                    str(_ioc.get("context") or "AnyRun sandbox extracted IOC"),
+                    str(_ioc.get("confidence") or "medium"),
+                )
         _raw = _item.get("raw_summary") or {}
         for _ioc in (_raw.get("iocs") or [])[:50]:
             if not isinstance(_ioc, dict):
@@ -2637,12 +2650,34 @@ def _digest_hybrid_analysis(hybrid: dict) -> dict:
                 "verdict": item.get("verdict"),
                 "analysis_id": item.get("analysis_id"),
                 "threat_score": item.get("threat_score"),
+                "sandbox_intelligence": _digest_anyrun_sandbox_intelligence(item.get("sandbox_intelligence") or {}),
                 "contacted_domains": ((item.get("dynamic_io_summary") or {}).get("contacted_domains") or [])[:5],
                 "contacted_ips": ((item.get("dynamic_io_summary") or {}).get("contacted_ips") or [])[:5],
             }
             for item in (hybrid.get("items") or [])[:3]
             if isinstance(item, dict)
         ]
+    }
+
+
+def _digest_anyrun_sandbox_intelligence(intel: dict) -> dict:
+    if not isinstance(intel, dict):
+        return {}
+    process_tree = intel.get("process_tree_summary") or {}
+    return {
+        "summary": intel.get("summary") or {},
+        "process_tree_summary": {
+            "process_count": process_tree.get("process_count"),
+            "edge_count": process_tree.get("edge_count"),
+            "root_processes": (process_tree.get("root_processes") or [])[:3],
+            "high_risk_processes": (process_tree.get("high_risk_processes") or [])[:5],
+            "narrative": process_tree.get("narrative"),
+        },
+        "contacted_hosts": (intel.get("contacted_hosts") or [])[:8],
+        "contacted_ips": (intel.get("contacted_ips") or [])[:8],
+        "dropped_files": (intel.get("dropped_files") or [])[:8],
+        "suspicious_commands": (intel.get("suspicious_commands") or [])[:8],
+        "extracted_iocs": (intel.get("extracted_iocs") or [])[:12],
     }
 
 
@@ -2727,6 +2762,7 @@ def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
                         "contacted_ips": (dynamic.get("contacted_ips") or [])[:5],
                         "processes": (dynamic.get("processes") or [])[:5],
                     },
+                    "sandbox_intelligence": _digest_anyrun_sandbox_intelligence(item.get("sandbox_intelligence") or {}),
                     "raw_summary": dict(list(raw.items())[:5]) if isinstance(raw, dict) else {},
                 }
             )
