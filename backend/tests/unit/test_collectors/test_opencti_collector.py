@@ -204,6 +204,86 @@ def test_opencti_collect_includes_observable_and_report_metadata(monkeypatch):
     assert ev.reports[0].modified == "2025-03-10T11:00:00.000Z"
 
 
+def test_opencti_collect_finds_domain_with_typed_exact_filter_when_search_misses(monkeypatch):
+    class _Settings:
+        opencti_api_url = "https://opencti.example.test"
+        opencti_api_key = "token"
+        opencti_verify_ssl = False
+
+    class _Response:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None, verify=None):
+        query = (json or {}).get("query") or ""
+        variables = (json or {}).get("variables") or {}
+
+        if "GetObservableMetadata" in query:
+            return _Response({"data": {"stixCyberObservable": {}}})
+        if "GetIndicators" in query:
+            return _Response({"data": {"stixCyberObservable": {"indicators": {"edges": []}}}})
+        if "GetReports" in query:
+            return _Response({"data": {"stixCyberObservable": {"reports": {"edges": []}}}})
+        if "GetRelationships" in query:
+            return _Response({"data": {"stixCoreRelationships": {"edges": []}}})
+
+        if "SearchObservable" in query:
+            return _Response({"data": {"stixCyberObservables": {"edges": []}}})
+
+        if "FilterObservableV6Typed" in query:
+            filters = variables.get("filters") or {}
+            filter_rows = filters.get("filters") or []
+            value_filter = filter_rows[0] if filter_rows else {}
+            if (
+                variables.get("types") == ["Domain-Name", "Url"]
+                and value_filter.get("operator") == "eq"
+                and value_filter.get("key") == ["value"]
+                and value_filter.get("values") == ["findmaps-loca.com"]
+            ):
+                return _Response(
+                    {
+                        "data": {
+                            "stixCyberObservables": {
+                                "edges": [
+                                    {
+                                        "node": {
+                                            "id": "obs-findmaps",
+                                            "entity_type": "Domain-Name",
+                                            "observable_value": "findmaps-loca.com",
+                                            "x_opencti_score": 50,
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+
+        return _Response({"data": {"stixCyberObservables": {"edges": []}}})
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    collector = svc.OpenCTICollector(
+        domain="findmaps-loca.com",
+        observable_type="domain",
+        investigation_id=uuid.uuid4(),
+    )
+
+    ev = collector._collect()
+
+    assert ev.found is True
+    assert ev.observable_id == "obs-findmaps"
+    assert ev.observable_entity_type == "Domain-Name"
+    assert ev.observable_value == "findmaps-loca.com"
+    assert ev.score == 50
+
+
 def test_opencti_collect_does_not_accept_unrelated_first_search_result(monkeypatch):
     class _Settings:
         opencti_api_url = "https://opencti.example.test"

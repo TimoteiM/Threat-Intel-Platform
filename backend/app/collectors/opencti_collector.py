@@ -42,6 +42,16 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
+_OPENCTI_VALUE_FILTER_KEYS = ("value", "observable_value")
+
+_OPENCTI_TYPES_BY_OBSERVABLE_TYPE = {
+    "domain": ["Domain-Name", "Url"],
+    "url": ["Url", "Domain-Name"],
+    "ip": ["IPv4-Addr", "IPv6-Addr"],
+    "hash": ["StixFile"],
+    "file": ["StixFile"],
+}
+
 # ── Shared node fragment — keep minimal to avoid schema-version failures ──
 # indicators/reports are fetched separately in best-effort calls below.
 _NODE_FIELDS = """
@@ -172,6 +182,18 @@ query FilterObservableV6($filters: FilterGroup, $first: Int) {{
 """
 
 # ── Query 3: relationships (best-effort, separate call) ──
+_GQL_FILTER_V6_TYPED = f"""
+query FilterObservableV6Typed($types: [String], $filters: FilterGroup, $first: Int) {{
+  stixCyberObservables(types: $types, filters: $filters, first: $first) {{
+    edges {{
+      node {{
+        {_NODE_FIELDS}
+      }}
+    }}
+  }}
+}}
+"""
+
 _GQL_RELATIONSHIPS = """
 query GetRelationships($fromId: [String], $first: Int) {
   stixCoreRelationships(fromId: $fromId, first: $first) {
@@ -354,6 +376,26 @@ class OpenCTICollector(BaseCollector):
         except Exception as exc:
             logger.info("[opencti] search query EXCEPTION for '%s': %s", term, exc)
 
+        for key in _OPENCTI_VALUE_FILTER_KEYS:
+            try:
+                raw = self._gql(
+                    api_url=api_url, api_key=api_key,
+                    query=_GQL_FILTER_V6_TYPED,
+                    variables={
+                        "first": 10,
+                        "types": _opencti_types_for(self.observable_type),
+                        "filters": _v6_filter_group(term, operator="eq", key=key),
+                    },
+                )
+                edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+                logger.info("[opencti] typed v6 exact key=%s term='%s' -> %d edge(s)", key, term, len(edges))
+                node = _best_node(raw, "stixCyberObservables", term)
+                logger.info("[opencti] typed v6 exact key=%s term='%s' best_node=%s", key, term, bool(node))
+                if node:
+                    return node
+            except Exception as exc:
+                logger.info("[opencti] typed v6 exact key=%s EXCEPTION for '%s': %s", key, term, exc)
+
         # Strategy 2 — v5 list-style filter (value contains)
         try:
             raw = self._gql(
@@ -370,6 +412,25 @@ class OpenCTICollector(BaseCollector):
                 return node
         except Exception as exc:
             logger.info("[opencti] v5 filter EXCEPTION for '%s': %s", term, exc)
+
+        for key in _OPENCTI_VALUE_FILTER_KEYS:
+            try:
+                raw = self._gql(
+                    api_url=api_url, api_key=api_key,
+                    query=_GQL_FILTER_V6,
+                    variables={
+                        "first": 10,
+                        "filters": _v6_filter_group(term, operator="contains", key=key),
+                    },
+                )
+                edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+                logger.info("[opencti] v6 filter key=%s term='%s' -> %d edge(s)", key, term, len(edges))
+                node = _best_node(raw, "stixCyberObservables", term)
+                logger.info("[opencti] v6 filter key=%s term='%s' best_node=%s", key, term, bool(node))
+                if node:
+                    return node
+            except Exception as exc:
+                logger.info("[opencti] v6 filter key=%s EXCEPTION for '%s': %s", key, term, exc)
 
         # Strategy 3 — v6 FilterGroup-style filter (value contains)
         try:
@@ -585,6 +646,20 @@ class OpenCTICollector(BaseCollector):
 
 
 # ── Module-level helpers ─────────────────────────────────────────────────────
+
+def _opencti_types_for(observable_type: str) -> list[str]:
+    return _OPENCTI_TYPES_BY_OBSERVABLE_TYPE.get(observable_type, [])
+
+
+def _v6_filter_group(term: str, *, operator: str, key: str = "value") -> dict[str, Any]:
+    return {
+        "mode": "and",
+        "filters": [
+            {"key": [key], "values": [term], "operator": operator, "mode": "or"}
+        ],
+        "filterGroups": [],
+    }
+
 
 def _best_node(raw: dict, query_field: str, term: str) -> dict | None:
     """Return the node whose observable_value actually matches the searched term."""
