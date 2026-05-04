@@ -51,7 +51,7 @@ export default function AnyRunProcessGraphTab({ evidence }: Props) {
             <div style={{ fontSize: 12, color: "var(--accent)", marginBottom: 8 }}>
               Graph #{idx + 1} · {source} · {mode}
             </div>
-            <AnyRunGraph raw={raw} height={760} />
+            <AnyRunGraph raw={raw} height={760} analysisContext={{ item, items }} />
           </div>
         );
       })}

@@ -334,6 +334,42 @@ function _uniq<T>(vals: T[]): T[] {
   return Array.from(new Set(vals));
 }
 
+function _isLookupMode(value: any): boolean {
+  return String(value || "").toLowerCase().includes("lookup");
+}
+
+function _asDisplayScore(value: any): string {
+  return value == null || value === "" ? "-" : String(value);
+}
+
+function _findMaliciousLookupContext(context: any): any | null {
+  const items = arr(context?.items);
+  const current = context?.item || context;
+  const candidates = items.length ? items : [current];
+  for (const item of candidates) {
+    const raw = item?.raw_summary || {};
+    const source = String(raw?.source || "").toLowerCase();
+    const verdict = String(item?.verdict || raw?.verdict || "").toLowerCase();
+    const mode = raw?.mode || item?.mode;
+    if (source === "anyrun" && _isLookupMode(mode) && verdict === "malicious") {
+      return item;
+    }
+    const domainIntel = item?.domain_intelligence;
+    if (domainIntel?.checked && String(domainIntel?.verdict || "").toLowerCase() === "malicious") {
+      return domainIntel;
+    }
+  }
+  return null;
+}
+
+function _lookupContextLabel(item: any): string {
+  const raw = item?.raw_summary || {};
+  const mode = String(raw?.mode || item?.mode || "lookup").toUpperCase();
+  const score = _asDisplayScore(item?.threat_score ?? raw?.threat_score);
+  const id = String(item?.analysis_id || raw?.analysis_id || "").trim();
+  return `${mode} verdict: MALICIOUS${score !== "-" ? `, score ${score}` : ""}${id ? `, analysis ${id}` : ""}`;
+}
+
 function _procSignature(p: any): string {
   const name = String(p?.fileName || p?.image || p?.processName || p?.name || "").toLowerCase();
   const cmd = String(p?.commandLine || p?.cmd || "").toLowerCase();
@@ -1188,7 +1224,7 @@ function layoutProcessGraph(nodes: any[], edges: any[], details: Record<string, 
   return { nodes: laidOutNodes, edges, details };
 }
 
-export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number }) {
+export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any; height?: number; analysisContext?: any }) {
   const processTree = React.useMemo(() => buildProcessTreeGraph(raw || {}), [raw]);
   const rawNodes = arr(processTree?.nodes);
   const rawEdges = arr(processTree?.edges);
@@ -1200,6 +1236,10 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
   const [activeEventCategory, setActiveEventCategory] = React.useState<EventCategoryKey>("modified_files");
   const threatRows = arr(raw?.behavior_details?.network_threats);
   const processDetails = arr(raw?.behavior_details?.process_details);
+  const maliciousLookupContext = React.useMemo(
+    () => _findMaliciousLookupContext(analysisContext),
+    [analysisContext]
+  );
   const graphProcessRefs = React.useMemo(() => {
     const refs = new Set<string>();
     for (const n of rawNodes) {
@@ -1398,6 +1438,11 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
     : [];
   const selectedThreatCount = selectedRefs.reduce((acc, r) => acc + Number(threatByProcess[r]?.count || 0), 0);
   const selectedThreatLevel = selectedRefs.reduce((acc, r) => Math.max(acc, Number(threatByProcess[r]?.maxLevel || 0)), 0);
+  const selectedProcessThreatLevel = Math.max(
+    selectedThreatLevel,
+    _num(selectedProcessDetail?.threat_level ?? selected?.threat_level ?? selected?.threatLevel)
+  );
+  const selectedProcessScore = selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0;
   const selectedEventCounts = React.useMemo(() => {
     const counts: Record<EventCategoryKey, number> = {
       modified_files: 0,
@@ -1530,6 +1575,24 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
 
   return (
     <div style={{ marginBottom: 10, position: "relative" }}>
+      {maliciousLookupContext && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: "9px 12px",
+            border: "1px solid rgba(239,68,68,0.35)",
+            background: "rgba(239,68,68,0.08)",
+            borderRadius: 6,
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong style={{ color: "var(--red, #ef4444)" }}>AnyRun intelligence verdict:</strong>{" "}
+          {_lookupContextLabel(maliciousLookupContext)}. Process scores below are sandbox process telemetry only, so a clean
+          or zero process score means AnyRun did not assign malicious behavior to that specific process in this run.
+        </div>
+      )}
       <div style={{ height, border: "1px solid #132e45", borderRadius: 6, overflow: "hidden", background: "#09202f" }}>
         <ReactFlow
           nodes={nodes}
@@ -1586,8 +1649,8 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                   ID {selected?.pid || selected?.uuid || "-"}
                 </span>
                 {selectedThreatCount > 0 && (
-                  <span style={{ color: selectedThreatLevel >= 2 ? "var(--red)" : "var(--yellow)", marginLeft: 8 }}>
-                    {selectedThreatLevel >= 2 ? "Malicious" : "Suspicious"}
+                  <span style={{ color: selectedProcessThreatLevel >= 2 ? "var(--red)" : "var(--yellow)", marginLeft: 8 }}>
+                    {selectedProcessThreatLevel >= 2 ? "Malicious" : "Suspicious"}
                   </span>
                 )}
               </div>
@@ -1636,7 +1699,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                 <strong>Indicators:</strong> {selectedThreatCount}
               </div>
               <div style={{ marginBottom: 6 }}>
-                <strong>Threat score:</strong> {String(selected?.threat_score ?? selectedProcessDetail?.threat_score ?? "-")}
+                <strong>Process score:</strong> {String(selectedProcessScore ?? "-")}
               </div>
               <div style={{ marginBottom: 6 }}>
                 <strong>Network activity:</strong> {String(selected?.network_count ?? selectedProcessDetail?.network_count ?? "0")}
@@ -1889,7 +1952,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                             }}
                           >
                             <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1 }}>
-                              {selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0}
+                              {selectedProcessScore}
                             </div>
                             <div style={{ fontSize: 11, color: "#93c5fd", marginTop: 6 }}>OUT OF 100</div>
                           </div>
@@ -1899,19 +1962,24 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                                 fontSize: 19,
                                 fontWeight: 800,
                                 color:
-                                  selectedThreatLevel >= 2
+                                  selectedProcessThreatLevel >= 2
                                     ? "#fca5a5"
-                                    : selectedThreatLevel >= 1
+                                    : selectedProcessThreatLevel >= 1
                                       ? "#fde68a"
                                       : "#67e8f9",
                                 marginBottom: 8,
                               }}
                             >
-                              {selectedThreatLevel >= 2 ? "High risk" : selectedThreatLevel >= 1 ? "Suspicious" : "No verdict"}
+                              {selectedProcessThreatLevel >= 2 ? "High risk" : selectedProcessThreatLevel >= 1 ? "Suspicious" : "No process verdict"}
                             </div>
                             <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.5 }}>
-                              The process summary combines AnyRun threat counters, per-process telemetry, and analyst-oriented event grouping so we can inspect the behavior without losing execution context.
+                              This score is scoped to the selected process and comes from live sandbox telemetry. Lookup or community intelligence verdicts are shown separately because they are indicator-level, not process-level.
                             </div>
+                            {maliciousLookupContext && selectedProcessThreatLevel < 1 && _num(selectedProcessScore) === 0 && (
+                              <div style={{ marginTop: 8, color: "#fca5a5", fontSize: 12, lineHeight: 1.4 }}>
+                                Indicator-level AnyRun intelligence is malicious, but this process has no assigned sandbox threat score.
+                              </div>
+                            )}
                             <div style={{ marginTop: 10, color: "#93c5fd", fontSize: 12 }}>
                               Indicators: {selectedThreatCount}
                             </div>
@@ -2037,7 +2105,7 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <AnalystStatChip label="Rows" value={selectedEventCategoryRows.length} />
                             <AnalystStatChip label="Flattened events" value={selectedEvents.length} />
-                            <AnalystStatChip label="Threat score" value={selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0} />
+                            <AnalystStatChip label="Process score" value={selectedProcessScore} />
                           </div>
                         </div>
                       </AnalystCard>
@@ -2291,8 +2359,8 @@ export function AnyRunGraph({ raw, height = 520 }: { raw?: any; height?: number 
                   <EvidenceTable
                     title="Main Information"
                     data={[
-                      { field: "Threat Verdict", value: selectedThreatLevel >= 2 ? "MALICIOUS" : selectedThreatLevel >= 1 ? "SUSPICIOUS" : "NO VERDICT" },
-                      { field: "Threat Score", value: selectedProcessDetail?.threat_score ?? "-" },
+                      { field: "Process Verdict", value: selectedProcessThreatLevel >= 2 ? "MALICIOUS" : selectedProcessThreatLevel >= 1 ? "SUSPICIOUS" : "NO PROCESS VERDICT" },
+                      { field: "Process Score", value: selectedProcessScore ?? "-" },
                       { field: "Username", value: selectedProcessDetail?.username || selected?.user || selected?.username || "-" },
                       { field: "SID", value: selectedProcessDetail?.sid || "-" },
                       { field: "Integrity Level", value: selectedProcessDetail?.integrity_level || "-" },
