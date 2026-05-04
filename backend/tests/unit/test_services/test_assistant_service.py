@@ -1,4 +1,6 @@
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -6,8 +8,19 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.sql import Select
 
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+sys.path = [path for path in sys.path if path != str(BACKEND_ROOT)]
+sys.path.insert(0, str(BACKEND_ROOT))
+loaded_app = sys.modules.get("app")
+if loaded_app and Path(str(getattr(loaded_app, "__file__", ""))).resolve() == BACKEND_ROOT / "__init__.py":
+    sys.modules.pop("app", None)
+
 from app.models.database import AssistantEntry, AssistantSession
 from app.services.assistant_service import AssistantService
+
+
+def _report_body(markdown: str | None) -> str:
+    return (markdown or "").split("\n\n---\n\n## Resolved Identifiers", 1)[0]
 
 
 def _build_session(mode: str = "alert_analysis") -> AssistantSession:
@@ -33,7 +46,11 @@ def _build_session(mode: str = "alert_analysis") -> AssistantSession:
 
 
 def _build_settings() -> SimpleNamespace:
-    return SimpleNamespace(openai_model="gpt-5-mini", openai_api_key="test-key")
+    return SimpleNamespace(
+        anthropic_api_key=None,
+        openai_model="gpt-5-mini",
+        openai_api_key="test-key",
+    )
 
 
 class _ScalarResult:
@@ -80,9 +97,9 @@ async def test_run_session_persists_alert_result_without_sending_raw_text(monkey
     assert result.report_markdown.startswith("# Executive Summary")
     assert result.status == "completed"
     assert "admin@example.com" not in seen_prompt["user_text"]
-    assert "10.0.0.1" not in seen_prompt["user_text"]
+    assert "10.0.0.1" in seen_prompt["user_text"]
     assert "[EMAIL_1]" in seen_prompt["user_text"]
-    assert "[IP_1]" in seen_prompt["user_text"]
+    assert "[IP_" not in seen_prompt["user_text"]
     assert result.entries[0].sanitized_text
     fake_db.commit.assert_awaited()
 
@@ -115,16 +132,84 @@ async def test_run_session_restores_sanitized_tokens_in_final_output(monkeypatch
     service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
 
     async def fake_openai(*, model: str, system: str, user_text: str) -> str:
-        return "# Event Interpretation\n[HOST_1] observed [EMAIL_1] from [IP_1]."
+        return "# Event Interpretation\n[HOST_1] observed [EMAIL_1] from 10.0.0.1."
 
     monkeypatch.setattr(service, "_call_openai", fake_openai)
 
     result = await service.run_session(session_obj.id)
 
-    assert "wm-c06.siembiot.int" in (result.report_markdown or "")
-    assert "admin@example.com" in (result.report_markdown or "")
-    assert "10.0.0.1" in (result.report_markdown or "")
-    assert "[HOST_1]" not in (result.report_markdown or "")
+    report_body = _report_body(result.report_markdown)
+    assert "wm-c06.siembiot.int" in report_body
+    assert "admin@example.com" in report_body
+    assert "10.0.0.1" in report_body
+    assert "[HOST_1]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_restores_markdown_escaped_host_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "hostname=HOST1 srcip=10.0.0.1"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nMalicious activity on \\[HOST_1\\] from 10.0.0.1."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "HOST1" in report_body
+    assert "[HOST_1]" not in report_body
+    assert "\\[HOST_1\\]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_restores_windows_account_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = (
+        "subjectUserName=epentilescu targetUserName=CodexSandboxUsers "
+        "computer=EXP-D07DY24.int.expertware.net"
+    )
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nAccount [ACCOUNT_1] created group on [HOST_1]."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "epentilescu" in report_body
+    assert "EXP-D07DY24.int.expertware.net" in report_body
+    assert "[ACCOUNT_1]" not in report_body
+    assert "[HOST_1]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_replaces_unresolved_hallucinated_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "classification=Ransomware originatorProcess=svchost.exe"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nRansomware was detected on [HOST_1]."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "the affected host" in report_body
+    assert "[HOST_1]" not in report_body
+    assert "Resolved Identifiers" not in (result.report_markdown or "")
 
 
 @pytest.mark.asyncio

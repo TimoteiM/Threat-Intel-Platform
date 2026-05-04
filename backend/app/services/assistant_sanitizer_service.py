@@ -11,11 +11,18 @@ SID_RE = re.compile(r"\bS-\d-(?:\d+-){1,14}\d+\b", re.IGNORECASE)
 # Captures the VALUE in key="VALUE" patterns for user/username/srcuser/dstuser fields.
 # Uses a lookahead so the closing quote is not consumed and remains in the text.
 KEYED_ACCOUNT_RE = re.compile(
-    r'(?P<prefix>\b(?:(?:src|dst)?user(?:name)?)\s*=\s*"?)(?P<value>[A-Za-z0-9][A-Za-z0-9._@-]{0,252})(?="|\s|$)',
+    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:user(?:name)?|accountname|samaccountname))\s*=\s*"?)'
+    r'(?P<value>[A-Za-z0-9][A-Za-z0-9._@\\-]{0,252})(?="|[,\s}]|$)',
+    re.IGNORECASE,
+)
+MESSAGE_ACCOUNT_RE = re.compile(
+    r"(?P<prefix>\b(?:SAM\s+)?Account\s+Name:\s+)"
+    r"(?P<value>[A-Za-z0-9][A-Za-z0-9._@\\-]{0,252})(?=\s|\"|$)",
     re.IGNORECASE,
 )
 KEYED_HOST_RE = re.compile(
-    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:hostname|computername|computer|host|server|device|workstation))(?:(?:\\?")?\s*:\s*(?:\\?")|\s*[=:]\s*))(?P<value>[A-Z0-9._-]+)',
+    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:hostname|computername|computer|host|server|device|workstation))'
+    r'(?:(?:\\*")?\s*:\s*(?:\\*")|\s*[=:]\s*\\*"?))(?P<value>[A-Z0-9._-]+)',
     re.IGNORECASE,
 )
 FREEFORM_HOST_RE = re.compile(
@@ -24,6 +31,17 @@ FREEFORM_HOST_RE = re.compile(
 )
 SIMPLE_HOST_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,251}[A-Z0-9])?$", re.IGNORECASE)
 FQDN_LABEL_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?$", re.IGNORECASE)
+# Syslog RFC-3164 source hostname: <priority>MMM DD HH:MM:SS <hostname>
+SYSLOG_HOST_RE = re.compile(
+    r"(?P<prefix>(?:<\d{1,3}>)?[A-Z][a-z]{2}\s{1,2}\d{1,2}\s\d{2}:\d{2}:\d{2}\s)"
+    r"(?P<value>[A-Z0-9][A-Z0-9._-]{1,253})(?=\s)",
+    re.IGNORECASE,
+)
+# Windows user-profile path: C:\Users\<username>\ or C:/Users/<username>/
+WIN_PATH_USER_RE = re.compile(
+    r"(?P<prefix>[A-Za-z]:[/\\]+Users[/\\]+)(?P<value>[A-Za-z0-9][A-Za-z0-9._-]{0,252})(?=[/\\])",
+    re.IGNORECASE,
+)
 # Bare FQDNs not preceded by a keyword (e.g. "onvmbp01.onenet.be" appearing inline).
 # Requires at least 3 labels (2+ dots) to avoid matching .NET type references.
 # Must not be preceded by @ (emails already handled) or letters/digits (mid-word match).
@@ -70,8 +88,35 @@ def sanitize_entries(
             entry_summary: dict[str, int] = defaultdict(int)
             sanitized_text = _replace_keyed_host_pattern(
                 sanitized_text,
+                SYSLOG_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
                 KEYED_ACCOUNT_RE,
-                "ACCOUNT",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
+                MESSAGE_ACCOUNT_RE,
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
+                WIN_PATH_USER_RE,
                 shared_token_map,
                 reverse_token_map,
                 token_counters,
@@ -100,7 +145,6 @@ def sanitize_entries(
             )
             for label, pattern in (
                 ("emails", EMAIL_RE),
-                ("ips", IP_RE),
                 ("sids", SID_RE),
             ):
                 sanitized_text = _replace_pattern(
@@ -161,6 +205,8 @@ def _replace_pattern(
 
     def repl(match: re.Match[str]) -> str:
         original = match.group(0)
+        if token_prefix == "HOST" and not _looks_like_host(original):
+            return original
         token = reverse_token_map.get(original)
         if token is None:
             token_counters[token_prefix] += 1
@@ -204,6 +250,40 @@ def _replace_keyed_host_pattern(
     return pattern.sub(repl, text)
 
 
+def _replace_keyed_account_pattern(
+    text: str,
+    pattern: re.Pattern[str],
+    shared_token_map: dict[str, str],
+    reverse_token_map: dict[str, str],
+    token_counters: dict[str, int],
+    entry_summary: dict[str, int],
+    batch_summary: dict[str, int],
+) -> str:
+    """Like _replace_keyed_host_pattern but for account values.
+
+    Skips the _looks_like_host gate so that plain domain accounts (e.g.
+    "domain\\username"), usernames without digits, and path-embedded usernames
+    are all tokenised correctly.
+    """
+    label_key = "accounts"
+
+    def repl(match: re.Match[str]) -> str:
+        original = match.group("value")
+        if not original or EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original):
+            return match.group(0)
+        token = reverse_token_map.get(original)
+        if token is None:
+            token_counters["ACCOUNT"] += 1
+            token = f"[ACCOUNT_{token_counters['ACCOUNT']}]"
+            reverse_token_map[original] = token
+            shared_token_map[token] = original
+            batch_summary[label_key] += 1
+        entry_summary[label_key] += 1
+        return f"{match.group('prefix')}{token}"
+
+    return pattern.sub(repl, text)
+
+
 def _looks_like_host(value: str) -> bool:
     candidate = value.strip().strip("\"'")
     if not candidate or len(candidate) > 253:
@@ -213,6 +293,8 @@ def _looks_like_host(value: str) -> bool:
     if "." in candidate:
         labels = candidate.split(".")
         if len(labels) < 2:
+            return False
+        if labels[0].isdigit():
             return False
         if any(not label or len(label) > 63 for label in labels):
             return False

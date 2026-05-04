@@ -288,10 +288,11 @@ def _build_auth_section(extracted: dict[str, Any]) -> dict[str, Any]:
     dkim = (_s(auth.get("dkim")) or "none").lower()
     dmarc = (_s(auth.get("dmarc")) or "none").lower()
 
-    fails = sum(1 for v in (spf, dkim, dmarc) if v in {"fail", "none", "softfail", "permerror", "temperror"})
-    if fails >= 2:
+    concrete_failures = sum(1 for v in (spf, dkim, dmarc) if _is_auth_failure(v))
+    missing_results = sum(1 for v in (spf, dkim, dmarc) if _is_auth_missing(v))
+    if concrete_failures >= 2 or (concrete_failures >= 1 and missing_results >= 1):
         spoof = "high"
-    elif fails == 1:
+    elif concrete_failures == 1 or missing_results >= 2:
         spoof = "medium"
     else:
         spoof = "low"
@@ -343,10 +344,11 @@ def _final_conclusion(
 
     spoof = auth_section.get("spoofing_risk_assessment")
 
-    # Only classify malicious when strong infrastructure/reputation signals are present.
+    # Only classify based on infrastructure/reputation, URL, and attachment outcomes.
+    # Authentication gaps or spoofability are context, not enough to make an email suspicious.
     if max_rank >= 3:
         classification = "malicious"
-    elif max_rank >= 2 or spoof == "high":
+    elif max_rank >= 2:
         classification = "suspicious"
     elif max_rank == 1:
         classification = "inconclusive"
@@ -390,4 +392,12 @@ def _rank_classification(value: str) -> int:
         "suspicious": 2,
         "malicious": 3,
     }.get(v, 0)
+
+
+def _is_auth_missing(value: str) -> bool:
+    return (value or "").strip().lower() in {"", "none", "neutral", "unknown", "not present"}
+
+
+def _is_auth_failure(value: str) -> bool:
+    return (value or "").strip().lower() in {"fail", "softfail", "permerror", "temperror"}
 

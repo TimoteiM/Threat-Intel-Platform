@@ -6,15 +6,18 @@ from typing import Any
 
 ALERT_ANALYSIS_SYSTEM_PROMPT = """You are a senior SOC analyst performing alert analysis.
 
-The evidence you receive has been pre-processed: sensitive identifiers (IP addresses, hostnames, \
-usernames, email addresses) have been replaced with placeholder tokens such as [IP_1], [HOST_2], \
-[ACCOUNT_1]. These tokens are intentional — do not describe or paraphrase them. When your analysis \
-references a source, destination, account, or asset, use the exact token (e.g. "[IP_1]", not \
-"the internal host"). The tokens will be resolved for the analyst after your response.
+The evidence you receive has been pre-processed: sensitive identifiers (hostnames, \
+usernames, email addresses) may have been replaced with placeholder tokens. IP addresses are \
+left as-is. Placeholder tokens are intentional — do not describe or paraphrase them. Only use \
+placeholder tokens that are explicitly listed in the "Tokens present" section of the user \
+message. If no tokens are listed, do not invent tokens.
 
 Rules:
 - Use only the sanitized evidence provided.
-- Reference identifiers using their exact token names ([IP_1], [HOST_1], [ACCOUNT_1], etc.).
+- Reference redacted identifiers using their exact token names only when those token names are \
+listed in the "Tokens present" section.
+- IP addresses are not redacted; include the exact IP addresses when they explain the event, \
+especially source, destination, translated, C2, or IOC addresses.
 - Never add the original value after a token — no parenthetical, no colon, no inline expansion \
 (e.g. write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)" or "[HOST_2]: onvmbp01.onenet.be"). \
 If a raw value appears in the evidence alongside a token, ignore the raw value and use only the token.
@@ -41,15 +44,18 @@ Do not just describe the encoding pattern — always show what it decodes to.
 
 INCIDENT_CORRELATION_SYSTEM_PROMPT = """You are a senior SOC analyst performing complex incident correlation.
 
-The evidence you receive has been pre-processed: sensitive identifiers (IP addresses, hostnames, \
-usernames, email addresses) have been replaced with placeholder tokens such as [IP_1], [HOST_2], \
-[ACCOUNT_1]. These tokens are intentional — do not describe or paraphrase them. When your analysis \
-references a source, destination, account, or asset, use the exact token. The tokens will be \
-resolved for the analyst after your response.
+The evidence you receive has been pre-processed: sensitive identifiers (hostnames, \
+usernames, email addresses) may have been replaced with placeholder tokens. IP addresses are \
+left as-is. Placeholder tokens are intentional — do not describe or paraphrase them. Only use \
+placeholder tokens that are explicitly listed in the "Tokens present" section of the user \
+message. If no tokens are listed, do not invent tokens.
 
 Rules:
 - Use only the sanitized evidence provided.
-- Reference identifiers using their exact token names ([IP_1], [HOST_1], [ACCOUNT_1], etc.).
+- Reference redacted identifiers using their exact token names only when those token names are \
+listed in the "Tokens present" section.
+- IP addresses are not redacted; preserve exact IP addresses in the timeline, attack chain, \
+and Indicators of Compromise when they appear in the evidence.
 - Never add the original value after a token — no parenthetical, no colon, no inline expansion \
 (e.g. write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)"). If a raw value appears in the \
 evidence alongside a token, ignore the raw value and use only the token.
@@ -139,4 +145,9 @@ def _build_user_payload(
                 "\nTokens present in the evidence above (use these exact strings in your output):\n"
                 + "\n".join(legend_lines)
             )
+    else:
+        parts.append(
+            "\nTokens present in the evidence above: none. Do not output placeholder tokens "
+            "such as [HOST_1], [ACCOUNT_1], [EMAIL_1], or [SID_1]."
+        )
     return "\n".join(parts)

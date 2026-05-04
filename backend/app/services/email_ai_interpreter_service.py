@@ -36,13 +36,16 @@ Rules:
 
 Email-specific classification rules (apply strictly):
 - If SPF=fail AND DMARC policy is none or absent: sender_domain classification is at minimum "suspicious".
+- Missing/none SPF, DKIM, or DMARC alone is an authentication gap only; it is NOT enough to classify
+  the email, sender domain, or overall verdict as suspicious.
 - If domain_age_days < 30: HIGH-severity signal; include prominently in findings.
 - If domain_age_days < 7: EXTREME signal; overall_verdict must be at minimum "suspicious".
 - If any URL has credential_form_present=true: overall_verdict is at minimum "suspicious".
 - If any attachment vt.malicious_count > 0: overall_verdict = "malicious", confidence = "high".
 - If AnyRun verdict is "malicious" for any item AND threat_score >= 95: overall_verdict = "malicious".
 - If AnyRun verdict is "malicious" for any item AND threat_score < 95: treat as suspicious signal only — do NOT set overall_verdict = "malicious" on this alone.
-- If spoofability_score is "high": mention the domain can be trivially spoofed.
+- If spoofability_score is "high": mention the domain can be trivially spoofed, but do NOT raise
+  overall_verdict to suspicious unless another concrete risk signal is present.
 
 You will receive:
 - ONLY suspicious or malicious URLs and attachments (clean ones are excluded from url_assessments/attachment_narratives).

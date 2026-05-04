@@ -1,5 +1,14 @@
 import asyncio
+import sys
 import threading
+from pathlib import Path
+
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+sys.path = [path for path in sys.path if path != str(BACKEND_ROOT)]
+sys.path.insert(0, str(BACKEND_ROOT))
+loaded_app = sys.modules.get("app")
+if loaded_app and Path(str(getattr(loaded_app, "__file__", ""))).resolve() == BACKEND_ROOT / "__init__.py":
+    sys.modules.pop("app", None)
 
 from app.services import email_indicator_checks_service as indicator_svc
 from app.services import email_investigation_processing_service as processing_svc
@@ -278,3 +287,111 @@ def test_run_email_indicator_checks_skips_hybrid_fanout_when_anyrun_enabled(monk
     assert checks["urls"][0]["hybrid_analysis"]["checked"] is False
     assert "single email-level AnyRun submission" in checks["urls"][0]["hybrid_analysis"]["error"]
     assert checks["attachments"]["items"][0]["hybrid_analysis"]["checked"] is False
+
+
+def test_deterministic_verdict_does_not_mark_missing_auth_as_suspicious() -> None:
+    checks = {
+        "urls": [],
+        "attachments": {"items": []},
+        "email_security": {
+            "spoofability_score": "high",
+            "dmarc_policy": None,
+            "spf_all_qualifier": None,
+        },
+        "sender_domain": {"whois": {}},
+        "content_ml": {},
+        "final_risk": {"risk_level": "low"},
+    }
+
+    verdict, signals = processing_svc._deterministic_overall_verdict(checks)
+
+    assert verdict == "inconclusive"
+    assert not any("spoofability" in signal.lower() for signal in signals)
+
+
+def test_deterministic_verdict_returns_clean_when_urls_and_anyrun_are_clean() -> None:
+    checks = {
+        "urls": [
+            {
+                "url": "https://example.com",
+                "effective_verdict": "clean",
+                "vt": {"verdict": "clean", "malicious_count": 0, "suspicious_count": 0},
+                "anyrun": {"checked": True, "verdict": "clean"},
+                "url_behavior": {"credential_form_present": False},
+            }
+        ],
+        "attachments": {"items": []},
+        "email_anyrun": {"checked": True, "verdict": "clean"},
+        "email_security": {
+            "spoofability_score": "high",
+            "dmarc_policy": None,
+            "spf_all_qualifier": None,
+        },
+        "sender_domain": {"whois": {}},
+        "content_ml": {},
+        "final_risk": {"risk_level": "low", "risk_score": 10},
+    }
+
+    verdict, signals = processing_svc._deterministic_overall_verdict(checks)
+
+    assert verdict == "clean"
+    assert any("clean" in signal.lower() for signal in signals)
+
+
+def test_process_email_investigation_overrides_ai_inconclusive_when_checks_are_clean(monkeypatch) -> None:
+    extracted = {
+        "email_subject": "Quarterly Update",
+        "sender_email": "noreply@example.com",
+        "sender_domain": "example.com",
+        "sender_ip": "1.2.3.4",
+        "authentication": {"spf": None, "dkim": None, "dmarc": None},
+        "urls": ["https://example.com"],
+        "url_domains": ["example.com"],
+        "attachments": [],
+    }
+
+    monkeypatch.setattr(processing_svc, "extract_email_iocs", lambda payload, filename: extracted)
+    monkeypatch.setattr(
+        processing_svc,
+        "run_email_indicator_checks",
+        lambda *args, **kwargs: {
+            "sender_domain": {},
+            "sender_ip": {},
+            "urls": [
+                {
+                    "url": "https://example.com",
+                    "effective_verdict": "clean",
+                    "vt": {"verdict": "clean"},
+                    "anyrun": {"checked": True, "verdict": "clean"},
+                    "url_behavior": {"credential_form_present": False},
+                }
+            ],
+            "attachments": {"items": []},
+            "email_security": {"spoofability_score": "high"},
+            "email_anyrun": {"checked": True, "verdict": "clean"},
+            "final_risk": {"risk_level": "low", "risk_score": 10},
+        },
+    )
+
+    async def fake_ai(_payload):
+        return {
+            "overall_verdict": "inconclusive",
+            "confidence": "low",
+            "primary_signals": [],
+            "url_assessments": [],
+            "attachment_narratives": [],
+            "sender_domain_analysis": {"primary_reasoning": "No decisive signal."},
+        }
+
+    monkeypatch.setattr(processing_svc, "interpret_email_results_with_ai", fake_ai)
+
+    result = asyncio.run(
+        processing_svc.process_email_investigation(
+            payload=b"From: a@example.com\r\nSubject: Test\r\n\r\nBody",
+            filename="sample.eml",
+            run_ai=True,
+        )
+    )
+
+    assert result["resolution"]["overall_verdict"] == "clean"
+    assert result["resolution"]["confidence"] == "medium"

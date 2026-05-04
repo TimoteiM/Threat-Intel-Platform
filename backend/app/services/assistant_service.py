@@ -181,9 +181,13 @@ class AssistantService:
                 system=system,
                 user_text=user_text,
             )
+            # Strip AI-generated parenthetical expansions (e.g. "[IP_1] (10.0.0.1)")
+            # before restoring tokens so the final report stays clean.
+            cleaned = self._scrub_token_leakage(report_markdown)
             # Restore any tokens Claude used inline, then append the full identifier
             # table so analysts always see every resolved value.
-            restored = self._restore_tokens(report_markdown, merged_token_map)
+            restored = self._restore_tokens(cleaned, merged_token_map)
+            restored = self._replace_unresolved_tokens(restored, merged_token_map)
             final_report = self._append_resolved_identifiers(restored, merged_token_map)
 
             assistant_session.result_json = {
@@ -305,11 +309,42 @@ class AssistantService:
             raise ValueError(f"Assistant session {session_id} not found")
         return assistant_session.report_markdown or ""
 
+    def _scrub_token_leakage(self, text: str) -> str:
+        """Remove parenthetical values the AI adds after tokens despite instructions.
+
+        e.g. "[ACCOUNT_1] (povgrp\\pom29)" → "[ACCOUNT_1]"
+        """
+        return re.sub(r"(\[[A-Z]+_\d+\])\s*\([^)]{1,200}\)", r"\1", text)
+
     def _restore_tokens(self, text: str, token_map: dict[str, str]) -> str:
         restored = text
         for token, original in sorted(token_map.items(), key=lambda item: len(item[0]), reverse=True):
             restored = restored.replace(token, original)
+            escaped_token = token.replace("[", r"\[").replace("]", r"\]")
+            restored = restored.replace(escaped_token, original)
+            token_pattern = re.escape(token).replace(r"\[", r"\\?\[").replace(r"\]", r"\\?\]")
+            restored = re.sub(token_pattern, original, restored, flags=re.IGNORECASE)
         return restored
+
+    _INLINE_TOKEN_RE = re.compile(r"\\?\[(?P<prefix>[A-Z]+)_(?P<number>\d+)\\?\]", re.IGNORECASE)
+    _UNRESOLVED_TOKEN_LABELS: dict[str, str] = {
+        "HOST": "the affected host",
+        "ACCOUNT": "the affected account",
+        "EMAIL": "the affected email address",
+        "SID": "the affected security identifier",
+        "IP": "the affected IP address",
+    }
+
+    def _replace_unresolved_tokens(self, text: str, token_map: dict[str, str]) -> str:
+        known_tokens = {token.upper() for token in token_map}
+
+        def repl(match: re.Match[str]) -> str:
+            token = f"[{match.group('prefix').upper()}_{match.group('number')}]"
+            if token in known_tokens:
+                return match.group(0)
+            return self._UNRESOLVED_TOKEN_LABELS.get(match.group("prefix").upper(), "the affected identifier")
+
+        return self._INLINE_TOKEN_RE.sub(repl, text)
 
     _TOKEN_CATEGORY: dict[str, str] = {
         "IP": "IP Address",

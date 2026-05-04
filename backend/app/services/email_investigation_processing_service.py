@@ -128,12 +128,18 @@ async def process_email_investigation(
         }
         resolution_source = "disabled"
 
-    # Compute deterministic overall_verdict when AI didn't provide one
+    # Compute deterministic overall_verdict when AI didn't provide one.
+    # If AI is cautious/inconclusive but deterministic checks are all clean,
+    # prefer the checked-clean verdict over an ambiguous result.
+    det_verdict, det_signals = _deterministic_overall_verdict(checks)
     if resolution_source != "ai":
-        det_verdict, det_signals = _deterministic_overall_verdict(checks)
         resolution["overall_verdict"] = det_verdict
         resolution["primary_signals"] = det_signals
         resolution["confidence"] = "medium" if len(det_signals) >= 2 else "low"
+    elif str(resolution.get("overall_verdict") or "").lower() == "inconclusive" and det_verdict == "clean":
+        resolution["overall_verdict"] = "clean"
+        resolution["primary_signals"] = det_signals
+        resolution["confidence"] = "medium"
 
     # Always build the bullet-point template as the primary formatted_resolution.
     # AI provides narratives for suspicious items that are woven into the template.
@@ -704,6 +710,7 @@ def _render_template_resolution(
     auth_header = extracted.get("authentication") or {}
     spf_header = str(auth_header.get("spf") or "none").lower()
     dkim_header = str(auth_header.get("dkim") or "none").lower()
+    dmarc_header = str(auth_header.get("dmarc") or "none").lower()
 
     # Only flag authentication issues that are actionable for the client
     auth_warnings: list[str] = []
@@ -711,7 +718,9 @@ def _render_template_resolution(
         auth_warnings.append("the email failed SPF authentication")
     if dkim_header == "fail":
         auth_warnings.append("DKIM signature is invalid")
-    if spoofability == "high":
+    if dmarc_header == "fail":
+        auth_warnings.append("the email failed DMARC authentication")
+    if spoofability == "high" and any(v == "fail" for v in (spf_header, dkim_header, dmarc_header)):
         auth_warnings.append("the sender domain can be trivially spoofed")
 
     # Only surface domain age when newly registered (suspicious signal)
@@ -1472,7 +1481,7 @@ def _deterministic_overall_verdict(checks: dict[str, Any]) -> tuple[str, list[st
     spf_all = str(es.get("spf_all_qualifier") or "").lower()
     dmarc_policy = str(es.get("dmarc_policy") or "").lower()
     spoofability = str(es.get("spoofability_score") or "").lower()
-    if spoofability == "high":
+    if spoofability == "high" and _email_security_has_concrete_auth_failure(es):
         signals.append(f"Domain spoofability: HIGH (DMARC={dmarc_policy or 'none'}, SPF={spf_all or 'none'})")
         if verdict == "inconclusive":
             verdict = "suspicious"
@@ -1505,7 +1514,11 @@ def _deterministic_overall_verdict(checks: dict[str, Any]) -> tuple[str, list[st
         verdict = "suspicious"
 
     if not signals:
-        verdict = "inconclusive"
+        if _has_positive_clean_evidence(checks):
+            verdict = "clean"
+            signals.append("Checked URLs, attachments, sandbox, or reputation sources returned clean results.")
+        else:
+            verdict = "inconclusive"
 
     return verdict, signals[:5]
 
@@ -1535,6 +1548,67 @@ def _describe_destination_domain(domain: str) -> str:
     if lowered.endswith(".edu"):
         return "education/academic destination"
     return "general web destination"
+
+
+def _email_security_has_concrete_auth_failure(email_security: dict[str, Any]) -> bool:
+    if not isinstance(email_security, dict):
+        return False
+    values = [
+        str(email_security.get("spf_result") or "").lower(),
+        str(email_security.get("dkim_result") or "").lower(),
+        str(email_security.get("dmarc_result") or "").lower(),
+        str(email_security.get("spf_all_qualifier") or "").lower(),
+        str(email_security.get("dmarc_policy") or "").lower(),
+    ]
+    return any(value in {"fail", "softfail", "permerror", "temperror", "+all"} for value in values)
+
+
+def _has_positive_clean_evidence(checks: dict[str, Any]) -> bool:
+    """True when at least one meaningful detector actually ran and returned clean."""
+    email_anyrun = checks.get("email_anyrun") or {}
+    if email_anyrun.get("checked") and str(email_anyrun.get("verdict") or "").lower() == "clean":
+        return True
+
+    for item in checks.get("urls") or []:
+        if not isinstance(item, dict):
+            continue
+        verdicts = {
+            str(item.get("effective_verdict") or "").lower(),
+            str((item.get("vt") or {}).get("verdict") or "").lower(),
+            str((item.get("anyrun") or {}).get("verdict") or "").lower(),
+            str((item.get("urlscan") or {}).get("verdict") or "").lower(),
+        }
+        if "clean" in verdicts:
+            return True
+
+    for att in (checks.get("attachments") or {}).get("items") or []:
+        if not isinstance(att, dict):
+            continue
+        verdicts = {
+            str((att.get("vt") or {}).get("verdict") or "").lower(),
+            str((att.get("anyrun") or {}).get("verdict") or "").lower(),
+            str((att.get("hybrid_analysis") or {}).get("verdict") or "").lower(),
+        }
+        if "clean" in verdicts:
+            return True
+
+    for section_name in ("sender_domain", "sender_ip"):
+        section = checks.get(section_name) or {}
+        verdicts = {
+            str((section.get("vt") or {}).get("verdict") or "").lower(),
+            str((section.get("urlscan") or {}).get("verdict") or "").lower(),
+        }
+        if "clean" in verdicts:
+            return True
+
+    final_risk = checks.get("final_risk") or {}
+    risk_level = str(final_risk.get("risk_level") or final_risk.get("verdict") or "").lower()
+    if risk_level in {"clean", "low"} and (
+        final_risk.get("risk_score") is not None or final_risk.get("score") is not None
+    ):
+        return True
+
+    return False
 
 
 def _infer_url_purpose(items: list[dict[str, Any]]) -> str:
