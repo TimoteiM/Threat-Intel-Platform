@@ -374,6 +374,8 @@ class OpenCTICollector(BaseCollector):
             if node:
                 return node
         except Exception as exc:
+            if not _is_strategy_compatibility_error(exc):
+                raise
             logger.info("[opencti] search query EXCEPTION for '%s': %s", term, exc)
 
         for key in _OPENCTI_VALUE_FILTER_KEYS:
@@ -394,6 +396,8 @@ class OpenCTICollector(BaseCollector):
                 if node:
                     return node
             except Exception as exc:
+                if not _is_strategy_compatibility_error(exc):
+                    raise
                 logger.info("[opencti] typed v6 exact key=%s EXCEPTION for '%s': %s", key, term, exc)
 
         # Strategy 2 — v5 list-style filter (value contains)
@@ -411,6 +415,8 @@ class OpenCTICollector(BaseCollector):
             if node:
                 return node
         except Exception as exc:
+            if not _is_strategy_compatibility_error(exc):
+                raise
             logger.info("[opencti] v5 filter EXCEPTION for '%s': %s", term, exc)
 
         for key in _OPENCTI_VALUE_FILTER_KEYS:
@@ -430,6 +436,8 @@ class OpenCTICollector(BaseCollector):
                 if node:
                     return node
             except Exception as exc:
+                if not _is_strategy_compatibility_error(exc):
+                    raise
                 logger.info("[opencti] v6 filter key=%s EXCEPTION for '%s': %s", key, term, exc)
 
         # Strategy 3 — v6 FilterGroup-style filter (value contains)
@@ -455,6 +463,8 @@ class OpenCTICollector(BaseCollector):
             if node:
                 return node
         except Exception as exc:
+            if not _is_strategy_compatibility_error(exc):
+                raise
             logger.info("[opencti] v6 filter EXCEPTION for '%s': %s", term, exc)
 
         return None
@@ -649,6 +659,32 @@ class OpenCTICollector(BaseCollector):
 
 def _opencti_types_for(observable_type: str) -> list[str]:
     return _OPENCTI_TYPES_BY_OBSERVABLE_TYPE.get(observable_type, [])
+
+
+def _is_strategy_compatibility_error(exc: Exception) -> bool:
+    """
+    True for GraphQL schema/filter-shape failures that should fall through to
+    the next lookup strategy. Transport/auth/permission failures must surface
+    as collector failures instead of being misreported as "not found".
+    """
+    if not isinstance(exc, ValueError):
+        return False
+
+    message = str(exc).lower()
+    if "opencti:" in message:
+        return False
+
+    compatibility_markers = (
+        "graphql errors",
+        "unknown argument",
+        "unknown type",
+        "cannot query field",
+        "field \"",
+        "variable \"$",
+        "expected type",
+        "got invalid value",
+    )
+    return any(marker in message for marker in compatibility_markers)
 
 
 def _v6_filter_group(term: str, *, operator: str, key: str = "value") -> dict[str, Any]:

@@ -284,6 +284,32 @@ def test_opencti_collect_finds_domain_with_typed_exact_filter_when_search_misses
     assert ev.score == 50
 
 
+def test_opencti_transport_failure_marks_collector_failed(monkeypatch):
+    class _Settings:
+        opencti_api_url = "https://opencti.example.test"
+        opencti_api_key = "token"
+        opencti_verify_ssl = False
+
+    def fake_post(*args, **kwargs):
+        raise svc.requests.exceptions.ConnectionError("network unreachable")
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    collector = svc.OpenCTICollector(
+        domain="findmaps-loca.com",
+        observable_type="domain",
+        investigation_id=uuid.uuid4(),
+    )
+
+    ev, meta, _ = collector.run()
+
+    assert meta.status.value == "failed"
+    assert "network unreachable" in (meta.error or "")
+    assert ev.found is False
+    assert ev.notes == []
+
+
 def test_opencti_collect_does_not_accept_unrelated_first_search_result(monkeypatch):
     class _Settings:
         opencti_api_url = "https://opencti.example.test"

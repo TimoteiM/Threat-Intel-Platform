@@ -33,9 +33,16 @@ async def export_investigation_pdf(investigation_id: str, session: DBSession):
     detail_dict = {
         "id": str(detail.id),
         "domain": detail.domain,
+        "observable_type": getattr(detail, "observable_type", "domain"),
         "state": detail.state,
         "classification": detail.classification,
+        "confidence": detail.confidence,
+        "risk_score": detail.risk_score,
+        "recommended_action": detail.recommended_action,
+        "client_domain": detail.client_domain,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
+        "updated_at": detail.updated_at.isoformat() if detail.updated_at else None,
+        "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
     try:
@@ -70,9 +77,16 @@ async def export_investigation_json(investigation_id: str, session: DBSession):
     detail_dict = {
         "id": str(detail.id),
         "domain": detail.domain,
+        "observable_type": getattr(detail, "observable_type", "domain"),
         "state": detail.state,
         "classification": detail.classification,
+        "confidence": detail.confidence,
+        "risk_score": detail.risk_score,
+        "recommended_action": detail.recommended_action,
+        "client_domain": detail.client_domain,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
+        "updated_at": detail.updated_at.isoformat() if detail.updated_at else None,
+        "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
     json_bytes = export_json(evidence, report, detail_dict)
@@ -101,9 +115,16 @@ async def export_investigation_md(investigation_id: str, session: DBSession):
     detail_dict = {
         "id": str(detail.id),
         "domain": detail.domain,
+        "observable_type": getattr(detail, "observable_type", "domain"),
         "state": detail.state,
         "classification": detail.classification,
+        "confidence": detail.confidence,
+        "risk_score": detail.risk_score,
+        "recommended_action": detail.recommended_action,
+        "client_domain": detail.client_domain,
         "created_at": detail.created_at.isoformat() if detail.created_at else None,
+        "updated_at": detail.updated_at.isoformat() if detail.updated_at else None,
+        "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
     md_text = export_markdown(evidence, report, detail_dict)

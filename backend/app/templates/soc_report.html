@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ soc_report.title }} - {{ domain }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm 20mm 16mm;
+      @top-left {
+        content: "SOC Investigation Report";
+        font-size: 8px;
+        color: #64748b;
+        font-family: Arial, sans-serif;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+      @bottom-left {
+        content: "CONFIDENTIAL - Internal SOC Use Only";
+        font-size: 8px;
+        color: #64748b;
+        font-family: Arial, sans-serif;
+      }
+      @bottom-right {
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 8px;
+        color: #64748b;
+        font-family: Arial, sans-serif;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #172033;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10.5px;
+      line-height: 1.45;
+      background: #fff;
+    }
+    h1, h2, h3, p { margin: 0; }
+    .mono { font-family: "Courier New", monospace; word-break: break-word; }
+    .muted { color: #64748b; }
+    .small { font-size: 9px; }
+    .page-break { page-break-before: always; }
+    .avoid-break { page-break-inside: avoid; }
+
+    .classification-bar {
+      height: 7px;
+      background: {{ soc_report.classification_color }};
+      margin-bottom: 18px;
+    }
+    .cover {
+      border: 1px solid #cbd5e1;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    .eyebrow {
+      color: #475569;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .title {
+      font-size: 25px;
+      line-height: 1.1;
+      font-weight: 800;
+      color: #0f172a;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      color: #475569;
+      font-size: 11px;
+      margin-bottom: 18px;
+    }
+    .observable {
+      font-size: 13px;
+      color: #0f172a;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 9px 10px;
+      margin-bottom: 12px;
+    }
+
+    .verdict-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .metric {
+      border: 1px solid #dbe3ee;
+      background: #f8fafc;
+      padding: 9px 10px;
+      min-height: 54px;
+    }
+    .metric-label {
+      font-size: 8px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .metric-value {
+      font-size: 13px;
+      font-weight: 800;
+      color: #0f172a;
+      overflow-wrap: anywhere;
+    }
+    .metric-value.classification { color: {{ soc_report.classification_color }}; }
+
+    .section {
+      margin: 15px 0 0;
+      page-break-inside: avoid;
+    }
+    .section-title {
+      font-size: 12px;
+      color: #0f172a;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      border-bottom: 2px solid #dbe3ee;
+      padding-bottom: 5px;
+      margin-bottom: 8px;
+    }
+    .section-subtitle {
+      font-size: 10px;
+      color: #475569;
+      margin-bottom: 8px;
+    }
+    .narrative {
+      border-left: 3px solid {{ soc_report.classification_color }};
+      background: #f8fafc;
+      padding: 10px 12px;
+      color: #243244;
+      font-size: 11px;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 10px;
+    }
+    .kv {
+      border-bottom: 1px solid #edf2f7;
+      padding: 4px 0;
+    }
+    .kv-label {
+      display: inline-block;
+      width: 35%;
+      color: #64748b;
+      font-weight: 700;
+      vertical-align: top;
+      font-size: 9px;
+    }
+    .kv-value {
+      display: inline-block;
+      width: 63%;
+      color: #172033;
+      overflow-wrap: anywhere;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 5px;
+      table-layout: fixed;
+    }
+    th {
+      background: #eef2f7;
+      color: #475569;
+      font-size: 8px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      text-align: left;
+      padding: 6px 7px;
+      border: 1px solid #dbe3ee;
+    }
+    td {
+      padding: 6px 7px;
+      border: 1px solid #e5edf5;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    tr:nth-child(even) td { background: #fbfdff; }
+
+    .finding {
+      border: 1px solid #dbe3ee;
+      border-left: 4px solid #94a3b8;
+      padding: 9px 11px;
+      margin-bottom: 8px;
+      background: #fff;
+      page-break-inside: avoid;
+    }
+    .finding.critical { border-left-color: #7c3aed; background: #faf5ff; }
+    .finding.high { border-left-color: #ef4444; background: #fff7f7; }
+    .finding.medium { border-left-color: #f59e0b; background: #fffbeb; }
+    .finding.low { border-left-color: #2563eb; background: #eff6ff; }
+    .finding.info { border-left-color: #64748b; background: #f8fafc; }
+    .finding-title {
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      margin-right: 5px;
+    }
+    .badge.critical { background: #ede9fe; color: #6d28d9; }
+    .badge.high { background: #fee2e2; color: #b91c1c; }
+    .badge.medium { background: #fef3c7; color: #92400e; }
+    .badge.low { background: #dbeafe; color: #1d4ed8; }
+    .badge.completed { background: #dcfce7; color: #166534; }
+    .badge.failed { background: #fee2e2; color: #b91c1c; }
+    .badge.running { background: #dbeafe; color: #1d4ed8; }
+
+    ul, ol { margin: 5px 0 0 18px; padding: 0; }
+    li { margin-bottom: 4px; }
+
+    .appendix-section {
+      margin-bottom: 13px;
+      page-break-inside: avoid;
+    }
+    .appendix-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: #0f172a;
+      background: #f1f5f9;
+      border: 1px solid #dbe3ee;
+      padding: 7px 8px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="classification-bar"></div>
+
+  <div class="cover">
+    <div class="eyebrow">{{ soc_report.subtitle }}</div>
+    <h1 class="title">{{ soc_report.title }}</h1>
+    <p class="subtitle">Generated {{ soc_report.generated_at }} UTC for formal SOC review, escalation, and evidence retention.</p>
+    <div class="observable mono">{{ domain }}</div>
+
+    <div class="verdict-grid">
+      <div class="metric">
+        <div class="metric-label">Classification</div>
+        <div class="metric-value classification">{{ soc_report.verdict.classification }}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Confidence</div>
+        <div class="metric-value">{{ soc_report.verdict.confidence }}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Risk Score</div>
+        <div class="metric-value">
+          {{ soc_report.verdict.risk_score if soc_report.verdict.risk_score is not none else "N/A" }}{% if soc_report.verdict.risk_score is not none %}/100{% endif %}
+        </div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Recommended Action</div>
+        <div class="metric-value">{{ soc_report.verdict.recommended_action }}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Case Metadata</div>
+      <div class="kv-grid">
+        {% for item in soc_report.case_metadata %}
+        {% if item.value %}
+        <div class="kv">
+          <span class="kv-label">{{ item.label }}</span>
+          <span class="kv-value{% if item.mono %} mono{% endif %}">{{ item.value }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">1. Executive Summary</div>
+    <div class="narrative">{{ soc_report.summary }}</div>
+  </div>
+
+  {% if soc_report.assessment_points %}
+  <div class="section">
+    <div class="section-title">2. Analyst Assessment</div>
+    <ul>
+      {% for point in soc_report.assessment_points %}
+      <li>{{ point }}</li>
+      {% endfor %}
+    </ul>
+    {% if soc_report.verdict.risk_rationale %}
+    <p class="section-subtitle" style="margin-top:8px;"><strong>Risk rationale:</strong> {{ soc_report.verdict.risk_rationale }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="section">
+    <div class="section-title">3. Evidence Matrix</div>
+    {% if soc_report.key_evidence %}
+    <table>
+      <tr><th style="width:30%">Evidence Reference</th><th>Observed Value / Analyst Relevance</th></tr>
+      {% for row in soc_report.key_evidence %}
+      <tr>
+        <td class="mono">{{ row.ref }}</td>
+        <td>{{ row.value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No key evidence references were stored in the analyst report.</p>
+    {% endif %}
+  </div>
+
+  {% if soc_report.findings %}
+  <div class="section">
+    <div class="section-title">4. Findings</div>
+    {% for finding in soc_report.findings %}
+    <div class="finding {{ finding.get('severity', 'info') }}">
+      <div class="finding-title">
+        <span class="badge {{ finding.get('severity', 'info') }}">{{ finding.get("severity", "info") }}</span>
+        {{ finding.get("title", "Untitled finding") }}
+      </div>
+      <p>{{ finding.get("description", "") }}</p>
+      {% if finding.get("ttp") %}
+      <p class="small muted mono" style="margin-top:4px;">{{ finding.get("ttp") }}{% if finding.get("ttp_name") %} - {{ finding.get("ttp_name") }}{% endif %}</p>
+      {% endif %}
+      {% if finding.get("evidence_arguments") %}
+      <table>
+        <tr><th style="width:30%">Reference</th><th>Evidence Argument</th></tr>
+        {% for arg in finding.evidence_arguments %}
+        <tr>
+          <td class="mono">{{ arg.ref }}</td>
+          <td>{{ arg.argument }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="section">
+    <div class="section-title">5. Indicators of Compromise</div>
+    {% if soc_report.iocs %}
+    <table>
+      <tr><th style="width:12%">Type</th><th style="width:38%">Value</th><th>Context</th><th style="width:16%">Confidence</th></tr>
+      {% for ioc in soc_report.iocs %}
+      <tr>
+        <td>{{ ioc.get("type", "") }}</td>
+        <td class="mono">{{ ioc.get("value", "") }}</td>
+        <td>{{ ioc.get("context", "") }}</td>
+        <td>{{ ioc.get("confidence", "") }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No pivotable IOCs were present in the stored report.</p>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">6. Recommended SOC Actions</div>
+    <ol>
+      {% for item in soc_report.recommendations %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+
+  {% if soc_report.contradicting_evidence or soc_report.data_gaps %}
+  <div class="section">
+    <div class="section-title">7. Limitations and Data Gaps</div>
+    {% if soc_report.contradicting_evidence %}
+    <p><strong>Contradicting or mitigating evidence</strong></p>
+    <table>
+      <tr><th style="width:30%">Reference</th><th>Observed Value</th></tr>
+      {% for row in soc_report.contradicting_evidence %}
+      <tr><td class="mono">{{ row.ref }}</td><td>{{ row.value }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% if soc_report.data_gaps %}
+    <p style="margin-top:8px;"><strong>Additional data needed</strong></p>
+    <ul>
+      {% for gap in soc_report.data_gaps %}
+      <li>{{ gap }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="page-break"></div>
+  <div class="section">
+    <div class="section-title">Appendix A. Collector Execution Summary</div>
+    {% if soc_report.collector_status %}
+    <table>
+      <tr><th>Collector</th><th>Status</th><th>Duration</th><th>Error / Note</th></tr>
+      {% for row in soc_report.collector_status %}
+      <tr>
+        <td>{{ row.collector }}</td>
+        <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+        <td>{{ row.duration }}</td>
+        <td>{{ row.error }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">Collector metadata was not available in the stored evidence.</p>
+    {% endif %}
+  </div>
+
+  {% if soc_report.signals %}
+  <div class="section">
+    <div class="section-title">Appendix B. Generated Signals</div>
+    <table>
+      <tr><th style="width:16%">Severity</th><th>Description</th></tr>
+      {% for signal in soc_report.signals %}
+      <tr>
+        <td><span class="badge {{ signal.severity }}">{{ signal.severity }}</span></td>
+        <td>{{ signal.description }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="section">
+    <div class="section-title">Appendix C. Detailed Technical Evidence</div>
+    {% for section in soc_report.evidence_sections %}
+    <div class="appendix-section">
+      <div class="appendix-title">{{ section.title }}</div>
+      {% if section.rows %}
+      <div class="kv-grid">
+        {% for row in section.rows %}
+        <div class="kv">
+          <span class="kv-label">{{ row.label }}</span>
+          <span class="kv-value{% if row.mono %} mono{% endif %}">{{ row.value }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if section.table %}
+      <table>
+        <tr>
+          {% for header in section.table.headers %}
+          <th>{{ header }}</th>
+          {% endfor %}
+        </tr>
+        {% for row in section.table.rows %}
+        <tr>
+          {% for cell in row %}
+          <td{% if loop.index > 1 %} class="mono"{% endif %}>{{ cell }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">Appendix D. Methodology</div>
+    <ol>
+      {% for item in soc_report.methodology %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+</body>
+</html>
