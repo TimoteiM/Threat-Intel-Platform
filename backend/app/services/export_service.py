@@ -44,9 +44,7 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     action = (report.get("recommended_action") or "monitor").upper()
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
     confidence_engine = intelligence.get("confidence_engine") or {}
-    timeline = intelligence.get("evidence_timeline") or []
     ioc_quality = intelligence.get("ioc_quality") or {}
-    opencti_resolver = intelligence.get("opencti_resolver") or {}
 
     lines = [
         f"# Threat Analysis Report: {domain}",
@@ -77,14 +75,6 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     for reason in (confidence_engine.get("reasons") or [])[:8]:
         lines.append(f"- {reason}")
 
-    lines.extend(["", "## Unified Evidence Timeline", ""])
-    for event in timeline[:20]:
-        timestamp = event.get("timestamp") or "undated"
-        lines.append(
-            f"- **{timestamp}** [{event.get('source', 'source')}] "
-            f"{event.get('title', '')}: {event.get('description', '')}"
-        )
-
     lines.extend(["", "## IOC Quality and Actionability", "", "| Type | Value | Quality | Labels | Action |",
                   "|------|-------|---------|--------|--------|"])
     for ioc in (ioc_quality.get("items") or [])[:40]:
@@ -93,15 +83,6 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
             f"{ioc.get('quality_score', '?')} | {', '.join(ioc.get('labels') or [])} | "
             f"{ioc.get('recommended_action', '')} |"
         )
-
-    lines.extend(["", "## OpenCTI Resolution", ""])
-    lines.append(f"**Status:** {opencti_resolver.get('status', 'not_collected')}  ")
-    if opencti_resolver.get("matched_term"):
-        lines.append(f"**Matched Term:** `{opencti_resolver.get('matched_term')}`  ")
-    if opencti_resolver.get("searched_terms"):
-        lines.append(f"**Searched Terms:** {', '.join(opencti_resolver.get('searched_terms') or [])}  ")
-    for recommendation in (opencti_resolver.get("recommendations") or [])[:5]:
-        lines.append(f"- {recommendation}")
 
     lines.extend(["", "## Findings", ""])
     for f in report.get("findings", []):
@@ -567,7 +548,10 @@ def _build_evidence_reference_rows(values: Any, evidence: dict[str, Any]) -> lis
         ref = str(item).strip()
         if not ref:
             continue
-        rows.append({"ref": ref, "value": _evidence_argument_from_ref(ref, evidence)})
+        value = _evidence_argument_from_ref(ref, evidence)
+        if not value:
+            continue
+        rows.append({"ref": ref, "value": value})
     return rows
 
 
@@ -871,10 +855,13 @@ def _build_detailed_findings(report: dict[str, Any], evidence: dict[str, Any]) -
 
         evidence_arguments = []
         for ref in refs:
+            value = _resolve_evidence_ref(ref=ref, evidence=evidence)
+            if value is None:
+                continue
             evidence_arguments.append(
                 {
                     "ref": ref,
-                    "argument": _evidence_argument_from_ref(ref, evidence),
+                    "argument": _compact_evidence_value(value),
                     "supports_classification": ref in key_evidence,
                     "contradicts_classification": ref in contradicting_evidence,
                 }
@@ -893,7 +880,7 @@ def _build_detailed_findings(report: dict[str, Any], evidence: dict[str, Any]) -
 def _evidence_argument_from_ref(ref: str, evidence: dict[str, Any]) -> str:
     value = _resolve_evidence_ref(ref=ref, evidence=evidence)
     if value is None:
-        return "No value was available for this evidence reference in the collected dataset."
+        return ""
     return _compact_evidence_value(value)
 
 

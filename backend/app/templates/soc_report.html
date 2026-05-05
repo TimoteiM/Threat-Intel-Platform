@@ -413,26 +413,9 @@
   </div>
   {% endif %}
 
-  {% if derived.timeline %}
-  <div class="section">
-    <div class="section-title">8. Unified Evidence Timeline</div>
-    <table>
-      <tr><th style="width:20%">Time</th><th style="width:14%">Source</th><th>Event</th><th>Value / Context</th></tr>
-      {% for event in derived.timeline[:24] %}
-      <tr>
-        <td>{{ event.timestamp or "Undated" }}</td>
-        <td>{{ event.source }}</td>
-        <td>{{ event.title }}</td>
-        <td>{{ event.value }}{% if event.description %}<br>{{ event.description }}{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
-  {% endif %}
-
   {% if derived.ioc_quality and derived.ioc_quality.get("items") %}
   <div class="section">
-    <div class="section-title">9. IOC Quality and Actionability</div>
+    <div class="section-title">8. IOC Quality and Actionability</div>
     <table>
       <tr><th style="width:12%">Type</th><th>Value</th><th style="width:13%">Quality</th><th style="width:22%">Labels</th><th style="width:16%">Action</th></tr>
       {% for ioc in derived.ioc_quality.get("items", [])[:30] %}
@@ -448,87 +431,11 @@
   </div>
   {% endif %}
 
-  {% if derived.opencti %}
-  <div class="section">
-    <div class="section-title">10. OpenCTI Resolution</div>
-    <div class="kv-grid">
-      <div class="kv">
-        <span class="kv-label">Status</span>
-        <span class="kv-value">{{ derived.opencti.get("status", "not_collected") }}</span>
-      </div>
-      <div class="kv">
-        <span class="kv-label">Matched Term</span>
-        <span class="kv-value mono">{{ derived.opencti.get("matched_term", "") }}</span>
-      </div>
-      <div class="kv">
-        <span class="kv-label">Searched Terms</span>
-        <span class="kv-value mono">{{ derived.opencti.get("searched_terms", [])|join(", ") }}</span>
-      </div>
-      <div class="kv">
-        <span class="kv-label">Related Objects</span>
-        <span class="kv-value">{{ derived.opencti.get("related_entities", [])|length }}</span>
-      </div>
-    </div>
-    {% if derived.opencti.get("matched_observable") %}
-    <table>
-      <tr><th>Observable ID</th><th>Entity Type</th><th>Score</th><th>Labels</th></tr>
-      <tr>
-        <td class="mono">{{ derived.opencti.matched_observable.get("standard_id") or derived.opencti.matched_observable.get("id") }}</td>
-        <td>{{ derived.opencti.matched_observable.get("entity_type") }}</td>
-        <td>{{ derived.opencti.matched_observable.get("score") }}</td>
-        <td>{{ derived.opencti.matched_observable.get("labels", [])|join(", ") }}</td>
-      </tr>
-    </table>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  {% if soc_report.contradicting_evidence or soc_report.data_gaps %}
-  <div class="section">
-    <div class="section-title">11. Limitations and Data Gaps</div>
-    {% if soc_report.contradicting_evidence %}
-    <p><strong>Contradicting or mitigating evidence</strong></p>
-    <table>
-      <tr><th style="width:30%">Reference</th><th>Observed Value</th></tr>
-      {% for row in soc_report.contradicting_evidence %}
-      <tr><td class="mono">{{ row.ref }}</td><td>{{ row.value }}</td></tr>
-      {% endfor %}
-    </table>
-    {% endif %}
-    {% if soc_report.data_gaps %}
-    <p style="margin-top:8px;"><strong>Additional data needed</strong></p>
-    <ul>
-      {% for gap in soc_report.data_gaps %}
-      <li>{{ gap }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-  </div>
-  {% endif %}
-
   <div class="page-break"></div>
-  <div class="section">
-    <div class="section-title">Appendix A. Collector Execution Summary</div>
-    {% if soc_report.collector_status %}
-    <table>
-      <tr><th>Collector</th><th>Status</th><th>Duration</th><th>Error / Note</th></tr>
-      {% for row in soc_report.collector_status %}
-      <tr>
-        <td>{{ row.collector }}</td>
-        <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
-        <td>{{ row.duration }}</td>
-        <td>{{ row.error }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="muted">Collector metadata was not available in the stored evidence.</p>
-    {% endif %}
-  </div>
 
   {% if soc_report.signals %}
   <div class="section">
-    <div class="section-title">Appendix B. Generated Signals</div>
+    <div class="section-title">Appendix. Generated Signals</div>
     <table>
       <tr><th style="width:16%">Severity</th><th>Description</th></tr>
       {% for signal in soc_report.signals %}
@@ -542,7 +449,7 @@
   {% endif %}
 
   <div class="section">
-    <div class="section-title">Appendix C. Detailed Technical Evidence</div>
+    <div class="section-title">Appendix. Detailed Technical Evidence</div>
     {% for section in soc_report.evidence_sections %}
     <div class="appendix-section">
       <div class="appendix-title">{{ section.title }}</div>
@@ -577,7 +484,7 @@
   </div>
 
   <div class="section">
-    <div class="section-title">Appendix D. Methodology</div>
+    <div class="section-title">Appendix. Methodology</div>
     <ol>
       {% for item in soc_report.methodology %}
       <li>{{ item }}</li>
