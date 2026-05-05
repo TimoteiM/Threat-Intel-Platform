@@ -38,7 +38,9 @@ export default function InvestigationProcessGraphPage() {
 
   useEffect(() => {
     function updateHeight() {
-      setGraphHeight(Math.max(420, window.innerHeight - 16));
+      // The verdict banner is rendered above the ReactFlow canvas. Keep the
+      // canvas inside the visible viewport so details do not slide under the OS taskbar.
+      setGraphHeight(Math.max(420, window.innerHeight - 82));
     }
     updateHeight();
     window.addEventListener("resize", updateHeight);
@@ -77,7 +79,7 @@ const fullscreenShell: React.CSSProperties = {
   inset: 0,
   zIndex: 2147483000,
   width: "100vw",
-  minHeight: "100vh",
+  height: "100dvh",
   padding: 8,
   boxSizing: "border-box",
   background: "#061724",
