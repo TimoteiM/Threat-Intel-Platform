@@ -47,6 +47,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_collectors JSONB NOT NULL DEFAULT '[]'::jsonb",
             "ALTER TABLE investigations ADD COLUMN IF NOT EXISTS observable_type VARCHAR(20) NOT NULL DEFAULT 'domain'",
             "ALTER TABLE investigations ALTER COLUMN domain TYPE VARCHAR(512)",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS schedule_interval VARCHAR(20)",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS next_check_at TIMESTAMPTZ",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS risk_score_history JSONB",
+            "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS evidence_diff_json JSONB",
+            "CREATE INDEX IF NOT EXISTS idx_watchlist_next_check ON watchlist(next_check_at)",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))
