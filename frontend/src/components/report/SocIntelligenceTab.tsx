@@ -231,28 +231,49 @@ function TimelinePanel({ timeline }: { timeline: any[] }) {
 }
 
 function GraphPanel({ graph }: { graph: any }) {
-  const { nodes, edges } = React.useMemo(() => buildFlowGraph(graph), [graph]);
+  const { nodes, edges, sourceById } = React.useMemo(() => buildFlowGraph(graph), [graph]);
+  const preferredNodeId = React.useMemo(() => {
+    const sourceNodes = Object.values(sourceById);
+    return (
+      sourceNodes.find((node: any) => String(node?.type || "").toLowerCase() === "url")?.id
+      || sourceNodes.find((node: any) => String(node?.type || "").toLowerCase() === "process")?.id
+      || sourceNodes[0]?.id
+      || ""
+    );
+  }, [sourceById]);
+  const [selectedNodeId, setSelectedNodeId] = React.useState<string>("");
+
+  React.useEffect(() => {
+    setSelectedNodeId((current) => current && sourceById[current] ? current : String(preferredNodeId || ""));
+  }, [preferredNodeId, sourceById]);
+
   if (!nodes.length) return <EmptyState label="No relationship graph could be derived." />;
+  const selectedNode = sourceById[selectedNodeId] || sourceById[preferredNodeId] || null;
+  const stats = graphStats(Object.values(sourceById), edges);
 
   return (
     <section style={sectionStyle}>
-      <div style={graphShellStyle}>
-        <ReactFlowProvider>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            fitView
-            minZoom={0.25}
-            maxZoom={1.5}
-            nodesDraggable
-            nodesConnectable={false}
-            elementsSelectable
-          >
-            <Background color="rgba(148,163,184,0.18)" gap={24} />
-            <MiniMap nodeStrokeWidth={3} zoomable pannable />
-            <Controls />
-          </ReactFlow>
-        </ReactFlowProvider>
+      <div style={graphInsightGridStyle}>
+        <div style={graphShellStyle}>
+          <ReactFlowProvider>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              fitView
+              minZoom={0.2}
+              maxZoom={1.6}
+              nodesDraggable
+              nodesConnectable={false}
+              elementsSelectable
+              onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
+            >
+              <Background color="rgba(148,163,184,0.18)" gap={24} />
+              <MiniMap nodeStrokeWidth={3} zoomable pannable />
+              <Controls />
+            </ReactFlow>
+          </ReactFlowProvider>
+        </div>
+        <GraphNodeInspector node={selectedNode} stats={stats} />
       </div>
     </section>
   );
@@ -706,9 +727,138 @@ function ComponentScore({ component }: { component: any }) {
   );
 }
 
-function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[] } {
+function GraphNodeInspector({ node, stats }: { node: any; stats: Record<string, number> }) {
+  if (!node) {
+    return <EmptyState label="Select a graph node to inspect its full value and metadata." />;
+  }
+  const color = nodeColor(node);
+  const rows = graphNodeDetailRows(node);
+  return (
+    <aside style={graphInspectorStyle}>
+      <div>
+        <div style={eyebrowStyle}>Graph Overview</div>
+        <div style={graphStatsGridStyle}>
+          <GraphStat label="Nodes" value={stats.nodes} />
+          <GraphStat label="Edges" value={stats.edges} />
+          <GraphStat label="URLs" value={stats.urls} />
+          <GraphStat label="Processes" value={stats.processes} />
+        </div>
+      </div>
+
+      <div style={graphInspectorCardStyle}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ ...sourcePillStyle, color, borderColor: `${color}55`, background: `${color}14` }}>
+            {text(node?.type, "node").toUpperCase()}
+          </span>
+          {node?.score !== undefined && node?.score !== null ? (
+            <span style={graphScorePillStyle}>{text(node.score)}/100</span>
+          ) : null}
+        </div>
+        <div style={graphInspectorTitleStyle}>{text(node?.label || node?.value)}</div>
+        <div style={graphFullValueStyle}>{text(node?.value || node?.label)}</div>
+      </div>
+
+      {rows.length ? (
+        <div style={graphDetailListStyle}>
+          {rows.map((row) => (
+            <div key={row.label} style={graphDetailRowStyle}>
+              <div style={graphDetailLabelStyle}>{row.label}</div>
+              <div style={{ ...graphDetailValueStyle, fontFamily: row.mono ? "var(--font-mono)" : undefined }}>
+                {row.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState label="No additional metadata is available for this graph node." compact />
+      )}
+    </aside>
+  );
+}
+
+function GraphStat({ label, value }: { label: string; value: any }) {
+  return (
+    <div style={graphStatStyle}>
+      <div style={{ ...eyebrowStyle, fontSize: 9 }}>{label}</div>
+      <div style={{ color: "var(--text-primary)", fontWeight: 800, fontSize: 18 }}>{text(value, "0")}</div>
+    </div>
+  );
+}
+
+function GraphNodeLabel({ node }: { node: any }) {
+  const type = String(node?.type || "").toUpperCase();
+  const value = text(node?.label || node?.value);
+  const isUrl = String(node?.type || "").toLowerCase() === "url";
+  return (
+    <div title={text(node?.value || node?.label)} style={{ display: "grid", gap: 5 }}>
+      <div style={{
+        color: "var(--text-primary)",
+        fontSize: 11,
+        fontWeight: 800,
+        lineHeight: 1.35,
+        wordBreak: isUrl ? "break-all" : "break-word",
+      }}>
+        {isUrl ? value : truncate(value, 54)}
+      </div>
+      <div style={{ color: "var(--text-muted)", fontSize: 9, fontWeight: 800, letterSpacing: "0.08em" }}>
+        {type}
+      </div>
+    </div>
+  );
+}
+
+function graphStats(nodes: any[], edges: Edge[]): Record<string, number> {
+  return {
+    nodes: nodes.length,
+    edges: edges.length,
+    urls: nodes.filter((node) => String(node?.type || "").toLowerCase() === "url").length,
+    processes: nodes.filter((node) => String(node?.type || "").toLowerCase() === "process").length,
+  };
+}
+
+function graphNodeDetailRows(node: any): Array<{ label: string; value: string; mono?: boolean }> {
+  const fields: Array<[string, string, boolean?]> = [
+    ["Group", "group"],
+    ["Context", "context"],
+    ["PID", "pid", true],
+    ["PPID", "ppid", true],
+    ["User", "user"],
+    ["Path", "path", true],
+    ["Command Line", "command_line", true],
+    ["SHA256", "sha256", true],
+    ["SHA1", "sha1", true],
+    ["MD5", "md5", true],
+    ["Process Score", "process_score"],
+    ["Indicators", "indicators"],
+    ["Network Activity", "network_activity"],
+    ["File Activity", "file_activity"],
+    ["MITRE Tags", "mitre_tags"],
+    ["Process", "process"],
+    ["Source", "source"],
+    ["URL", "url", true],
+    ["Protocol", "protocol"],
+    ["Port", "port"],
+    ["Threat Name", "threat_name"],
+    ["Status Code", "status_code"],
+    ["Action", "action"],
+    ["Labels", "labels"],
+  ];
+  return fields
+    .map(([label, key, mono]) => ({ label, value: detailValue(node?.[key]), mono }))
+    .filter((row) => row.value);
+}
+
+function detailValue(value: any): string {
+  if (value === null || value === undefined || value === "" || value === "-") return "";
+  if (Array.isArray(value)) return value.map((item) => text(item, "")).filter(Boolean).join(", ");
+  if (typeof value === "object") return Object.entries(value).map(([key, val]) => `${key}: ${text(val)}`).join(", ");
+  return text(value, "");
+}
+
+function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[]; sourceById: Record<string, any> } {
   const sourceNodes = arr(graph?.nodes);
   const sourceEdges = arr(graph?.edges);
+  const sourceById: Record<string, any> = {};
   const counters: Record<string, number> = {};
   const groupColumn: Record<string, number> = {
     observable: 0,
@@ -723,26 +873,25 @@ function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[] } {
   };
 
   const flowNodes: Node[] = sourceNodes.slice(0, 140).map((node: any) => {
+    sourceById[String(node.id)] = node;
     const group = String(node?.group || node?.type || "other");
     const col = groupColumn[group] ?? 2;
     const row = counters[group] || 0;
     counters[group] = row + 1;
     const color = nodeColor(node);
+    const isUrl = String(node?.type || "").toLowerCase() === "url";
     return {
       id: String(node.id),
       type: "default",
-      position: { x: col * 260, y: row * 92 + (group === "observable" ? 120 : 0) },
-      data: { label: `${truncate(node?.label || node?.value, 42)}\n${String(node?.type || "").toUpperCase()}` },
+      position: { x: col * 300, y: row * (isUrl ? 118 : 96) + (group === "observable" ? 120 : 0) },
+      data: { label: <GraphNodeLabel node={node} /> },
       style: {
-        width: 190,
-        minHeight: 58,
+        width: isUrl ? 270 : 210,
+        minHeight: isUrl ? 78 : 62,
         borderRadius: 12,
         border: `1px solid ${color}`,
         background: "rgba(8,15,29,0.92)",
         color: "var(--text-primary)",
-        fontSize: 11,
-        fontWeight: 700,
-        whiteSpace: "pre-line",
         boxShadow: `0 0 0 4px ${color}16`,
       },
     };
@@ -765,7 +914,7 @@ function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[] } {
         labelBgStyle: { fill: "rgba(8,15,29,0.86)", fillOpacity: 0.9 },
       };
     });
-  return { nodes: flowNodes, edges: flowEdges };
+  return { nodes: flowNodes, edges: flowEdges, sourceById };
 }
 
 function nodeColor(node: any) {
@@ -980,6 +1129,106 @@ const graphShellStyle: React.CSSProperties = {
   borderRadius: "var(--radius)",
   overflow: "hidden",
   background: "#071525",
+};
+
+const graphInsightGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 380px)",
+  gap: 14,
+  alignItems: "stretch",
+};
+
+const graphInspectorStyle: React.CSSProperties = {
+  minHeight: 420,
+  maxHeight: 640,
+  overflow: "auto",
+  display: "grid",
+  alignContent: "start",
+  gap: 12,
+  padding: 14,
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius)",
+  background: "rgba(8,15,29,0.72)",
+};
+
+const graphStatsGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  marginTop: 10,
+};
+
+const graphStatStyle: React.CSSProperties = {
+  padding: "9px 10px",
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.46)",
+};
+
+const graphInspectorCardStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 10,
+  padding: 12,
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.54)",
+};
+
+const graphInspectorTitleStyle: React.CSSProperties = {
+  color: "var(--text-primary)",
+  fontSize: 15,
+  fontWeight: 800,
+  lineHeight: 1.45,
+  wordBreak: "break-word",
+};
+
+const graphFullValueStyle: React.CSSProperties = {
+  padding: 10,
+  border: "1px solid rgba(102,168,255,0.22)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(102,168,255,0.07)",
+  color: "var(--text-primary)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  lineHeight: 1.65,
+  wordBreak: "break-all",
+};
+
+const graphScorePillStyle: React.CSSProperties = {
+  padding: "2px 7px",
+  borderRadius: 999,
+  color: "var(--yellow)",
+  border: "1px solid rgba(251,191,36,0.28)",
+  background: "rgba(251,191,36,0.10)",
+  fontSize: 10,
+  fontWeight: 800,
+};
+
+const graphDetailListStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+};
+
+const graphDetailRowStyle: React.CSSProperties = {
+  padding: "9px 10px",
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.34)",
+};
+
+const graphDetailLabelStyle: React.CSSProperties = {
+  color: "var(--text-muted)",
+  fontSize: 10,
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const graphDetailValueStyle: React.CSSProperties = {
+  marginTop: 4,
+  color: "var(--text-primary)",
+  fontSize: 11,
+  lineHeight: 1.55,
+  wordBreak: "break-word",
 };
 
 const reportPreviewShellStyle: React.CSSProperties = {

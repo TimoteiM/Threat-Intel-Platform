@@ -778,13 +778,19 @@ def build_investigation_graph(
     edge(ip_node, asn_node, "announced by", "asn", "info")
 
     http = _as_dict(evidence.get("http"))
-    final_url_node = node("url", http.get("final_url"), "Final URL", group="web")
+    final_url_node = node("url", http.get("final_url"), http.get("final_url"), group="web", context="HTTP final URL")
     edge(root, final_url_node, "loads as", "http", "info")
     previous = root
     for row in _as_list(http.get("redirect_chain")) + _as_list(http.get("redirects")):
         if not isinstance(row, dict):
             continue
-        url_node = node("url", row.get("url") or row.get("location"), group="web")
+        url_node = node(
+            "url",
+            row.get("url") or row.get("location"),
+            group="web",
+            context="HTTP redirect hop",
+            status_code=row.get("status_code"),
+        )
         edge(previous, url_node, "redirects to", "redirect", "warning")
         previous = url_node or previous
 
@@ -795,20 +801,66 @@ def build_investigation_graph(
         for proc in _as_list(_as_dict(intel.get("process_tree_summary")).get("root_processes")) + _as_list(_as_dict(intel.get("process_tree_summary")).get("high_risk_processes")):
             if not isinstance(proc, dict):
                 continue
-            proc_node = node("process", f"{proc.get('name')}:{proc.get('pid')}", proc.get("name"), group="process", score=proc.get("risk_rank") or proc.get("threat_score"))
+            proc_node = node(
+                "process",
+                f"{proc.get('name')}:{proc.get('pid')}",
+                proc.get("name"),
+                group="process",
+                score=proc.get("risk_rank") or proc.get("threat_score"),
+                pid=proc.get("pid"),
+                ppid=proc.get("ppid"),
+                path=proc.get("path"),
+                user=proc.get("user"),
+                command_line=proc.get("command_line"),
+                sha256=proc.get("sha256"),
+                process_score=proc.get("process_score"),
+                indicators=proc.get("indicators"),
+                network_activity=proc.get("network_activity"),
+                file_activity=proc.get("file_activity"),
+                mitre_tags=proc.get("mitre_tags"),
+            )
             edge(analysis_node, proc_node, "executed", "process", "warning" if _num(proc.get("risk_rank") or proc.get("threat_level")) else "info")
         for row in _as_list(intel.get("contacted_hosts"))[:40]:
             if isinstance(row, dict):
-                host_node = node("domain", row.get("host"), group="network", score=row.get("threat_level"))
+                host_node = node(
+                    "domain",
+                    row.get("host"),
+                    group="network",
+                    score=row.get("threat_level"),
+                    process=row.get("process"),
+                    source=row.get("source"),
+                    url=row.get("url"),
+                    threat_name=row.get("threat_name"),
+                )
                 edge(analysis_node, host_node, "contacted host", "network", "danger" if _num(row.get("threat_level")) >= 2 else "warning")
         for row in _as_list(intel.get("contacted_ips"))[:40]:
             if isinstance(row, dict):
-                contact_node = node("ip", row.get("ip"), group="network", score=row.get("threat_level"))
+                contact_node = node(
+                    "ip",
+                    row.get("ip"),
+                    group="network",
+                    score=row.get("threat_level"),
+                    process=row.get("process"),
+                    source=row.get("source"),
+                    protocol=row.get("protocol"),
+                    port=row.get("port"),
+                )
                 edge(analysis_node, contact_node, "contacted IP", "network", "danger" if _num(row.get("threat_level")) >= 2 else "warning")
         for row in _as_list(intel.get("dropped_files"))[:40]:
             if isinstance(row, dict):
                 file_value = row.get("sha256") or row.get("path") or row.get("name")
-                file_node = node("file", file_value, row.get("name") or row.get("path"), group="file")
+                file_node = node(
+                    "file",
+                    file_value,
+                    row.get("name") or row.get("path"),
+                    group="file",
+                    process=row.get("process"),
+                    path=row.get("path"),
+                    sha256=row.get("sha256"),
+                    sha1=row.get("sha1"),
+                    md5=row.get("md5"),
+                    action=row.get("action"),
+                )
                 edge(analysis_node, file_node, "dropped file", "file", "warning")
 
     opencti = _as_dict(evidence.get("opencti"))
