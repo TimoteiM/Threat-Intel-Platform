@@ -1069,9 +1069,9 @@ def _build_soc_report_preview(
 
     return {
         "title": title,
-        "classification": _clean(report.get("classification") or confidence.get("verdict")).upper(),
-        "confidence": _clean(report.get("confidence") or confidence.get("confidence")).upper(),
-        "risk_score": report.get("risk_score") if report.get("risk_score") is not None else confidence.get("score"),
+        "classification": _clean(confidence.get("verdict") or report.get("classification")).upper(),
+        "confidence": _clean(confidence.get("confidence") or report.get("confidence")).upper(),
+        "risk_score": confidence.get("score") if confidence.get("score") is not None else report.get("risk_score"),
         "summary": summary,
         "verdict_rationale": _as_list(confidence.get("reasons"))[:8],
         "evidence_matrix": evidence_matrix[:16],

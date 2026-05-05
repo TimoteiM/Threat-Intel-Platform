@@ -43,14 +43,16 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     evidence = _sanitize_evidence_for_export(evidence)
     report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
-    classification = (report.get("classification") or "inconclusive").upper()
-    confidence = report.get("confidence", "?")
-    risk_score = report.get("risk_score", "?")
-    action = (report.get("recommended_action") or "monitor").upper()
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
     confidence_engine = intelligence.get("confidence_engine") or {}
     ioc_quality = intelligence.get("ioc_quality") or {}
     evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
+    confidence = str(confidence_engine.get("confidence") or report.get("confidence") or "?").upper()
+    risk_score = confidence_engine.get("score")
+    if risk_score is None:
+        risk_score = report.get("risk_score", "?")
+    action = (report.get("recommended_action") or "monitor").upper()
 
     lines = [
         f"# Threat Analysis Report: {domain}",
@@ -171,6 +173,13 @@ def _md_cell(value: Any) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", " ")
 
 
+def _display_verdict(value: Any) -> str:
+    text = str(value or "inconclusive").strip().upper()
+    if text in {"BENIGN", "SUSPICIOUS", "MALICIOUS", "INCONCLUSIVE"}:
+        return text
+    return "INCONCLUSIVE"
+
+
 _CLASSIFICATION_COLORS = {
     "BENIGN": "#10b981",
     "SUSPICIOUS": "#f59e0b",
@@ -203,6 +212,17 @@ def _build_soc_report_context(
     risk = evidence.get("final_risk") or {}
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
     evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    derived_classification = _display_verdict(confidence_engine.get("verdict") or classification)
+    derived_confidence = str(
+        confidence_engine.get("confidence")
+        or report.get("confidence")
+        or detail.get("confidence")
+        or "unknown"
+    ).upper()
+    derived_risk_score = confidence_engine.get("score")
+    if derived_risk_score is None:
+        derived_risk_score = report.get("risk_score", detail.get("risk_score"))
 
     summary = (
         _clean_text(report.get("executive_summary"))
@@ -213,8 +233,8 @@ def _build_soc_report_context(
     return {
         "title": "SOC Investigation Report",
         "subtitle": "Official Threat Intelligence and Incident Triage Documentation",
-        "classification": classification,
-        "classification_color": cls_color,
+        "classification": derived_classification,
+        "classification_color": _CLASSIFICATION_COLORS.get(derived_classification, cls_color),
         "generated_at": _format_dt(generated_at),
         "case_metadata": [
             _kv("Case ID", detail.get("id")),
@@ -227,9 +247,9 @@ def _build_soc_report_context(
             _kv("Exported", _format_dt(generated_at)),
         ],
         "verdict": {
-            "classification": classification,
-            "confidence": str(report.get("confidence") or detail.get("confidence") or "unknown").upper(),
-            "risk_score": report.get("risk_score", detail.get("risk_score")),
+            "classification": derived_classification,
+            "confidence": derived_confidence,
+            "risk_score": derived_risk_score,
             "recommended_action": str(
                 report.get("recommended_action") or detail.get("recommended_action") or "monitor"
             ).upper(),
@@ -789,7 +809,9 @@ def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
     evidence = _sanitize_evidence_for_export(evidence)
     report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
-    classification = (report.get("classification") or "inconclusive").upper()
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
     cls_color = _CLASSIFICATION_COLORS.get(classification, "#64748b")
     investigation_id = detail.get("id", "")
     generated_at = datetime.now(timezone.utc).isoformat()

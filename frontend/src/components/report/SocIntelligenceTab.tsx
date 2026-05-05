@@ -385,8 +385,8 @@ function ReportPreviewPanel({
       ? arr(reportBuilder.priority_actions)
       : arr(report?.recommended_steps);
   const title = text(preview?.title || reportBuilder?.recommended_title, `SOC Investigation Report - ${text(detail?.domain || evidence?.domain, "Observable")}`);
-  const classification = text(preview?.classification || report?.classification || confidence?.verdict, "unknown").toUpperCase();
-  const riskScore = preview?.risk_score ?? report?.risk_score ?? confidence?.score ?? "-";
+  const classification = text(preview?.classification || confidence?.verdict || report?.classification, "unknown").toUpperCase();
+  const riskScore = preview?.risk_score ?? confidence?.score ?? report?.risk_score ?? "-";
   const summary = text(preview?.summary || report?.executive_summary || report?.primary_reasoning || confidence?.explanation, "No executive summary is available yet.");
   const verdictReasons = arr(preview?.verdict_rationale).length ? arr(preview.verdict_rationale) : arr(confidence?.reasons);
   const derived = preview?.derived_verdict || {};

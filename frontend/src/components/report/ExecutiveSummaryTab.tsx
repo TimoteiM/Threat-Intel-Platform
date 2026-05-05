@@ -6,9 +6,22 @@ import ClassificationBadge from "@/components/investigation/ClassificationBadge"
 
 interface Props {
   report: AnalystReport;
+  intelligence?: any;
 }
 
-export default function ExecutiveSummaryTab({ report }: Props) {
+export default function ExecutiveSummaryTab({ report, intelligence }: Props) {
+  const confidenceEngine = intelligence?.confidence_engine || {};
+  const derivedClassification = normalizeClassification(
+    confidenceEngine?.verdict || report?.classification || "inconclusive"
+  );
+  const derivedConfidence = normalizeConfidence(
+    confidenceEngine?.confidence || report?.confidence || "low"
+  );
+  const rawRiskScore =
+    confidenceEngine?.score !== null && confidenceEngine?.score !== undefined
+      ? Number(confidenceEngine.score)
+      : report?.risk_score;
+  const derivedRiskScore = Number(rawRiskScore);
   const reasoningText = report?.primary_reasoning || "No reasoning provided.";
   const reasoningParagraphs = reasoningText
     .split(/\n{2,}/)
@@ -18,9 +31,9 @@ export default function ExecutiveSummaryTab({ report }: Props) {
   return (
     <div>
       <ClassificationBadge
-        classification={report?.classification || "inconclusive"}
-        confidence={report?.confidence || "low"}
-        riskScore={report?.risk_score}
+        classification={derivedClassification}
+        confidence={derivedConfidence}
+        riskScore={Number.isFinite(derivedRiskScore) ? derivedRiskScore : undefined}
       />
 
       <Section title="Primary Reasoning">
@@ -60,6 +73,22 @@ export default function ExecutiveSummaryTab({ report }: Props) {
 
     </div>
   );
+}
+
+function normalizeClassification(value: any): "benign" | "suspicious" | "malicious" | "inconclusive" {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "benign" || normalized === "suspicious" || normalized === "malicious") {
+    return normalized;
+  }
+  return "inconclusive";
+}
+
+function normalizeConfidence(value: any): "low" | "medium" | "high" {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "high" || normalized === "medium" || normalized === "low") {
+    return normalized;
+  }
+  return "low";
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
