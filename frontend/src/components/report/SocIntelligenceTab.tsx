@@ -788,7 +788,6 @@ function GraphStat({ label, value }: { label: string; value: any }) {
 function GraphNodeLabel({ node }: { node: any }) {
   const type = String(node?.type || "").toUpperCase();
   const value = text(node?.label || node?.value);
-  const isUrl = String(node?.type || "").toLowerCase() === "url";
   return (
     <div title={text(node?.value || node?.label)} style={{ display: "grid", gap: 5 }}>
       <div style={{
@@ -796,9 +795,9 @@ function GraphNodeLabel({ node }: { node: any }) {
         fontSize: 11,
         fontWeight: 800,
         lineHeight: 1.35,
-        wordBreak: isUrl ? "break-all" : "break-word",
+        wordBreak: "break-word",
       }}>
-        {isUrl ? value : truncate(value, 54)}
+        {truncate(value, 42)}
       </div>
       <div style={{ color: "var(--text-muted)", fontSize: 9, fontWeight: 800, letterSpacing: "0.08em" }}>
         {type}
@@ -879,15 +878,14 @@ function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[]; sourceById:
     const row = counters[group] || 0;
     counters[group] = row + 1;
     const color = nodeColor(node);
-    const isUrl = String(node?.type || "").toLowerCase() === "url";
     return {
       id: String(node.id),
       type: "default",
-      position: { x: col * 300, y: row * (isUrl ? 118 : 96) + (group === "observable" ? 120 : 0) },
+      position: { x: col * 260, y: row * 92 + (group === "observable" ? 120 : 0) },
       data: { label: <GraphNodeLabel node={node} /> },
       style: {
-        width: isUrl ? 270 : 210,
-        minHeight: isUrl ? 78 : 62,
+        width: 190,
+        minHeight: 58,
         borderRadius: 12,
         border: `1px solid ${color}`,
         background: "rgba(8,15,29,0.92)",
