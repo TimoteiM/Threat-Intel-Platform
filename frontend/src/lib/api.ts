@@ -314,6 +314,10 @@ export function getReport(id: string) {
   return request<any>(`/investigations/${id}/report`);
 }
 
+export function getInvestigationIntelligence(id: string) {
+  return request<any>(`/investigations/${id}/intelligence`);
+}
+
 export function enrichInvestigation(id: string, data: any) {
   return request<any>(`/investigations/${id}/enrich`, {
     method: "POST",

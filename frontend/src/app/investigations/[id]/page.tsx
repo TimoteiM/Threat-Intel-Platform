@@ -20,6 +20,7 @@ import IndicatorsTab from "@/components/report/IndicatorsTab";
 import SignalsTab from "@/components/report/SignalsTab";
 import InfrastructureTab from "@/components/report/InfrastructureTab";
 import AnyRunProcessGraphTab from "@/components/report/AnyRunProcessGraphTab";
+import SocIntelligenceTab from "@/components/report/SocIntelligenceTab";
 
 import * as api from "@/lib/api";
 import { useSSE } from "@/hooks/useSSE";
@@ -32,6 +33,7 @@ const { shouldTriggerDomainCompletionRefresh } = completionRefresh;
 // Full tab set for domain / URL investigations (Claude analysis available)
 const DOMAIN_TABS = [
   { id: "summary", label: "Executive Summary" },
+  { id: "intelligence", label: "SOC Intelligence" },
   { id: "evidence", label: "Technical Evidence" },
   { id: "findings", label: "Findings" },
   { id: "indicators", label: "Indicators & Pivots" },
@@ -44,6 +46,7 @@ const DOMAIN_TABS = [
 // Minimal tab set for fast-path types (hash / ip / file)
 // No AI-generated narrative - just technical evidence and IOCs.
 const FAST_PATH_TABS = [
+  { id: "intelligence", label: "SOC Intelligence" },
   { id: "evidence", label: "Technical Evidence" },
   { id: "indicators", label: "Indicators & Pivots" },
 ] as const;
@@ -66,7 +69,7 @@ const DEFAULT_COLLECTOR_ORDER = [
   "opencti",
 ] as const;
 
-type TabId = "summary" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
+type TabId = "summary" | "intelligence" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
 
 const pageShellStyle: React.CSSProperties = {
   paddingTop: 24,
@@ -180,6 +183,7 @@ export default function InvestigationPage() {
   const [detail, setDetail] = useState<any>(null);
   const [evidence, setEvidence] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
+  const [intelligence, setIntelligence] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const observableType = detail?.observable_type || "domain";
@@ -276,10 +280,13 @@ export default function InvestigationPage() {
       const rep = await api.getReport(investigationId).catch(() => null);
       setReport(rep);
 
+      const intel = await api.getInvestigationIntelligence(investigationId).catch(() => null);
+      setIntelligence(intel);
+
       if (!silent) {
         setLoading(false);
       }
-      return { detail: det, evidence: ev, report: rep };
+      return { detail: det, evidence: ev, report: rep, intelligence: intel };
     } catch (e: any) {
       setError(e?.message || "Failed to load");
       if (!silent) {
@@ -695,6 +702,8 @@ export default function InvestigationPage() {
       switch (activeTab) {
         case "summary":
           return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
+        case "intelligence":
+          return <SocIntelligenceTab intelligence={intelligence} loading={!intelligence && !evidence && !report} />;
         case "evidence":
           return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":
@@ -708,7 +717,7 @@ export default function InvestigationPage() {
         case "anyrun":
           return <AnyRunProcessGraphTab evidence={evidence || {}} />;
         case "raw":
-          return <RawJsonView evidence={evidence} report={report} detail={detail} />;
+          return <RawJsonView evidence={evidence} report={report} detail={detail} intelligence={intelligence} />;
         default:
           return null;
       }
@@ -1135,15 +1144,15 @@ function NoData({ label }: { label: string }) {
   );
 }
 
-function RawJsonView({ evidence, report, detail }: { evidence: any; report: any; detail: any }) {
-  const [view, setView] = useState<"evidence" | "report" | "detail">("evidence");
+function RawJsonView({ evidence, report, detail, intelligence }: { evidence: any; report: any; detail: any; intelligence?: any }) {
+  const [view, setView] = useState<"evidence" | "report" | "detail" | "intelligence">("evidence");
 
-  const data = view === "evidence" ? evidence : view === "report" ? report : detail;
+  const data = view === "evidence" ? evidence : view === "report" ? report : view === "intelligence" ? intelligence : detail;
 
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {(["evidence", "report", "detail"] as const).map((v) => (
+        {(["evidence", "report", "intelligence", "detail"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}

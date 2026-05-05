@@ -381,9 +381,111 @@
     </ol>
   </div>
 
+  {% set derived = soc_report.derived_intelligence %}
+  {% if derived.confidence_engine %}
+  <div class="section">
+    <div class="section-title">7. Derived SOC Intelligence Verdict</div>
+    <div class="kv-grid">
+      <div class="kv">
+        <span class="kv-label">Derived Verdict</span>
+        <span class="kv-value">{{ derived.confidence_engine.get("verdict", "unknown")|upper }}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Derived Score</span>
+        <span class="kv-value">{{ derived.confidence_engine.get("score", "N/A") }}/100</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Confidence</span>
+        <span class="kv-value">{{ derived.confidence_engine.get("confidence", "unknown")|upper }} ({{ derived.confidence_engine.get("confidence_percent", "N/A") }}%)</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Source Components</span>
+        <span class="kv-value">{{ derived.confidence_engine.get("components", [])|length }}</span>
+      </div>
+    </div>
+    {% if derived.confidence_engine.get("reasons") %}
+    <ul>
+      {% for reason in derived.confidence_engine.get("reasons", [])[:8] %}
+      <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if derived.timeline %}
+  <div class="section">
+    <div class="section-title">8. Unified Evidence Timeline</div>
+    <table>
+      <tr><th style="width:20%">Time</th><th style="width:14%">Source</th><th>Event</th><th>Value / Context</th></tr>
+      {% for event in derived.timeline[:24] %}
+      <tr>
+        <td>{{ event.timestamp or "Undated" }}</td>
+        <td>{{ event.source }}</td>
+        <td>{{ event.title }}</td>
+        <td>{{ event.value }}{% if event.description %}<br>{{ event.description }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  {% if derived.ioc_quality and derived.ioc_quality.get("items") %}
+  <div class="section">
+    <div class="section-title">9. IOC Quality and Actionability</div>
+    <table>
+      <tr><th style="width:12%">Type</th><th>Value</th><th style="width:13%">Quality</th><th style="width:22%">Labels</th><th style="width:16%">Action</th></tr>
+      {% for ioc in derived.ioc_quality.get("items", [])[:30] %}
+      <tr>
+        <td>{{ ioc.get("type", "") }}</td>
+        <td class="mono">{{ ioc.get("value", "") }}</td>
+        <td>{{ ioc.get("quality_score", "") }}</td>
+        <td>{{ ioc.get("labels", [])|join(", ") }}</td>
+        <td>{{ ioc.get("recommended_action", "") }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  {% if derived.opencti %}
+  <div class="section">
+    <div class="section-title">10. OpenCTI Resolution</div>
+    <div class="kv-grid">
+      <div class="kv">
+        <span class="kv-label">Status</span>
+        <span class="kv-value">{{ derived.opencti.get("status", "not_collected") }}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Matched Term</span>
+        <span class="kv-value mono">{{ derived.opencti.get("matched_term", "") }}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Searched Terms</span>
+        <span class="kv-value mono">{{ derived.opencti.get("searched_terms", [])|join(", ") }}</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Related Objects</span>
+        <span class="kv-value">{{ derived.opencti.get("related_entities", [])|length }}</span>
+      </div>
+    </div>
+    {% if derived.opencti.get("matched_observable") %}
+    <table>
+      <tr><th>Observable ID</th><th>Entity Type</th><th>Score</th><th>Labels</th></tr>
+      <tr>
+        <td class="mono">{{ derived.opencti.matched_observable.get("standard_id") or derived.opencti.matched_observable.get("id") }}</td>
+        <td>{{ derived.opencti.matched_observable.get("entity_type") }}</td>
+        <td>{{ derived.opencti.matched_observable.get("score") }}</td>
+        <td>{{ derived.opencti.matched_observable.get("labels", [])|join(", ") }}</td>
+      </tr>
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if soc_report.contradicting_evidence or soc_report.data_gaps %}
   <div class="section">
-    <div class="section-title">7. Limitations and Data Gaps</div>
+    <div class="section-title">11. Limitations and Data Gaps</div>
     {% if soc_report.contradicting_evidence %}
     <p><strong>Contradicting or mitigating evidence</strong></p>
     <table>

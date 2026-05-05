@@ -15,16 +15,20 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Optional
 
+from app.services.investigation_intelligence import build_investigation_intelligence
+
 logger = logging.getLogger(__name__)
 
 
 def export_json(evidence: dict, report: dict, detail: dict) -> bytes:
     """Export full investigation as JSON."""
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
     result = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "investigation": detail,
         "evidence": evidence,
         "report": report,
+        "soc_intelligence": intelligence,
     }
     return json.dumps(result, indent=2, default=str).encode("utf-8")
 
@@ -38,6 +42,11 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     confidence = report.get("confidence", "?")
     risk_score = report.get("risk_score", "?")
     action = (report.get("recommended_action") or "monitor").upper()
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    timeline = intelligence.get("evidence_timeline") or []
+    ioc_quality = intelligence.get("ioc_quality") or {}
+    opencti_resolver = intelligence.get("opencti_resolver") or {}
 
     lines = [
         f"# Threat Analysis Report: {domain}",
@@ -55,6 +64,44 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
         report.get("primary_reasoning", "No reasoning provided."),
         "",
     ]
+
+    lines.extend([
+        "",
+        "## SOC Intelligence Verdict",
+        "",
+        f"**Derived Verdict:** {str(confidence_engine.get('verdict') or 'unknown').upper()}  ",
+        f"**Derived Score:** {confidence_engine.get('score', 'N/A')}/100  ",
+        f"**Derived Confidence:** {confidence_engine.get('confidence', 'unknown')} ({confidence_engine.get('confidence_percent', 'N/A')}%)  ",
+        "",
+    ])
+    for reason in (confidence_engine.get("reasons") or [])[:8]:
+        lines.append(f"- {reason}")
+
+    lines.extend(["", "## Unified Evidence Timeline", ""])
+    for event in timeline[:20]:
+        timestamp = event.get("timestamp") or "undated"
+        lines.append(
+            f"- **{timestamp}** [{event.get('source', 'source')}] "
+            f"{event.get('title', '')}: {event.get('description', '')}"
+        )
+
+    lines.extend(["", "## IOC Quality and Actionability", "", "| Type | Value | Quality | Labels | Action |",
+                  "|------|-------|---------|--------|--------|"])
+    for ioc in (ioc_quality.get("items") or [])[:40]:
+        lines.append(
+            f"| {ioc.get('type', '?')} | `{ioc.get('value', '?')}` | "
+            f"{ioc.get('quality_score', '?')} | {', '.join(ioc.get('labels') or [])} | "
+            f"{ioc.get('recommended_action', '')} |"
+        )
+
+    lines.extend(["", "## OpenCTI Resolution", ""])
+    lines.append(f"**Status:** {opencti_resolver.get('status', 'not_collected')}  ")
+    if opencti_resolver.get("matched_term"):
+        lines.append(f"**Matched Term:** `{opencti_resolver.get('matched_term')}`  ")
+    if opencti_resolver.get("searched_terms"):
+        lines.append(f"**Searched Terms:** {', '.join(opencti_resolver.get('searched_terms') or [])}  ")
+    for recommendation in (opencti_resolver.get("recommendations") or [])[:5]:
+        lines.append(f"- {recommendation}")
 
     lines.extend(["", "## Findings", ""])
     for f in report.get("findings", []):
@@ -146,6 +193,7 @@ def _build_soc_report_context(
     recommendations = _build_recommendations(report=report, classification=classification)
     evidence_sections = _build_evidence_sections(evidence)
     risk = evidence.get("final_risk") or {}
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
 
     summary = (
         _clean_text(report.get("executive_summary"))
@@ -194,6 +242,14 @@ def _build_soc_report_context(
         "recommendations": recommendations,
         "collector_status": collector_status,
         "evidence_sections": evidence_sections,
+        "derived_intelligence": {
+            "confidence_engine": intelligence.get("confidence_engine") or {},
+            "timeline": intelligence.get("evidence_timeline") or [],
+            "graph": intelligence.get("investigation_graph") or {},
+            "ioc_quality": intelligence.get("ioc_quality") or {},
+            "opencti": intelligence.get("opencti_resolver") or {},
+            "report_builder": intelligence.get("soc_report_builder") or {},
+        },
         "signals": _normalise_signal_rows(evidence.get("signals") or []),
         "technical_narrative": _clean_text(report.get("technical_narrative")),
         "methodology": [

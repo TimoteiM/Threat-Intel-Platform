@@ -30,6 +30,7 @@ from app.dependencies import DBSession
 from app.models.database import Investigation, Evidence
 from app.models.schemas import InvestigationCreate
 from app.services.investigation_service import InvestigationService
+from app.services.investigation_intelligence import build_investigation_intelligence
 from app.tasks.cancellation import find_task_ids, revoke_task_ids
 from app.services.hybrid_analysis_service import evict_anyrun_cache
 from app.collectors.registry import get_collector, get_collectors_for_type
@@ -133,6 +134,33 @@ async def get_report(investigation_id: str, session: DBSession):
     if not report:
         raise HTTPException(404, "Report not yet generated")
     return report
+
+
+@router.get("/{investigation_id}/intelligence")
+async def get_intelligence(investigation_id: str, session: DBSession):
+    """Get derived SOC intelligence for timeline, graph, IOC quality, and reporting."""
+    service = InvestigationService(session)
+    detail = await service.get(investigation_id)
+    if not detail:
+        raise HTTPException(404, "Investigation not found")
+
+    evidence = await service.get_evidence(investigation_id) or {}
+    report = await service.get_report(investigation_id) or {}
+    detail_dict = {
+        "id": str(detail.id),
+        "domain": detail.domain,
+        "observable_type": getattr(detail, "observable_type", "domain"),
+        "state": detail.state,
+        "classification": detail.classification,
+        "confidence": detail.confidence,
+        "risk_score": detail.risk_score,
+        "recommended_action": detail.recommended_action,
+        "client_domain": detail.client_domain,
+        "created_at": detail.created_at.isoformat() if detail.created_at else None,
+        "updated_at": detail.updated_at.isoformat() if detail.updated_at else None,
+        "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
+    }
+    return build_investigation_intelligence(evidence=evidence, report=report, detail=detail_dict)
 
 
 @router.post("/upload-file")
