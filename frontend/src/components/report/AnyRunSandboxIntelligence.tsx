@@ -39,6 +39,41 @@ function uniqueRows(rows: any[], keyFn: (row: any) => string): any[] {
   return out;
 }
 
+function openThumbnailUrl(url: string): void {
+  if (typeof window === "undefined") return;
+  if (!url.startsWith("data:image/")) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const blob = dataUrlToBlob(url);
+  if (!blob) {
+    const win = window.open("", "_blank", "noopener,noreferrer");
+    if (win) {
+      win.document.write(`<title>ANY.RUN thumbnail</title><img src="${url}" style="max-width:100%;height:auto;display:block;margin:0 auto;background:#020617;" />`);
+      win.document.close();
+    }
+    return;
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
+function dataUrlToBlob(url: string): Blob | null {
+  const match = url.match(/^data:([^;,]+)(;base64)?,(.*)$/);
+  if (!match) return null;
+  const mime = match[1] || "image/jpeg";
+  const isBase64 = Boolean(match[2]);
+  try {
+    const raw = isBase64 ? window.atob(match[3]) : decodeURIComponent(match[3]);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  } catch {
+    return null;
+  }
+}
+
 function collectIntelligence(hybridAnalysis: any): Intelligence[] {
   return arr(hybridAnalysis?.items)
     .map((item: any) => item?.sandbox_intelligence || {})
@@ -219,10 +254,16 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis }: Props) {
           <div style={tableTitleStyle}>Screenshot Thumbnails</div>
           <div style={thumbGridStyle}>
             {screenshots.slice(0, 8).map((shot, idx) => (
-              <a key={`${shot?.url}-${idx}`} href={String(shot?.url || "#")} target="_blank" rel="noreferrer" style={thumbLinkStyle}>
+              <button
+                key={`${shot?.url}-${idx}`}
+                type="button"
+                onClick={() => openThumbnailUrl(String(shot?.url || ""))}
+                style={thumbLinkStyle}
+                title="Open thumbnail"
+              >
                 <img src={String(shot?.url || "")} alt={text(shot?.label)} style={thumbImageStyle} />
                 <span style={thumbLabelStyle}>{text(shot?.label)}</span>
-              </a>
+              </button>
             ))}
           </div>
         </div>
@@ -302,11 +343,14 @@ const thumbGridStyle: React.CSSProperties = {
 
 const thumbLinkStyle: React.CSSProperties = {
   display: "block",
+  width: "100%",
+  padding: 0,
   overflow: "hidden",
   border: "1px solid var(--border-dim)",
   borderRadius: "var(--radius-sm)",
   background: "rgba(15,23,42,0.42)",
-  textDecoration: "none",
+  cursor: "pointer",
+  textAlign: "left",
 };
 
 const thumbImageStyle: React.CSSProperties = {

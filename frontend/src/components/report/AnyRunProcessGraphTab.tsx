@@ -7,13 +7,15 @@ import { useSearchParams } from "next/navigation";
 
 type Props = {
   evidence: any;
+  graphOnly?: boolean;
+  graphHeight?: number;
 };
 
 function arr(v: any): any[] {
   return Array.isArray(v) ? v : [];
 }
 
-export default function AnyRunProcessGraphTab({ evidence }: Props) {
+export default function AnyRunProcessGraphTab({ evidence, graphOnly = false, graphHeight = 760 }: Props) {
   const searchParams = useSearchParams();
   const hybrid = evidence?.hybrid_analysis || {};
   const items = arr(hybrid?.items);
@@ -40,20 +42,26 @@ export default function AnyRunProcessGraphTab({ evidence }: Props) {
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-        Dedicated process tree view (AnyRun source preferred). Use mouse wheel to zoom and drag to pan.
-      </div>
-      <AnyRunSandboxIntelligence hybridAnalysis={{ items: renderList }} />
+      {!graphOnly && (
+        <>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+            Dedicated process tree view (AnyRun source preferred). Use mouse wheel to zoom and drag to pan.
+          </div>
+          <AnyRunSandboxIntelligence hybridAnalysis={{ items: renderList }} />
+        </>
+      )}
       {renderList.map((item: any, idx: number) => {
         const raw = item?.raw_summary || {};
         const source = String(raw?.source || "hybrid").toUpperCase();
         const mode = String(raw?.mode || "lookup").toUpperCase();
         return (
-          <div key={`pg-${idx}`} style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, color: "var(--accent)", marginBottom: 8 }}>
-              Graph #{idx + 1} · {source} · {mode}
-            </div>
-            <AnyRunGraph raw={raw} height={760} analysisContext={{ item, items }} />
+          <div key={`pg-${idx}`} style={{ marginBottom: graphOnly ? 0 : 20 }}>
+            {!graphOnly && (
+              <div style={{ fontSize: 12, color: "var(--accent)", marginBottom: 8 }}>
+                Graph #{idx + 1} - {source} - {mode}
+              </div>
+            )}
+            <AnyRunGraph raw={raw} height={graphHeight} analysisContext={{ item, items }} />
           </div>
         );
       })}

@@ -3182,7 +3182,9 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
                   onClick={() => {
                     if (typeof window === "undefined") return;
                     const u = new URL(window.location.href);
-                    u.pathname = `${u.pathname.replace(/\/$/, "")}/process-graph`;
+                    u.pathname = investigationId
+                      ? `/investigations/${investigationId}/process-graph`
+                      : `${u.pathname.replace(/\/$/, "")}/process-graph`;
                     u.search = "";
                     u.searchParams.set("graph_index", String(idx));
                     window.open(u.toString(), "_blank", "noopener,noreferrer");

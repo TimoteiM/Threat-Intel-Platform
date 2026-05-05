@@ -12,6 +12,7 @@ export default function InvestigationProcessGraphPage() {
   const [evidence, setEvidence] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [graphHeight, setGraphHeight] = useState(760);
 
   useEffect(() => {
     let mounted = true;
@@ -35,24 +36,45 @@ export default function InvestigationProcessGraphPage() {
     };
   }, [investigationId]);
 
-  if (loading) return <Spinner message="Loading process graph..." />;
+  useEffect(() => {
+    function updateHeight() {
+      setGraphHeight(Math.max(420, window.innerHeight - 16));
+    }
+    updateHeight();
+    window.addEventListener("resize", updateHeight);
+    return () => window.removeEventListener("resize", updateHeight);
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={fullscreenShell}>
+        <Spinner message="Loading process graph..." />
+      </div>
+    );
+  }
   if (error) {
     return (
-      <div style={{ paddingTop: 24, color: "var(--red)", fontSize: 12 }}>
+      <div style={{ ...fullscreenShell, padding: 24, color: "var(--red)", fontSize: 12 }}>
         {error}
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        width: "100vw",
-        marginLeft: "calc(50% - 50vw)",
-        padding: "8px 12px 18px 12px",
-      }}
-    >
-      <AnyRunProcessGraphTab evidence={evidence || {}} />
+    <div style={fullscreenShell}>
+      <AnyRunProcessGraphTab evidence={evidence || {}} graphOnly graphHeight={graphHeight} />
     </div>
   );
 }
+
+const fullscreenShell: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 2147483000,
+  width: "100vw",
+  minHeight: "100vh",
+  padding: 8,
+  boxSizing: "border-box",
+  background: "#061724",
+  overflow: "hidden",
+};
