@@ -272,6 +272,22 @@ select {
   padding: 24px var(--shell-gutter) 40px;
 }
 
+body.process-graph-fullscreen {
+  overflow: hidden;
+}
+
+body.process-graph-fullscreen .app-header,
+body.process-graph-fullscreen .app-footer {
+  display: none;
+}
+
+body.process-graph-fullscreen .app-shell__main {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+}
+
 .app-header {
   position: sticky;
   top: 0;

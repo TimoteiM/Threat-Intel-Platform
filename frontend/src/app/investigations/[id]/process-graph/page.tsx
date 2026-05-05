@@ -45,6 +45,11 @@ export default function InvestigationProcessGraphPage() {
     return () => window.removeEventListener("resize", updateHeight);
   }, []);
 
+  useEffect(() => {
+    document.body.classList.add("process-graph-fullscreen");
+    return () => document.body.classList.remove("process-graph-fullscreen");
+  }, []);
+
   if (loading) {
     return (
       <div style={fullscreenShell}>

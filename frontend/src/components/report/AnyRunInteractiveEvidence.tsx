@@ -1645,6 +1645,10 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
               borderRadius: 6,
               boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
               zIndex: 12,
+              maxHeight: Math.max(260, Number(height) - 28),
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
             }}
           >
             <div
@@ -1685,7 +1689,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                 ×
               </button>
             </div>
-            <div style={{ padding: 10, fontSize: 12, color: "var(--text-secondary)" }}>
+            <div style={{ padding: 10, fontSize: 12, color: "var(--text-secondary)", overflowY: "auto", minHeight: 0 }}>
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.35, wordBreak: "break-all", overflowWrap: "break-word" }}>
                   {_filenameFromPath(selected?.fileName || selected?.image || selected?.processName || selected?.name || "-")}

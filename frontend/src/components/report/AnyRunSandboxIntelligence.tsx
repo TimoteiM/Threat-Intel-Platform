@@ -49,14 +49,20 @@ function openThumbnailUrl(url: string): void {
   if (!blob) {
     const win = window.open("", "_blank", "noopener,noreferrer");
     if (win) {
-      win.document.write(`<title>ANY.RUN thumbnail</title><img src="${url}" style="max-width:100%;height:auto;display:block;margin:0 auto;background:#020617;" />`);
+      win.document.write(buildThumbnailViewerHtml(url));
       win.document.close();
     }
     return;
   }
   const objectUrl = URL.createObjectURL(blob);
-  window.open(objectUrl, "_blank", "noopener,noreferrer");
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  const win = window.open("", "_blank", "noopener,noreferrer");
+  if (!win) {
+    URL.revokeObjectURL(objectUrl);
+    return;
+  }
+  win.document.write(buildThumbnailViewerHtml(objectUrl, true));
+  win.document.close();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
 }
 
 function dataUrlToBlob(url: string): Blob | null {
@@ -72,6 +78,35 @@ function dataUrlToBlob(url: string): Blob | null {
   } catch {
     return null;
   }
+}
+
+function buildThumbnailViewerHtml(url: string, isObjectUrl = false): string {
+  const safeUrl = url.replace(/"/g, "&quot;");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ANY.RUN thumbnail</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #020617; color: #cbd5e1; font-family: Inter, system-ui, sans-serif; }
+    .bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: rgba(2, 6, 23, 0.92); border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
+    .title { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #93c5fd; }
+    .hint { font-size: 12px; color: #94a3b8; }
+    .stage { min-height: calc(100vh - 45px); display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+    img { display: block; max-width: none; width: auto; height: auto; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: 0 20px 60px rgba(0,0,0,.35); image-rendering: auto; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div class="title">ANY.RUN embedded HTML thumbnail</div>
+    <div class="hint">Shown at native size to avoid artificial zoom distortion.</div>
+  </div>
+  <div class="stage">
+    <img src="${safeUrl}" alt="ANY.RUN thumbnail" />
+  </div>
+  ${isObjectUrl ? "" : ""}
+</body>
+</html>`;
 }
 
 function collectIntelligence(hybridAnalysis: any): Intelligence[] {
