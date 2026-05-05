@@ -15,7 +15,10 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Optional
 
-from app.services.investigation_intelligence import build_investigation_intelligence
+from app.services.investigation_intelligence import (
+    build_evidence_matrix_rows,
+    build_investigation_intelligence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +26,14 @@ logger = logging.getLogger(__name__)
 def export_json(evidence: dict, report: dict, detail: dict) -> bytes:
     """Export full investigation as JSON."""
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
     result = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "investigation": detail,
         "evidence": evidence,
         "report": report,
         "soc_intelligence": intelligence,
+        "evidence_matrix": evidence_matrix,
     }
     return json.dumps(result, indent=2, default=str).encode("utf-8")
 
@@ -45,6 +50,7 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
     confidence_engine = intelligence.get("confidence_engine") or {}
     ioc_quality = intelligence.get("ioc_quality") or {}
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
 
     lines = [
         f"# Threat Analysis Report: {domain}",
@@ -62,6 +68,23 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
         report.get("primary_reasoning", "No reasoning provided."),
         "",
     ]
+
+    if evidence_matrix:
+        lines.extend([
+            "## Evidence Matrix",
+            "",
+            "| Source | Evidence Reference | Observed Value / SOC Relevance |",
+            "|--------|--------------------|--------------------------------|",
+        ])
+        for row in evidence_matrix[:28]:
+            value = row.get("value") or ""
+            relevance = row.get("relevance") or ""
+            if relevance:
+                value = f"{value}<br>{relevance}"
+            lines.append(
+                f"| {_md_cell(row.get('source', ''))} | `{_md_cell(row.get('ref', ''))}` | {_md_cell(value)} |"
+            )
+        lines.append("")
 
     lines.extend([
         "",
@@ -144,6 +167,10 @@ def export_pdf(evidence: dict, report: dict, detail: dict) -> bytes:
         raise RuntimeError("PDF generation failed") from e
 
 
+def _md_cell(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+
 _CLASSIFICATION_COLORS = {
     "BENIGN": "#10b981",
     "SUSPICIOUS": "#f59e0b",
@@ -175,6 +202,7 @@ def _build_soc_report_context(
     evidence_sections = _build_evidence_sections(evidence)
     risk = evidence.get("final_risk") or {}
     intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
 
     summary = (
         _clean_text(report.get("executive_summary"))
@@ -213,7 +241,7 @@ def _build_soc_report_context(
         },
         "summary": summary,
         "assessment_points": assessment_points,
-        "key_evidence": _build_evidence_reference_rows(report.get("key_evidence"), evidence),
+        "key_evidence": evidence_matrix,
         "contradicting_evidence": _build_evidence_reference_rows(
             report.get("contradicting_evidence"), evidence
         ),

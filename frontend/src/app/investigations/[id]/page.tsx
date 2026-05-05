@@ -703,7 +703,7 @@ export default function InvestigationPage() {
         case "summary":
           return report ? <ExecutiveSummaryTab report={report} /> : <NoData label="report" />;
         case "intelligence":
-          return <SocIntelligenceTab intelligence={intelligence} loading={!intelligence && !evidence && !report} />;
+          return <SocIntelligenceTab intelligence={intelligence} report={report} evidence={evidence} detail={detail} loading={!intelligence && !evidence && !report} />;
         case "evidence":
           return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":

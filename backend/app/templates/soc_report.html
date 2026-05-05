@@ -311,16 +311,22 @@
     <div class="section-title">3. Evidence Matrix</div>
     {% if soc_report.key_evidence %}
     <table>
-      <tr><th style="width:30%">Evidence Reference</th><th>Observed Value / Analyst Relevance</th></tr>
+      <tr><th style="width:24%">Evidence Source</th><th style="width:27%">Evidence Reference</th><th>Observed Value / SOC Relevance</th></tr>
       {% for row in soc_report.key_evidence %}
       <tr>
+        <td>{{ row.source }}</td>
         <td class="mono">{{ row.ref }}</td>
-        <td>{{ row.value }}</td>
+        <td>
+          {{ row.value }}
+          {% if row.relevance %}
+          <div class="small muted" style="margin-top:4px;">{{ row.relevance }}</div>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </table>
     {% else %}
-    <p class="muted">No key evidence references were stored in the analyst report.</p>
+    <p class="muted">No reportable evidence references were available in the collected dataset.</p>
     {% endif %}
   </div>
 

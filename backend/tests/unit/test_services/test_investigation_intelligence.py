@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.services.investigation_intelligence import build_investigation_intelligence
+from app.services.investigation_intelligence import (
+    build_evidence_matrix_rows,
+    build_investigation_intelligence,
+)
 
 
 def test_build_investigation_intelligence_derives_soc_sections() -> None:
@@ -20,6 +23,15 @@ def test_build_investigation_intelligence_derives_soc_sections() -> None:
             "total_vendors": 80,
             "last_analysis_date": "2026-05-05T08:10:00+00:00",
         },
+        "signals": [
+            {
+                "id": "vt-detection",
+                "category": "reputation",
+                "description": "VirusTotal vendors flagged the observable.",
+                "severity": "warning",
+                "evidence_refs": ["vt.malicious_count"],
+            }
+        ],
         "hybrid_analysis": {
             "items": [
                 {
@@ -93,3 +105,28 @@ def test_build_investigation_intelligence_derives_soc_sections() -> None:
     assert any(event["source"] == "anyrun" for event in out["evidence_timeline"])
     assert any(node["type"] == "malware" for node in out["investigation_graph"]["nodes"])
     assert out["soc_report_builder"]["readiness_score"] >= 70
+    assert "OpenCTI Resolution" not in [section["title"] for section in out["soc_report_builder"]["sections"]]
+    assert "Unified Evidence Timeline" not in [section["title"] for section in out["soc_report_builder"]["sections"]]
+    assert out["soc_report_builder"]["evidence_matrix"]
+    assert out["soc_report_builder"]["preview"]["evidence_matrix"]
+
+
+def test_build_evidence_matrix_rows_falls_back_to_collector_values() -> None:
+    rows = build_evidence_matrix_rows(
+        evidence={
+            "vt": {"malicious_count": 2, "suspicious_count": 1},
+            "dns": {"a": ["203.0.113.10"]},
+            "signals": [
+                {
+                    "category": "reputation",
+                    "severity": "warning",
+                    "description": "Reputation signal.",
+                    "evidence_refs": ["vt.malicious_count", "missing.path"],
+                }
+            ],
+        },
+        report={"key_evidence": ["missing.path"], "findings": []},
+    )
+
+    assert any(row["ref"] == "vt.malicious_count" for row in rows)
+    assert all("No value was available" not in row["value"] for row in rows)

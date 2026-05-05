@@ -24,6 +24,37 @@ IOC_TYPE_BASE_SCORE = {
     "email": 38,
 }
 
+EVIDENCE_MATRIX_FALLBACK_REFS: tuple[tuple[str, str], ...] = (
+    ("final_risk.risk_score", "Composite risk score"),
+    ("final_risk.risk_level", "Composite risk level"),
+    ("vt.malicious_count", "VirusTotal malicious detections"),
+    ("vt.suspicious_count", "VirusTotal suspicious detections"),
+    ("vt.reputation_score", "VirusTotal reputation"),
+    ("threat_feeds.abuseipdb.abuse_confidence_score", "AbuseIPDB confidence"),
+    ("threat_feeds.phishtank.in_database", "PhishTank listing"),
+    ("threat_feeds.phishtank.verified", "PhishTank verification"),
+    ("threat_feeds.threatfox_matches", "ThreatFox matches"),
+    ("threat_feeds.openphish_listed", "OpenPhish listing"),
+    ("opencti.found", "OpenCTI observable lookup"),
+    ("opencti.score", "OpenCTI score"),
+    ("opencti.observable_value", "OpenCTI matched observable"),
+    ("hybrid_analysis.items", "Sandbox submissions"),
+    ("url_lexical_ml.score", "URL lexical ML score"),
+    ("ml_url_score.score", "Normalized URL ML score"),
+    ("url_behavior.classification", "URL behavior classification"),
+    ("http.final_url", "HTTP final URL"),
+    ("http.final_status_code", "HTTP final status"),
+    ("http.has_login_form", "HTTP login form"),
+    ("http.phishing_indicators", "HTTP phishing indicators"),
+    ("redirect_analysis.cloaking_detected", "Redirect cloaking"),
+    ("domain_similarity.overall_similarity_score", "Domain similarity"),
+    ("whois.domain_age_days", "WHOIS domain age"),
+    ("dns.a", "DNS A records"),
+    ("dns.mx", "DNS MX records"),
+    ("tls.issuer_org", "TLS issuer"),
+    ("hosting.asn_org", "Hosting ASN organization"),
+)
+
 
 def build_investigation_intelligence(
     evidence: dict[str, Any] | None,
@@ -81,6 +112,72 @@ def build_investigation_intelligence(
         "opencti_resolver": opencti,
         "soc_report_builder": soc_report,
     }
+
+
+def build_evidence_matrix_rows(
+    *,
+    evidence: dict[str, Any] | None,
+    report: dict[str, Any] | None = None,
+    max_rows: int = 28,
+) -> list[dict[str, str]]:
+    """Build SOC report evidence rows from analyst refs, findings, signals, and collector facts."""
+    evidence = evidence if isinstance(evidence, dict) else {}
+    report = report if isinstance(report, dict) else {}
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_ref(ref: Any, source: str, relevance: Any = "") -> None:
+        ref_text = _clean(ref)
+        if not ref_text or len(rows) >= max_rows:
+            return
+        if ref_text.startswith("evidence."):
+            ref_text = ref_text[len("evidence.") :]
+        key = ref_text.casefold()
+        if key in seen:
+            return
+        value = _resolve_evidence_path(evidence, ref_text)
+        if not _has_matrix_value(value):
+            return
+        compact_value = _compact_matrix_value(value)
+        if not compact_value:
+            return
+        seen.add(key)
+        rows.append(
+            {
+                "source": source,
+                "ref": ref_text,
+                "value": compact_value,
+                "relevance": _clean(relevance),
+            }
+        )
+
+    for ref in _as_list(report.get("key_evidence")):
+        add_ref(ref, "Analyst key evidence", "Listed by the analyst report as evidence supporting the verdict.")
+
+    for finding in _as_list(report.get("findings"))[:12]:
+        if not isinstance(finding, dict):
+            continue
+        title = _clean(finding.get("title")) or "Finding"
+        for ref in _as_list(finding.get("evidence_refs"))[:4]:
+            add_ref(ref, f"Finding: {title}", finding.get("description"))
+
+    signals = [
+        signal for signal in _as_list(evidence.get("signals"))
+        if isinstance(signal, dict)
+    ]
+    severity_rank = {"critical": 0, "danger": 0, "high": 0, "warning": 1, "medium": 1, "info": 2, "low": 3}
+    signals.sort(key=lambda signal: severity_rank.get(str(signal.get("severity") or "").lower(), 2))
+    for signal in signals[:18]:
+        label = _clean(signal.get("category")) or "Signal"
+        severity = _clean(signal.get("severity")).upper()
+        source = f"{severity} signal: {label}" if severity else f"Signal: {label}"
+        for ref in _as_list(signal.get("evidence_refs"))[:3]:
+            add_ref(ref, source, signal.get("description"))
+
+    for ref, source in EVIDENCE_MATRIX_FALLBACK_REFS:
+        add_ref(ref, source)
+
+    return rows[:max_rows]
 
 
 def build_evidence_timeline(
@@ -843,6 +940,7 @@ def build_soc_report_outline(
     opencti: dict[str, Any],
 ) -> dict[str, Any]:
     """Build an official SOC documentation outline from derived intelligence."""
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
     sections = [
         {
             "id": "executive_summary",
@@ -857,16 +955,34 @@ def build_soc_report_outline(
             "status": "ready" if confidence.get("components") else "needs_data",
         },
         {
-            "id": "evidence_timeline",
-            "title": "Unified Evidence Timeline",
-            "purpose": "Show when collection, reputation, sandbox, OpenCTI, and certificate events were observed.",
-            "status": "ready" if timeline else "needs_data",
+            "id": "evidence_matrix",
+            "title": "Evidence Matrix",
+            "purpose": "Map analyst conclusions to concrete collected evidence references and observed values.",
+            "status": "ready" if evidence_matrix else "needs_data",
         },
         {
-            "id": "investigation_graph",
-            "title": "Investigation Relationship Graph",
-            "purpose": "Connect observable, infrastructure, sandbox behavior, OpenCTI relationships, and derived IOCs.",
-            "status": "ready" if graph.get("nodes") else "needs_data",
+            "id": "findings",
+            "title": "Findings",
+            "purpose": "Summarize the material technical findings that support SOC triage.",
+            "status": "ready" if report.get("findings") else "needs_review",
+        },
+        {
+            "id": "indicators",
+            "title": "Indicators of Compromise",
+            "purpose": "List primary and derived IOCs with confidence, context, and actionability.",
+            "status": "ready" if report.get("iocs") or ioc_quality.get("items") else "needs_data",
+        },
+        {
+            "id": "soc_actions",
+            "title": "Recommended SOC Actions",
+            "purpose": "Define containment, hunting, monitoring, and evidence-retention actions.",
+            "status": "ready",
+        },
+        {
+            "id": "derived_verdict",
+            "title": "Derived SOC Intelligence Verdict",
+            "purpose": "Record the platform-derived verdict, score, source components, and rationale.",
+            "status": "ready" if confidence.get("components") else "needs_data",
         },
         {
             "id": "ioc_quality",
@@ -874,30 +990,102 @@ def build_soc_report_outline(
             "purpose": "Classify IOCs as high-value, actionable, low-value, volatile, or contextual.",
             "status": "ready" if ioc_quality.get("items") else "needs_data",
         },
-        {
-            "id": "opencti_resolution",
-            "title": "OpenCTI Resolution",
-            "purpose": "Record exact search terms, matched observable, and linked internal threat intelligence.",
-            "status": "ready" if opencti.get("status") == "matched" else "not_available",
-        },
-        {
-            "id": "soc_actions",
-            "title": "Recommended SOC Actions",
-            "purpose": "Define blocking, hunting, monitoring, and evidence-retention actions.",
-            "status": "ready",
-        },
     ]
     ready = sum(1 for section in sections if section["status"] == "ready")
     readiness_score = round((ready / len(sections)) * 100)
     priority_actions = _build_priority_actions(confidence, ioc_quality, opencti, report, detail)
+    recommended_title = f"SOC Investigation Report - {_primary_observable(evidence, detail) or 'Observable'}"
 
     return {
         "readiness_score": readiness_score,
         "sections": sections,
+        "evidence_matrix": evidence_matrix,
+        "preview": _build_soc_report_preview(
+            title=recommended_title,
+            evidence=evidence,
+            report=report,
+            confidence=confidence,
+            ioc_quality=ioc_quality,
+            priority_actions=priority_actions,
+            evidence_matrix=evidence_matrix,
+        ),
         "priority_actions": priority_actions,
         "export_profile": "official_soc_documentation",
-        "recommended_title": f"SOC Investigation Report - {_primary_observable(evidence, detail) or 'Observable'}",
+        "recommended_title": recommended_title,
         "missing_sections": [section["title"] for section in sections if section["status"] not in {"ready"}],
+    }
+
+
+def _build_soc_report_preview(
+    *,
+    title: str,
+    evidence: dict[str, Any],
+    report: dict[str, Any],
+    confidence: dict[str, Any],
+    ioc_quality: dict[str, Any],
+    priority_actions: list[str],
+    evidence_matrix: list[dict[str, str]],
+) -> dict[str, Any]:
+    summary = (
+        _clean(report.get("executive_summary"))
+        or _clean(report.get("primary_reasoning"))
+        or _clean(confidence.get("explanation"))
+        or "No analyst executive summary is available for this investigation yet."
+    )
+    findings: list[dict[str, str]] = []
+    for finding in _as_list(report.get("findings"))[:8]:
+        if not isinstance(finding, dict):
+            continue
+        findings.append(
+            {
+                "severity": _clean(finding.get("severity")) or "info",
+                "title": _clean(finding.get("title")) or "Untitled finding",
+                "description": _clean(finding.get("description")),
+                "ttp": _clean(finding.get("ttp")),
+            }
+        )
+
+    report_iocs = [
+        {
+            "type": _clean(ioc.get("type")).upper(),
+            "value": _clean(ioc.get("value")),
+            "context": _clean(ioc.get("context")),
+            "confidence": _clean(ioc.get("confidence")).upper(),
+        }
+        for ioc in _as_list(report.get("iocs"))[:20]
+        if isinstance(ioc, dict) and _clean(ioc.get("value"))
+    ]
+    quality_iocs = [
+        {
+            "type": _clean(ioc.get("type")).upper(),
+            "value": _clean(ioc.get("value")),
+            "quality": str(ioc.get("quality_score") or ""),
+            "labels": _join(ioc.get("labels")),
+            "action": _clean(ioc.get("recommended_action")),
+        }
+        for ioc in _as_list(ioc_quality.get("items"))[:20]
+        if isinstance(ioc, dict) and _clean(ioc.get("value"))
+    ]
+
+    return {
+        "title": title,
+        "classification": _clean(report.get("classification") or confidence.get("verdict")).upper(),
+        "confidence": _clean(report.get("confidence") or confidence.get("confidence")).upper(),
+        "risk_score": report.get("risk_score") if report.get("risk_score") is not None else confidence.get("score"),
+        "summary": summary,
+        "verdict_rationale": _as_list(confidence.get("reasons"))[:8],
+        "evidence_matrix": evidence_matrix[:16],
+        "findings": findings,
+        "iocs": report_iocs,
+        "recommended_actions": priority_actions[:8],
+        "derived_verdict": {
+            "verdict": _clean(confidence.get("verdict")).upper(),
+            "score": confidence.get("score"),
+            "confidence": _clean(confidence.get("confidence")).upper(),
+            "explanation": _clean(confidence.get("explanation")),
+        },
+        "ioc_quality": quality_iocs,
+        "observable": _primary_observable(evidence, {}),
     }
 
 
@@ -1255,6 +1443,94 @@ def _join(values: Any, limit: int = 8) -> str:
     if len(cleaned) > limit:
         return ", ".join(cleaned[:limit]) + f", +{len(cleaned) - limit} more"
     return ", ".join(cleaned)
+
+
+def _resolve_evidence_path(evidence: dict[str, Any], ref: str) -> Any:
+    current: Any = evidence
+    for raw_segment in ref.split("."):
+        segment = _clean(raw_segment)
+        if not segment:
+            return None
+        key, idx = _parse_path_segment(segment)
+        if key:
+            if not isinstance(current, dict) or key not in current:
+                return None
+            current = current.get(key)
+        if idx is not None:
+            if not isinstance(current, list) or idx < 0 or idx >= len(current):
+                return None
+            current = current[idx]
+    return current
+
+
+def _parse_path_segment(segment: str) -> tuple[str, int | None]:
+    if "[" not in segment or not segment.endswith("]"):
+        return segment, None
+    key, _, idx_raw = segment.partition("[")
+    idx_text = idx_raw[:-1].strip()
+    if not idx_text.isdigit():
+        return key, None
+    return key, int(idx_text)
+
+
+def _has_matrix_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(_clean(value))
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
+
+
+def _compact_matrix_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        text = _clean(value)
+        return text if len(text) <= 260 else text[:257] + "..."
+    if isinstance(value, list):
+        if not value:
+            return ""
+        scalar_items = [item for item in value if isinstance(item, (str, int, float, bool))]
+        if len(scalar_items) == len(value):
+            shown = [_clean(item) for item in scalar_items[:8] if _clean(item)]
+            suffix = f" (+{len(value) - 8} more)" if len(value) > 8 else ""
+            return ", ".join(shown) + suffix
+        return f"{len(value)} structured item(s) collected."
+    if isinstance(value, dict):
+        important = (
+            "status",
+            "verdict",
+            "classification",
+            "risk_score",
+            "risk_level",
+            "confidence",
+            "score",
+            "found",
+            "present",
+            "malicious_count",
+            "suspicious_count",
+            "abuse_confidence_score",
+            "registrar",
+            "issuer_org",
+            "asn_org",
+            "country",
+            "observable_value",
+        )
+        pairs = [
+            f"{key}={value[key]}"
+            for key in important
+            if key in value and isinstance(value[key], (str, int, float, bool))
+        ]
+        if pairs:
+            return "; ".join(pairs[:8])
+        return "Structured fields: " + ", ".join(list(value.keys())[:8])
+    return _clean(value)[:260]
 
 
 def _compact(value: Any) -> str:
