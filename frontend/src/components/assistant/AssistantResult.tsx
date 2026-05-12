@@ -5,6 +5,7 @@ import * as api from "@/lib/api";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import StatusPill from "@/components/ui/StatusPill";
 import type { AssistantSessionDetail } from "@/lib/types";
+import AssistantIncidentGraph from "./AssistantIncidentGraph";
 
 
 export default function AssistantResult({
@@ -27,9 +28,14 @@ export default function AssistantResult({
   // before rendering — we display it ourselves below as structured UI.
   const resolvedSection = parseResolvedIdentifiers(session.report_markdown ?? "");
   const reportBody = stripResolvedSection(session.report_markdown ?? "");
+  const incidentGraph = session.result_json?.incident_graph;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {incidentGraph?.nodes?.length ? (
+        <AssistantIncidentGraph graph={incidentGraph} />
+      ) : null}
+
       <ConsoleModule
         eyebrow="Analyst output"
         title="Assistant output"
