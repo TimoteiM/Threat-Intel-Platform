@@ -122,6 +122,9 @@ class Investigation(Base):
     assistant_sessions: Mapped[list["AssistantSession"]] = relationship(
         back_populates="investigation"
     )
+    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
+        back_populates="investigation", cascade="all, delete-orphan"
+    )
 
     # Indexes
     __table_args__ = (
@@ -522,6 +525,9 @@ class AssistantSession(Base):
     entries: Mapped[list["AssistantEntry"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
+        back_populates="assistant_session", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_assistant_sessions_created", "created_at"),
@@ -552,8 +558,63 @@ class AssistantEntry(Base):
     )
 
     session: Mapped[AssistantSession] = relationship(back_populates="entries")
+    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
+        back_populates="assistant_entry", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_assistant_entries_session", "session_id"),
         Index("idx_assistant_entries_session_order", "session_id", "entry_index"),
+    )
+
+
+class SOCIndicator(Base):
+    """Normalized indicators extracted from investigations and AI assistant sessions."""
+    __tablename__ = "soc_indicators"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    indicator_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
+    normalized_value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
+    token: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="assistant")
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    confidence: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    assistant_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistant_sessions.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    assistant_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistant_entries.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    investigation: Mapped[Investigation | None] = relationship(back_populates="soc_indicators")
+    assistant_session: Mapped[AssistantSession | None] = relationship(back_populates="soc_indicators")
+    assistant_entry: Mapped[AssistantEntry | None] = relationship(back_populates="soc_indicators")
+
+    __table_args__ = (
+        Index("idx_soc_indicators_normalized", "indicator_type", "normalized_value"),
+        Index("idx_soc_indicators_session", "assistant_session_id"),
+        Index("idx_soc_indicators_entry", "assistant_entry_id"),
+        Index("idx_soc_indicators_investigation", "investigation_id"),
+        Index("idx_soc_indicators_seen", "last_seen_at"),
     )

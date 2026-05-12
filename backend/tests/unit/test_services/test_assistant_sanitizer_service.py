@@ -19,13 +19,13 @@ def test_sanitize_entry_replaces_email_sid_and_account_values() -> None:
 
     result = sanitizer.sanitize_entry(text, {})
 
-    assert "10.20.30.40" in result.sanitized_text  # IPs are no longer sanitized
-    assert "[IP_" not in result.sanitized_text
+    assert "10.20.30.40" not in result.sanitized_text
+    assert "[IP_1]" in result.sanitized_text
     assert "[EMAIL_1]" in result.sanitized_text
     assert "[SID_1]" in result.sanitized_text
     assert "[ACCOUNT_1]" in result.sanitized_text
     assert result.token_map["[ACCOUNT_1]"] == "admin"
-    assert result.summary.get("ips", 0) == 0
+    assert result.summary["ips"] == 1
     assert result.summary["emails"] == 1
     assert result.summary["sids"] == 1
 
@@ -39,11 +39,10 @@ def test_sanitize_session_entries_reuses_same_token_for_same_indicator() -> None
     results = sanitizer.sanitize_entries(entries)
 
     assert len(results.entries) == 2
-    # IPs pass through unchanged
-    assert "10.20.30.40" in results.entries[0].sanitized_text
-    assert "[IP_" not in results.entries[0].sanitized_text
-    # Emails are still deduplicated across entries
-    assert results.summary.get("ips", 0) == 0
+    assert "10.20.30.40" not in results.entries[0].sanitized_text
+    assert "[IP_1]" in results.entries[0].sanitized_text
+    # IPs and emails are deduplicated across entries
+    assert results.summary["ips"] == 1
     assert results.summary["emails"] == 1
 
 
@@ -153,9 +152,8 @@ def test_sanitize_entries_full_syslog_attack_chain() -> None:
     # host1 and fw1 share the same batch token map but are different tokens
     host_tokens = {k for k in token_map if k.startswith("[HOST_")}
     assert len(host_tokens) >= 2
-    # IPs pass through as plain text (no longer sanitized)
-    assert "10.16.17.17" in results.entries[0].sanitized_text
-    assert "[IP_" not in results.entries[0].sanitized_text
+    assert "10.16.17.17" not in results.entries[0].sanitized_text
+    assert "[IP_1]" in results.entries[0].sanitized_text
     _ = account_token  # suppress unused-variable warning
 
 
@@ -193,6 +191,6 @@ def test_sanitize_entry_replaces_escaped_json_agent_computer_name() -> None:
     result = sanitizer.sanitize_entry(text, {})
 
     assert r'\"agentComputerName\":\"[HOST_1]\"' in result.sanitized_text
-    assert "172.16.0.2" in result.sanitized_text
-    assert "[IP_" not in result.sanitized_text
+    assert "172.16.0.2" not in result.sanitized_text
+    assert "[IP_1]" in result.sanitized_text
     assert result.token_map["[HOST_1]"] == "5CG5452NBD"

@@ -30,6 +30,7 @@ export const APP_NAV_LINKS = [
   { href: "/watchlist", label: "Watchlist" },
   { href: "/email-investigations", label: "Email" },
   { href: "/assistant", label: "AI Assistant" },
+  { href: "/soc-indicators", label: "SOC Graph" },
   { href: "/clients", label: "Clients" },
   { href: "/alerts", label: "Alerts" },
   { href: "/ip-lookup", label: "IP Lookup" },

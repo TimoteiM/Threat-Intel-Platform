@@ -97,9 +97,9 @@ async def test_run_session_persists_alert_result_without_sending_raw_text(monkey
     assert result.report_markdown.startswith("# Executive Summary")
     assert result.status == "completed"
     assert "admin@example.com" not in seen_prompt["user_text"]
-    assert "10.0.0.1" in seen_prompt["user_text"]
+    assert "10.0.0.1" not in seen_prompt["user_text"]
+    assert "[IP_1]" in seen_prompt["user_text"]
     assert "[EMAIL_1]" in seen_prompt["user_text"]
-    assert "[IP_" not in seen_prompt["user_text"]
     assert result.entries[0].sanitized_text
     fake_db.commit.assert_awaited()
 

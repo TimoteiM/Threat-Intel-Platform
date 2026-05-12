@@ -28,7 +28,7 @@ def test_alert_prompt_uses_sanitized_content_and_required_sections() -> None:
     assert "notable entities" not in system.lower()
     assert "ignore low-value collection metadata" in system.lower()
     assert "error codes" in system.lower()
-    assert "ip addresses are not redacted" in system.lower()
+    assert "ip address tokens" in system.lower()
     assert "[ACCOUNT_1]" in user
     assert "10.0.0.1" in user
     assert "admin" not in user
@@ -49,8 +49,8 @@ def test_alert_prompt_requires_key_indicator_ips_and_tokens_to_be_preserved() ->
         raw_entries=["srcip=10.0.0.1 dstip=10.0.0.2 user=vhorga"],
     )
 
-    assert "include the exact ip addresses" in system.lower()
-    assert "source, destination, translated, c2, or ioc addresses" in system.lower()
+    assert "include those exact tokens" in system.lower()
+    assert "source, destination, translated, c2, or ioc activity" in system.lower()
 
 
 def test_incident_prompt_contains_timeline_iocs_root_cause_sections() -> None:

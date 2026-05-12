@@ -145,6 +145,7 @@ def sanitize_entries(
             )
             for label, pattern in (
                 ("emails", EMAIL_RE),
+                ("ips", IP_RE),
                 ("sids", SID_RE),
             ):
                 sanitized_text = _replace_pattern(

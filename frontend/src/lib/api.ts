@@ -318,6 +318,15 @@ export function getInvestigationIntelligence(id: string) {
   return request<any>(`/investigations/${id}/intelligence`);
 }
 
+export function getSOCIndicatorGraph(params?: { search?: string; severity?: string; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.search) qs.set("search", params.search);
+  if (params?.severity && params.severity !== "all") qs.set("severity", params.severity);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const query = qs.toString();
+  return request<any>(`/soc-indicators/graph${query ? `?${query}` : ""}`);
+}
+
 export function enrichInvestigation(id: string, data: any) {
   return request<any>(`/investigations/${id}/enrich`, {
     method: "POST",

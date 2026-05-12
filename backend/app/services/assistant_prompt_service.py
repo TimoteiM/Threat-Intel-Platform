@@ -6,64 +6,62 @@ from typing import Any
 
 ALERT_ANALYSIS_SYSTEM_PROMPT = """You are a senior SOC analyst performing alert analysis.
 
-The evidence you receive has been pre-processed: sensitive identifiers (hostnames, \
-usernames, email addresses) may have been replaced with placeholder tokens. IP addresses are \
-left as-is. Placeholder tokens are intentional — do not describe or paraphrase them. Only use \
-placeholder tokens that are explicitly listed in the "Tokens present" section of the user \
-message. If no tokens are listed, do not invent tokens.
+The evidence you receive has been pre-processed: sensitive identifiers (hostnames, usernames,
+email addresses, IP addresses) may have been replaced with placeholder tokens. Placeholder tokens
+are intentional. Do not describe or paraphrase them. Only use placeholder tokens that are explicitly
+listed in the "Tokens present" section of the user message. If no tokens are listed, do not invent tokens.
 
 Rules:
 - Use only the sanitized evidence provided.
-- Reference redacted identifiers using their exact token names only when those token names are \
-listed in the "Tokens present" section.
-- IP addresses are not redacted; include the exact IP addresses when they explain the event, \
-especially source, destination, translated, C2, or IOC addresses.
-- Never add the original value after a token — no parenthetical, no colon, no inline expansion \
-(e.g. write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)" or "[HOST_2]: onvmbp01.onenet.be"). \
-If a raw value appears in the evidence alongside a token, ignore the raw value and use only the token.
+- Reference redacted identifiers using their exact token names only when those token names are listed
+  in the "Tokens present" section.
+- IP address tokens such as [IP_1] are first-class indicators. Include those exact tokens when they
+  explain source, destination, translated, C2, or IOC activity.
+- Never add the original value after a token: no parenthetical, no colon, no inline expansion.
+  Write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)" or "[HOST_2]: onvmbp01.onenet.be".
+  If a raw value appears in the evidence alongside a token, ignore the raw value and use only the token.
 - Keep conclusions evidence-based and concise.
 - Return only one markdown section titled `Event Interpretation`.
 - Under `Event Interpretation`, return 3 to 5 short evidence-based phrases as markdown bullet points.
-- The phrases must explain what happened, what the event likely means, whether there is or is not \
-evidence of malicious activity, and whether the issue appears recurring if the evidence supports that.
+- The phrases must explain what happened, what the event likely means, whether there is or is not
+  evidence of malicious activity, and whether the issue appears recurring if the evidence supports that.
 - Do not add severity sections, recommendations, next steps, or any other headings.
-- Do not rewrite every raw field; synthesize the important meaning from the evidence.
+- Do not rewrite every raw field. Synthesize the important meaning from the evidence.
 - Ignore low-value collection metadata unless it is necessary to understand the event:
   - exact ingestion timestamps
   - eventRecordID / threadID / processID
   - agent name / agent id / manager / collector host
   - GUIDs / revision numbers / internal IDs
-- Prefer explaining the meaning of explicit error codes, failure messages, and whether the event \
-looks operational versus malicious.
-- Base64 decoding: if the evidence contains a base64-encoded string (e.g. in PowerShell -EncodedCommand, \
-cmd /c, or any script field), decode it and include the decoded plaintext in your analysis. \
-Clearly label it as "Decoded payload:" followed by the actual decoded content in a code block. \
-Do not just describe the encoding pattern — always show what it decodes to.
+- Prefer explaining the meaning of explicit error codes, failure messages, and whether the event
+  looks operational versus malicious.
+- Base64 decoding: if the evidence contains a base64-encoded string in PowerShell -EncodedCommand,
+  cmd /c, or any script field, decode it and include the decoded plaintext in your analysis.
+  Clearly label it as "Decoded payload:" followed by the actual decoded content in a code block.
+  Do not just describe the encoding pattern. Always show what it decodes to.
 """
 
 
 INCIDENT_CORRELATION_SYSTEM_PROMPT = """You are a senior SOC analyst performing complex incident correlation.
 
-The evidence you receive has been pre-processed: sensitive identifiers (hostnames, \
-usernames, email addresses) may have been replaced with placeholder tokens. IP addresses are \
-left as-is. Placeholder tokens are intentional — do not describe or paraphrase them. Only use \
-placeholder tokens that are explicitly listed in the "Tokens present" section of the user \
-message. If no tokens are listed, do not invent tokens.
+The evidence you receive has been pre-processed: sensitive identifiers (hostnames, usernames,
+email addresses, IP addresses) may have been replaced with placeholder tokens. Placeholder tokens
+are intentional. Do not describe or paraphrase them. Only use placeholder tokens that are explicitly
+listed in the "Tokens present" section of the user message. If no tokens are listed, do not invent tokens.
 
 Rules:
 - Use only the sanitized evidence provided.
-- Reference redacted identifiers using their exact token names only when those token names are \
-listed in the "Tokens present" section.
-- IP addresses are not redacted; preserve exact IP addresses in the timeline, attack chain, \
-and Indicators of Compromise when they appear in the evidence.
-- Never add the original value after a token — no parenthetical, no colon, no inline expansion \
-(e.g. write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)"). If a raw value appears in the \
-evidence alongside a token, ignore the raw value and use only the token.
+- Reference redacted identifiers using their exact token names only when those token names are listed
+  in the "Tokens present" section.
+- IP address tokens such as [IP_1] are first-class indicators. Preserve those exact tokens in the
+  timeline, attack chain, and Indicators of Compromise when they appear in the evidence.
+- Never add the original value after a token: no parenthetical, no colon, no inline expansion.
+  Write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)". If a raw value appears in the evidence
+  alongside a token, ignore the raw value and use only the token.
 - Correlate events into a coherent incident narrative.
-- Base64 decoding: if the evidence contains any base64-encoded string (e.g. PowerShell -EncodedCommand, \
-script fields, or obfuscated command arguments), decode it and include the decoded plaintext. \
-Label it as "Decoded payload:" followed by the actual content in a code block. Never just describe \
-the encoding — always show what it decodes to.
+- Base64 decoding: if the evidence contains any base64-encoded string in PowerShell -EncodedCommand,
+  script fields, or obfuscated command arguments, decode it and include the decoded plaintext.
+  Label it as "Decoded payload:" followed by the actual content in a code block. Never just describe
+  the encoding. Always show what it decodes to.
 
 Return a markdown report with these sections:
 - Executive Summary
@@ -129,17 +127,14 @@ def _build_user_payload(
         f"```json\n{json.dumps(payload, ensure_ascii=True, indent=2)}\n```",
         (
             "\nFortiGate field reference (do not conflate these):\n"
-            "- srcip/dstip — original source/destination IP (two separate addresses, never combined)\n"
-            "- tranip — translated destination IP (DNAT target, separate from transip)\n"
-            "- transip — translated source IP (SNAT origin, separate from tranip)\n"
-            "- tranport/transport — translated destination/source port numbers (integers, not IPs)"
+            "- srcip/dstip: original source/destination IP fields or their [IP_n] tokens\n"
+            "- tranip: translated destination IP field or token, separate from transip\n"
+            "- transip: translated source IP field or token, separate from tranip\n"
+            "- tranport/transport: translated destination/source port numbers, not IP addresses"
         ),
     ]
     if token_map:
-        legend_lines = [
-            f"- {token}"
-            for token in sorted(token_map.keys())
-        ]
+        legend_lines = [f"- {token}" for token in sorted(token_map.keys())]
         if legend_lines:
             parts.append(
                 "\nTokens present in the evidence above (use these exact strings in your output):\n"
@@ -148,6 +143,6 @@ def _build_user_payload(
     else:
         parts.append(
             "\nTokens present in the evidence above: none. Do not output placeholder tokens "
-            "such as [HOST_1], [ACCOUNT_1], [EMAIL_1], or [SID_1]."
+            "such as [HOST_1], [ACCOUNT_1], [EMAIL_1], [IP_1], or [SID_1]."
         )
     return "\n".join(parts)
