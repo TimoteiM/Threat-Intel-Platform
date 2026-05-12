@@ -35,6 +35,8 @@ EVIDENCE_MATRIX_FALLBACK_REFS: tuple[tuple[str, str], ...] = (
     ("threat_feeds.phishtank.verified", "PhishTank verification"),
     ("threat_feeds.threatfox_matches", "ThreatFox matches"),
     ("threat_feeds.openphish_listed", "OpenPhish listing"),
+    ("threat_feeds.otx.pulse_count", "AlienVault OTX pulse matches"),
+    ("threat_feeds.otx.malware_families", "AlienVault OTX malware families"),
     ("opencti.found", "OpenCTI observable lookup"),
     ("opencti.score", "OpenCTI score"),
     ("opencti.observable_value", "OpenCTI matched observable"),
@@ -408,7 +410,15 @@ def build_confidence_engine(
 ) -> dict[str, Any]:
     components: list[dict[str, Any]] = []
 
-    def add_component(source: str, score: Any, verdict: str, reasons: list[str], weight: float) -> None:
+    def add_component(
+        source: str,
+        score: Any,
+        verdict: str,
+        reasons: list[str],
+        weight: float,
+        *,
+        risk_signal: bool = True,
+    ) -> None:
         numeric = max(0.0, min(100.0, _num(score)))
         if numeric <= 0 and not reasons:
             return
@@ -418,6 +428,7 @@ def build_confidence_engine(
                 "score": round(numeric, 1),
                 "verdict": verdict or _verdict_from_score(numeric),
                 "weight": weight,
+                "risk_signal": risk_signal,
                 "reasons": [r for r in reasons if r][:6],
             }
         )
@@ -515,6 +526,11 @@ def build_confidence_engine(
         if threat_feeds.get("openphish_listed"):
             score += 70
             reasons.append("Listed by OpenPhish.")
+        otx = _as_dict(threat_feeds.get("otx"))
+        if otx.get("found"):
+            pulse_count = _num(otx.get("pulse_count"))
+            score += min(85, 35 + pulse_count * 8)
+            reasons.append(f"AlienVault OTX pulse match count {int(pulse_count)}.")
         if _as_dict(threat_feeds.get("phishtank")).get("in_database"):
             score += 70
             reasons.append("Present in PhishTank.")
@@ -534,18 +550,20 @@ def build_confidence_engine(
         add_component(
             "ioc_quality",
             min(100, 35 + quality_summary.get("actionable_count", 0) * 8 + quality_summary.get("high_value_count", 0) * 10),
-            "suspicious",
+            "informational",
             [f"{quality_summary.get('actionable_count', 0)} actionable IOC(s), {quality_summary.get('high_value_count', 0)} high-value IOC(s)."],
-            0.65,
+            0.0,
+            risk_signal=False,
         )
 
-    weighted_total = sum(row["score"] * row["weight"] for row in components)
-    total_weight = sum(row["weight"] for row in components) or 1.0
+    scoring_components = [row for row in components if row.get("risk_signal", True)]
+    weighted_total = sum(row["score"] * row["weight"] for row in scoring_components)
+    total_weight = sum(row["weight"] for row in scoring_components) or 1.0
     score = round(weighted_total / total_weight)
-    high_scores = [row["score"] for row in components if row["score"] >= 70]
+    high_scores = [row["score"] for row in scoring_components if row["score"] >= 70]
     malicious_votes = sum(
         1
-        for row in components
+        for row in scoring_components
         if str(row.get("verdict") or "").lower() in {"malicious", "critical", "high"}
         or row.get("score", 0) >= 80
     )
@@ -553,10 +571,12 @@ def build_confidence_engine(
         score = max(score, round(max(high_scores) * 0.82))
     if report_verdict.lower() == "malicious" and _num(report_score) >= 80 and malicious_votes >= 2:
         score = max(score, 80)
-    verdict = _verdict_from_score(score)
+    if report_score is not None:
+        score = max(score, round(_num(report_score)))
+    verdict = _stronger_verdict(report_verdict, _verdict_from_score(score))
 
     votes = {"malicious": 0, "suspicious": 0, "benign": 0, "unknown": 0}
-    for row in components:
+    for row in scoring_components:
         v = str(row.get("verdict") or _verdict_from_score(row.get("score"))).lower()
         if v in {"high", "critical"}:
             v = "malicious"
@@ -1079,8 +1099,8 @@ def _build_soc_report_preview(
     evidence_matrix: list[dict[str, str]],
 ) -> dict[str, Any]:
     summary = (
-        _clean(report.get("executive_summary"))
-        or _clean(report.get("primary_reasoning"))
+        _clean(report.get("primary_reasoning"))
+        or _clean(report.get("executive_summary"))
         or _clean(confidence.get("explanation"))
         or "No analyst executive summary is available for this investigation yet."
     )
@@ -1376,6 +1396,17 @@ def _stronger_confidence(left: Any, right: Any) -> str:
     l = str(left or "low").lower()
     r = str(right or "low").lower()
     return r if order.get(r, 1) > order.get(l, 1) else l
+
+
+def _stronger_verdict(left: Any, right: Any) -> str:
+    order = {"unknown": 0, "benign": 1, "inconclusive": 1, "suspicious": 2, "malicious": 3}
+    l = str(left or "").lower()
+    r = str(right or "").lower()
+    if l not in order:
+        l = "unknown"
+    if r not in order:
+        r = "unknown"
+    return l if order[l] >= order[r] else r
 
 
 def _node_id(node_type: str, value: str) -> str:

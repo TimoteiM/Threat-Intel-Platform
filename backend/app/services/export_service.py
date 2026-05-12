@@ -225,8 +225,8 @@ def _build_soc_report_context(
         derived_risk_score = report.get("risk_score", detail.get("risk_score"))
 
     summary = (
-        _clean_text(report.get("executive_summary"))
-        or _clean_text(report.get("primary_reasoning"))
+        _clean_text(report.get("primary_reasoning"))
+        or _clean_text(report.get("executive_summary"))
         or "No analyst summary was available in the stored report."
     )
 

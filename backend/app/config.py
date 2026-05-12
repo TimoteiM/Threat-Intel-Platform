@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import ValidationError, model_validator
+from pydantic import AliasChoices, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
     phishtank_api_key: str = ""
+    otx_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OTX_API_KEY", "OTX_Api_Key", "ALIENVAULT_OTX_API_KEY"),
+    )
     shodan_api_key: str = ""
     urlscan_api_key: str = ""           # optional — public scans work without key
     brave_search_api_key: str = ""
@@ -65,6 +69,11 @@ class Settings(BaseSettings):
     opencti_api_key: str = ""
     opencti_api_url: str = ""          # e.g. https://opencti.yourorg.com
     opencti_verify_ssl: bool = True    # set False for self-signed/internal certs
+    spamhaus_sia_token: str = ""
+    spamhaus_sia_username: str = ""
+    spamhaus_sia_password: str = ""
+    spamhaus_sia_base_url: str = "https://api.spamhaus.org"
+    spamhaus_sia_timeout_seconds: int = 8
     anyrun_sandbox_os: str = "windows"
     anyrun_privacy_type: str = "owner"
     anyrun_timeout_url_domain_seconds: int = 120

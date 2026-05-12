@@ -167,6 +167,7 @@ class IntelEvidence(BaseModel):
     allowlist_hits: list[IntelHit] = []
     related_certs: list[str] = []
     related_subdomains: list[str] = []
+    spamhaus_sia: dict[str, Any] = {}
     notes: list[str] = []
     # Raw cert entries from crt.sh for downstream timeline analysis
     cert_entries_raw: list[dict] = []
@@ -287,6 +288,64 @@ class GoogleSafeBrowsingResult(BaseModel):
     error: Optional[str] = None
 
 
+class OTXPulseResult(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    description: Optional[str] = None
+    author_name: Optional[str] = None
+    created: Optional[str] = None
+    modified: Optional[str] = None
+    tlp: Optional[str] = None
+    subscriber_count: Optional[int] = None
+    indicator_count: Optional[int] = None
+    related_indicator_is_active: Optional[bool] = None
+    tags: list[str] = []
+    malware_families: list[str] = []
+    adversary: Optional[str] = None
+    references: list[str] = []
+
+
+class OTXPassiveDNSRecord(BaseModel):
+    hostname: Optional[str] = None
+    address: Optional[str] = None
+    record_type: Optional[str] = None
+    first: Optional[str] = None
+    last: Optional[str] = None
+    asn: Optional[str] = None
+    country: Optional[str] = None
+    asset_type: Optional[str] = None
+
+
+class OTXResult(BaseModel):
+    checked: bool = False
+    found: bool = False
+    indicator: Optional[str] = None
+    indicator_type: Optional[str] = None
+    type_title: Optional[str] = None
+    pulse_count: int = 0
+    pulses: list[OTXPulseResult] = []
+    sections: list[str] = []
+    validation: list[str] = []
+    indicator_facts: list[str] = []
+    tags: list[str] = []
+    malware_families: list[str] = []
+    adversaries: list[str] = []
+    references: list[str] = []
+    external_resources: dict[str, str] = {}
+    geo: dict[str, Any] = {}
+    passive_dns_count: int = 0
+    passive_dns: list[OTXPassiveDNSRecord] = []
+    nameservers: list[str] = []
+    subdomains: list[str] = []
+    ip_addresses: list[str] = []
+    url_count: int = 0
+    urls: list[str] = []
+    malware_count: int = 0
+    http_scans_count: int = 0
+    reputation: Optional[int] = None
+    error: Optional[str] = None
+
+
 class ThreatFeedEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="threat_feeds"))
     abuseipdb: Optional[AbuseIPDBResult] = None
@@ -294,6 +353,7 @@ class ThreatFeedEvidence(BaseModel):
     threatfox_matches: list[ThreatFoxResult] = []
     openphish_listed: bool = False
     google_safe_browsing: Optional[GoogleSafeBrowsingResult] = None
+    otx: Optional[OTXResult] = None
     feeds_checked: list[str] = []
     feeds_skipped: list[str] = []
 

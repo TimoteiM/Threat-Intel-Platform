@@ -347,9 +347,11 @@ def _collect_screenshot_links(result: dict[str, Any], raw: dict[str, Any]) -> li
     seen: set[str] = set()
 
     def add(value: Any, *, label: str = "Screenshot", kind: str = "screenshot") -> None:
+        report_url = ""
         if isinstance(value, dict):
             url = _first(value, "thumbnail_url", "thumbnailUrl", "preview_url", "previewUrl", "url", "src", "href", "link")
             label_text = _clean_text(_first(value, "label", "title", "name", "type")) or label
+            report_url = _clean_text(_first(value, "report_url", "reportUrl", "full_url", "fullUrl", "analysis_link", "analysisLink"))
         else:
             url = value
             label_text = label
@@ -361,7 +363,10 @@ def _collect_screenshot_links(result: dict[str, Any], raw: dict[str, Any]) -> li
         if url_text.startswith("data:image/") and len(url_text) > 250_000:
             return
         seen.add(url_text.lower())
-        out.append({"label": label_text[:80], "url": url_text, "kind": kind})
+        row = {"label": label_text[:80], "url": url_text, "kind": kind}
+        if report_url.startswith("http://") or report_url.startswith("https://"):
+            row["report_url"] = report_url
+        out.append(row)
 
     for key in ("screenshots", "screenshot_thumbnails", "thumbnails", "images"):
         for value in _as_list(raw.get(key)) + _as_list(result.get(key)):

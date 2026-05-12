@@ -11,10 +11,12 @@ Facts only. No interpretation.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import socket
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -29,6 +31,14 @@ DNSBL_LISTS = [
     ("multi.surbl.org", "SURBL"),
     ("dbl.spamhaus.org", "Spamhaus DBL"),
 ]
+
+SPAMHAUS_DNSBL_ERROR_CODES = {
+    "127.255.255.252": "typing error in DNSBL name",
+    "127.255.255.254": "query via public/open resolver",
+    "127.255.255.255": "excessive number of queries",
+}
+
+_SPAMHAUS_SIA_TOKEN_CACHE: dict[str, int | str] = {"token": "", "expires": 0}
 
 
 class IntelCollector(BaseCollector):
@@ -69,8 +79,10 @@ class IntelCollector(BaseCollector):
 
         # ── 2. DNS Blocklist checks ──
         try:
+            self._dnsbl_notes = []
             blocklist_hits = self._check_dns_blocklists(target)
             evidence.blocklist_hits = blocklist_hits
+            evidence.notes.extend(getattr(self, "_dnsbl_notes", []))
         except Exception as e:
             logger.warning(f"DNSBL check failed for {target}: {e}")
             evidence.notes.append(f"DNSBL check failed: {e}")
@@ -96,11 +108,39 @@ class IntelCollector(BaseCollector):
                 ttl_hours=settings.intel_cache_ttl_hours,
             )
 
+        # ── 4. Spamhaus Intelligence API ──
+        spamhaus_token = self._get_spamhaus_sia_token(settings)
+        if spamhaus_token:
+            try:
+                evidence.spamhaus_sia = self._query_spamhaus_sia_domain(
+                    target,
+                    token=spamhaus_token,
+                    base_url=settings.spamhaus_sia_base_url,
+                    timeout=min(self.timeout, settings.spamhaus_sia_timeout_seconds),
+                )
+                if evidence.spamhaus_sia.get("status") == "unauthorized" and settings.spamhaus_sia_username:
+                    refreshed_token = self._get_spamhaus_sia_token(settings, force_refresh=True)
+                    if refreshed_token and refreshed_token != spamhaus_token:
+                        evidence.spamhaus_sia = self._query_spamhaus_sia_domain(
+                            target,
+                            token=refreshed_token,
+                            base_url=settings.spamhaus_sia_base_url,
+                            timeout=min(self.timeout, settings.spamhaus_sia_timeout_seconds),
+                        )
+            except Exception as e:
+                logger.warning(f"Spamhaus SIA lookup failed for {target}: {e}")
+                evidence.notes.append(f"Spamhaus SIA lookup failed: {e}")
+        else:
+            evidence.notes.append(
+                "Spamhaus SIA lookup skipped: configure SPAMHAUS_SIA_TOKEN or SPAMHAUS_SIA_USERNAME/PASSWORD"
+            )
+
         # ── Store artifact ──
         self._store_artifact("raw_intel", json.dumps({
             "certs_count": len(evidence.related_certs),
             "subdomains_count": len(evidence.related_subdomains),
             "blocklist_hits": len(evidence.blocklist_hits),
+            "spamhaus_sia_status": evidence.spamhaus_sia.get("status") if evidence.spamhaus_sia else None,
             "subdomains_sample": evidence.related_subdomains[:20],
         }, default=str))
 
@@ -160,7 +200,9 @@ class IntelCollector(BaseCollector):
     def _check_dns_blocklists(self, target: str) -> list[IntelHit]:
         """
         Check domain against DNS-based blocklists.
-        A positive result (DNS resolves) means the domain is listed.
+        A positive reputation result means the domain is listed. Some providers,
+        including Spamhaus, also return DNS A records for query errors; those
+        must not be treated as blocklist hits.
         """
         hits = []
 
@@ -168,15 +210,25 @@ class IntelCollector(BaseCollector):
             query = f"{target}.{dnsbl_zone}"
             try:
                 answers = socket.getaddrinfo(query, None, socket.AF_INET)
-                if answers:
-                    # Domain is listed in this blocklist
-                    result_ip = answers[0][4][0]
+                result_ips = sorted({answer[4][0] for answer in answers if answer and answer[4]})
+                reputational_ips: list[str] = []
+                for result_ip in result_ips:
+                    error_reason = self._dnsbl_error_reason(source_name, result_ip)
+                    if error_reason:
+                        note = f"{source_name} lookup skipped: {error_reason} (response: {result_ip})"
+                        getattr(self, "_dnsbl_notes", []).append(note)
+                        logger.info("%s for %s", note, target)
+                    else:
+                        reputational_ips.append(result_ip)
+
+                if reputational_ips:
+                    result_detail = ", ".join(reputational_ips)
                     hits.append(IntelHit(
                         source=source_name,
                         indicator=target,
                         category="blocklist",
                         severity="high",
-                        details=f"Listed in {source_name} (response: {result_ip})",
+                        details=f"Listed in {source_name} (response: {result_detail})",
                     ))
             except socket.gaierror:
                 # NXDOMAIN = not listed (good)
@@ -185,6 +237,15 @@ class IntelCollector(BaseCollector):
                 logger.debug(f"DNSBL {source_name} check error: {e}")
 
         return hits
+
+    @staticmethod
+    def _dnsbl_error_reason(source_name: str, result_ip: str) -> str | None:
+        if source_name == "Spamhaus DBL":
+            if result_ip in SPAMHAUS_DNSBL_ERROR_CODES:
+                return SPAMHAUS_DNSBL_ERROR_CODES[result_ip]
+            if result_ip.startswith("127.255.255."):
+                return "Spamhaus DNSBL query error"
+        return None
 
     def _check_urlhaus(self, target: str, *, timeout: int) -> list[IntelHit]:
         """
@@ -236,6 +297,140 @@ class IntelCollector(BaseCollector):
             return hits
 
         return []
+
+    def _query_spamhaus_sia_domain(
+        self,
+        target: str,
+        *,
+        token: str,
+        base_url: str,
+        timeout: int,
+    ) -> dict:
+        """
+        Query Spamhaus Intelligence API domain endpoints.
+        """
+        base = base_url.rstrip("/")
+        domain = quote(target.strip().lower(), safe="")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "ThreatInvestigator/1.0",
+        }
+        endpoint_paths = {
+            "general": f"/api/intel/v2/byobject/domain/{domain}",
+            "listing": f"/api/intel/v2/byobject/domain/{domain}/listing",
+            "dimensions": f"/api/intel/v2/byobject/domain/{domain}/dimensions",
+            "contexts": f"/api/intel/v2/byobject/domain/{domain}/contexts",
+            "senders": f"/api/intel/v2/byobject/domain/{domain}/senders",
+            "nameservers": f"/api/intel/v2/byobject/domain/{domain}/ns",
+            "a_records": f"/api/intel/v2/byobject/domain/{domain}/a",
+            "hostnames": f"/api/intel/v2/byobject/domain/{domain}/hostnames",
+            "malware_hashes": f"/api/intel/v2/byobject/domain/{domain}/malware/hashes",
+            "malware_urls": f"/api/intel/v2/byobject/domain/{domain}/malware/urls",
+        }
+        result: dict = {
+            "status": "checked",
+            "source": "Spamhaus Intelligence API",
+            "domain": target,
+            "errors": {},
+        }
+
+        for key, path in endpoint_paths.items():
+            try:
+                response = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
+            except requests.RequestException as exc:
+                result["errors"][key] = str(exc)
+                continue
+
+            if response.status_code == 404:
+                result[key] = None if key in {"general", "listing", "dimensions"} else []
+                continue
+            if response.status_code == 401:
+                result["status"] = "unauthorized"
+                result["errors"][key] = "token expired or unauthorized"
+                break
+            if response.status_code == 403:
+                result["errors"][key] = "forbidden for token tier"
+                continue
+            if response.status_code == 429:
+                result["status"] = "rate_limited"
+                result["errors"][key] = "rate limited"
+                break
+            if response.status_code != 200:
+                result["errors"][key] = f"HTTP {response.status_code}"
+                continue
+
+            try:
+                result[key] = response.json()
+            except ValueError:
+                result["errors"][key] = "invalid JSON response"
+
+        if not result["errors"]:
+            result.pop("errors", None)
+        return result
+
+    def _get_spamhaus_sia_token(self, settings, *, force_refresh: bool = False) -> str:
+        now = int(datetime.now(timezone.utc).timestamp())
+        cached_token = str(_SPAMHAUS_SIA_TOKEN_CACHE.get("token") or "")
+        cached_expires = int(_SPAMHAUS_SIA_TOKEN_CACHE.get("expires") or 0)
+        if cached_token and cached_expires > now + 300 and not force_refresh:
+            return cached_token
+
+        configured_token = str(settings.spamhaus_sia_token or "").strip()
+        configured_expires = self._jwt_exp(configured_token)
+        if configured_token and configured_expires > now + 300 and not force_refresh:
+            _SPAMHAUS_SIA_TOKEN_CACHE["token"] = configured_token
+            _SPAMHAUS_SIA_TOKEN_CACHE["expires"] = configured_expires
+            return configured_token
+
+        if not settings.spamhaus_sia_username or not settings.spamhaus_sia_password:
+            if configured_token and not force_refresh:
+                return configured_token
+            return ""
+
+        return self._refresh_spamhaus_sia_token(
+            username=settings.spamhaus_sia_username,
+            password=settings.spamhaus_sia_password,
+            base_url=settings.spamhaus_sia_base_url,
+            timeout=min(self.timeout, settings.spamhaus_sia_timeout_seconds),
+        )
+
+    def _refresh_spamhaus_sia_token(
+        self,
+        *,
+        username: str,
+        password: str,
+        base_url: str,
+        timeout: int,
+    ) -> str:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/api/v1/login",
+            json={"username": username, "password": password, "realm": "intel"},
+            timeout=timeout,
+            headers={"Accept": "application/json", "User-Agent": "ThreatInvestigator/1.0"},
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Spamhaus SIA login failed: HTTP {response.status_code}")
+        data = response.json()
+        token = str(data.get("token") or "")
+        if not token:
+            raise RuntimeError("Spamhaus SIA login response did not include a token")
+        expires = int(data.get("expires") or self._jwt_exp(token) or 0)
+        _SPAMHAUS_SIA_TOKEN_CACHE["token"] = token
+        _SPAMHAUS_SIA_TOKEN_CACHE["expires"] = expires
+        return token
+
+    @staticmethod
+    def _jwt_exp(token: str) -> int:
+        if not token or token.count(".") < 2:
+            return 0
+        try:
+            payload = token.split(".", 2)[1]
+            payload += "=" * (-len(payload) % 4)
+            decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
+            return int(json.loads(decoded).get("exp") or 0)
+        except Exception:
+            return 0
 
     @staticmethod
     def _parse_urlhaus_date(date_str: str | None) -> datetime | None:

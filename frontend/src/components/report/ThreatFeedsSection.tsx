@@ -13,6 +13,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
   const threatfox = threatFeeds.threatfox_matches || [];
   const openphish = threatFeeds.openphish_listed;
   const gsb = threatFeeds.google_safe_browsing;
+  const otx = threatFeeds.otx;
 
   const abuseScore = abuseipdb?.abuse_confidence_score ?? 0;
   const hasAnyHit =
@@ -20,14 +21,15 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
     phishtank?.in_database ||
     threatfox.length > 0 ||
     openphish ||
-    !!gsb?.listed;
+    !!gsb?.listed ||
+    !!otx?.found;
 
   return (
     <div>
       {/* Status Grid */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(5, 1fr)",
+        gridTemplateColumns: "repeat(6, 1fr)",
         gap: 8,
         marginBottom: 16,
       }}>
@@ -117,6 +119,23 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
               ? gsb?.listed
                 ? `Matched (${gsb?.matches_count || 0})`
                 : "No match"
+              : "Not checked"
+          }
+        />
+        <FeedStatusBox
+          label="AlienVault OTX"
+          status={
+            threatFeeds.feeds_checked.includes("otx")
+              ? otx?.found
+                ? (otx.pulse_count || 0) >= 3 ? "danger" : "warning"
+                : "clean"
+              : "skipped"
+          }
+          detail={
+            threatFeeds.feeds_checked.includes("otx")
+              ? otx?.found
+                ? `${otx.pulse_count} pulse${otx.pulse_count === 1 ? "" : "s"}`
+                : "No pulses"
               : "Not checked"
           }
         />
@@ -258,6 +277,140 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
             {gsb?.cache_durations?.length ? <DetailRow label="Cache Durations" value={gsb.cache_durations.join(", ")} /> : null}
             {gsb?.error ? <DetailRow label="Error" value={gsb.error} /> : null}
           </div>
+        </div>
+      )}
+
+      {/* AlienVault OTX */}
+      {threatFeeds.feeds_checked.includes("otx") && (
+        <div style={{ marginBottom: 14 }}>
+          <SectionLabel color={otx?.found ? "var(--yellow)" : "var(--green)"}>
+            AlienVault OTX — {otx?.found ? `${otx.pulse_count} Pulse Match${otx.pulse_count === 1 ? "" : "es"}` : "No pulses"}
+          </SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <DetailRow label="Checked" value={otx?.checked ? "Yes" : "No"} />
+            <DetailRow label="Indicator Type" value={otx?.type_title || otx?.indicator_type || "-"} />
+            <DetailRow label="Pulse Count" value={String(otx?.pulse_count ?? 0)} highlight={!!otx?.found} />
+            {otx?.geo?.asn ? <DetailRow label="ASN" value={String(otx.geo.asn)} /> : null}
+            {otx?.geo?.country_name ? <DetailRow label="Location" value={String(otx.geo.country_name)} /> : null}
+            {otx?.ip_addresses?.length ? <DetailRow label="IP Addresses" value={otx.ip_addresses.slice(0, 4).join(", ")} /> : null}
+            {otx?.nameservers?.length ? <DetailRow label="Nameservers" value={otx.nameservers.slice(0, 4).join(", ")} /> : null}
+            {otx?.subdomains?.length ? <DetailRow label="Subdomains" value={String(otx.subdomains.length)} /> : null}
+            {otx?.passive_dns_count ? <DetailRow label="Passive DNS Records" value={String(otx.passive_dns_count)} /> : null}
+            {otx?.url_count ? <DetailRow label="Observed URLs" value={String(otx.url_count)} highlight /> : null}
+            {otx?.malware_count ? <DetailRow label="Malware Samples" value={String(otx.malware_count)} highlight /> : null}
+            {otx?.http_scans_count ? <DetailRow label="HTTP Scans" value={String(otx.http_scans_count)} /> : null}
+            {otx?.malware_families?.length ? <DetailRow label="Malware Families" value={otx.malware_families.join(", ")} /> : null}
+            {otx?.adversaries?.length ? <DetailRow label="Adversaries" value={otx.adversaries.join(", ")} /> : null}
+            {otx?.tags?.length ? <DetailRow label="Tags" value={otx.tags.slice(0, 8).join(", ")} /> : null}
+            {otx?.error ? <DetailRow label="Error" value={otx.error} /> : null}
+          </div>
+          {otx?.indicator_facts?.length ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+              {otx.indicator_facts.slice(0, 10).map((fact, i) => (
+                <span key={`${fact}-${i}`} style={{
+                  padding: "3px 8px", fontSize: 10, fontWeight: 700,
+                  background: "rgba(251,191,36,0.12)", color: "var(--yellow)",
+                  borderRadius: 3, border: "1px solid rgba(251,191,36,0.22)",
+                }}>
+                  {fact}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {otx?.external_resources && Object.keys(otx.external_resources).length ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+              {Object.entries(otx.external_resources).slice(0, 8).map(([label, url]) => (
+                <a
+                  key={label}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    padding: "3px 8px", fontSize: 10, fontWeight: 700,
+                    background: "var(--bg-input)", color: "var(--blue)",
+                    borderRadius: 3, border: "1px solid var(--border-dim)",
+                    textDecoration: "none",
+                  }}
+                >
+                  {label}
+                </a>
+              ))}
+            </div>
+          ) : null}
+          {otx?.passive_dns?.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+              <div style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.05em" }}>
+                PASSIVE DNS
+              </div>
+              {otx.passive_dns.slice(0, 8).map((record, i) => (
+                <div
+                  key={`${record.hostname || "-"}-${record.address || "-"}-${i}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "64px minmax(160px, 1fr) minmax(180px, 1fr) minmax(120px, 0.8fr)",
+                    gap: 8,
+                    alignItems: "center",
+                    padding: "6px 10px",
+                    background: "var(--bg-input)",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: 11,
+                  }}
+                >
+                  <span style={{ color: "var(--yellow)", fontWeight: 700 }}>{record.record_type || "-"}</span>
+                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{record.hostname || "-"}</span>
+                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{record.address || "-"}</span>
+                  <span style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {record.asn || record.country || "-"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {otx?.pulses?.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+              {otx.pulses.slice(0, 6).map((pulse, i) => (
+                <div
+                  key={`${pulse.id || pulse.name}-${i}`}
+                  style={{
+                    padding: "10px 14px",
+                    background: "rgba(251,191,36,0.06)",
+                    borderLeft: "3px solid var(--yellow)",
+                    borderRadius: "var(--radius-sm)",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 700 }}>
+                    {pulse.name || "Unnamed pulse"}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 3 }}>
+                    {pulse.author_name || "Unknown author"}{pulse.modified ? ` - modified ${new Date(pulse.modified).toLocaleDateString()}` : ""}{pulse.tlp ? ` - TLP:${pulse.tlp}` : ""}{pulse.subscriber_count != null ? ` - ${pulse.subscriber_count} subscribers` : ""}
+                  </div>
+                  {pulse.description ? (
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 6 }}>
+                      {pulse.description}
+                    </div>
+                  ) : null}
+                  {pulse.related_indicator_is_active === false ? (
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 5, fontWeight: 700 }}>
+                      Indicator inactive
+                    </div>
+                  ) : null}
+                  {pulse.tags?.length ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                      {pulse.tags.slice(0, 8).map((tag, j) => (
+                        <span key={j} style={{
+                          padding: "1px 7px", fontSize: 10,
+                          background: "var(--bg-input)", color: "var(--text-muted)",
+                          borderRadius: 3, border: "1px solid var(--border-dim)",
+                        }}>
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
 

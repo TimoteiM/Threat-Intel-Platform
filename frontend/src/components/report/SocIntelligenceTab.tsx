@@ -13,6 +13,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import EvidenceTable from "@/components/evidence/EvidenceTable";
+import { getArtifactUrl } from "@/lib/api";
 
 type Props = {
   intelligence?: any;
@@ -22,13 +23,17 @@ type Props = {
   loading?: boolean;
 };
 
-type SocTab = "verdict" | "timeline" | "graph" | "iocs" | "opencti" | "report";
+type SocTab = "score" | "timeline" | "graph" | "iocs" | "screenshots" | "collectors" | "changes" | "notes" | "opencti" | "report";
 
 const TAB_LABELS: Array<{ id: SocTab; label: string }> = [
-  { id: "verdict", label: "Verdict" },
+  { id: "score", label: "Score" },
   { id: "timeline", label: "Timeline" },
   { id: "graph", label: "Graph" },
-  { id: "iocs", label: "IOC Quality" },
+  { id: "iocs", label: "IOC Actions" },
+  { id: "screenshots", label: "Screenshots" },
+  { id: "collectors", label: "Collectors" },
+  { id: "changes", label: "Changes" },
+  { id: "notes", label: "Notes" },
   { id: "opencti", label: "OpenCTI" },
   { id: "report", label: "Report" },
 ];
@@ -77,7 +82,31 @@ function truncate(value: any, max = 90): string {
 }
 
 export default function SocIntelligenceTab({ intelligence, report, evidence, detail, loading }: Props) {
-  const [active, setActive] = React.useState<SocTab>("verdict");
+  const [active, setActive] = React.useState<SocTab>("score");
+  const notesKey = `soc-analyst-notes:${text(detail?.id || detail?.domain || evidence?.domain, "current")}`;
+  const [analystNotes, setAnalystNotes] = React.useState("");
+  const [analystOverride, setAnalystOverride] = React.useState("");
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(notesKey) || "{}");
+      setAnalystNotes(String(stored.notes || ""));
+      setAnalystOverride(String(stored.override || ""));
+    } catch {
+      setAnalystNotes("");
+      setAnalystOverride("");
+    }
+  }, [notesKey]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(notesKey, JSON.stringify({ notes: analystNotes, override: analystOverride }));
+    } catch {
+      // Browser storage may be disabled; notes remain available in component state.
+    }
+  }, [analystNotes, analystOverride, notesKey]);
 
   if (loading) {
     return <EmptyState label="Building SOC intelligence..." />;
@@ -122,10 +151,21 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
         ))}
       </div>
 
-      {active === "verdict" && <VerdictPanel confidence={confidence} tone={tone} />}
+      {active === "score" && <ScoreBreakdownPanel confidence={confidence} evidence={evidence} report={report} detail={detail} />}
       {active === "timeline" && <TimelinePanel timeline={timeline} />}
       {active === "graph" && <GraphPanel graph={graph} />}
-      {active === "iocs" && <IocQualityPanel iocQuality={iocQuality} />}
+      {active === "iocs" && <IocActionPanel iocQuality={iocQuality} />}
+      {active === "screenshots" && <ScreenshotGalleryPanel evidence={evidence} />}
+      {active === "collectors" && <CollectorHealthPanel evidence={evidence} />}
+      {active === "changes" && <ChangeDetectionPanel evidence={evidence} detail={detail} />}
+      {active === "notes" && (
+        <AnalystNotesPanel
+          notes={analystNotes}
+          override={analystOverride}
+          onNotesChange={setAnalystNotes}
+          onOverrideChange={setAnalystOverride}
+        />
+      )}
       {active === "opencti" && <OpenCtiPanel opencti={opencti} />}
       {active === "report" && (
         <ReportPreviewPanel
@@ -138,6 +178,206 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
         />
       )}
     </div>
+  );
+}
+
+function ScoreBreakdownPanel({ confidence, evidence, report, detail }: { confidence: any; evidence: any; report: any; detail: any }) {
+  const components = arr(confidence?.components);
+  const finalRisk = evidence?.final_risk || {};
+  const votes = confidence?.source_agreement || {};
+  const tone = toneFromVerdict(confidence?.verdict || report?.classification || detail?.classification);
+
+  return (
+    <section style={sectionStyle}>
+      <div style={metricGridStyle}>
+        <Metric label="Derived Verdict" value={text(confidence?.verdict, "unknown").toUpperCase()} color={tone.color} compact />
+        <Metric label="Derived Score" value={`${text(confidence?.score, "0")}/100`} color={tone.color} compact />
+        <Metric label="Final Risk" value={`${text(finalRisk?.risk_score ?? finalRisk?.score, "-")}/100`} color="var(--accent)" compact />
+        <Metric label="Agreement" value={`${asNumber(votes.malicious) + asNumber(votes.suspicious)} risk votes`} color="var(--yellow)" compact />
+      </div>
+      <div style={twoColStyle}>
+        <div>
+          <SectionTitle title="Component Scores" />
+          <div style={{ display: "grid", gap: 10 }}>
+            {components.length ? components.map((component: any, idx: number) => (
+              <ComponentScore key={`${component?.source}-${idx}`} component={component} />
+            )) : <EmptyState label="No scoring components available." compact />}
+          </div>
+        </div>
+        <div>
+          <SectionTitle title="Source Agreement" />
+          <EvidenceTable
+            data={[
+              { verdict: "Malicious", count: votes.malicious || 0 },
+              { verdict: "Suspicious", count: votes.suspicious || 0 },
+              { verdict: "Benign", count: votes.benign || 0 },
+              { verdict: "Unknown", count: votes.unknown || 0 },
+            ]}
+            columns={[{ key: "verdict" }, { key: "count" }]}
+          />
+          <SectionTitle title="Final Risk Rationale" />
+          <Bullets items={arr(finalRisk?.rationale)} empty="No final-risk rationale is available." />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function IocActionPanel({ iocQuality }: { iocQuality: any }) {
+  const items = arr(iocQuality?.items);
+  const summary = iocQuality?.summary || {};
+  const blockNow = items.filter((ioc: any) => {
+    const action = String(ioc?.recommended_action || "").toLowerCase();
+    return action.includes("block") || (asNumber(ioc?.quality_score) >= 75 && arr(ioc?.labels).includes("actionable"));
+  });
+  const monitor = items.filter((ioc: any) => String(ioc?.recommended_action || "").toLowerCase().includes("monitor"));
+  const enrich = items.filter((ioc: any) => String(ioc?.recommended_action || "").toLowerCase().match(/enrich|review|validate/));
+  if (!items.length) return <EmptyState label="No IOCs were available for quality scoring." />;
+
+  return (
+    <section style={sectionStyle}>
+      <div style={metricGridStyle}>
+        <Metric label="Block Now" value={blockNow.length} color="var(--red)" compact />
+        <Metric label="Monitor" value={monitor.length} color="var(--yellow)" compact />
+        <Metric label="Needs Enrichment" value={enrich.length} color="var(--accent)" compact />
+        <Metric label="Actionable" value={text(summary.actionable_count, "0")} color="var(--green)" compact />
+      </div>
+      <EvidenceTable
+        title="IOC Action Queue"
+        data={items.slice(0, 100).map((ioc: any) => ({
+          action: text(ioc?.recommended_action),
+          type: text(ioc?.type).toUpperCase(),
+          value: text(ioc?.value),
+          quality: text(ioc?.quality_score),
+          labels: arr(ioc?.labels).join(", ") || "-",
+          sources: arr(ioc?.sources).join(", ") || "-",
+        }))}
+        columns={[
+          { key: "action", label: "Action", wrap: true },
+          { key: "type", label: "Type" },
+          { key: "value", label: "Value", wrap: true },
+          { key: "quality", label: "Quality" },
+          { key: "labels", label: "Labels", wrap: true },
+          { key: "sources", label: "Sources", wrap: true },
+        ]}
+        showHeader
+      />
+      <SectionTitle title="Copy-Ready High-Value IOCs" />
+      <pre style={copyBlockStyle}>{items.filter((ioc: any) => asNumber(ioc?.quality_score) >= 65).slice(0, 80).map((ioc: any) => ioc?.value).filter(Boolean).join("\n") || "No high-value IOCs available."}</pre>
+    </section>
+  );
+}
+
+function ScreenshotGalleryPanel({ evidence }: { evidence: any }) {
+  const shots = buildScreenshotRows(evidence);
+  if (!shots.length) return <EmptyState label="No screenshot artifacts are available for this investigation." />;
+  return (
+    <section style={sectionStyle}>
+      <div style={screenshotGridStyle}>
+        {shots.map((shot, idx) => (
+          <a key={`${shot.title}-${idx}`} href={shot.href} target="_blank" rel="noreferrer" style={screenshotCardStyle}>
+            <img src={shot.src} alt={shot.title} style={screenshotImageStyle} />
+            <div style={screenshotMetaStyle}>
+              <strong>{shot.title}</strong>
+              <span>{shot.caption}</span>
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CollectorHealthPanel({ evidence }: { evidence: any }) {
+  const rows = buildCollectorRows(evidence);
+  const failed = rows.filter((row) => row.status === "failed").length;
+  const completed = rows.filter((row) => row.status === "completed").length;
+  const missing = rows.filter((row) => row.status === "missing").length;
+  return (
+    <section style={sectionStyle}>
+      <div style={metricGridStyle}>
+        <Metric label="Completed" value={completed} color="var(--green)" compact />
+        <Metric label="Failed" value={failed} color="var(--red)" compact />
+        <Metric label="Missing" value={missing} color="var(--yellow)" compact />
+        <Metric label="Collectors" value={rows.length} color="var(--accent)" compact />
+      </div>
+      <EvidenceTable
+        title="Collector Health"
+        data={rows}
+        columns={[
+          { key: "collector", label: "Collector" },
+          { key: "status", label: "Status" },
+          { key: "duration", label: "Duration" },
+          { key: "completed", label: "Completed", wrap: true },
+          { key: "error", label: "Error / Note", wrap: true },
+        ]}
+        showHeader
+      />
+    </section>
+  );
+}
+
+function ChangeDetectionPanel({ evidence, detail }: { evidence: any; detail: any }) {
+  const diff = evidence?.evidence_diff_json || evidence?.diff || detail?.evidence_diff_json || detail?.diff || {};
+  const changes = diff?.changes || diff;
+  const entries = Object.entries(changes || {}).filter(([, value]) => value !== undefined && value !== null && JSON.stringify(value) !== "{}");
+  return (
+    <section style={sectionStyle}>
+      {entries.length ? (
+        <EvidenceTable
+          title="Investigation Changes"
+          data={entries.map(([key, value]) => ({
+            field: key.replace(/_/g, " "),
+            change: compactPreviewValue(value),
+          }))}
+          columns={[{ key: "field" }, { key: "change", wrap: true }]}
+          showHeader
+        />
+      ) : (
+        <EmptyState label="No previous-run diff is attached to this investigation. Add this observable to Watchlist or compare recurring runs to populate changes." />
+      )}
+    </section>
+  );
+}
+
+function AnalystNotesPanel({
+  notes,
+  override,
+  onNotesChange,
+  onOverrideChange,
+}: {
+  notes: string;
+  override: string;
+  onNotesChange: (value: string) => void;
+  onOverrideChange: (value: string) => void;
+}) {
+  return (
+    <section style={sectionStyle}>
+      <div style={twoColStyle}>
+        <label style={fieldLabelStyle}>
+          Analyst verdict override
+          <select value={override} onChange={(event) => onOverrideChange(event.target.value)} style={selectStyle}>
+            <option value="">No override</option>
+            <option value="benign">Benign</option>
+            <option value="suspicious">Suspicious</option>
+            <option value="malicious">Malicious</option>
+            <option value="inconclusive">Inconclusive</option>
+          </select>
+        </label>
+        <div style={noteInfoStyle}>
+          Analyst notes are stored locally in this browser for fast triage. They do not replace the generated report until a backend review workflow is added.
+        </div>
+      </div>
+      <label style={{ ...fieldLabelStyle, marginTop: 12 }}>
+        Analyst notes
+        <textarea
+          value={notes}
+          onChange={(event) => onNotesChange(event.target.value)}
+          placeholder="Record manual validation, false-positive rationale, escalation notes, or customer-facing caveats."
+          style={textareaStyle}
+        />
+      </label>
+    </section>
   );
 }
 
@@ -408,7 +648,7 @@ function ReportPreviewPanel({
   const title = text(preview?.title || reportBuilder?.recommended_title, `SOC Investigation Report - ${text(detail?.domain || evidence?.domain, "Observable")}`);
   const classification = text(preview?.classification || confidence?.verdict || report?.classification, "unknown").toUpperCase();
   const riskScore = preview?.risk_score ?? confidence?.score ?? report?.risk_score ?? "-";
-  const summary = text(preview?.summary || report?.executive_summary || report?.primary_reasoning || confidence?.explanation, "No executive summary is available yet.");
+  const summary = text(report?.primary_reasoning || preview?.summary || report?.executive_summary || confidence?.explanation, "No executive summary is available yet.");
   const verdictReasons = arr(preview?.verdict_rationale).length ? arr(preview.verdict_rationale) : arr(confidence?.reasons);
   const derived = preview?.derived_verdict || {};
   const readiness = text(reportBuilder?.readiness_score, "0");
@@ -854,6 +1094,107 @@ function detailValue(value: any): string {
   return text(value, "");
 }
 
+const EXPECTED_COLLECTORS = [
+  "dns",
+  "http",
+  "tls",
+  "whois",
+  "hosting",
+  "intel",
+  "vt",
+  "threat_feeds",
+  "brave_osint",
+  "urlscan",
+  "hybrid_analysis",
+  "opencti",
+  "final_risk",
+];
+
+function buildCollectorRows(evidence: any): Array<{ collector: string; status: string; duration: string; completed: string; error: string }> {
+  const rows: Array<{ collector: string; status: string; duration: string; completed: string; error: string }> = [];
+  const seen = new Set<string>();
+  Object.entries(evidence || {}).forEach(([key, value]: [string, any]) => {
+    if (!value || typeof value !== "object") return;
+    const meta = value.meta;
+    if (!meta || typeof meta !== "object") return;
+    const collector = String(meta.collector || key);
+    seen.add(key);
+    seen.add(collector);
+    rows.push({
+      collector: collector.replace(/_/g, " "),
+      status: String(meta.status || "completed"),
+      duration: meta.duration_ms != null ? `${meta.duration_ms}ms` : "-",
+      completed: meta.completed_at ? formatDate(meta.completed_at) : "-",
+      error: meta.error || arr(value.notes).slice(0, 2).join(" ") || "-",
+    });
+  });
+  EXPECTED_COLLECTORS.forEach((collector) => {
+    if (seen.has(collector)) return;
+    rows.push({
+      collector: collector.replace(/_/g, " "),
+      status: "missing",
+      duration: "-",
+      completed: "-",
+      error: "No evidence payload present",
+    });
+  });
+  const rank: Record<string, number> = { failed: 0, missing: 1, completed: 2, success: 2 };
+  return rows.sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.collector.localeCompare(b.collector));
+}
+
+function buildScreenshotRows(evidence: any): Array<{ title: string; caption: string; src: string; href: string }> {
+  const rows: Array<{ title: string; caption: string; src: string; href: string }> = [];
+  const localArtifact = evidence?.screenshot?.artifact_id;
+  if (localArtifact) {
+    const url = getArtifactUrl(String(localArtifact));
+    rows.push({
+      title: "Local Browser Capture",
+      caption: evidence?.screenshot?.final_url || "Captured by local screenshot collector",
+      src: url,
+      href: url,
+    });
+  }
+  const urlscanArtifact = evidence?.urlscan?.screenshot_artifact_id;
+  if (urlscanArtifact) {
+    const url = getArtifactUrl(String(urlscanArtifact));
+    rows.push({
+      title: "URLScan Screenshot",
+      caption: evidence?.urlscan?.page_url || evidence?.urlscan?.scan_id || "URLScan capture",
+      src: url,
+      href: url,
+    });
+  }
+  const visual = evidence?.visual_comparison || {};
+  [
+    ["Investigated Visual", visual?.investigated_screenshot_artifact_id],
+    ["Client Visual", visual?.client_screenshot_artifact_id],
+  ].forEach(([title, artifact]) => {
+    if (!artifact) return;
+    const url = getArtifactUrl(String(artifact));
+    rows.push({ title: String(title), caption: "Visual comparison artifact", src: url, href: url });
+  });
+  arr(evidence?.hybrid_analysis?.items).forEach((item: any) => {
+    const intel = item?.sandbox_intelligence || {};
+    arr(intel?.screenshot_thumbnails).slice(0, 4).forEach((shot: any, idx: number) => {
+      const src = String(shot?.url || "");
+      if (!src) return;
+      rows.push({
+        title: `AnyRun Thumbnail ${idx + 1}`,
+        caption: shot?.label || item?.analysis_id || "AnyRun embedded thumbnail",
+        src,
+        href: shot?.report_url || src,
+      });
+    });
+  });
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.title}|${row.src}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildFlowGraph(graph: any): { nodes: Node[]; edges: Edge[]; sourceById: Record<string, any> } {
   const sourceNodes = arr(graph?.nodes);
   const sourceEdges = arr(graph?.edges);
@@ -1035,6 +1376,13 @@ const twoColStyle: React.CSSProperties = {
   alignItems: "start",
 };
 
+const threeColStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gap: 16,
+  alignItems: "start",
+};
+
 const eyebrowStyle: React.CSSProperties = {
   fontSize: 10,
   color: "var(--text-muted)",
@@ -1059,6 +1407,91 @@ const componentStyle: React.CSSProperties = {
   border: "1px solid var(--border-dim)",
   borderRadius: "var(--radius-sm)",
   background: "rgba(15,23,42,0.34)",
+};
+
+const copyBlockStyle: React.CSSProperties = {
+  margin: 0,
+  minHeight: 120,
+  maxHeight: 280,
+  overflow: "auto",
+  padding: 12,
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(2,6,23,0.45)",
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+};
+
+const screenshotGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gap: 14,
+};
+
+const screenshotCardStyle: React.CSSProperties = {
+  display: "block",
+  overflow: "hidden",
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.38)",
+  color: "inherit",
+  textDecoration: "none",
+};
+
+const screenshotImageStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  aspectRatio: "16 / 9",
+  objectFit: "contain",
+  background: "#020617",
+};
+
+const screenshotMetaStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 3,
+  padding: "9px 10px",
+  fontSize: 12,
+  color: "var(--text-secondary)",
+};
+
+const fieldLabelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  color: "var(--text-primary)",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const selectStyle: React.CSSProperties = {
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(2,6,23,0.45)",
+  color: "var(--text-primary)",
+  padding: "9px 10px",
+};
+
+const textareaStyle: React.CSSProperties = {
+  minHeight: 240,
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(2,6,23,0.45)",
+  color: "var(--text-primary)",
+  padding: 12,
+  resize: "vertical",
+  lineHeight: 1.55,
+};
+
+const noteInfoStyle: React.CSSProperties = {
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.36)",
+  padding: 12,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.6,
 };
 
 const barTrackStyle: React.CSSProperties = {

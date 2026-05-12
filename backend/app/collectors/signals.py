@@ -715,6 +715,19 @@ def generate_signals(evidence: dict) -> list[Signal]:
                 evidence_refs=["threat_feeds.openphish_listed"],
             ))
 
+        otx = threat_feeds.get("otx", {}) or {}
+        if otx.get("found"):
+            pulses = otx.get("pulse_count") or 0
+            families = otx.get("malware_families") or []
+            family_text = f" linked malware: {', '.join(families[:3])}" if families else ""
+            signals.append(Signal(
+                id="sig_otx_pulse_match",
+                category="reputation",
+                description=f"AlienVault OTX: observable appears in {pulses} community pulse(s){family_text}",
+                severity="high" if int(pulses or 0) >= 3 else "medium",
+                evidence_refs=["threat_feeds.otx.pulse_count", "threat_feeds.otx.pulses"],
+            ))
+
     brave_osint = evidence.get("brave_osint", {}) or {}
     brave_score = int(brave_osint.get("score") or 0)
     brave_hits = brave_osint.get("top_hits") or []

@@ -405,9 +405,9 @@ function _processRelevanceScore(p: any): number {
   const name = String(p?.fileName || p?.image || p?.processName || p?.name || "").toLowerCase();
   const threatScore = _num(p?.threat_score ?? p?.threatScore ?? p?.score);
   const threatLevel = _num(p?.threat_level ?? p?.threatLevel);
-  const networkCount = _num(p?.network_count);
+  const networkCount = _processNetworkActivityCount(p);
   const threatEventCount = _num(p?.network_threat_count ?? p?.event_counts?.network_threats);
-  const fileCount = _num(p?.file_activity_count);
+  const fileCount = _processFileWriteCount(p);
   const mitreCount = _num(p?.mitre_count);
   const suspicious = Boolean(p?.suspicious_flag) || threatLevel >= 1 || threatScore >= 35 || threatEventCount > 0;
 
@@ -417,8 +417,10 @@ function _processRelevanceScore(p: any): number {
   if (networkCount > 0) score += 2;
   if (threatEventCount > 0) score += 4;
   if (fileCount > 0) score += 2;
+  if (_processPrivilegeActivityCount(p) > 0) score += 2;
   if (mitreCount > 0) score += 3;
-  if (String(p?.commandLine || p?.cmd || "").trim()) score += 1;
+  if (_hasCommandLineAnomaly(p)) score += 3;
+  else if (String(p?.command_line || p?.commandLine || p?.cmd || "").trim()) score += 1;
 
   // De-prioritize very common low-signal system/browser process names.
   if (
@@ -437,6 +439,86 @@ function _processRelevanceScore(p: any): number {
     score -= 2;
   }
   return score;
+}
+
+const COMMAND_ANOMALY_TOKENS = [
+  " -enc",
+  "-encodedcommand",
+  "frombase64string",
+  "downloadstring",
+  "invoke-webrequest",
+  " iwr ",
+  " iwr.exe",
+  "curl ",
+  "wget ",
+  "certutil",
+  "bitsadmin",
+  "rundll32",
+  "regsvr32",
+  "mshta",
+  "wscript",
+  "cscript",
+  "powershell.exe -e",
+  "bypass",
+  "hidden",
+  "schtasks",
+  "reg add",
+  "\\appdata\\",
+  "\\temp\\",
+  "/tmp/",
+];
+
+function _processNetworkActivityCount(p: any): number {
+  const counts = p?.event_counts || {};
+  const countTotal =
+    _num(counts?.connections) +
+    _num(counts?.http_requests) +
+    _num(counts?.dns_requests) +
+    _num(counts?.network_threats);
+  if (countTotal > 0) return countTotal;
+  return _num(p?.network_count);
+}
+
+function _processFileWriteCount(p: any): number {
+  const counts = p?.event_counts || {};
+  const countTotal =
+    _num(counts?.modified_files) +
+    _num(counts?.created_files) +
+    _num(counts?.dropped_files) +
+    _num(counts?.deleted_files);
+  if (countTotal > 0) return countTotal;
+  return _num(p?.file_activity_count);
+}
+
+function _processPrivilegeActivityCount(p: any): number {
+  const counts = p?.event_counts || {};
+  const cmd = String(p?.command_line || p?.commandLine || p?.cmd || "").toLowerCase();
+  const integrity = String(p?.integrity_level || p?.integrityLevel || "").toLowerCase();
+  let score = _num(counts?.registry_changes);
+  if (integrity === "high" || integrity === "system") score += 1;
+  if (["runas", "uac", "token", "privilege", "sebackupprivilege", "sedebugprivilege"].some((token) => cmd.includes(token))) {
+    score += 1;
+  }
+  return score;
+}
+
+function _hasCommandLineAnomaly(p: any): boolean {
+  const cmd = ` ${String(p?.command_line || p?.commandLine || p?.cmd || "").toLowerCase()} `;
+  return COMMAND_ANOMALY_TOKENS.some((token) => cmd.includes(token));
+}
+
+function _isDetectionTriggeringProcess(p: any): boolean {
+  return _hasDirectThreatSignal(p) || _num(p?.network_threat_count ?? p?.event_counts?.network_threats) > 0;
+}
+
+function _isMeaningfulGraphProcess(p: any): boolean {
+  return (
+    _isDetectionTriggeringProcess(p) ||
+    _processNetworkActivityCount(p) > 0 ||
+    _processFileWriteCount(p) > 0 ||
+    _processPrivilegeActivityCount(p) > 0 ||
+    _hasCommandLineAnomaly(p)
+  );
 }
 
 function _isLowSignalSystemProcess(p: any): boolean {
@@ -1077,48 +1159,47 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
   // Step 1: Find threat anchors — high-signal processes we MUST show.
   //         Allow noise-list names if they have a direct threat signal (e.g. malicious svchost).
   const threatAnchorIds = new Set<string>();
+  const meaningfulIds = new Set<string>();
   nodesById.forEach((n, id) => {
     if (removed.has(id)) return;
     const proc = n.process || {};
     const score = _processRelevanceScore(proc);
     const name = String(n?.label || proc?.name || "").trim().toLowerCase();
     const isNoiseByName = NOISE_PROCESS_NAMES.has(name);
+    if (_isMeaningfulGraphProcess(proc)) meaningfulIds.add(id);
     if (score >= 6 && (!isNoiseByName || _hasDirectThreatSignal(proc))) {
       threatAnchorIds.add(id);
     }
   });
 
-  // Step 2: Collect ALL descendants of threat anchors (always keep, even if low-signal).
-  //         This ensures child msedge.exe, identity_helper.exe etc. are shown.
-  const kept = new Set<string>(Array.from(threatAnchorIds));
-  const descQueue = Array.from(threatAnchorIds);
-  while (descQueue.length > 0) {
-    const cur = descQueue.pop()!;
-    for (const child of children.get(cur) || []) {
-      if (!removed.has(child) && !kept.has(child)) {
-        kept.add(child);
-        descQueue.push(child);
-      }
-    }
-  }
+  const kept = new Set<string>(Array.from(meaningfulIds));
 
   // Step 3: Walk ancestors of threat anchors, stopping at execution-context noise.
   //         This prevents [System Process], System, csrss, wininit, services etc.
   //         from being pulled in just because they are in the ancestry chain.
-  const addAncestors = (id: string) => {
+  const addParentContext = (id: string) => {
     let cur = nodesById.get(id)?.parentId || null;
     let guard = 0;
     while (cur && guard < 200) {
       if (removed.has(cur)) break;
       const curNode = nodesById.get(cur);
       if (!curNode) break;
-      if (_isExecutionContextProcess(curNode.process || {})) break; // stop at noise boundary
       kept.add(cur);
+      if (_isExecutionContextProcess(curNode.process || {}) || meaningfulIds.has(cur)) break;
       cur = curNode.parentId || null;
       guard += 1;
     }
   };
-  Array.from(threatAnchorIds).forEach(addAncestors);
+  Array.from(meaningfulIds).forEach(addParentContext);
+
+  Array.from(threatAnchorIds).forEach((id) => {
+    kept.add(id);
+    const parentId = nodesById.get(id)?.parentId || null;
+    if (parentId && !removed.has(parentId)) kept.add(parentId);
+    for (const child of children.get(id) || []) {
+      if (!removed.has(child)) kept.add(child);
+    }
+  });
 
   // Step 4: Safety fallback — if nothing was kept (no threat signals in the whole trace),
   //         show all non-execution-context nodes so the graph isn't empty.
@@ -1453,7 +1534,48 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
     selectedThreatLevel,
     _num(selectedProcessDetail?.threat_level ?? selected?.threat_level ?? selected?.threatLevel)
   );
-  const selectedProcessScore = selectedProcessDetail?.threat_score ?? selected?.threat_score ?? 0;
+  const selectedNodeData = selectedNode
+    ? ((nodesBase.find((node) => String(node.id) === String(selectedNode)) as any)?.data || null)
+    : null;
+  const selectedNodeSuspicious = Boolean(selectedNodeData?.suspicious);
+  const selectedSandboxScore = _num(
+    selectedProcessDetail?.threat_score ??
+      selected?.threat_score ??
+      selectedNodeData?.process?.threat_score ??
+      selected?.threatScore ??
+      selectedNodeData?.process?.threatScore
+  );
+  const selectedProcessScore = Math.max(
+    selectedSandboxScore,
+    selectedProcessThreatLevel >= 2 ? 70 : selectedNodeSuspicious || selectedThreatCount > 0 || selectedProcessThreatLevel >= 1 ? 35 : 0
+  );
+  const selectedRiskTone =
+    selectedProcessThreatLevel >= 2 || selectedProcessScore >= 70
+      ? {
+          label: "Malicious",
+          color: "#fca5a5",
+          strong: "#ef4444",
+          border: "rgba(239,68,68,0.7)",
+          bg: "rgba(127,29,29,0.20)",
+          panel: "rgba(61,18,30,0.97)",
+        }
+      : selectedNodeSuspicious || selectedProcessThreatLevel >= 1 || selectedProcessScore >= 35
+        ? {
+            label: "Suspicious",
+            color: "#fde68a",
+            strong: "#f59e0b",
+            border: "rgba(245,158,11,0.65)",
+            bg: "rgba(120,80,10,0.18)",
+            panel: "rgba(50,43,20,0.97)",
+          }
+        : {
+            label: "No process verdict",
+            color: "#67e8f9",
+            strong: "#38bdf8",
+            border: "#1b4d6b",
+            bg: "rgba(14,116,144,0.10)",
+            panel: "rgba(4,39,61,0.97)",
+          };
   const selectedEventCounts = React.useMemo(() => {
     const counts: Record<EventCategoryKey, number> = {
       modified_files: 0,
@@ -1640,10 +1762,12 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
               right: 14,
               bottom: 28,
               width: 360,
-              border: "1px solid #1b4d6b",
-              background: "rgba(4,39,61,0.97)",
+              border: `1px solid ${selectedRiskTone.border}`,
+              background: selectedRiskTone.panel,
               borderRadius: 6,
-              boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
+              boxShadow: selectedRiskTone.label === "No process verdict"
+                ? "0 12px 30px rgba(0,0,0,0.35)"
+                : `0 12px 30px rgba(0,0,0,0.35), 0 0 0 2px ${selectedRiskTone.bg}`,
               zIndex: 12,
               maxHeight: Math.max(240, Number(height) - 56),
               display: "flex",
@@ -1666,9 +1790,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                 <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
                   ID {selected?.pid || selected?.uuid || "-"}
                 </span>
-                {selectedThreatCount > 0 && (
-                  <span style={{ color: selectedProcessThreatLevel >= 2 ? "var(--red)" : "var(--yellow)", marginLeft: 8 }}>
-                    {selectedProcessThreatLevel >= 2 ? "Malicious" : "Suspicious"}
+                {selectedRiskTone.label !== "No process verdict" && (
+                  <span style={{ color: selectedRiskTone.strong, marginLeft: 8 }}>
+                    {selectedRiskTone.label}
                   </span>
                 )}
               </div>
@@ -1717,7 +1841,13 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                 <strong>Indicators:</strong> {selectedThreatCount}
               </div>
               <div style={{ marginBottom: 6 }}>
-                <strong>Process score:</strong> {String(selectedProcessScore ?? "-")}
+                <strong>Graph threat score:</strong>{" "}
+                <span style={{ color: selectedRiskTone.strong, fontWeight: 800 }}>
+                  {selectedProcessScore}/100
+                </span>
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <strong>Sandbox process score:</strong> {selectedSandboxScore}/100
               </div>
               <div style={{ marginBottom: 6 }}>
                 <strong>Network activity:</strong> {String(selected?.network_count ?? selectedProcessDetail?.network_count ?? "0")}
@@ -1814,6 +1944,15 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                   const title = String(p?.name || p?.fileName || p?.image || p?.processName || p?.label || "process");
                   const pid = p?.pid != null ? String(p.pid) : "-";
                   const isContext = _isExecutionContextProcess(p);
+                  const pThreatLevel = _num(p?.threat_level ?? p?.threatLevel);
+                  const pScore = _num(p?.threat_score ?? p?.threatScore ?? p?.score);
+                  const pSuspicious = Boolean(p?.suspicious_flag) || pThreatLevel >= 1 || pScore >= 35;
+                  const pMalicious = pThreatLevel >= 2 || pScore >= 70;
+                  const pTone = pMalicious
+                    ? { label: "Malicious", color: "#fca5a5", border: "rgba(239,68,68,0.65)", bg: "rgba(127,29,29,0.20)" }
+                    : pSuspicious
+                      ? { label: "Suspicious", color: "#fde68a", border: "rgba(245,158,11,0.55)", bg: "rgba(120,80,10,0.18)" }
+                      : null;
                   const active = Boolean(selected && [selected?.uuid, selected?.guid, selected?.pid, selected?.name, selected?.fileName, selected?.image].filter(Boolean).map(String).includes(key));
                   return (
                     <button
@@ -1838,8 +1977,12 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                         width: "100%",
                         textAlign: "left",
                         padding: "8px 9px",
-                        border: active ? "1px solid rgba(56,189,248,0.7)" : "1px solid var(--border-dim)",
-                        background: active ? "rgba(14,116,144,0.22)" : "rgba(2,23,39,0.5)",
+                        border: active
+                          ? "1px solid rgba(56,189,248,0.7)"
+                          : pTone
+                            ? `1px solid ${pTone.border}`
+                            : "1px solid var(--border-dim)",
+                        background: active ? "rgba(14,116,144,0.22)" : pTone ? pTone.bg : "rgba(2,23,39,0.5)",
                         borderRadius: 6,
                         color: "var(--text-primary)",
                         cursor: "pointer",
@@ -1849,7 +1992,24 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                     >
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <div style={{ fontWeight: 700 }}>{title}</div>
-                        {isContext && (
+                        {pTone ? (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              letterSpacing: 0.3,
+                              textTransform: "uppercase",
+                              color: pTone.color,
+                              background: pTone.bg,
+                              border: `1px solid ${pTone.border}`,
+                              borderRadius: 999,
+                              padding: "2px 6px",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {pTone.label}
+                          </div>
+                        ) : isContext && (
                           <div
                             style={{
                               fontSize: 10,
@@ -1890,7 +2050,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                       position: "sticky",
                       top: 0,
                       zIndex: 2,
-                      background: "#06314a",
+                      background: selectedRiskTone.label === "No process verdict" ? "#06314a" : selectedRiskTone.panel,
                     }}
                   >
                     <div style={{ minWidth: 0 }}>
@@ -1903,6 +2063,11 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                         <span style={{ color: "var(--accent)", fontWeight: 500 }}>
                           {selectedProcessDetail?.image || selected?.image || ""}
                         </span>
+                        {selectedRiskTone.label !== "No process verdict" && (
+                          <span style={{ color: selectedRiskTone.strong, fontWeight: 800, marginLeft: 8 }}>
+                            {selectedRiskTone.label}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -1960,13 +2125,15 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               width: 118,
                               height: 118,
                               borderRadius: "50%",
-                              border: "4px solid rgba(59,130,246,0.35)",
+                              border: `4px solid ${selectedRiskTone.border}`,
                               display: "flex",
                               flexDirection: "column",
                               alignItems: "center",
                               justifyContent: "center",
                               color: "var(--text-primary)",
-                              background: "radial-gradient(circle at 35% 30%, rgba(59,130,246,0.18), rgba(6,49,74,0.9) 70%)",
+                              background: selectedRiskTone.label === "No process verdict"
+                                ? "radial-gradient(circle at 35% 30%, rgba(59,130,246,0.18), rgba(6,49,74,0.9) 70%)"
+                                : `radial-gradient(circle at 35% 30%, ${selectedRiskTone.bg}, rgba(6,49,74,0.9) 70%)`,
                             }}
                           >
                             <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1 }}>
@@ -1979,19 +2146,14 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               style={{
                                 fontSize: 19,
                                 fontWeight: 800,
-                                color:
-                                  selectedProcessThreatLevel >= 2
-                                    ? "#fca5a5"
-                                    : selectedProcessThreatLevel >= 1
-                                      ? "#fde68a"
-                                      : "#67e8f9",
+                                color: selectedRiskTone.color,
                                 marginBottom: 8,
                               }}
                             >
-                              {selectedProcessThreatLevel >= 2 ? "High risk" : selectedProcessThreatLevel >= 1 ? "Suspicious" : "No process verdict"}
+                              {selectedRiskTone.label === "Malicious" ? "High risk" : selectedRiskTone.label}
                             </div>
                             <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.5 }}>
-                              This score is scoped to the selected process and comes from live sandbox telemetry. Lookup or community intelligence verdicts are shown separately because they are indicator-level, not process-level.
+                              This graph score is scoped to the selected process and combines sandbox telemetry, linked threat indicators, and graph-level suspicious flags. The raw sandbox process score is shown separately when AnyRun provides it.
                             </div>
                             {maliciousLookupContext && selectedProcessThreatLevel < 1 && _num(selectedProcessScore) === 0 && (
                               <div style={{ marginTop: 8, color: "#fca5a5", fontSize: 12, lineHeight: 1.4 }}>
@@ -1999,7 +2161,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               </div>
                             )}
                             <div style={{ marginTop: 10, color: "#93c5fd", fontSize: 12 }}>
-                              Indicators: {selectedThreatCount}
+                              Indicators: {selectedThreatCount} | Sandbox process score: {selectedSandboxScore}/100
                             </div>
                           </div>
                         </div>

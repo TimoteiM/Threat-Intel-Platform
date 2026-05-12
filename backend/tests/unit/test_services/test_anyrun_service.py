@@ -224,7 +224,7 @@ def test_build_behavior_graph_collapses_repeated_low_signal_system_processes():
     assert all("instances" not in label for label in labels)
 
 
-def test_build_behavior_graph_does_not_keep_descendant_noise_from_inherited_suspicion():
+def test_build_behavior_graph_keeps_only_immediate_child_context_for_suspicious_process():
     processes = [
         {"uuid": "root", "pid": 10, "fileName": "explorer.exe"},
         {"uuid": "cmd", "pid": 20, "ppid": 10, "fileName": "cmd.exe", "commandLine": "cmd.exe /c start"},
@@ -247,7 +247,7 @@ def test_build_behavior_graph_does_not_keep_descendant_noise_from_inherited_susp
     assert "powershell.exe" in labels
     assert "cmd.exe" in labels
     assert "explorer.exe" in labels
-    assert "ShellExperienceHost.exe" not in labels
+    assert "ShellExperienceHost.exe" in labels
     assert "SearchApp.exe" not in labels
     assert "RuntimeBroker.exe" not in labels
 
@@ -273,9 +273,10 @@ def test_build_behavior_graph_collapses_low_signal_windows_ancestry_chain():
 
     labels = {n["label"] for n in graph["nodes"]}
     assert "powershell.exe" in labels
-    assert "Windows system chain (5 processes)" in labels
+    assert "wininit.exe" in labels
+    assert "conhost.exe" in labels
     assert "svchost.exe" not in labels
-    assert "conhost.exe" not in labels
+    assert "services.exe" not in labels
 
 
 def test_build_behavior_graph_drops_benign_sibling_branches_from_kept_path():
@@ -299,12 +300,14 @@ def test_build_behavior_graph_drops_benign_sibling_branches_from_kept_path():
 
     labels = {n["label"] for n in graph["nodes"]}
     assert "powershell.exe" in labels
-    assert "Windows system chain (3 processes)" in labels
+    assert "wininit.exe" in labels
+    assert "svchost.exe" in labels
+    assert "services.exe" not in labels
     assert "msedge.exe" not in labels
     assert "conhost.exe" not in labels
 
 
-def test_build_behavior_graph_prefers_single_strongest_suspicious_branch():
+def test_build_behavior_graph_keeps_meaningful_sibling_branches():
     processes = [
         {"uuid": "root", "pid": 10, "fileName": "explorer.exe"},
         {"uuid": "cmd-low", "pid": 20, "ppid": 10, "fileName": "cmd.exe", "commandLine": "cmd.exe /c start"},
@@ -331,11 +334,35 @@ def test_build_behavior_graph_prefers_single_strongest_suspicious_branch():
     labels = [n["label"] for n in graph["nodes"]]
     edge_pairs = {(e["source"], e["target"]) for e in graph["edges"]}
 
-    assert labels.count("cmd.exe") == 1
-    assert "mshta.exe" not in labels
+    assert labels.count("cmd.exe") == 2
+    assert "mshta.exe" in labels
     assert labels.count("powershell.exe") == 1
     assert ("process:cmd-high", "process:high") in edge_pairs
-    assert ("process:cmd-low", "process:low") not in edge_pairs
+    assert ("process:cmd-low", "process:low") in edge_pairs
+
+
+def test_build_behavior_graph_keeps_file_writing_process_without_threat_score():
+    processes = [
+        {"uuid": "root", "pid": 10, "fileName": "explorer.exe"},
+        {"uuid": "writer", "pid": 20, "ppid": 10, "fileName": "dropper.exe", "modifiedFiles": [{"path": "C:/Temp/payload.dll"}]},
+        {"uuid": "noise", "pid": 30, "ppid": 10, "fileName": "runtimebroker.exe"},
+    ]
+    process_details = svc._extract_process_details({}, processes)
+
+    graph = svc._build_behavior_graph(
+        processes=process_details,
+        dns_requests=[],
+        http_requests=[],
+        connections=[],
+    )
+
+    labels = {n["label"] for n in graph["nodes"]}
+    edge_pairs = {(e["source"], e["target"]) for e in graph["edges"]}
+
+    assert "explorer.exe" in labels
+    assert "dropper.exe" in labels
+    assert "runtimebroker.exe" not in labels
+    assert ("process:root", "process:writer") in edge_pairs
 
 
 def test_build_behavior_graph_keeps_flagged_browser_process_branch():

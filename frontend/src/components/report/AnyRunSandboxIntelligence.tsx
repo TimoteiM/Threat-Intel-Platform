@@ -2,9 +2,11 @@
 
 import React from "react";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
+import { getArtifactUrl } from "@/lib/api";
 
 type Props = {
   hybridAnalysis: any;
+  screenshot?: any;
 };
 
 type Intelligence = {
@@ -39,7 +41,7 @@ function uniqueRows(rows: any[], keyFn: (row: any) => string): any[] {
   return out;
 }
 
-function openThumbnailUrl(url: string): void {
+function openThumbnailUrl(url: string, reportUrl?: string): void {
   if (typeof window === "undefined") return;
   if (!url.startsWith("data:image/")) {
     window.open(url, "_blank", "noopener,noreferrer");
@@ -47,22 +49,23 @@ function openThumbnailUrl(url: string): void {
   }
   const blob = dataUrlToBlob(url);
   if (!blob) {
-    const win = window.open("", "_blank", "noopener,noreferrer");
-    if (win) {
-      win.document.write(buildThumbnailViewerHtml(url));
-      win.document.close();
-    }
+    openThumbnailViewerHtml(buildThumbnailViewerHtml(url, false, reportUrl));
     return;
   }
   const objectUrl = URL.createObjectURL(blob);
-  const win = window.open("", "_blank", "noopener,noreferrer");
+  openThumbnailViewerHtml(buildThumbnailViewerHtml(objectUrl, true, reportUrl));
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
+}
+
+function openThumbnailViewerHtml(html: string): void {
+  const viewerBlob = new Blob([html], { type: "text/html" });
+  const viewerUrl = URL.createObjectURL(viewerBlob);
+  const win = window.open(viewerUrl, "_blank", "noopener,noreferrer");
   if (!win) {
-    URL.revokeObjectURL(objectUrl);
+    URL.revokeObjectURL(viewerUrl);
     return;
   }
-  win.document.write(buildThumbnailViewerHtml(objectUrl, true));
-  win.document.close();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
+  window.setTimeout(() => URL.revokeObjectURL(viewerUrl), 120_000);
 }
 
 function dataUrlToBlob(url: string): Blob | null {
@@ -80,8 +83,9 @@ function dataUrlToBlob(url: string): Blob | null {
   }
 }
 
-function buildThumbnailViewerHtml(url: string, isObjectUrl = false): string {
+function buildThumbnailViewerHtml(url: string, isObjectUrl = false, reportUrl?: string): string {
   const safeUrl = url.replace(/"/g, "&quot;");
+  const safeReportUrl = reportUrl?.replace(/"/g, "&quot;");
   return `<!doctype html>
 <html>
 <head>
@@ -92,18 +96,34 @@ function buildThumbnailViewerHtml(url: string, isObjectUrl = false): string {
     .bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: rgba(2, 6, 23, 0.92); border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
     .title { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #93c5fd; }
     .hint { font-size: 12px; color: #94a3b8; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+    button, a { border: 1px solid rgba(147, 197, 253, .35); background: rgba(96, 165, 250, .12); color: #bfdbfe; border-radius: 6px; padding: 6px 9px; font: 700 12px Inter, system-ui, sans-serif; text-decoration: none; cursor: pointer; }
     .stage { min-height: calc(100vh - 45px); display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
-    img { display: block; max-width: none; width: auto; height: auto; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: 0 20px 60px rgba(0,0,0,.35); image-rendering: auto; }
+    img { display: block; max-width: none; width: auto; height: auto; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: 0 20px 60px rgba(0,0,0,.35); image-rendering: auto; transform-origin: center top; }
   </style>
 </head>
 <body>
   <div class="bar">
-    <div class="title">ANY.RUN embedded HTML thumbnail</div>
-    <div class="hint">Shown at native size to avoid artificial zoom distortion.</div>
+    <div>
+      <div class="title">ANY.RUN embedded HTML thumbnail</div>
+      <div class="hint">Use the report link for AnyRun's highest-quality screenshot viewer when available.</div>
+    </div>
+    <div class="actions">
+      <button type="button" onclick="setZoom(1)">1x</button>
+      <button type="button" onclick="setZoom(2)">2x</button>
+      <button type="button" onclick="setZoom(3)">3x</button>
+      ${safeReportUrl ? `<a href="${safeReportUrl}" target="_blank" rel="noreferrer">Open AnyRun report</a>` : ""}
+    </div>
   </div>
   <div class="stage">
-    <img src="${safeUrl}" alt="ANY.RUN thumbnail" />
+    <img id="shot" src="${safeUrl}" alt="ANY.RUN thumbnail" />
   </div>
+  <script>
+    function setZoom(z) {
+      var img = document.getElementById("shot");
+      if (img) img.style.transform = "scale(" + z + ")";
+    }
+  </script>
   ${isObjectUrl ? "" : ""}
 </body>
 </html>`;
@@ -126,10 +146,11 @@ function collectIntelligence(hybridAnalysis: any): Intelligence[] {
     });
 }
 
-export default function AnyRunSandboxIntelligence({ hybridAnalysis }: Props) {
+export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }: Props) {
   const intelligence = React.useMemo(() => collectIntelligence(hybridAnalysis), [hybridAnalysis]);
   if (!intelligence.length) return null;
 
+  const localScreenshotUrl = screenshot?.artifact_id ? getArtifactUrl(String(screenshot.artifact_id)) : "";
   const hosts = uniqueRows(intelligence.flatMap((i) => arr(i.contacted_hosts)), (row) => text(row?.host));
   const ips = uniqueRows(
     intelligence.flatMap((i) => arr(i.contacted_ips)),
@@ -284,6 +305,28 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis }: Props) {
         showHeader
       />
 
+      {localScreenshotUrl && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={tableTitleStyle}>High-Resolution Local Capture</div>
+          <a
+            href={localScreenshotUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={localCaptureLinkStyle}
+            title="Open full-resolution capture"
+          >
+            <img
+              src={localScreenshotUrl}
+              alt="High-resolution local browser capture"
+              style={localCaptureImageStyle}
+            />
+            <span style={localCaptureMetaStyle}>
+              {screenshot?.final_url ? `Final URL: ${String(screenshot.final_url)}` : "Local browser capture"}
+            </span>
+          </a>
+        </div>
+      )}
+
       {screenshots.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div style={tableTitleStyle}>Screenshot Thumbnails</div>
@@ -292,12 +335,23 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis }: Props) {
               <button
                 key={`${shot?.url}-${idx}`}
                 type="button"
-                onClick={() => openThumbnailUrl(String(shot?.url || ""))}
+                onClick={() => openThumbnailUrl(String(shot?.url || ""), String(shot?.report_url || ""))}
                 style={thumbLinkStyle}
-                title="Open thumbnail"
+                title="Open thumbnail viewer"
               >
                 <img src={String(shot?.url || "")} alt={text(shot?.label)} style={thumbImageStyle} />
                 <span style={thumbLabelStyle}>{text(shot?.label)}</span>
+                {shot?.report_url ? (
+                  <span
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      window.open(String(shot.report_url), "_blank", "noopener,noreferrer");
+                    }}
+                    style={thumbReportLinkStyle}
+                  >
+                    Open AnyRun report
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -398,7 +452,43 @@ const thumbImageStyle: React.CSSProperties = {
 
 const thumbLabelStyle: React.CSSProperties = {
   display: "block",
-  padding: "7px 8px",
+  padding: "7px 8px 2px",
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const thumbReportLinkStyle: React.CSSProperties = {
+  display: "block",
+  padding: "0 8px 8px",
+  fontSize: 10,
+  color: "var(--accent)",
+  fontWeight: 700,
+};
+
+const localCaptureLinkStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  overflow: "hidden",
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.42)",
+  textDecoration: "none",
+};
+
+const localCaptureImageStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  maxHeight: 560,
+  objectFit: "contain",
+  background: "var(--bg-root)",
+};
+
+const localCaptureMetaStyle: React.CSSProperties = {
+  display: "block",
+  padding: "8px 10px",
   fontSize: 11,
   color: "var(--text-secondary)",
   whiteSpace: "nowrap",

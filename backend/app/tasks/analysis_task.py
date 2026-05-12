@@ -2579,6 +2579,7 @@ def _digest_vt(vt: dict) -> dict:
 def _digest_threat_feeds(threat_feeds: dict) -> dict:
     phishtank = threat_feeds.get("phishtank") or {}
     abuse = threat_feeds.get("abuseipdb") or {}
+    otx = threat_feeds.get("otx") or {}
     return {
         "openphish_listed": threat_feeds.get("openphish_listed"),
         "phishtank": {
@@ -2599,6 +2600,21 @@ def _digest_threat_feeds(threat_feeds: dict) -> dict:
             for item in (threat_feeds.get("threatfox_matches") or [])[:5]
             if isinstance(item, dict)
         ],
+        "otx": {
+            "found": otx.get("found"),
+            "pulse_count": otx.get("pulse_count"),
+            "malware_families": (otx.get("malware_families") or [])[:5],
+            "adversaries": (otx.get("adversaries") or [])[:5],
+            "pulses": [
+                {
+                    "name": item.get("name"),
+                    "author_name": item.get("author_name"),
+                    "tags": (item.get("tags") or [])[:5],
+                }
+                for item in (otx.get("pulses") or [])[:5]
+                if isinstance(item, dict)
+            ],
+        },
     }
 
 

@@ -744,6 +744,64 @@ export interface GoogleSafeBrowsingResult {
   error?: string;
 }
 
+export interface OTXPulseResult {
+  id?: string;
+  name: string;
+  description?: string;
+  author_name?: string;
+  created?: string;
+  modified?: string;
+  tlp?: string;
+  subscriber_count?: number;
+  indicator_count?: number;
+  related_indicator_is_active?: boolean;
+  tags: string[];
+  malware_families: string[];
+  adversary?: string;
+  references: string[];
+}
+
+export interface OTXPassiveDNSRecord {
+  hostname?: string;
+  address?: string;
+  record_type?: string;
+  first?: string;
+  last?: string;
+  asn?: string;
+  country?: string;
+  asset_type?: string;
+}
+
+export interface OTXResult {
+  checked: boolean;
+  found: boolean;
+  indicator?: string;
+  indicator_type?: string;
+  type_title?: string;
+  pulse_count: number;
+  pulses: OTXPulseResult[];
+  sections: string[];
+  validation: string[];
+  indicator_facts: string[];
+  tags: string[];
+  malware_families: string[];
+  adversaries: string[];
+  references: string[];
+  external_resources: Record<string, string>;
+  geo: Record<string, string | number>;
+  passive_dns_count: number;
+  passive_dns: OTXPassiveDNSRecord[];
+  nameservers: string[];
+  subdomains: string[];
+  ip_addresses: string[];
+  url_count: number;
+  urls: string[];
+  malware_count: number;
+  http_scans_count: number;
+  reputation?: number;
+  error?: string;
+}
+
 export interface ThreatFeedEvidence {
   meta: CollectorMeta;
   abuseipdb?: AbuseIPDBResult;
@@ -751,6 +809,7 @@ export interface ThreatFeedEvidence {
   threatfox_matches: ThreatFoxResult[];
   openphish_listed: boolean;
   google_safe_browsing?: GoogleSafeBrowsingResult;
+  otx?: OTXResult;
   feeds_checked: string[];
   feeds_skipped: string[];
 }

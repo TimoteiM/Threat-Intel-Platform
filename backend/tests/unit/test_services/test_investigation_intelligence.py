@@ -111,6 +111,78 @@ def test_build_investigation_intelligence_derives_soc_sections() -> None:
     assert out["soc_report_builder"]["preview"]["evidence_matrix"]
 
 
+def test_ioc_quality_does_not_escalate_low_risk_verdict() -> None:
+    evidence = {
+        "domain": "securdoccle-itffjyqdi.k9p4mt-7q2v.com",
+        "observable_type": "domain",
+        "final_risk": {
+            "risk_score": 12,
+            "risk_level": "low",
+            "rationale": ["No strong malicious signal; monitor and corroborate with external context"],
+        },
+        "vt": {
+            "found": True,
+            "malicious_count": 3,
+            "suspicious_count": 0,
+            "total_vendors": 91,
+            "reputation_score": 0,
+        },
+        "urlscan": {
+            "verdict": "unknown",
+            "score": 0,
+        },
+        "hybrid_analysis": {
+            "items": [
+                {
+                    "verdict": "unknown",
+                    "threat_score": 8,
+                    "sandbox_intelligence": {
+                        "summary": {
+                            "verdict": "unknown",
+                            "threat_score": 8,
+                            "process_count": 169,
+                            "contacted_host_count": 26,
+                            "suspicious_command_count": 1,
+                        },
+                        "extracted_iocs": [
+                            {
+                                "type": "domain",
+                                "value": f"ioc-{idx}.example",
+                                "source": "anyrun",
+                                "context": "contacted host",
+                                "confidence": "high",
+                            }
+                            for idx in range(12)
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+    report = {
+        "classification": "suspicious",
+        "confidence": "medium",
+        "risk_score": 15,
+        "primary_reasoning": "Low-confidence suspicious activity with limited corroboration.",
+    }
+    detail = {
+        "domain": "securdoccle-itffjyqdi.k9p4mt-7q2v.com",
+        "observable_type": "domain",
+        "classification": "suspicious",
+        "risk_score": 15,
+    }
+
+    out = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence = out["confidence_engine"]
+    ioc_component = next(row for row in confidence["components"] if row["source"] == "ioc_quality")
+
+    assert ioc_component["risk_signal"] is False
+    assert ioc_component["verdict"] == "informational"
+    assert confidence["score"] < 35
+    assert confidence["score"] == 15
+    assert confidence["verdict"] == "suspicious"
+
+
 def test_build_evidence_matrix_rows_falls_back_to_collector_values() -> None:
     rows = build_evidence_matrix_rows(
         evidence={

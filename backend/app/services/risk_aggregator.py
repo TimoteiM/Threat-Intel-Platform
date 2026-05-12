@@ -149,6 +149,11 @@ def _infrastructure_score(evidence: dict[str, Any]) -> float:
     abuse_score = float(abuse.get("abuse_confidence_score") or 0.0)
     score += min(0.2, abuse_score / 100.0 * 0.2)
 
+    otx = tf.get("otx") or {}
+    if otx.get("found"):
+        pulse_count = int(otx.get("pulse_count") or 0)
+        score += min(0.25, 0.08 + pulse_count * 0.02)
+
     age_days = whois.get("domain_age_days")
     if isinstance(age_days, int) and age_days <= 30:
         score += 0.15

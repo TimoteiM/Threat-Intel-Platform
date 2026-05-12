@@ -1328,6 +1328,7 @@ def _extract_iocs(ioc_report: Any) -> list[dict[str, Any]]:
 def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[dict[str, Any]]:
     screenshots: list[dict[str, Any]] = []
     seen: set[str] = set()
+    screenshot_report_url = _extract_anyrun_screenshot_report_url(report_data, html_report)
 
     def add(url: Any, label: str = "ANY.RUN screenshot") -> None:
         text = str(url or "").strip()
@@ -1343,7 +1344,10 @@ def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[d
         if key in seen:
             return
         seen.add(key)
-        screenshots.append({"label": label[:80], "url": text})
+        row = {"label": label[:80], "url": text}
+        if screenshot_report_url:
+            row["report_url"] = screenshot_report_url
+        screenshots.append(row)
 
     def walk(value: Any, label: str = "ANY.RUN screenshot") -> None:
         if isinstance(value, dict):
@@ -1380,6 +1384,20 @@ def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[d
                 add(url, "ANY.RUN HTML image")
 
     return screenshots[:12]
+
+
+def _extract_anyrun_screenshot_report_url(report_data: Any, html_report: Any) -> str | None:
+    if isinstance(html_report, str) and html_report:
+        match = re.search(r"https?://report\.any\.run/[^\s\"'<>]+/#Screenshots", html_report, flags=re.I)
+        if match:
+            return match.group(0)
+
+    if isinstance(report_data, dict):
+        analysis = report_data.get("analysis") or {}
+        permanent = str(analysis.get("permanentUrl") or "").strip()
+        if permanent.startswith("http://") or permanent.startswith("https://"):
+            return f"{permanent.rstrip('/')}#Screenshots"
+    return None
 
 
 def _normalize_anyrun_labels(values: Any) -> list[str]:
@@ -1509,6 +1527,8 @@ def _build_behavior_graph(
     nodes = [{"id": "analysis:root", "label": "AnyRun Task", "kind": "analysis"}]
     edges: list[dict[str, Any]] = []
 
+    collapsed_ids = {str(proc.get("node_id")) for proc in collapsed}
+
     for proc in collapsed:
         nodes.append(
             {
@@ -1519,7 +1539,7 @@ def _build_behavior_graph(
             }
         )
         parent_id = str(proc.get("parent_node_id") or "").strip()
-        source = parent_id if parent_id else "analysis:root"
+        source = parent_id if parent_id in collapsed_ids else "analysis:root"
         edges.append(
             {
                 "id": f"{source}->{proc['node_id']}:spawns",
@@ -1586,26 +1606,99 @@ def _direct_anyrun_process_signal(process: dict[str, Any]) -> int:
     return score
 
 
-def _process_relevance_score(process: dict[str, Any], *, parent_is_suspicious: bool) -> int:
+_COMMAND_ANOMALY_TOKENS = (
+    " -enc",
+    "-encodedcommand",
+    "frombase64string",
+    "downloadstring",
+    "invoke-webrequest",
+    " iwr ",
+    " iwr.exe",
+    "curl ",
+    "wget ",
+    "certutil",
+    "bitsadmin",
+    "rundll32",
+    "regsvr32",
+    "mshta",
+    "wscript",
+    "cscript",
+    "powershell.exe -e",
+    "bypass",
+    "hidden",
+    "schtasks",
+    "reg add",
+    "\\appdata\\",
+    "\\temp\\",
+    "/tmp/",
+)
+
+
+def _process_network_activity_count(process: dict[str, Any]) -> int:
     counts = process.get("event_counts") or {}
-    score = _direct_anyrun_process_signal(process)
-    network_count = (
+    return (
         _as_int(counts.get("connections"))
         + _as_int(counts.get("http_requests"))
         + _as_int(counts.get("dns_requests"))
         + _as_int(counts.get("network_threats"))
     )
+
+
+def _process_file_write_count(process: dict[str, Any]) -> int:
+    counts = process.get("event_counts") or {}
+    return (
+        _as_int(counts.get("modified_files"))
+        + _as_int(counts.get("created_files"))
+        + _as_int(counts.get("dropped_files"))
+        + _as_int(counts.get("deleted_files"))
+    )
+
+
+def _process_privilege_activity_count(process: dict[str, Any]) -> int:
+    counts = process.get("event_counts") or {}
+    cmd = str(process.get("command_line") or process.get("commandLine") or process.get("cmd") or "").lower()
+    integrity = str(process.get("integrity_level") or process.get("integrityLevel") or "").lower()
+    privilege_terms = ("runas", "uac", "token", "privilege", "sebackupprivilege", "sedebugprivilege")
+    score = _as_int(counts.get("registry_changes"))
+    if integrity in {"high", "system"}:
+        score += 1
+    if any(term in cmd for term in privilege_terms):
+        score += 1
+    return score
+
+
+def _has_command_line_anomaly(process: dict[str, Any]) -> bool:
+    cmd = f" {str(process.get('command_line') or process.get('commandLine') or process.get('cmd') or '').lower()} "
+    return any(token in cmd for token in _COMMAND_ANOMALY_TOKENS)
+
+
+def _is_detection_triggering_process(process: dict[str, Any]) -> bool:
+    return _direct_anyrun_process_signal(process) > 0 or _as_int((process.get("event_counts") or {}).get("network_threats")) > 0
+
+
+def _is_meaningful_graph_process(process: dict[str, Any]) -> bool:
+    return (
+        _is_detection_triggering_process(process)
+        or _process_network_activity_count(process) > 0
+        or _process_file_write_count(process) > 0
+        or _process_privilege_activity_count(process) > 0
+        or _has_command_line_anomaly(process)
+    )
+
+
+def _process_relevance_score(process: dict[str, Any], *, parent_is_suspicious: bool) -> int:
+    score = _direct_anyrun_process_signal(process)
+    network_count = _process_network_activity_count(process)
     if network_count > 0:
         score += 3
-    if _as_int(counts.get("modified_files")) > 0:
+    if _process_file_write_count(process) > 0:
         score += 2
-    if _as_int(counts.get("registry_changes")) > 0:
+    if _process_privilege_activity_count(process) > 0:
         score += 2
     children = _ensure_list(process.get("children"))
     if len(children) > 0:
         score += 2
-    cmd = str(process.get("command_line") or "").lower()
-    if any(token in cmd for token in (" -enc", "frombase64string", "downloadstring", "iwr ", "invoke-webrequest", "rundll32", "regsvr32", "mshta", "powershell.exe -e")):
+    if _has_command_line_anomaly(process):
         score += 3
     if parent_is_suspicious:
         score += 2
@@ -1726,18 +1819,60 @@ def _normalize_process_graph_rows(processes: list[dict[str, Any]]) -> list[dict[
     if root_row:
         keep.add(root_row["node_id"])
 
-    candidate_rows = [row for row in rows if _as_int(row.get("intrinsic_relevance_score")) >= 3]
-    if not candidate_rows:
-        candidate_rows = [row for row in rows if _as_int(row.get("relevance_score")) >= 3]
+    meaningful_rows = [row for row in rows if _is_meaningful_graph_process(row["process"])]
+    suspicious_rows = [
+        row
+        for row in meaningful_rows
+        if _is_detection_triggering_process(row["process"])
+        or _as_int(row.get("intrinsic_relevance_score")) >= 3
+        or _has_command_line_anomaly(row["process"])
+    ]
 
-    anchor_row = max(candidate_rows, key=_suspicious_anchor_rank) if candidate_rows else root_row
-    cur = anchor_row
-    guard = 0
-    while cur and guard < 200:
-        keep.add(cur["node_id"])
-        parent_id = str(cur.get("parent_node_id") or "")
-        cur = by_node_id.get(parent_id) if parent_id else None
-        guard += 1
+    for row in meaningful_rows:
+        keep.add(row["node_id"])
+
+    # Show only the useful neighborhood around suspicious anchors: the parent,
+    # the suspicious node, and its immediate children. This keeps execution
+    # context visible without dragging every descendant into the graph.
+    for row in suspicious_rows:
+        keep.add(row["node_id"])
+        parent_id = str(row.get("parent_node_id") or "")
+        if parent_id:
+            keep.add(parent_id)
+        for child_id in _ensure_list(row.get("children")):
+            child_id = str(child_id or "")
+            if child_id:
+                keep.add(child_id)
+
+    # Connect any meaningful node back to its nearest visible ancestor so sibling
+    # network/file activity remains readable without showing each quiet hop.
+    for row in meaningful_rows:
+        cur = row
+        guard = 0
+        while cur and guard < 200:
+            parent_id = str(cur.get("parent_node_id") or "")
+            if not parent_id:
+                break
+            keep.add(parent_id)
+            parent_row = by_node_id.get(parent_id)
+            if not parent_row or parent_id in keep:
+                break
+            cur = parent_row
+            guard += 1
+
+    if not meaningful_rows:
+        candidate_rows = [row for row in rows if _as_int(row.get("intrinsic_relevance_score")) >= 3]
+        if not candidate_rows:
+            candidate_rows = [row for row in rows if _as_int(row.get("relevance_score")) >= 3]
+
+        anchor_row = max(candidate_rows, key=_suspicious_anchor_rank) if candidate_rows else root_row
+        cur = anchor_row
+        guard = 0
+        while cur and guard < 200:
+            keep.add(cur["node_id"])
+            parent_id = str(cur.get("parent_node_id") or "")
+            cur = by_node_id.get(parent_id) if parent_id else None
+            guard += 1
 
     for row in rows:
         row["kept"] = row["node_id"] in keep

@@ -76,6 +76,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
   const whois = evidence?.whois || ({} as any);
   const hosting = evidence?.hosting || ({} as any);
   const intel = evidence?.intel || ({} as any);
+  const spamhausSia = intel?.spamhaus_sia || {};
   const vt = evidence?.vt || ({} as any);
   const braveOsint = evidence?.brave_osint || ({} as any);
   const urlscan = evidence?.urlscan || ({} as any);
@@ -232,6 +233,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         visible: true,
         hasData: !!(intel && (
           arr(intel.blocklist_hits).length ||
+          Object.keys(spamhausSia || {}).length ||
           arr(intel.related_subdomains).length ||
           arr(intel.notes).length
         )),
@@ -262,7 +264,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: true,
       },
     ],
-    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, openCti, finalRisk, hasRedirectDestinationIntel, intel, type],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, openCti, finalRisk, hasRedirectDestinationIntel, intel, spamhausSia, type],
   );
   const availableSections = React.useMemo(
     () => sectionDefs.filter((s) => s.visible),
@@ -1959,7 +1961,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
       )}
 
       <Section title="AnyRun Analysis">
-        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} />
+        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} screenshot={evidence?.screenshot} />
         <AnyRunInteractiveEvidence
           hybridAnalysis={hybridAnalysis}
           investigationId={investigationId}
@@ -2150,6 +2152,114 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
               }}>
                 No blocklist hits detected
               </div>
+            )}
+
+            {spamhausSia && Object.keys(spamhausSia).length > 0 && (
+              <>
+                <EvidenceTable
+                  title="Spamhaus Intelligence API"
+                  data={[
+                    { field: "Status", value: spamhausSia.status || "checked" },
+                    { field: "Domain", value: spamhausSia.domain || "—" },
+                    { field: "Score", value: spamhausSia.general?.score ?? "—" },
+                    { field: "Tags", value: arr(spamhausSia.general?.tags).join(", ") || "—" },
+                    { field: "Abused", value: spamhausSia.general?.abused === true ? "Yes" : spamhausSia.general?.abused === false ? "No" : "—" },
+                    { field: "Last Seen", value: formatUnixDate(spamhausSia.general?.["last-seen"]) },
+                    { field: "Currently Listed", value: spamhausSia.listing?.["is-listed"] === true || spamhausSia.listing?.is_listed === true ? "Yes" : "No" },
+                    { field: "Listing Timestamp", value: formatUnixDate(spamhausSia.listing?.ts) },
+                    { field: "Listed Until", value: formatUnixDate(spamhausSia.listing?.["listed-until"]) },
+                    {
+                      field: "Dimensions",
+                      value: spamhausSia.dimensions && typeof spamhausSia.dimensions === "object"
+                        ? Object.entries(spamhausSia.dimensions).map(([k, v]) => `${k}: ${v}`).join(", ")
+                        : "—",
+                    },
+                    {
+                      field: "Contexts",
+                      value: arr(spamhausSia.contexts).slice(0, 12).map((c: any) => `${c?.context || "unknown"}${c?.["last-seen"] ? ` (${formatUnixDate(c["last-seen"])})` : ""}`).join(", ") || "—",
+                    },
+                  ]}
+                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
+                />
+
+                {(arr(spamhausSia.nameservers).length > 0 || arr(spamhausSia.a_records).length > 0) && (
+                  <EvidenceTable
+                    title="Spamhaus Infrastructure Reputation"
+                    data={[
+                      ...arr(spamhausSia.nameservers).slice(0, 8).map((row: any) => ({
+                        type: "NS",
+                        indicator: row?.ns || "—",
+                        score: row?.score ?? "—",
+                        counter: row?.counter ?? "—",
+                        last_seen: formatUnixDate(row?.["last-seen"]),
+                      })),
+                      ...arr(spamhausSia.a_records).slice(0, 8).map((row: any) => ({
+                        type: "A/AAAA",
+                        indicator: row?.ip || "—",
+                        score: row?.score ?? "—",
+                        counter: row?.counter ?? "—",
+                        last_seen: formatUnixDate(row?.["last-seen"]),
+                      })),
+                    ]}
+                    columns={[
+                      { key: "type" },
+                      { key: "indicator", wrap: true },
+                      { key: "score" },
+                      { key: "counter" },
+                      { key: "last_seen", label: "Last Seen" },
+                    ]}
+                    showHeader
+                  />
+                )}
+
+                {arr(spamhausSia.hostnames).length > 0 && (
+                  <EvidenceTable
+                    title="Spamhaus Listed Hostnames"
+                    data={arr(spamhausSia.hostnames).slice(0, 20).map((row: any) => ({
+                      hostname: row?.hostname || "—",
+                      listed: row?.["is-listed"] === true || row?.["is-listed"] === "true" ? "Yes" : "No",
+                      abused: row?.abused === true ? "Yes" : row?.abused === false ? "No" : "—",
+                      ts: formatUnixDate(row?.ts),
+                      until: formatUnixDate(row?.["listed-until"]),
+                    }))}
+                    columns={[
+                      { key: "hostname", wrap: true },
+                      { key: "listed" },
+                      { key: "abused" },
+                      { key: "ts", label: "Listed At" },
+                      { key: "until", label: "Until" },
+                    ]}
+                    showHeader
+                  />
+                )}
+
+                {(arr(spamhausSia.malware_hashes).length > 0 || arr(spamhausSia.malware_urls).length > 0) && (
+                  <EvidenceTable
+                    title="Spamhaus Malware Associations"
+                    data={[
+                      ...arr(spamhausSia.malware_hashes).slice(0, 10).map((row: any) => ({
+                        type: row?.type || "hash",
+                        value: row?.hash || "—",
+                        botname: row?.botname || "—",
+                        seen: formatUnixDate(row?.ts),
+                      })),
+                      ...arr(spamhausSia.malware_urls).slice(0, 10).map((row: any) => ({
+                        type: "url",
+                        value: row?.url || "—",
+                        botname: row?.botname || "—",
+                        seen: formatUnixDate(row?.ts),
+                      })),
+                    ]}
+                    columns={[
+                      { key: "type" },
+                      { key: "value", wrap: true },
+                      { key: "botname" },
+                      { key: "seen", label: "Seen" },
+                    ]}
+                    showHeader
+                  />
+                )}
+              </>
             )}
 
             {arr(intel.related_subdomains).length > 0 && (
@@ -2355,6 +2465,20 @@ function fmtDate(val: string | null | undefined): string {
     });
   } catch {
     return String(val);
+  }
+}
+
+function formatUnixDate(value: unknown): string {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  try {
+    return new Date(n * 1000).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return String(value);
   }
 }
 

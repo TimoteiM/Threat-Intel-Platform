@@ -73,6 +73,13 @@ def get_api_health_snapshot(*, force_refresh: bool = False) -> APIHealthResponse
             settings=settings,
         ),
         _configured_provider(
+            "otx",
+            "AlienVault OTX",
+            configured=bool((getattr(settings, "otx_api_key", "") or "").strip()),
+            source="configuration",
+            settings=settings,
+        ),
+        _configured_provider(
             "shodan",
             "Shodan",
             configured=bool((settings.shodan_api_key or "").strip()),
