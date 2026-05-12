@@ -23,12 +23,13 @@ type Props = {
   loading?: boolean;
 };
 
-type SocTab = "score" | "timeline" | "graph" | "iocs" | "screenshots" | "collectors" | "changes" | "notes" | "opencti" | "report";
+type SocTab = "score" | "timeline" | "graph" | "similar" | "iocs" | "screenshots" | "collectors" | "changes" | "notes" | "opencti" | "report";
 
 const TAB_LABELS: Array<{ id: SocTab; label: string }> = [
   { id: "score", label: "Score" },
   { id: "timeline", label: "Timeline" },
-  { id: "graph", label: "Graph" },
+  { id: "graph", label: "IOC Map" },
+  { id: "similar", label: "Similar Cases" },
   { id: "iocs", label: "IOC Actions" },
   { id: "screenshots", label: "Screenshots" },
   { id: "collectors", label: "Collectors" },
@@ -122,6 +123,8 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
   const iocQuality = intelligence?.ioc_quality || {};
   const opencti = intelligence?.opencti_resolver || {};
   const reportBuilder = intelligence?.soc_report_builder || {};
+  const similar = intelligence?.similar_investigations || {};
+  const rescanDiff = intelligence?.rescan_diff || {};
   const tone = toneFromVerdict(confidence?.verdict);
 
   return (
@@ -154,10 +157,11 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
       {active === "score" && <ScoreBreakdownPanel confidence={confidence} evidence={evidence} report={report} detail={detail} />}
       {active === "timeline" && <TimelinePanel timeline={timeline} />}
       {active === "graph" && <GraphPanel graph={graph} />}
+      {active === "similar" && <SimilarInvestigationsPanel similar={similar} />}
       {active === "iocs" && <IocActionPanel iocQuality={iocQuality} />}
       {active === "screenshots" && <ScreenshotGalleryPanel evidence={evidence} />}
       {active === "collectors" && <CollectorHealthPanel evidence={evidence} />}
-      {active === "changes" && <ChangeDetectionPanel evidence={evidence} detail={detail} />}
+      {active === "changes" && <ChangeDetectionPanel evidence={evidence} detail={detail} rescanDiff={rescanDiff} />}
       {active === "notes" && (
         <AnalystNotesPanel
           notes={analystNotes}
@@ -317,12 +321,20 @@ function CollectorHealthPanel({ evidence }: { evidence: any }) {
   );
 }
 
-function ChangeDetectionPanel({ evidence, detail }: { evidence: any; detail: any }) {
-  const diff = evidence?.evidence_diff_json || evidence?.diff || detail?.evidence_diff_json || detail?.diff || {};
+function ChangeDetectionPanel({ evidence, detail, rescanDiff }: { evidence: any; detail: any; rescanDiff?: any }) {
+  const diff = rescanDiff?.available ? rescanDiff : evidence?.evidence_diff_json || evidence?.diff || detail?.evidence_diff_json || detail?.diff || {};
   const changes = diff?.changes || diff;
   const entries = Object.entries(changes || {}).filter(([, value]) => value !== undefined && value !== null && JSON.stringify(value) !== "{}");
+  const previous = diff?.previous_investigation || {};
   return (
     <section style={sectionStyle}>
+      <div style={metricGridStyle}>
+        <Metric label="Previous Run" value={previous?.id ? "Found" : "Missing"} color={previous?.id ? "var(--green)" : "var(--yellow)"} compact />
+        <Metric label="Changed Fields" value={entries.length} color={entries.length ? "var(--yellow)" : "var(--green)"} compact />
+        <Metric label="Previous Score" value={text(previous?.risk_score, "-")} color="var(--accent)" compact />
+        <Metric label="Previous Verdict" value={text(previous?.classification, "-").toUpperCase()} color={toneFromVerdict(previous?.classification).color} compact />
+      </div>
+      {diff?.summary ? <div style={changeSummaryStyle}>{text(diff.summary)}</div> : null}
       {entries.length ? (
         <EvidenceTable
           title="Investigation Changes"
@@ -334,9 +346,63 @@ function ChangeDetectionPanel({ evidence, detail }: { evidence: any; detail: any
           showHeader
         />
       ) : (
-        <EmptyState label="No previous-run diff is attached to this investigation. Add this observable to Watchlist or compare recurring runs to populate changes." />
+        <EmptyState label={previous?.id ? "Previous run exists, but no meaningful evidence changes were detected." : "No previous concluded investigation exists for this observable yet."} />
       )}
     </section>
+  );
+}
+
+function SimilarInvestigationsPanel({ similar }: { similar: any }) {
+  const items = arr(similar?.items);
+  const summary = similar?.summary || {};
+  if (!items.length) {
+    return <EmptyState label="No similar investigations were found from shared IOCs, infrastructure, CTI context, or verdict profile." />;
+  }
+
+  return (
+    <section style={sectionStyle}>
+      <div style={metricGridStyle}>
+        <Metric label="Matches" value={items.length} color="var(--accent)" compact />
+        <Metric label="Strong Matches" value={text(summary.strong_matches, "0")} color="var(--red)" compact />
+        <Metric label="Shared IOCs" value={text(summary.shared_ioc_matches, "0")} color="var(--yellow)" compact />
+        <Metric label="Shared Infra" value={text(summary.shared_infrastructure_matches, "0")} color="var(--green)" compact />
+      </div>
+      <div style={{ display: "grid", gap: 12 }}>
+        {items.map((item: any) => (
+          <a key={item.id} href={`/investigations/${item.id}`} style={similarCaseCardStyle}>
+            <div style={{ display: "grid", gap: 7 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong style={{ color: "var(--text-primary)", wordBreak: "break-all" }}>{text(item.domain)}</strong>
+                <span style={{ ...sourcePillStyle, color: toneFromVerdict(item.classification).color, borderColor: toneFromVerdict(item.classification).border }}>
+                  {text(item.classification, "unknown").toUpperCase()}
+                </span>
+                <span style={graphScorePillStyle}>{text(item.similarity_score, "0")}% similar</span>
+              </div>
+              <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                {formatDate(item.created_at)} | Risk {text(item.risk_score, "-")} | {text(item.observable_type, "observable")}
+              </div>
+              <Bullets items={arr(item.reasons)} empty="No matching reasons were supplied." />
+            </div>
+            <div style={similarOverlapGridStyle}>
+              <OverlapPreview title="IOCs" values={arr(item?.overlap?.iocs)} />
+              <OverlapPreview title="Infrastructure" values={arr(item?.overlap?.infrastructure)} />
+              <OverlapPreview title="CTI Context" values={arr(item?.overlap?.cti)} />
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OverlapPreview({ title, values }: { title: string; values: any[] }) {
+  return (
+    <div style={overlapPreviewStyle}>
+      <div style={eyebrowStyle}>{title}</div>
+      <div style={{ color: values.length ? "var(--text-primary)" : "var(--text-muted)", fontSize: 11, lineHeight: 1.6, wordBreak: "break-all" }}>
+        {values.length ? values.slice(0, 3).map((value) => text(value)).join(", ") : "No direct overlap"}
+      </div>
+    </div>
   );
 }
 
@@ -628,6 +694,7 @@ function ReportPreviewPanel({
   evidence: any;
   detail: any;
 }) {
+  const [audience, setAudience] = React.useState<"analyst" | "executive">("analyst");
   const preview = reportBuilder?.preview || {};
   const sections = arr(reportBuilder?.sections).filter((section: any) => (
     !["evidence_timeline", "opencti_resolution", "limitations", "collector_execution_summary"].includes(String(section?.id || ""))
@@ -652,19 +719,46 @@ function ReportPreviewPanel({
   const verdictReasons = arr(preview?.verdict_rationale).length ? arr(preview.verdict_rationale) : arr(confidence?.reasons);
   const derived = preview?.derived_verdict || {};
   const readiness = text(reportBuilder?.readiness_score, "0");
+  const highValueIocs = qualityIocs.filter((ioc: any) => asNumber(ioc?.quality ?? ioc?.quality_score) >= 65);
 
   return (
     <section style={sectionStyle}>
       <div style={metricGridStyle}>
         <Metric label="Readiness" value={`${text(reportBuilder?.readiness_score, "0")}%`} color="var(--green)" compact />
-        <Metric label="Profile" value={text(reportBuilder?.export_profile, "SOC")} color="var(--accent)" compact />
+        <Metric label="Audience" value={audience === "executive" ? "Executive" : "Analyst"} color="var(--accent)" compact />
         <Metric label="Sections" value={text(sections.length, "0")} color="var(--yellow)" compact />
+      </div>
+      <div style={segmentedStyle}>
+        <button
+          type="button"
+          onClick={() => setAudience("analyst")}
+          style={{
+            ...segmentButtonStyle,
+            color: audience === "analyst" ? "var(--text-strong)" : "var(--text-secondary)",
+            background: audience === "analyst" ? "rgba(102,168,255,0.14)" : "transparent",
+            borderColor: audience === "analyst" ? "rgba(102,168,255,0.38)" : "transparent",
+          }}
+        >
+          Analyst Report
+        </button>
+        <button
+          type="button"
+          onClick={() => setAudience("executive")}
+          style={{
+            ...segmentButtonStyle,
+            color: audience === "executive" ? "var(--text-strong)" : "var(--text-secondary)",
+            background: audience === "executive" ? "rgba(102,168,255,0.14)" : "transparent",
+            borderColor: audience === "executive" ? "rgba(102,168,255,0.38)" : "transparent",
+          }}
+        >
+          Executive Brief
+        </button>
       </div>
 
       <div style={reportPreviewShellStyle}>
         <div style={reportPreviewHeaderStyle}>
           <div>
-            <div style={reportPreviewEyebrowStyle}>Official SOC Report Preview</div>
+            <div style={reportPreviewEyebrowStyle}>{audience === "executive" ? "Executive Decision Brief" : "Official SOC Report Preview"}</div>
             <h2 style={reportPreviewTitleStyle}>{title}</h2>
           </div>
           <div style={reportPreviewBadgeStyle}>{readiness}% ready</div>
@@ -677,6 +771,19 @@ function ReportPreviewPanel({
           <PreviewMeta label="Confidence" value={text(preview?.confidence || report?.confidence || confidence?.confidence, "unknown").toUpperCase()} />
         </div>
 
+        {audience === "executive" ? (
+          <ExecutiveBriefPreview
+            summary={summary}
+            classification={classification}
+            riskScore={riskScore}
+            confidence={text(preview?.confidence || report?.confidence || confidence?.confidence, "unknown").toUpperCase()}
+            actions={actions}
+            findings={findings}
+            highValueIocs={highValueIocs}
+            verdictReasons={verdictReasons}
+          />
+        ) : (
+          <>
         <PreviewSection number="1" title="Executive Summary">
           <p style={reportPreviewParagraphStyle}>{summary}</p>
         </PreviewSection>
@@ -763,8 +870,74 @@ function ReportPreviewPanel({
             />
           ) : <PreviewMuted>No IOC quality rows are available yet.</PreviewMuted>}
         </PreviewSection>
+          </>
+        )}
       </div>
     </section>
+  );
+}
+
+function ExecutiveBriefPreview({
+  summary,
+  classification,
+  riskScore,
+  confidence,
+  actions,
+  findings,
+  highValueIocs,
+  verdictReasons,
+}: {
+  summary: string;
+  classification: string;
+  riskScore: any;
+  confidence: string;
+  actions: any[];
+  findings: any[];
+  highValueIocs: any[];
+  verdictReasons: any[];
+}) {
+  return (
+    <>
+      <PreviewSection number="1" title="Decision Summary">
+        <p style={reportPreviewParagraphStyle}>{summary}</p>
+        <div style={executiveDecisionGridStyle}>
+          <PreviewMeta label="Decision" value={classification} />
+          <PreviewMeta label="Risk" value={`${text(riskScore)}/100`} />
+          <PreviewMeta label="Confidence" value={confidence} />
+          <PreviewMeta label="Actionable IOCs" value={highValueIocs.length} />
+        </div>
+      </PreviewSection>
+
+      <PreviewSection number="2" title="Business Impact">
+        <PreviewBullets
+          items={[
+            classification === "MALICIOUS"
+              ? "Treat as an active threat requiring containment and retrospective hunting."
+              : classification === "SUSPICIOUS"
+                ? "Treat as elevated risk until the listed evidence is validated by telemetry."
+                : "No immediate blocking action is recommended unless local telemetry contradicts this assessment.",
+            ...verdictReasons.slice(0, 3),
+          ]}
+        />
+      </PreviewSection>
+
+      <PreviewSection number="3" title="Required Actions">
+        <PreviewBullets items={actions.slice(0, 5)} />
+      </PreviewSection>
+
+      <PreviewSection number="4" title="Supporting Highlights">
+        {findings.length ? (
+          <PreviewTable
+            columns={[
+              { key: "severity", label: "Severity" },
+              { key: "title", label: "Finding" },
+              { key: "description", label: "Why It Matters" },
+            ]}
+            rows={findings.slice(0, 4)}
+          />
+        ) : <PreviewMuted>No concise finding highlights are available yet.</PreviewMuted>}
+      </PreviewSection>
+    </>
   );
 }
 
@@ -1492,6 +1665,48 @@ const noteInfoStyle: React.CSSProperties = {
   color: "var(--text-secondary)",
   fontSize: 12,
   lineHeight: 1.6,
+};
+
+const changeSummaryStyle: React.CSSProperties = {
+  padding: "11px 13px",
+  border: "1px solid rgba(102,168,255,0.24)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(102,168,255,0.08)",
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.6,
+};
+
+const similarCaseCardStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(260px, 0.75fr)",
+  gap: 14,
+  padding: 14,
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(15,23,42,0.38)",
+  color: "inherit",
+  textDecoration: "none",
+};
+
+const similarOverlapGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+  gap: 8,
+};
+
+const overlapPreviewStyle: React.CSSProperties = {
+  padding: 10,
+  border: "1px solid var(--border-dim)",
+  borderRadius: "var(--radius-sm)",
+  background: "rgba(2,6,23,0.32)",
+};
+
+const executiveDecisionGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: 10,
+  marginTop: 14,
 };
 
 const barTrackStyle: React.CSSProperties = {

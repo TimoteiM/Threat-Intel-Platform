@@ -17,11 +17,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 import uuid
+from urllib.parse import urlparse
 
 import redis as redis_lib
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -29,6 +30,7 @@ from app.db.session import sync_engine
 from app.dependencies import DBSession
 from app.models.database import Investigation, Evidence
 from app.models.schemas import InvestigationCreate
+from app.services.evidence_diff_service import diff_evidence
 from app.services.investigation_service import InvestigationService
 from app.services.investigation_intelligence import build_investigation_intelligence
 from app.tasks.cancellation import find_task_ids, revoke_task_ids
@@ -160,7 +162,245 @@ async def get_intelligence(investigation_id: str, session: DBSession):
         "updated_at": detail.updated_at.isoformat() if detail.updated_at else None,
         "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
-    return build_investigation_intelligence(evidence=evidence, report=report, detail=detail_dict)
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail_dict)
+    intelligence["similar_investigations"] = await _build_similar_investigations(
+        session=session,
+        current=detail,
+        current_evidence=evidence,
+        current_iocs=(intelligence.get("ioc_quality") or {}).get("items") or [],
+    )
+    intelligence["rescan_diff"] = await _build_rescan_diff(
+        session=session,
+        current=detail,
+        current_evidence=evidence,
+    )
+    intelligence["summary"]["similar_investigations"] = len(intelligence["similar_investigations"].get("items") or [])
+    intelligence["summary"]["rescan_changes"] = len((intelligence["rescan_diff"].get("changes") or {}))
+    return intelligence
+
+
+async def _build_rescan_diff(
+    *,
+    session: DBSession,
+    current: Investigation,
+    current_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare this run with the previous completed run for the same observable."""
+    current_id = current.id
+    result = await session.execute(
+        select(Investigation, Evidence)
+        .join(Evidence, Evidence.investigation_id == Investigation.id)
+        .where(
+            Investigation.id != current_id,
+            Investigation.domain == current.domain,
+            Investigation.observable_type == current.observable_type,
+            Investigation.state == "concluded",
+        )
+        .order_by(desc(Investigation.created_at))
+        .limit(1)
+    )
+    row = result.first()
+    if not row:
+        return {
+            "available": False,
+            "previous_investigation": None,
+            "changes": {},
+            "summary": "No previous concluded investigation exists for this observable.",
+        }
+
+    previous, previous_evidence = row
+    previous_json = previous_evidence.evidence_json if previous_evidence else {}
+    changes = diff_evidence(previous_json or {}, current_evidence or {})
+    return {
+        "available": True,
+        "previous_investigation": {
+            "id": str(previous.id),
+            "domain": previous.domain,
+            "classification": previous.classification,
+            "risk_score": previous.risk_score,
+            "created_at": previous.created_at.isoformat() if previous.created_at else None,
+            "concluded_at": previous.concluded_at.isoformat() if previous.concluded_at else None,
+        },
+        "changes": changes,
+        "summary": _summarize_rescan_changes(changes),
+    }
+
+
+async def _build_similar_investigations(
+    *,
+    session: DBSession,
+    current: Investigation,
+    current_evidence: dict[str, Any],
+    current_iocs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Find nearby cases by shared infrastructure, IOCs, OpenCTI context, and verdict profile."""
+    current_fp = _case_fingerprint(current, current_evidence, current_iocs)
+    result = await session.execute(
+        select(Investigation, Evidence)
+        .join(Evidence, Evidence.investigation_id == Investigation.id)
+        .where(Investigation.id != current.id)
+        .order_by(desc(Investigation.created_at))
+        .limit(120)
+    )
+    candidates: list[dict[str, Any]] = []
+    for candidate, evidence_row in result.all():
+        candidate_evidence = evidence_row.evidence_json if evidence_row else {}
+        candidate_fp = _case_fingerprint(candidate, candidate_evidence or {}, [])
+        score, reasons, overlap = _score_case_similarity(current_fp, candidate_fp)
+        if score < 20:
+            continue
+        candidates.append(
+            {
+                "id": str(candidate.id),
+                "domain": candidate.domain,
+                "observable_type": candidate.observable_type,
+                "classification": candidate.classification,
+                "risk_score": candidate.risk_score,
+                "created_at": candidate.created_at.isoformat() if candidate.created_at else None,
+                "concluded_at": candidate.concluded_at.isoformat() if candidate.concluded_at else None,
+                "similarity_score": score,
+                "reasons": reasons[:5],
+                "overlap": overlap,
+            }
+        )
+
+    candidates.sort(key=lambda row: (-row["similarity_score"], row.get("created_at") or ""))
+    top = candidates[:12]
+    return {
+        "items": top,
+        "summary": {
+            "total_candidates": len(candidates),
+            "strong_matches": sum(1 for row in candidates if row["similarity_score"] >= 65),
+            "shared_ioc_matches": sum(1 for row in candidates if row["overlap"].get("iocs")),
+            "shared_infrastructure_matches": sum(1 for row in candidates if row["overlap"].get("infrastructure")),
+        },
+    }
+
+
+def _case_fingerprint(inv: Investigation, evidence: dict[str, Any], iocs: list[dict[str, Any]]) -> dict[str, set[str] | str | int | None]:
+    dns = evidence.get("dns") if isinstance(evidence.get("dns"), dict) else {}
+    hosting = evidence.get("hosting") if isinstance(evidence.get("hosting"), dict) else {}
+    http = evidence.get("http") if isinstance(evidence.get("http"), dict) else {}
+    opencti = evidence.get("opencti") if isinstance(evidence.get("opencti"), dict) else {}
+    threat_feeds = evidence.get("threat_feeds") if isinstance(evidence.get("threat_feeds"), dict) else {}
+
+    ioc_values = {
+        str(row.get("value") or "").strip().lower()
+        for row in iocs
+        if isinstance(row, dict) and row.get("value")
+    }
+    for ip in (dns.get("a") or []) + (dns.get("aaaa") or []):
+        if ip:
+            ioc_values.add(str(ip).strip().lower())
+    for row in threat_feeds.get("threatfox_matches") or []:
+        if isinstance(row, dict) and row.get("ioc_value"):
+            ioc_values.add(str(row["ioc_value"]).strip().lower())
+
+    final_url = str(http.get("final_url") or "").strip().lower()
+    redirect_hosts = set()
+    for row in (http.get("redirect_chain") or []) + (http.get("redirects") or []):
+        if isinstance(row, dict):
+            host = _url_host(row.get("url") or row.get("location"))
+            if host:
+                redirect_hosts.add(host)
+    if final_url:
+        ioc_values.add(final_url)
+
+    infra = {
+        str(value).strip().lower()
+        for value in [
+            hosting.get("ip"),
+            f"as{hosting.get('asn')}" if hosting.get("asn") else "",
+            hosting.get("asn_org"),
+            *(dns.get("ns") or []),
+            *(dns.get("mx") or []),
+            *redirect_hosts,
+            _url_host(final_url),
+        ]
+        if value
+    }
+    cti = {
+        str(value).strip().lower()
+        for value in [
+            *(opencti.get("campaigns") or []),
+            *(opencti.get("intrusion_sets") or []),
+            *(row.get("name") for row in (opencti.get("malware_families") or []) if isinstance(row, dict)),
+            *(row.get("name") for row in (opencti.get("reports") or []) if isinstance(row, dict)),
+        ]
+        if value
+    }
+    return {
+        "observable": str(inv.domain or "").strip().lower(),
+        "observable_type": inv.observable_type,
+        "classification": inv.classification,
+        "risk_score": inv.risk_score,
+        "iocs": ioc_values,
+        "infrastructure": infra,
+        "cti": cti,
+    }
+
+
+def _score_case_similarity(current: dict[str, Any], candidate: dict[str, Any]) -> tuple[int, list[str], dict[str, list[str]]]:
+    current_iocs = current.get("iocs") if isinstance(current.get("iocs"), set) else set()
+    candidate_iocs = candidate.get("iocs") if isinstance(candidate.get("iocs"), set) else set()
+    current_infra = current.get("infrastructure") if isinstance(current.get("infrastructure"), set) else set()
+    candidate_infra = candidate.get("infrastructure") if isinstance(candidate.get("infrastructure"), set) else set()
+    current_cti = current.get("cti") if isinstance(current.get("cti"), set) else set()
+    candidate_cti = candidate.get("cti") if isinstance(candidate.get("cti"), set) else set()
+
+    ioc_overlap = sorted((current_iocs & candidate_iocs) - {""})
+    infra_overlap = sorted((current_infra & candidate_infra) - {""})
+    cti_overlap = sorted((current_cti & candidate_cti) - {""})
+    score = min(45, len(ioc_overlap) * 16) + min(28, len(infra_overlap) * 10) + min(22, len(cti_overlap) * 12)
+    reasons: list[str] = []
+    if ioc_overlap:
+        reasons.append(f"Shares {len(ioc_overlap)} IOC(s)")
+    if infra_overlap:
+        reasons.append(f"Shares {len(infra_overlap)} infrastructure artifact(s)")
+    if cti_overlap:
+        reasons.append(f"Shares {len(cti_overlap)} CTI context item(s)")
+    if current.get("classification") and current.get("classification") == candidate.get("classification"):
+        score += 6
+        reasons.append(f"Same verdict: {current.get('classification')}")
+    if current.get("observable_type") == candidate.get("observable_type"):
+        score += 4
+    current_score = current.get("risk_score")
+    candidate_score = candidate.get("risk_score")
+    if isinstance(current_score, int) and isinstance(candidate_score, int) and abs(current_score - candidate_score) <= 12:
+        score += 5
+        reasons.append("Similar risk score band")
+    return min(100, score), reasons, {
+        "iocs": ioc_overlap[:10],
+        "infrastructure": infra_overlap[:10],
+        "cti": cti_overlap[:10],
+    }
+
+
+def _summarize_rescan_changes(changes: dict[str, Any]) -> str:
+    if not changes:
+        return "No meaningful evidence changes were detected versus the previous run."
+    labels = {
+        "risk_score": "risk score changed",
+        "dns_ips": "DNS answers changed",
+        "hosting_ip": "hosting IP changed",
+        "vt_malicious": "VirusTotal malicious count changed",
+        "threatfox_added": "new ThreatFox matches appeared",
+        "whois_registrar": "registrar changed",
+        "whois_org": "registrant organization changed",
+        "whois_country": "registrant country changed",
+    }
+    return "; ".join(labels.get(key, key.replace("_", " ")) for key in changes.keys())
+
+
+def _url_host(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        return (parsed.hostname or "").lower()
+    except Exception:
+        return ""
 
 
 @router.post("/upload-file")
