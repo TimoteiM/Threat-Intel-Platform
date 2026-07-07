@@ -15,6 +15,7 @@ from app.models.schemas import (
     AssistantSessionRunRequest,
 )
 from app.services.assistant_service import AssistantService
+from app.services.assistant_incident_graph_service import build_assistant_incident_graph
 
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
@@ -26,6 +27,33 @@ def _serialize_session(session) -> dict:
 
 def _serialize_detail(session) -> dict:
     return AssistantSessionDetailResponse.model_validate(session).model_dump(mode="json")
+
+
+def _graph_needs_repair(session) -> bool:
+    graph = ((session.result_json or {}).get("incident_graph") or {})
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    edges = graph.get("edges") if isinstance(graph, dict) else []
+    interpretation = (session.report_markdown or "") + "\n" + str(((graph.get("summary") or {}) if isinstance(graph, dict) else {}).get("interpretation") or "")
+    lowered = interpretation.lower()
+    has_rich_interpretation = any(term in lowered for term in (
+        "multiple sources", "promiscuous", "fired", "/.env", "command injection", "mitre", "router.tplink",
+        "azure ad", "oauth", "kerberos", "onedrive", "sharepoint", "office 365", "successful oauth",
+    ))
+    has_unknown_placeholder = any("unknown problem" in str(node.get("label") or "").lower() for node in nodes or [])
+    if not nodes:
+        return True
+    if has_rich_interpretation and (len(nodes) <= 4 or len(edges or []) <= 2 or has_unknown_placeholder):
+        return True
+    return False
+
+
+async def _repair_stale_incident_graph(service: AssistantService, session_obj) -> None:
+    if session_obj is None or session_obj.status != "completed" or not _graph_needs_repair(session_obj):
+        return
+    result_json = dict(session_obj.result_json or {})
+    result_json["incident_graph"] = build_assistant_incident_graph(session_obj, session_obj.report_markdown or "")
+    session_obj.result_json = result_json
+    await service.session.commit()
 
 
 @router.post("/sessions", status_code=201)
@@ -61,6 +89,10 @@ async def list_sessions(
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: uuid.UUID, session: DBSession):
     service = AssistantService(session)
+    assistant_session = await service.get_session(session_id)
+    if assistant_session is None:
+        raise HTTPException(status_code=404, detail="Assistant session not found")
+    await _repair_stale_incident_graph(service, assistant_session)
     assistant_session = await service.get_session(session_id)
     if assistant_session is None:
         raise HTTPException(status_code=404, detail="Assistant session not found")

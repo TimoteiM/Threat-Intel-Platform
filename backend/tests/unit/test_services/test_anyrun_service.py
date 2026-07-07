@@ -818,6 +818,65 @@ def test_lookup_anyrun_keeps_lookup_and_sandbox_when_both_complete(monkeypatch):
     assert out["additional_items"][0]["raw_summary"]["mode"] == "sandbox"
 
 
+def test_anyrun_conflicting_clean_lookup_downgrades_opaque_malicious_sandbox():
+    sandbox = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "malicious",
+        "analysis_id": "sandbox-task-1",
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "sandbox",
+            "behavior_counts": {"network_threats": 0},
+        },
+    }
+    lookup = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "clean",
+        "threat_score": 0,
+        "raw_summary": {"source": "anyrun", "mode": "lookup"},
+    }
+
+    out = svc._reconcile_anyrun_sandbox_lookup_verdict(sandbox, lookup)
+
+    assert out["provider_verdict"] == "malicious"
+    assert out["verdict"] == "suspicious"
+    assert out["verdict_context"]["conflict"] is True
+    assert out["verdict_context"]["final_verdict"] == "suspicious"
+    assert out["verdict_context"]["evidence_reasons"] == []
+
+
+def test_anyrun_conflicting_clean_lookup_retains_malicious_with_concrete_evidence():
+    sandbox = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "malicious",
+        "threat_score": 75,
+        "analysis_id": "sandbox-task-1",
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "sandbox",
+            "threatName": ["phishing-kit"],
+            "behavior_counts": {"network_threats": 1},
+        },
+    }
+    lookup = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "clean",
+        "threat_score": 0,
+        "raw_summary": {"source": "anyrun", "mode": "lookup"},
+    }
+
+    out = svc._reconcile_anyrun_sandbox_lookup_verdict(sandbox, lookup)
+
+    assert out["verdict"] == "malicious"
+    assert out["verdict_context"]["conflict"] is True
+    assert out["verdict_context"]["final_verdict"] == "malicious"
+    assert out["verdict_context"]["evidence_reasons"]
+
+
 def test_parallel_limit_error_helper_matches_provider_error_text():
     exc = Exception("[AnyRun Exception] Status code: 403. Description: Parallel task limit")
     assert svc._is_parallel_limit_error(exc) is True

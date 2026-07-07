@@ -547,6 +547,8 @@ export interface HybridAnalysisItem {
   checked: boolean;
   indicator_type?: string;
   verdict: string;
+  provider_verdict?: string;
+  verdict_context?: Record<string, any>;
   analysis_id?: string;
   threat_score?: number;
   error?: string;

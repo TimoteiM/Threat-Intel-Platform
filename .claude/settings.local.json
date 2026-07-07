@@ -54,7 +54,11 @@
       "Bash(grep -E \"\\\\.py$\")",
       "Bash(venv/Scripts/alembic upgrade *)",
       "Bash(venv/Scripts/python -c \"from app.models.database import WatchlistEntry; print\\('model ok'\\)\")",
-      "Bash(venv/Scripts/python -c ' *)"
+      "Bash(venv/Scripts/python -c ' *)",
+      "Bash(python -m pytest backend/tests/unit/test_services/test_assistant_sanitizer_service.py -v)",
+      "Bash(python -m pytest tests/unit/test_services/test_assistant_sanitizer_service.py -v)",
+      "Bash(python -c \"from app.services import assistant_sanitizer_service as s; r = s.sanitize_entry\\('user=povgrp\\\\\\\\\\\\\\\\pom29 action=allowed', {}\\); print\\('sanitized:', r.sanitized_text\\); print\\('map:', r.token_map\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

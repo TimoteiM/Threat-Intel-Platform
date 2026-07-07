@@ -1,11 +1,11 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import * as api from "@/lib/api";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import StatusPill from "@/components/ui/StatusPill";
 import type { AssistantSessionDetail } from "@/lib/types";
-import AssistantIncidentGraph from "./AssistantIncidentGraph";
 
 
 export default function AssistantResult({
@@ -33,7 +33,37 @@ export default function AssistantResult({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {incidentGraph?.nodes?.length ? (
-        <AssistantIncidentGraph graph={incidentGraph} />
+        <ConsoleModule
+          eyebrow="SOC investigation graph"
+          title="Log interpretation graph"
+          description="Open the deterministic evidence graph in a dedicated workspace with more room to inspect, pan, zoom, and move nodes."
+          tone={riskTone(incidentGraph?.summary?.risk)}
+          compact
+          actions={
+            <Link href={`/assistant/${session.id}/graph`} style={graphLinkStyle}>
+              Open graph
+            </Link>
+          }
+        >
+          <div style={graphLaunchStyle}>
+            <GraphStat label="Type" value={typeLabel(incidentGraph?.summary?.investigationType || "generic_multi_cluster_investigation")} />
+            <GraphStat label="Nodes" value={incidentGraph.nodes.length} />
+            <GraphStat label="Edges" value={Array.isArray(incidentGraph.edges) ? incidentGraph.edges.length : 0} />
+            <GraphStat label="Risk" value={incidentGraph?.summary?.risk || "Medium"} />
+          </div>
+        </ConsoleModule>
+      ) : incidentGraph ? (
+        <ConsoleModule
+          eyebrow="SOC investigation graph"
+          title="Graph unavailable"
+          description="The session has a graph payload, but no graph nodes were generated. Reopen or rerun the session to rebuild deterministic graph data from the logs."
+          tone="warning"
+          compact
+        >
+          <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+            Graph data checks will appear once the backend extracts source IPs, targeted accounts, and event relationships from the submitted logs.
+          </div>
+        </ConsoleModule>
       ) : null}
 
       <ConsoleModule
@@ -106,6 +136,27 @@ function EmptyState({ title, description }: { title: string; description: string
   );
 }
 
+function GraphStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={graphStatStyle}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function riskTone(value: any): "neutral" | "info" | "success" | "warning" | "danger" {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "critical" || normalized === "high") return "danger";
+  if (normalized === "medium") return "warning";
+  if (normalized === "low") return "success";
+  return "info";
+}
+
+function typeLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 
 const preStyle: React.CSSProperties = {
   margin: 0,
@@ -125,6 +176,40 @@ const reportSurfaceStyle: React.CSSProperties = {
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
   maxHeight: 560,
   overflow: "auto",
+};
+
+const graphLaunchStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: 10,
+};
+
+const graphStatStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 5,
+  minHeight: 78,
+  padding: 12,
+  borderRadius: 8,
+  border: "1px solid var(--border-dim)",
+  background: "rgba(2,6,23,0.34)",
+  color: "var(--text-secondary)",
+};
+
+const graphLinkStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: 34,
+  padding: "0 13px",
+  borderRadius: 8,
+  border: "1px solid rgba(103,232,249,0.32)",
+  background: "rgba(103,232,249,0.12)",
+  color: "#cffafe",
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  textDecoration: "none",
 };
 
 const resolvedRowStyle: React.CSSProperties = {

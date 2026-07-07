@@ -63,6 +63,8 @@ class HybridAnalysisCollector(BaseCollector):
                 checked=bool(r.get("checked")),
                 indicator_type=str(r.get("indicator_type") or indicator_type),
                 verdict=str(r.get("verdict") or "unknown"),
+                provider_verdict=r.get("provider_verdict"),
+                verdict_context=r.get("verdict_context") or raw.get("verdict_context") or {},
                 analysis_id=r.get("analysis_id"),
                 analysis_link=r.get("analysis_link"),
                 threat_score=r.get("threat_score"),

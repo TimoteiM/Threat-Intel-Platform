@@ -31,7 +31,7 @@ export default function AssistantWorkspace() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const requestedSessionId = searchParams.get("session");
-  const pageSize = 10;
+  const pageSize = 5;
 
   const [sessions, setSessions] = useState<AssistantSessionListItem[]>([]);
   const [sessionSearch, setSessionSearch] = useState("");
@@ -224,7 +224,8 @@ export default function AssistantWorkspace() {
           footer={
             <MetadataGrid
               compact
-              columns={3}
+              columns={1}
+              style={railFooterGridStyle}
               items={[
                 { label: "Search", value: appliedSessionSearch || "All sessions", mono: true, tone: "info" },
                 { label: "Page", value: `${Math.floor(sessionOffset / pageSize) + 1}`, tone: "neutral" },
@@ -358,16 +359,16 @@ export default function AssistantWorkspace() {
 
 const workspaceStyle: React.CSSProperties = {
   width: "100%",
-  maxWidth: "var(--shell-max-width)",
+  maxWidth: "none",
   margin: "0 auto",
-  padding: "20px 0 40px",
+  padding: "20px 18px 40px",
   display: "grid",
   gap: 18,
 };
 
 const railLayoutStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "320px minmax(0, 1fr)",
+  gridTemplateColumns: "220px minmax(0, 1fr)",
   alignItems: "start",
   gap: 16,
 };
@@ -375,6 +376,10 @@ const railLayoutStyle: React.CSSProperties = {
 const railModuleStyle: React.CSSProperties = {
   width: "100%",
   minWidth: 0,
+};
+
+const railFooterGridStyle: React.CSSProperties = {
+  gap: 8,
 };
 
 const mainColumnStyle: React.CSSProperties = {

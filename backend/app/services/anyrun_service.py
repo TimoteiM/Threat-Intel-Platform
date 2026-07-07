@@ -258,7 +258,10 @@ def lookup_anyrun(
                     primary = dict(primary)
                     primary["additional_items"] = [dict(sandbox_result)]
                 else:
-                    # Sandbox is primary (has behavioral data); TI is supplementary
+                    # Sandbox is primary, but conflicting clean lookup data means
+                    # the analyst-facing verdict must explain whether concrete
+                    # behavior supports the provider's task verdict.
+                    sandbox_result = _reconcile_anyrun_sandbox_lookup_verdict(sandbox_result, lookup_result)
                     raw = sandbox_result.get("raw_summary") or {}
                     sandbox_result["raw_summary"] = {
                         **(raw if isinstance(raw, dict) else {}),
@@ -1177,6 +1180,70 @@ def _normalize_anyrun_verdict(value: Any) -> str:
     if "no threats" in text or "clean" in text or "benign" in text:
         return "clean"
     return _normalize_lookup_verdict(value)
+
+
+def _reconcile_anyrun_sandbox_lookup_verdict(sandbox_result: dict[str, Any], lookup_result: dict[str, Any]) -> dict[str, Any]:
+    sandbox_verdict = str(sandbox_result.get("verdict") or "").strip().lower()
+    lookup_verdict = str(lookup_result.get("verdict") or "").strip().lower()
+    if sandbox_verdict != "malicious" or lookup_verdict not in {"clean", "benign", "safe"}:
+        return sandbox_result
+
+    concrete_reasons = _anyrun_concrete_sandbox_reasons(sandbox_result)
+    reconciled = dict(sandbox_result)
+    raw = reconciled.get("raw_summary") or {}
+    raw = dict(raw if isinstance(raw, dict) else {})
+    context = {
+        "conflict": True,
+        "provider_verdict": sandbox_verdict,
+        "lookup_verdict": lookup_verdict,
+        "lookup_threat_score": lookup_result.get("threat_score"),
+        "sandbox_threat_score": sandbox_result.get("threat_score"),
+        "confidence": "medium" if concrete_reasons else "low",
+        "evidence_reasons": concrete_reasons,
+    }
+    if concrete_reasons:
+        context["final_verdict"] = "malicious"
+        context["explanation"] = (
+            "ANY.RUN sandbox marked this task malicious while lookup reputation was clean. "
+            "Concrete sandbox evidence was present, so the malicious sandbox verdict is retained but flagged as conflicting."
+        )
+    else:
+        context["final_verdict"] = "suspicious"
+        context["explanation"] = (
+            "ANY.RUN sandbox marked this task malicious while lookup reputation was clean, but the completed task did not expose "
+            "concrete behavioral evidence such as threat score, network threats, malicious tags, or threat names. "
+            "Treat this as suspicious and review the task before blocking."
+        )
+        reconciled["provider_verdict"] = sandbox_verdict
+        reconciled["verdict"] = "suspicious"
+
+    raw["verdict_context"] = context
+    reconciled["verdict_context"] = context
+    reconciled["raw_summary"] = raw
+    return reconciled
+
+
+def _anyrun_concrete_sandbox_reasons(result: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    raw = result.get("raw_summary") or {}
+    raw = raw if isinstance(raw, dict) else {}
+    threat_score = _as_float(result.get("threat_score")) or 0.0
+    if threat_score > 0:
+        reasons.append(f"Sandbox threat score {threat_score:g}.")
+    threat_names = _normalize_anyrun_labels(result.get("threat_names") or raw.get("threatName") or raw.get("threat_names"))
+    if threat_names:
+        reasons.append(f"Threat labels: {', '.join(threat_names[:4])}.")
+    tags = _normalize_anyrun_labels(raw.get("tags") or result.get("tags"))
+    suspicious_tags = [tag for tag in tags if any(word in tag.lower() for word in ("phish", "malware", "trojan", "steal", "c2", "exploit"))]
+    if suspicious_tags:
+        reasons.append(f"Malicious tags: {', '.join(suspicious_tags[:4])}.")
+    counts = raw.get("behavior_counts") or {}
+    if isinstance(counts, dict) and _as_int(counts.get("network_threats")) > 0:
+        reasons.append(f"Network threats observed: {_as_int(counts.get('network_threats'))}.")
+    details = raw.get("behavior_details") or {}
+    if isinstance(details, dict) and _ensure_list(details.get("network_threats")):
+        reasons.append("Sandbox reported network threat details.")
+    return reasons[:6]
 
 
 def _is_deferred_anyrun_sandbox_error(value: Any) -> bool:

@@ -118,8 +118,8 @@ export default function AssistantSessionList({
 function sessionButtonStyle(active: boolean): React.CSSProperties {
   return {
     textAlign: "left",
-    padding: 14,
-    borderRadius: 16,
+    padding: 12,
+    borderRadius: 12,
     border: `1px solid ${active ? "rgba(102, 168, 255, 0.52)" : "rgba(120, 145, 178, 0.18)"}`,
     background: active
       ? "rgba(96, 165, 250, 0.10)"
@@ -195,7 +195,7 @@ const eyebrowStyle: React.CSSProperties = {
 
 const titleStyle: React.CSSProperties = {
   fontFamily: "var(--font-display)",
-  fontSize: 18,
+  fontSize: 16,
   fontWeight: 700,
   color: "var(--text-strong)",
   letterSpacing: "-0.02em",
@@ -244,8 +244,8 @@ const separatorStyle: React.CSSProperties = {
 const pillRowStyle: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  gap: 8,
-  marginTop: 12,
+  gap: 6,
+  marginTop: 10,
 };
 
 const emptyStateStyle: React.CSSProperties = {

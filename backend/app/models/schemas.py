@@ -730,6 +730,8 @@ class HybridAnalysisItem(BaseModel):
     checked: bool = False
     indicator_type: Optional[str] = None
     verdict: str = "unknown"
+    provider_verdict: Optional[str] = None
+    verdict_context: dict[str, Any] = {}
     analysis_id: Optional[str] = None
     analysis_link: Optional[str] = None
     threat_score: Optional[float] = None

@@ -62,10 +62,10 @@ export default function MetadataGrid({
               key={`${String(item.label)}-${index}`}
               style={{
                 gridColumn: item.span ? `span ${item.span}` : "auto",
-                borderRadius: 18,
+                borderRadius: compact ? 12 : 18,
                 border: "1px solid var(--panel-divider-strong)",
                 background: "var(--panel-card-bg)",
-                padding: compact ? 14 : 16,
+                padding: compact ? "10px 12px" : 16,
                 boxShadow: "var(--panel-shadow-soft)",
               }}
             >
@@ -76,7 +76,7 @@ export default function MetadataGrid({
                   letterSpacing: "0.14em",
                   textTransform: "uppercase",
                   color: toneColor.label,
-                  marginBottom: 10,
+                  marginBottom: compact ? 6 : 10,
                 }}
               >
                 {item.label}

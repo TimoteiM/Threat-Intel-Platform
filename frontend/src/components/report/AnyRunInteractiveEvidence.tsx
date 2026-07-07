@@ -64,6 +64,22 @@ function normalizedAnyrunLabels(values: any): string[] {
   return out;
 }
 
+function verdictContext(item: any): any {
+  return item?.verdict_context || item?.raw_summary?.verdict_context || {};
+}
+
+function providerVerdict(item: any): string {
+  return String(item?.provider_verdict || verdictContext(item)?.provider_verdict || item?.verdict || "unknown").toUpperCase();
+}
+
+function analystAssessment(item: any): string {
+  return String(verdictContext(item)?.final_verdict || item?.verdict || "unknown").toUpperCase();
+}
+
+function anyrunConflictItems(items: any[]): any[] {
+  return items.filter((item) => Boolean(verdictContext(item)?.conflict));
+}
+
 function isFlagged(item: any): boolean {
   const level = Number(item?.threatLevel ?? 0);
   const malconf = Boolean(item?.isMalconf);
@@ -374,6 +390,140 @@ function _lookupContextLabel(item: any): string {
   const score = _asDisplayScore(item?.threat_score ?? raw?.threat_score);
   const id = String(item?.analysis_id || raw?.analysis_id || "").trim();
   return `${mode} verdict: MALICIOUS${score !== "-" ? `, score ${score}` : ""}${id ? `, analysis ${id}` : ""}`;
+}
+
+type ProcessSuspicionFinding = {
+  title: string;
+  detail: string;
+  evidence?: string;
+  severity: "danger" | "warning" | "info";
+};
+
+function _processSuspicionFindings(proc: any, detail: any): ProcessSuspicionFinding[] {
+  const commandLine = String(detail?.command_line || proc?.commandLine || proc?.cmd || "").trim();
+  const image = String(detail?.image || proc?.image || proc?.fileName || proc?.processName || proc?.name || "").toLowerCase();
+  const findings: ProcessSuspicionFinding[] = [];
+  if (!commandLine && !image) return findings;
+
+  const lowerCommand = commandLine.toLowerCase();
+  const isBrowser = /\b(chrome|msedge|firefox|iexplore)\.exe\b/i.test(`${image} ${commandLine}`);
+  const disabledHttpsFlags = [
+    "HttpsUpgrades",
+    "HttpsFirstModeV2",
+    "HttpsOnlyMode",
+    "HttpsFirstBalancedMode",
+  ].filter((flag) => lowerCommand.includes(flag.toLowerCase()));
+
+  if (isBrowser && disabledHttpsFlags.length) {
+    findings.push({
+      title: "Browser HTTPS protections disabled",
+      detail: "The browser was launched with feature flags that weaken HTTPS-first or HTTPS-only upgrade behavior. That is unusual for normal user browsing and can make phishing redirects or downgrade-prone traffic easier to reach.",
+      evidence: `Disabled features: ${disabledHttpsFlags.join(", ")}`,
+      severity: "warning",
+    });
+  }
+
+  const urls = _extractUrls(commandLine);
+  for (const url of urls.slice(0, 4)) {
+    const parsed = _safeUrl(url);
+    if (!parsed) continue;
+    const host = parsed.hostname || "";
+    if (host && !_isLikelyInternalHost(host)) {
+      findings.push({
+        title: "External URL opened directly by process",
+        detail: "The command line contains an external URL passed directly to the process. For a browser process, this can indicate a scripted launch, phishing redirect, or email/link execution flow rather than ordinary navigation.",
+        evidence: `${host}${parsed.pathname || ""}`,
+        severity: "warning",
+      });
+    }
+
+    const decodedParams = _decodeSuspiciousUrlParams(parsed);
+    decodedParams.forEach((param) => {
+      const looksTargeted = /@/.test(param.decoded) || /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(param.decoded);
+      findings.push({
+        title: looksTargeted ? "URL parameter decodes to an email identity" : "Encoded URL parameter",
+        detail: looksTargeted
+          ? "A URL parameter decodes to an email address or identity value. In phishing, this is commonly used to pre-fill, track, or personalize a credential-harvesting flow for a specific recipient."
+          : "A URL parameter is encoded and decodes to readable content. Encoded parameters are not malicious by themselves, but they are worth reviewing when paired with an external redirect or security-weakening browser flags.",
+        evidence: `${param.name}: ${param.raw} -> ${param.decoded}`,
+        severity: looksTargeted ? "danger" : "info",
+      });
+    });
+  }
+
+  if (/\b--no-first-run\b/i.test(commandLine) || /\b--no-default-browser-check\b/i.test(commandLine)) {
+    findings.push({
+      title: "Automation-style browser launch flags",
+      detail: "The command suppresses first-run/default-browser prompts. These flags are common in automation and sandboxes; they are weak evidence alone but add context when combined with a suspicious URL.",
+      evidence: ["--no-first-run", "--no-default-browser-check"].filter((flag) => commandLine.includes(flag)).join(", "),
+      severity: "info",
+    });
+  }
+
+  if (!findings.length && _num(detail?.threat_score ?? proc?.threat_score ?? proc?.threatScore) > 0) {
+    findings.push({
+      title: "Sandbox process score assigned",
+      detail: "ANY.RUN assigned a non-zero process score, but the returned telemetry did not include a more specific command-line explanation.",
+      evidence: `Process score: ${_num(detail?.threat_score ?? proc?.threat_score ?? proc?.threatScore)}`,
+      severity: "warning",
+    });
+  }
+
+  return _dedupeFindings(findings).slice(0, 8);
+}
+
+function _extractUrls(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  return _uniq(matches.map((url) => url.replace(/[),.;\]]+$/, "")));
+}
+
+function _safeUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function _isLikelyInternalHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  return lower === "localhost" || lower.endsWith(".local") || lower.endsWith(".internal") || /^\d+\.\d+\.\d+\.\d+$/.test(lower) && (
+    lower.startsWith("10.") || lower.startsWith("192.168.") || /^172\.(1[6-9]|2\d|3[0-1])\./.test(lower)
+  );
+}
+
+function _decodeSuspiciousUrlParams(url: URL): Array<{ name: string; raw: string; decoded: string }> {
+  const important = new Set(["state", "redirect", "redirect_uri", "return", "returnurl", "email", "login", "user", "username"]);
+  const out: Array<{ name: string; raw: string; decoded: string }> = [];
+  url.searchParams.forEach((rawValue, name) => {
+    if (!important.has(name.toLowerCase()) && rawValue.length < 14) return;
+    const decoded = _decodeBase64Like(rawValue);
+    if (!decoded || decoded === rawValue) return;
+    if (!/[\w@.\- ]{4,}/.test(decoded)) return;
+    out.push({ name, raw: rawValue, decoded });
+  });
+  return out;
+}
+
+function _decodeBase64Like(value: string): string {
+  try {
+    const normalized = decodeURIComponent(value).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const decoded = atob(padded);
+    return /^[\x09\x0a\x0d\x20-\x7e]+$/.test(decoded) ? decoded.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function _dedupeFindings(findings: ProcessSuspicionFinding[]): ProcessSuspicionFinding[] {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = `${finding.title}:${finding.evidence || ""}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function _procSignature(p: any): string {
@@ -1549,6 +1699,10 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
     selectedSandboxScore,
     selectedProcessThreatLevel >= 2 ? 70 : selectedNodeSuspicious || selectedThreatCount > 0 || selectedProcessThreatLevel >= 1 ? 35 : 0
   );
+  const selectedProcessFindings = React.useMemo(
+    () => _processSuspicionFindings(selected || {}, selectedProcessDetail || {}),
+    [selected, selectedProcessDetail]
+  );
   const selectedRiskTone =
     selectedProcessThreatLevel >= 2 || selectedProcessScore >= 70
       ? {
@@ -1860,6 +2014,11 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
               <div style={{ marginBottom: 6, wordBreak: "break-all" }}>
                 <strong>SHA256:</strong> {selected?.sha256 || selectedProcessDetail?.sha256 || "-"}
               </div>
+              {selectedProcessFindings.length ? (
+                <div style={{ marginBottom: 10 }}>
+                  <ProcessSuspicionFindingsCard findings={selectedProcessFindings} compact />
+                </div>
+              ) : null}
               <div>
                 <div style={{ marginBottom: 4, color: "var(--accent)" }}><strong>Command line</strong></div>
                 <div
@@ -2166,6 +2325,10 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                           </div>
                         </div>
                       </AnalystCard>
+
+                      {selectedProcessFindings.length ? (
+                        <ProcessSuspicionFindingsCard findings={selectedProcessFindings} />
+                      ) : null}
 
                       <AnalystCard title="Process information">
                         <AnalystPair label="Username" value={selectedProcessDetail?.username || selected?.user || selected?.username || "-"} />
@@ -2911,11 +3074,14 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
     );
   }
 
+  const conflictItems = anyrunConflictItems(items);
+
   return (
     <ReactFlowProvider>
       <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 10 }}>
         Source priority: Any.Run first, Hybrid fallback.
       </div>
+      {conflictItems.length ? <AnyRunVerdictConflictNotice items={conflictItems} /> : null}
       <EvidenceTable
         title="Sandbox Verdicts"
         data={items.map((item: any, idx: number) => ({
@@ -2924,7 +3090,9 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           type: item?.indicator_type || "unknown",
           mode: String(item?.raw_summary?.mode || "lookup").toUpperCase(),
           execution: item?.cache_hit ? "CACHED" : "LIVE",
-          verdict: String(item?.verdict || "unknown").toUpperCase(),
+          provider_verdict: providerVerdict(item),
+          verdict: analystAssessment(item),
+          confidence: verdictContext(item)?.confidence || "—",
           threat_score: item?.threat_score ?? "—",
           analysis_id: item?.analysis_id || "—",
           error: item?.error || "—",
@@ -2935,7 +3103,9 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           { key: "type", label: "Indicator Type" },
           { key: "mode", label: "Mode" },
           { key: "execution", label: "Execution" },
-          { key: "verdict", label: "Verdict" },
+          { key: "provider_verdict", label: "Provider Verdict" },
+          { key: "verdict", label: "App Assessment" },
+          { key: "confidence", label: "Confidence" },
           { key: "threat_score", label: "Threat Score" },
           { key: "analysis_id", label: "Analysis ID", wrap: true },
           { key: "error", label: "Status/Error", wrap: true },
@@ -3555,6 +3725,67 @@ function AnalystCard({
   );
 }
 
+function ProcessSuspicionFindingsCard({
+  findings,
+  compact = false,
+}: {
+  findings: ProcessSuspicionFinding[];
+  compact?: boolean;
+}) {
+  if (!findings.length) return null;
+  return (
+    <AnalystCard title="Why this process is suspicious" bodyStyle={compact ? { padding: 10 } : undefined}>
+      <div style={{ display: "grid", gap: compact ? 7 : 10 }}>
+        {findings.map((finding, index) => {
+          const color = finding.severity === "danger"
+            ? "var(--red, #ef4444)"
+            : finding.severity === "warning"
+              ? "var(--yellow, #f59e0b)"
+              : "var(--accent, #38bdf8)";
+          return (
+            <div
+              key={`${finding.title}-${index}`}
+              style={{
+                border: `1px solid ${color}55`,
+                borderLeft: `3px solid ${color}`,
+                borderRadius: 7,
+                background: "rgba(2,23,39,0.42)",
+                padding: compact ? "8px 9px" : "10px 11px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ color, fontWeight: 900, fontSize: 12 }}>
+                  {finding.severity === "danger" ? "HIGH" : finding.severity === "warning" ? "NOTE" : "INFO"}
+                </span>
+                <strong style={{ color: "var(--text-primary)", fontSize: compact ? 12 : 13 }}>
+                  {finding.title}
+                </strong>
+              </div>
+              <div style={{ color: "var(--text-secondary)", fontSize: compact ? 11 : 12, lineHeight: 1.5 }}>
+                {finding.detail}
+              </div>
+              {finding.evidence ? (
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "#93c5fd",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: compact ? 10 : 11,
+                    lineHeight: 1.45,
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {finding.evidence}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </AnalystCard>
+  );
+}
+
 function AnalystPair({
   label,
   value,
@@ -3603,6 +3834,50 @@ function AnalystStatChip({ label, value }: { label: string; value: React.ReactNo
       }}
     >
       <span style={{ color: "#67e8f9", fontWeight: 700 }}>{label}:</span> {value}
+    </div>
+  );
+}
+
+function AnyRunVerdictConflictNotice({ items }: { items: any[] }) {
+  const contexts = items.map(verdictContext).filter(Boolean);
+  const first = contexts[0] || {};
+  const reasons = arr(first?.evidence_reasons);
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(245,158,11,0.35)",
+        borderLeft: "4px solid var(--yellow, #f59e0b)",
+        borderRadius: 8,
+        background: "rgba(245,158,11,0.08)",
+        padding: "12px 14px",
+        marginBottom: 12,
+        color: "var(--text-secondary)",
+        fontSize: 12,
+        lineHeight: 1.55,
+      }}
+    >
+      <div style={{ color: "var(--text-primary)", fontWeight: 800, marginBottom: 4 }}>
+        Conflicting ANY.RUN signals
+      </div>
+      <div>
+        Sandbox returned <strong>{String(first?.provider_verdict || "malicious").toUpperCase()}</strong>, while lookup reputation returned{" "}
+        <strong>{String(first?.lookup_verdict || "clean").toUpperCase()}</strong>. The app assessment is{" "}
+        <strong>{String(first?.final_verdict || "suspicious").toUpperCase()}</strong> with {String(first?.confidence || "low")} confidence.
+      </div>
+      <div style={{ marginTop: 6 }}>
+        {first?.explanation || "Review task evidence before blocking or escalating this indicator."}
+      </div>
+      {reasons.length ? (
+        <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+          {reasons.slice(0, 5).map((reason: any, index: number) => (
+            <li key={`${String(reason)}-${index}`}>{String(reason)}</li>
+          ))}
+        </ul>
+      ) : (
+        <div style={{ marginTop: 6 }}>
+          No concrete sandbox evidence was exposed in the returned task data, so review this as suspicious rather than confirmed malicious.
+        </div>
+      )}
     </div>
   );
 }
