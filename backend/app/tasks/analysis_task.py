@@ -28,15 +28,52 @@ from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
 from app.config import get_settings
+from app.services.decision_engine import apply_decision_to_report, build_decision_report
+from app.services.proxy_profiles import selected_proxy_summary
 from app.utils.domain_utils import extract_registered_domain
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+MAX_IOC_VALUE_LENGTH = 512
+MAX_IOCS_PER_REPORT = 150
+MAX_ANYRUN_EXTRACTED_IOCS = 40
+MAX_ANYRUN_RAW_IOCS = 25
+ALLOWED_IOC_TYPES = {"domain", "ip", "url", "hash", "email"}
+
 # Map collector names to evidence field names when they differ
 COLLECTOR_FIELD_MAP = {
     "asn": "hosting",
 }
+
+
+def _truncate_ioc_value(value: object, max_length: int = MAX_IOC_VALUE_LENGTH) -> str:
+    """
+    Fit IOC values into the database column without failing the whole investigation.
+    The full source evidence remains available in evidence_json/report_json.
+    """
+    text = str(value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + "..."
+
+
+def _normalize_ioc_for_storage(ioc: dict | None) -> dict | None:
+    if not isinstance(ioc, dict):
+        return None
+    ioc_type = str(ioc.get("type") or "domain").strip().lower()
+    if ioc_type not in ALLOWED_IOC_TYPES:
+        ioc_type = "domain"
+    value = _truncate_ioc_value(ioc.get("value"))
+    if not value:
+        return None
+    confidence = str(ioc.get("confidence") or "medium").strip().lower()[:20] or "medium"
+    return {
+        "type": ioc_type,
+        "value": value,
+        "context": ioc.get("context"),
+        "confidence": confidence,
+    }
 
 
 def _build_lexical_target(*, observable_type: str, domain: str, evidence_data: dict) -> str:
@@ -369,6 +406,10 @@ def run_analysis(
             "started": datetime.now(timezone.utc).isoformat(),
         },
     }
+    proxy_summary = selected_proxy_summary(external_context)
+    proxy_country = (proxy_summary or {}).get("country")
+    if proxy_summary:
+        evidence_data["network_profile"] = proxy_summary
 
     all_artifact_hashes = {}
     artifact_ids: dict[str, str] = {}
@@ -469,7 +510,7 @@ def run_analysis(
         )
         try:
             from app.collectors.redirect_analysis import analyze_redirects
-            redirect_result = analyze_redirects(domain, timeout=15)
+            redirect_result = analyze_redirects(domain, timeout=15, proxy_country=proxy_country)
             evidence_data["redirect_analysis"] = redirect_result
             logger.info(
                 f"[{investigation_id}] Redirect analysis: "
@@ -507,18 +548,23 @@ def run_analysis(
             from app.collectors.visual_comparison import capture_screenshot
             screenshot_target = investigated_url or domain
             logger.info(f"[{investigation_id}] Capturing screenshot of {screenshot_target}")
-            ss_bytes, ss_final_url = capture_screenshot(screenshot_target, timeout=25)
+            ss_bytes, ss_final_url = capture_screenshot(
+                screenshot_target,
+                timeout=25,
+                proxy_country=proxy_country,
+            )
             ss_art_id = _save_artifact_sync(
                 investigation_id, "screenshot",
                 "screenshot_domain.png",
                 ss_bytes, "image/png",
             )
             if ss_art_id:
-                payload = {"artifact_id": ss_art_id, "final_url": ss_final_url}
+                payload = {"artifact_id": ss_art_id, "final_url": ss_final_url, "network_profile": proxy_summary}
             else:
                 payload = {
                     "capture_error": "Screenshot captured but failed to save artifact",
                     "final_url": ss_final_url,
+                    "network_profile": proxy_summary,
                 }
             logger.info(
                 f"[{investigation_id}] Screenshot captured: {len(ss_bytes)} bytes, final_url={ss_final_url}"
@@ -534,6 +580,7 @@ def run_analysis(
                 investigation_id,
                 save_artifact_fn=_save_artifact_sync,
                 timeout=25,
+                proxy_country=proxy_country,
             )
             logger.info(
                 f"[{investigation_id}] JS analysis: "
@@ -630,6 +677,7 @@ def run_analysis(
                 inv_target, cli_target,
                 client_reference_image=reference_image,
                 timeout=25,
+                proxy_country=proxy_country,
             )
 
             # Persist screenshots as artifacts and get their IDs
@@ -818,6 +866,7 @@ def run_analysis(
         evidence_data["external_context"] = external_context
 
     evidence_data["timestamps"]["collected"] = datetime.now(timezone.utc).isoformat()
+    decision_report = build_decision_report(evidence_data, observable_type)
 
     # -- 4. Generate report  -  fast-path (rule-based) or Claude analyst --
     # Domain and URL investigations use Claude for full AI interpretation.
@@ -828,6 +877,7 @@ def run_analysis(
                           "Generating automated report...", 90)
         logger.info(f"[{investigation_id}] Using fast-path (rule-based) report for type={observable_type}")
         report_data = _generate_automated_report(evidence_data, observable_type)
+        report_data = apply_decision_to_report(report_data, decision_report)
         _time_phase("report_generation", report_phase_start)
     else:
         report_phase_start = time.monotonic()
@@ -846,6 +896,7 @@ def run_analysis(
                     "Using automated report synthesis for structured fields."
                 )
                 auto_report = _generate_automated_report(evidence_data, observable_type)
+                auto_report = apply_decision_to_report(auto_report, decision_report)
                 raw_summary = str(report_data.get("executive_summary") or "")[:3000]
                 auto_report["primary_reasoning"] = (
                     "Analyst response parse fallback applied. "
@@ -855,12 +906,14 @@ def run_analysis(
                     auto_report["executive_summary"] = raw_summary
                 report_data = auto_report
             report_data = _annotate_compact_analyst_report(report_data, used_tier=analyst_tier)
+            report_data = apply_decision_to_report(report_data, decision_report)
         except TimeoutError as e:
             logger.warning(
                 f"[{investigation_id}] Analyst timed out after "
                 f"{settings.analyst_timeout_seconds}s: {e}. Falling back to automated report."
             )
             report_data = _generate_automated_report(evidence_data, observable_type)
+            report_data = apply_decision_to_report(report_data, decision_report)
             timeout_note = (
                 f"Analyst timeout after {settings.analyst_timeout_seconds}s. "
                 "Fallback automated analysis applied."
@@ -880,12 +933,15 @@ def run_analysis(
                     "Falling back to automated report."
                 )
                 report_data = _build_prompt_too_long_fallback_report(
-                    _generate_automated_report(evidence_data, observable_type),
+                    apply_decision_to_report(
+                        _generate_automated_report(evidence_data, observable_type),
+                        decision_report,
+                    ),
                     prompt_error=e,
                 )
             else:
                 logger.error(f"[{investigation_id}] Analyst failed: {e}")
-                report_data = {
+                report_data = apply_decision_to_report({
                     "classification": "inconclusive",
                     "confidence": "low",
                     "investigation_state": "concluded",
@@ -895,9 +951,11 @@ def run_analysis(
                     "recommended_action": "investigate",
                     "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
                     "risk_score": None,
-                }
+                }, decision_report)
         _inject_lexical_contribution(report_data, evidence_data)
         _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
+        decision_report = apply_decision_to_report(decision_report, report_data)
+        report_data = apply_decision_to_report(report_data, decision_report)
         _time_phase("report_generation", report_phase_start)
 
     report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
@@ -909,6 +967,12 @@ def run_analysis(
         report_data["ai_model"] = actual_model
     else:
         report_data["ai_model"] = None
+    report_data.setdefault("report_freshness", {
+        "status": "fresh",
+        "recomputed": False,
+        "reason": "initial_analysis",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
 
     # Derive recommended_action from classification (rule-based, not AI-generated).
     # This overrides any value the AI may have produced so the action is always consistent.
@@ -922,6 +986,7 @@ def run_analysis(
         report_data["recommended_action"] = "monitor"
     else:
         report_data["recommended_action"] = "investigate"
+    _align_final_risk_with_report(evidence_data, report_data)
 
     evidence_data["timestamps"]["analyzed"] = datetime.now(timezone.utc).isoformat()
     phase_timings_ms["analysis_total"] = int((time.monotonic() - analysis_started) * 1000)
@@ -1087,16 +1152,30 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         http_early = evidence_data.get("http") or {}
         http_phishing = list(http_early.get("phishing_indicators") or [])
         http_has_login = bool(http_early.get("has_login_form"))
-        # A "strong" HTTP phishing signal: credential/payment fields, brand impersonation,
-        # or external form POST — each is a high-confidence individual indicator.
-        _strong_http_phishing_keywords = (
-            "credential", "payment", "brand impersonation", "form posts to external"
-        )
+        domain_suspicion_context = _has_domain_suspicion_context(evidence_data)
+        high_confidence_http_signals = [
+            s for s in http_phishing
+            if _is_high_confidence_http_phishing_signal(s)
+        ]
+        contextual_http_signals = [
+            s for s in http_phishing
+            if _is_contextual_http_phishing_signal(s)
+        ]
         http_strong_signals = [
             s for s in http_phishing
-            if any(kw in s.lower() for kw in _strong_http_phishing_keywords)
+            if _is_high_confidence_http_phishing_signal(s)
+            or (domain_suspicion_context and _is_contextual_http_phishing_signal(s))
         ]
-        http_phishing_score = len(http_strong_signals) * 2 + len(http_phishing)
+        http_scored_signals = [
+            s for s in http_phishing
+            if _is_high_confidence_http_phishing_signal(s)
+            or (domain_suspicion_context and not _is_contextual_http_phishing_signal(s))
+        ]
+        http_phishing_score = len(http_strong_signals) * 2 + len(http_scored_signals)
+        weak_signal_score, weak_signal_evidence = _domain_weak_signal_score(
+            evidence_data,
+            contextual_http=bool(contextual_http_signals),
+        )
 
         # AnyRun TI/sandbox verdict — extract best verdict across all items
         hybrid_evidence = evidence_data.get("hybrid_analysis") or {}
@@ -1123,7 +1202,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             confidence = "high"
             risk_score = 90
             recommended_action = "block"
-        elif http_strong_signals and (http_has_login or len(http_phishing) >= 2):
+        elif high_confidence_http_signals and (http_has_login or len(http_phishing) >= 2):
             # Static analysis detected credential harvesting with no external feed confirmation —
             # classify as malicious phishing even when sandbox says clean.
             classification = "malicious"
@@ -1150,6 +1229,16 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             confidence = "low"
             risk_score = 40
             recommended_action = "investigate"
+        elif weak_signal_score >= 4:
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = 50
+            recommended_action = "investigate"
+        elif weak_signal_score >= 3:
+            classification = "suspicious"
+            confidence = "low"
+            risk_score = 40
+            recommended_action = "monitor"
         else:
             classification = "benign"
             confidence = "medium"
@@ -1174,6 +1263,11 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             )
         for sig in http_strong_signals:
             key_evidence.append(f"Static HTTP: {sig}")
+        if contextual_http_signals and not domain_suspicion_context:
+            key_evidence.append(
+                "Static HTTP input/brand observations were treated as contextual because no independent suspicious-domain signal was present"
+            )
+        key_evidence.extend(weak_signal_evidence)
 
         whois = evidence_data.get("whois") or {}
         http = evidence_data.get("http") or {}
@@ -1223,17 +1317,30 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             })
 
         if http_phishing:
-            severity = "high" if http_strong_signals else "medium"
-            desc_parts = [f"Static HTTP analysis identified {len(http_phishing)} phishing indicator(s):"]
+            severity = "high" if high_confidence_http_signals else ("medium" if http_strong_signals else "low")
+            desc_parts = [f"Static HTTP analysis identified {len(http_phishing)} content observation(s):"]
             desc_parts += [f"  • {s}" for s in http_phishing[:6]]
             if http_has_login:
-                desc_parts.append("  • Password input field present on page")
+                desc_parts.append("  • Login/account input field present on page")
+            if contextual_http_signals and not domain_suspicion_context:
+                desc_parts.append(
+                    "  • Input fields and third-party brand references are common on legitimate sites and were not used to raise risk without independent suspicious-domain context"
+                )
             findings.append({
                 "id": "static_http_phishing",
-                "title": "Static HTTP phishing indicators detected",
+                "title": "Static HTTP content observations detected",
                 "description": " ".join(desc_parts),
                 "severity": severity,
                 "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
+            })
+
+        if weak_signal_score >= 3:
+            findings.append({
+                "id": "weak_signal_cluster",
+                "title": "Suspicious weak-signal cluster",
+                "description": "Multiple medium-confidence signals combine into suspicious context: " + "; ".join(weak_signal_evidence[:6]),
+                "severity": "medium" if weak_signal_score >= 4 else "low",
+                "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
             })
 
         if email_spoofability in {"high", "medium"}:
@@ -1396,7 +1503,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             + (" ".join(recommended_steps) if recommended_steps else "No additional steps required.")
         )
 
-    return {
+    report = {
         "classification": classification,
         "confidence": confidence,
         "investigation_state": "concluded",
@@ -1416,6 +1523,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         "technical_narrative": technical_narrative,
         "recommendations_narrative": recommendations_narrative,
     }
+    return apply_decision_to_report(report, build_decision_report(evidence_data, observable_type))
 
 
 def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list[dict]:
@@ -1425,22 +1533,23 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
     iocs: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
-    def add_ioc(ioc_type: str, value: str, context: str, confidence: str = "medium") -> None:
-        if not value:
-            return
-        v = str(value).strip()
-        if not v:
-            return
-        key = (ioc_type, v.lower())
-        if key in seen:
-            return
-        seen.add(key)
-        iocs.append({
+    def add_ioc(ioc_type: str, value: str, context: str, confidence: str = "medium") -> bool:
+        if len(iocs) >= MAX_IOCS_PER_REPORT:
+            return False
+        normalized = _normalize_ioc_for_storage({
             "type": ioc_type,
-            "value": v,
+            "value": value,
             "context": context,
             "confidence": confidence,
         })
+        if normalized is None:
+            return False
+        key = (normalized["type"], normalized["value"].lower())
+        if key in seen:
+            return False
+        seen.add(key)
+        iocs.append(normalized)
+        return True
 
     observable = (evidence_data.get("domain") or "").strip()
     if observable_type == "domain":
@@ -1502,24 +1611,31 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
 
     # AnyRun sandbox IOC report — domains/IPs/URLs observed during live detonation.
     hybrid = evidence_data.get("hybrid_analysis") or {}
+    anyrun_extracted_added = 0
+    anyrun_raw_added = 0
     for _item in (hybrid.get("items") or [])[:3]:
         if not isinstance(_item, dict):
             continue
         _sandbox_intel = _item.get("sandbox_intelligence") or {}
         for _ioc in (_sandbox_intel.get("extracted_iocs") or [])[:100]:
+            if anyrun_extracted_added >= MAX_ANYRUN_EXTRACTED_IOCS:
+                break
             if not isinstance(_ioc, dict):
                 continue
             _ioc_type = str(_ioc.get("type") or "").strip().lower()
             _ioc_val = str(_ioc.get("value") or "").strip()
             if _ioc_type in {"domain", "ip", "url", "hash", "email"}:
-                add_ioc(
+                if add_ioc(
                     _ioc_type,
                     _ioc_val,
                     str(_ioc.get("context") or "AnyRun sandbox extracted IOC"),
                     str(_ioc.get("confidence") or "medium"),
-                )
+                ):
+                    anyrun_extracted_added += 1
         _raw = _item.get("raw_summary") or {}
         for _ioc in (_raw.get("iocs") or [])[:50]:
+            if anyrun_raw_added >= MAX_ANYRUN_RAW_IOCS:
+                break
             if not isinstance(_ioc, dict):
                 continue
             _ioc_val = str(_ioc.get("ioc") or _ioc.get("value") or "").strip()
@@ -1529,11 +1645,14 @@ def _build_iocs_from_evidence(evidence_data: dict, observable_type: str) -> list
                 continue
             # Map AnyRun IOC categories to standard types
             if _ioc_cat in {"domain", "domains"} or _ioc_type in {"domain", "hostname"}:
-                add_ioc("domain", _ioc_val, "AnyRun sandbox — contacted domain", "medium")
+                if add_ioc("domain", _ioc_val, "AnyRun sandbox — contacted domain", "medium"):
+                    anyrun_raw_added += 1
             elif _ioc_cat in {"ip", "network"} or _ioc_type in {"ip", "ipv4", "ipv6"}:
-                add_ioc("ip", _ioc_val, "AnyRun sandbox — contacted IP", "medium")
+                if add_ioc("ip", _ioc_val, "AnyRun sandbox — contacted IP", "medium"):
+                    anyrun_raw_added += 1
             elif _ioc_cat in {"url", "http"} or _ioc_type == "url":
-                add_ioc("url", _ioc_val, "AnyRun sandbox — HTTP request", "medium")
+                if add_ioc("url", _ioc_val, "AnyRun sandbox — HTTP request", "medium"):
+                    anyrun_raw_added += 1
 
     return iocs
 
@@ -1561,9 +1680,17 @@ def _ensure_report_completeness(report_data: dict, evidence_data: dict, observab
     for key, value in fallback.items():
         normalized.setdefault(key, value)
 
+    if _blank(normalized.get("primary_reasoning")):
+        narrative_primary = (
+            normalized.get("executive_summary")
+            or normalized.get("technical_narrative")
+            or normalized.get("recommendations_narrative")
+        )
+        if not _blank(narrative_primary):
+            normalized["primary_reasoning"] = str(narrative_primary).strip()
+
     # Backfill commonly missing sections that power UI/PDF tabs.
     for key in (
-        "primary_reasoning",
         "findings",
         "iocs",
         "key_evidence",
@@ -1872,6 +1999,144 @@ def _trusted_external_risk_floor(evidence_data: dict) -> tuple[int, list[str]]:
     return 0, []
 
 
+def _is_contextual_http_phishing_signal(signal: object) -> bool:
+    text = str(signal or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "email-only input",
+            "credential or account input fields",
+            "third-party brand reference",
+            "brand impersonation",
+        )
+    )
+
+
+def _is_high_confidence_http_phishing_signal(signal: object) -> bool:
+    text = str(signal or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "form posts to external domain",
+            "telegram bot api",
+            "hardcoded external url",
+            "credential exfiltration",
+            "clickfix fake captcha",
+            "paste/run a command",
+        )
+    )
+
+
+def _domain_weak_signal_score(evidence_data: dict, *, contextual_http: bool = False) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+
+    lexical = evidence_data.get("url_lexical_ml") or {}
+    if not isinstance(lexical, dict) or not lexical:
+        lexical = (evidence_data.get("ml_url_score") or {}).get("raw") or evidence_data.get("ml_url_score") or {}
+    if isinstance(lexical, dict):
+        label = str(lexical.get("label") or lexical.get("risk_level") or "").lower()
+        try:
+            lexical_score = float(lexical.get("score") or lexical.get("phishing_probability") or 0.0)
+        except Exception:
+            lexical_score = 0.0
+        top_features = [str(x).lower() for x in (lexical.get("top_features") or [])]
+        if label == "high" or lexical_score >= 0.65:
+            score += 2
+            reasons.append(f"Lexical model high risk ({lexical_score:.2f})")
+        elif label == "medium" or lexical_score >= 0.45:
+            score += 1
+            reasons.append(f"Lexical model medium risk ({lexical_score:.2f})")
+        if "has_sensitive_keyword" in top_features:
+            score += 1
+            reasons.append("Hostname contains a sensitive keyword such as secure/login/account")
+
+    email = evidence_data.get("email_security") or {}
+    if isinstance(email, dict) and str(email.get("spoofability_score") or "").lower() == "high":
+        score += 1
+        reasons.append("High email spoofability")
+
+    infra = evidence_data.get("infrastructure_pivot") or {}
+    if isinstance(infra, dict):
+        if infra.get("shared_hosting_detected"):
+            score += 1
+            reasons.append("Shared hosting or crowded infrastructure observed")
+        if infra.get("registrant_pivots"):
+            score += 1
+            reasons.append("Registrant/registrar pivot links to other investigated domains")
+
+    signals = evidence_data.get("signals") or []
+    if isinstance(signals, list):
+        signal_ids = {
+            str(sig.get("id") or "")
+            for sig in signals
+            if isinstance(sig, dict)
+        }
+        if "sig_high_spoofability" in signal_ids and "High email spoofability" not in reasons:
+            score += 1
+            reasons.append("High email spoofability")
+        if {"sig_shared_hosting", "sig_registrant_pivot"} & signal_ids and not any("infrastructure" in r for r in reasons):
+            score += 1
+            reasons.append("Infrastructure pivot signal observed")
+
+    if contextual_http:
+        score += 1
+        reasons.append("Static HTTP brand/input observation present")
+
+    return score, reasons
+
+
+def _has_domain_suspicion_context(evidence_data: dict) -> bool:
+    vt = evidence_data.get("vt") or {}
+    if int(vt.get("malicious_count") or 0) > 0 or int(vt.get("suspicious_count") or 0) >= 3:
+        return True
+
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    if threat_feeds.get("openphish_listed") or (threat_feeds.get("threatfox_matches") or []):
+        return True
+    phishtank = threat_feeds.get("phishtank") or {}
+    if phishtank.get("verified"):
+        return True
+
+    intel = evidence_data.get("intel") or {}
+    blocklist_hits = [
+        hit for hit in (intel.get("blocklist_hits") or [])
+        if str((hit or {}).get("source") or "").strip().lower() != "uribl"
+    ]
+    if blocklist_hits:
+        return True
+
+    hybrid = evidence_data.get("hybrid_analysis") or {}
+    if str(hybrid.get("verdict") or "").strip().lower() in {"malicious", "suspicious"}:
+        return True
+    items = hybrid.get("items")
+    if isinstance(items, list) and any(
+        isinstance(item, dict)
+        and str(item.get("verdict") or "").strip().lower() in {"malicious", "suspicious"}
+        for item in items
+    ):
+        return True
+
+    similarity = evidence_data.get("domain_similarity") or {}
+    if float(similarity.get("overall_similarity_score") or 0) >= 50:
+        return True
+
+    visual = evidence_data.get("visual_comparison") or {}
+    if visual.get("is_visual_clone"):
+        return True
+
+    whois = evidence_data.get("whois") or {}
+    age_days = whois.get("domain_age_days")
+    if isinstance(age_days, int) and 0 <= age_days <= 30:
+        return True
+
+    redirect = evidence_data.get("redirect_analysis") or {}
+    if redirect.get("cloaking_detected"):
+        return True
+
+    return False
+
+
 def _looks_like_ip(value: str) -> bool:
     parts = value.split(".")
     if len(parts) != 4:
@@ -2016,14 +2281,24 @@ def _persist_results(
                     cr.evidence_json = col_evidence
                     cr.duration_ms = col_evidence.get("meta", {}).get("duration_ms")
 
-            # Extract IOCs from report and persist to iocs table
-            for ioc in report_data.get("iocs", []):
+            # Extract IOCs from report and persist to iocs table.
+            # Keep this defensive: a single oversized/noisy IOC should not leave
+            # an otherwise completed investigation stuck in evaluating.
+            persisted_iocs: set[tuple[str, str]] = set()
+            for ioc in (report_data.get("iocs", []) or [])[:MAX_IOCS_PER_REPORT]:
+                normalized_ioc = _normalize_ioc_for_storage(ioc)
+                if normalized_ioc is None:
+                    continue
+                ioc_key = (normalized_ioc["type"], normalized_ioc["value"].lower())
+                if ioc_key in persisted_iocs:
+                    continue
+                persisted_iocs.add(ioc_key)
                 session.add(IOCRecord(
                     investigation_id=inv_id,
-                    type=ioc.get("type", "domain"),
-                    value=ioc.get("value", ""),
-                    context=ioc.get("context"),
-                    confidence=ioc.get("confidence"),
+                    type=normalized_ioc["type"],
+                    value=normalized_ioc["value"],
+                    context=normalized_ioc["context"],
+                    confidence=normalized_ioc["confidence"],
                 ))
 
             # Save WHOIS history snapshot
@@ -2062,6 +2337,164 @@ def _persist_results(
 
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to persist results: {e}")
+
+
+def _align_final_risk_with_report(evidence_data: dict, report_data: dict) -> None:
+    """
+    Keep evidence.final_risk aligned with the persisted report verdict.
+
+    The component aggregator remains useful as a model view, but the report score
+    is the decision score analysts see in lists, exports, and summary tabs.
+    """
+    if not isinstance(evidence_data, dict) or not isinstance(report_data, dict):
+        return
+    final_risk = evidence_data.get("final_risk")
+    if not isinstance(final_risk, dict):
+        return
+    report_score = report_data.get("risk_score")
+    try:
+        risk_score = int(report_score)
+    except Exception:
+        return
+
+    if "composite_risk_score" not in final_risk:
+        final_risk["composite_risk_score"] = final_risk.get("risk_score")
+    if "composite_risk_level" not in final_risk:
+        final_risk["composite_risk_level"] = final_risk.get("risk_level")
+
+    final_risk["risk_score"] = max(0, min(100, risk_score))
+    final_risk["risk_level"] = (
+        "high" if final_risk["risk_score"] >= 70
+        else "medium" if final_risk["risk_score"] >= 35
+        else "low"
+    )
+    final_risk["source"] = "report_decision"
+    rationale = final_risk.get("rationale")
+    if isinstance(rationale, list):
+        note = "Final risk aligned to persisted report decision score"
+        if note not in rationale:
+            rationale.append(note)
+
+
+def recompute_report_for_existing_investigation(
+    investigation_id: str,
+    *,
+    reason: str = "evidence_updated",
+) -> dict | None:
+    """
+    Rebuild the deterministic report after evidence changes post-conclusion.
+
+    This is intentionally non-LLM: collector re-runs and deferred sandbox results
+    need a fast, repeatable verdict refresh without spending another analyst call.
+    """
+    try:
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import Session
+        from app.db.session import sync_engine
+        from app.models.database import Evidence, Investigation, Report
+        import uuid
+
+        inv_id = uuid.UUID(investigation_id)
+        with Session(sync_engine) as session:
+            inv = session.get(Investigation, inv_id)
+            if inv is None:
+                logger.warning("[%s] Recompute skipped: investigation not found", investigation_id)
+                return None
+
+            evidence_row = session.execute(
+                select(Evidence).where(Evidence.investigation_id == inv_id)
+            ).scalar_one_or_none()
+            if evidence_row is None:
+                logger.warning("[%s] Recompute skipped: evidence not found", investigation_id)
+                return None
+
+            evidence_data = (
+                json.loads(evidence_row.evidence_json)
+                if isinstance(evidence_row.evidence_json, str)
+                else dict(evidence_row.evidence_json or {})
+            )
+            observable_type = str(inv.observable_type or evidence_data.get("observable_type") or "domain")
+            domain = str(inv.domain or evidence_data.get("domain") or "")
+            evidence_data.setdefault("domain", domain)
+            evidence_data.setdefault("observable_type", observable_type)
+            evidence_data.setdefault("investigation_id", investigation_id)
+
+            signals = generate_signals(evidence_data)
+            gaps = detect_data_gaps(evidence_data)
+            evidence_data["signals"] = [s.model_dump() for s in signals]
+            evidence_data["data_gaps"] = [g.model_dump() for g in gaps]
+            evidence_data.setdefault("timestamps", {})
+            evidence_data["timestamps"]["reanalyzed"] = datetime.now(timezone.utc).isoformat()
+
+            try:
+                from app.services.risk_aggregator import aggregate_risk
+
+                evidence_data["final_risk"] = aggregate_risk(evidence_data)
+            except Exception as exc:
+                logger.warning("[%s] Recompute risk aggregation failed: %s", investigation_id, exc)
+
+            decision_report = build_decision_report(evidence_data, observable_type)
+            report_data = apply_decision_to_report(
+                _generate_automated_report(evidence_data, observable_type),
+                decision_report,
+            )
+            _inject_lexical_contribution(report_data, evidence_data)
+            _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
+            decision_report = apply_decision_to_report(decision_report, report_data)
+            report_data = apply_decision_to_report(report_data, decision_report)
+            report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
+            report_data["ai_model"] = None
+            report_data["report_freshness"] = {
+                "status": "fresh",
+                "recomputed": True,
+                "reason": reason,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            report_data["primary_reasoning"] = (
+                f"Report recomputed after {reason}. "
+                + str(report_data.get("primary_reasoning") or "")
+            ).strip()
+            _align_final_risk_with_report(evidence_data, report_data)
+
+            latest_iteration = session.execute(
+                select(func.max(Report.iteration)).where(Report.investigation_id == inv_id)
+            ).scalar()
+            next_iteration = int(latest_iteration or 0) + 1
+
+            inv.classification = report_data.get("classification")
+            inv.confidence = report_data.get("confidence")
+            inv.risk_score = report_data.get("risk_score")
+            inv.recommended_action = report_data.get("recommended_action")
+            inv.updated_at = datetime.now(timezone.utc)
+            if str(inv.state or "").lower() not in {"cancelled", "failed"}:
+                inv.state = "concluded"
+
+            evidence_row.evidence_json = evidence_data
+            evidence_row.signals = evidence_data.get("signals", [])
+            evidence_row.data_gaps = evidence_data.get("data_gaps", [])
+            evidence_row.external_context = evidence_data.get("external_context")
+
+            session.add(Report(
+                investigation_id=inv_id,
+                iteration=next_iteration,
+                report_json=report_data,
+                executive_summary=report_data.get("executive_summary"),
+                technical_narrative=report_data.get("technical_narrative"),
+                recommendations=report_data.get("recommendations_narrative"),
+            ))
+            session.commit()
+
+            logger.info(
+                "[%s] Report recomputed after evidence update: class=%s risk=%s iteration=%s",
+                investigation_id,
+                report_data.get("classification"),
+                report_data.get("risk_score"),
+                next_iteration,
+            )
+            return report_data
+    except Exception as exc:
+        logger.error("[%s] Report recompute failed: %s", investigation_id, exc, exc_info=True)
+        return None
 
 
 def _check_client_alerts_sync(session, inv, report_data: dict) -> None:
@@ -2297,29 +2730,29 @@ def _build_analyst_input_evidence(evidence_data: dict, tier: str = "standard") -
 
     if tier == "standard":
         trim_limits = {
-            ("intel", "related_subdomains"): 40,
-            ("intel", "related_urls"): 30,
-            ("intel", "historical_ip_addresses"): 20,
-            ("intel", "certificates"): 20,
-            ("js_analysis", "captured_requests"): 25,
-            ("js_analysis", "request_domains"): 20,
-            ("js_analysis", "tracking_pixels"): 20,
-            ("js_analysis", "suspicious_scripts"): 20,
-            ("js_analysis", "data_exfil_indicators"): 20,
-            ("js_analysis", "console_errors"): 10,
-            ("subdomains", "resolved"): 40,
-            ("subdomains", "unresolved"): 40,
-            ("subdomains", "interesting_subdomains"): 30,
-            ("threat_feeds", "threatfox_matches"): 20,
-            ("threat_feeds", "recent_reports"): 20,
-            ("cert_timeline", "entries"): 40,
-            ("favicon_intel", "hosts"): 30,
-            ("infrastructure_pivot", "related_ips"): 25,
-            ("signals",): 40,
-            ("data_gaps",): 20,
+            ("intel", "related_subdomains"): 100,
+            ("intel", "related_urls"): 80,
+            ("intel", "historical_ip_addresses"): 50,
+            ("intel", "certificates"): 50,
+            ("js_analysis", "captured_requests"): 80,
+            ("js_analysis", "request_domains"): 50,
+            ("js_analysis", "tracking_pixels"): 40,
+            ("js_analysis", "suspicious_scripts"): 40,
+            ("js_analysis", "data_exfil_indicators"): 40,
+            ("js_analysis", "console_errors"): 30,
+            ("subdomains", "resolved"): 100,
+            ("subdomains", "unresolved"): 80,
+            ("subdomains", "interesting_subdomains"): 60,
+            ("threat_feeds", "threatfox_matches"): 50,
+            ("threat_feeds", "recent_reports"): 50,
+            ("cert_timeline", "entries"): 100,
+            ("favicon_intel", "hosts"): 75,
+            ("infrastructure_pivot", "related_ips"): 50,
+            ("signals",): 80,
+            ("data_gaps",): 40,
             ("artifact_hashes",): 50,
         }
-        text_limit = 2000
+        text_limit = 4000
     elif tier == "compact":
         trim_limits = {
             ("intel", "related_subdomains"): 20,
@@ -2416,7 +2849,7 @@ def _build_analyst_evidence_digest(evidence_data: dict, *, tier: str) -> dict:
                 "severity": str(item.get("severity") or "info"),
                 "description": str(item.get("description") or ""),
             }
-            for item in signals[: (8 if tier == "standard" else 5 if tier == "compact" else 3)]
+            for item in signals[: (15 if tier == "standard" else 8 if tier == "compact" else 5)]
             if isinstance(item, dict)
         ],
         "top_data_gaps": [
@@ -2425,7 +2858,7 @@ def _build_analyst_evidence_digest(evidence_data: dict, *, tier: str) -> dict:
                 "impact": str(item.get("impact") or ""),
                 "description": str(item.get("description") or ""),
             }
-            for item in gaps[: (5 if tier != "digest" else 3)]
+            for item in gaps[: (10 if tier == "standard" else 5 if tier == "compact" else 3)]
             if isinstance(item, dict)
         ],
     }
@@ -2727,39 +3160,39 @@ def _digest_redirect_destination(redirect_dest: dict) -> dict:
 def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
     vt = compact.get("vt")
     if isinstance(vt, dict):
-        vt["vendor_results"] = (vt.get("vendor_results") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 5)]
-        vt["tags"] = (vt.get("tags") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 5)]
+        vt["vendor_results"] = (vt.get("vendor_results") or [])[: (25 if tier == "standard" else 6 if tier == "compact" else 5)]
+        vt["tags"] = (vt.get("tags") or [])[: (20 if tier == "standard" else 6 if tier == "compact" else 5)]
         vt_dns_records = vt.get("vt_dns_records")
         if isinstance(vt_dns_records, list):
-            vt["vt_dns_records"] = vt_dns_records[:3]
+            vt["vt_dns_records"] = vt_dns_records[:10 if tier == "standard" else 3]
 
     intel = compact.get("intel")
     if isinstance(intel, dict):
         intel["cert_entries_raw"] = []
-        intel["related_subdomains"] = (intel.get("related_subdomains") or [])[: (20 if tier == "standard" else 10 if tier == "compact" else 5)]
-        intel["related_certs"] = (intel.get("related_certs") or [])[:5]
+        intel["related_subdomains"] = (intel.get("related_subdomains") or [])[: (75 if tier == "standard" else 10 if tier == "compact" else 5)]
+        intel["related_certs"] = (intel.get("related_certs") or [])[: (20 if tier == "standard" else 5)]
 
     brave = compact.get("brave_osint")
     if isinstance(brave, dict):
-        brave["top_hits"] = (brave.get("top_hits") or [])[: (5 if tier == "standard" else 4 if tier == "compact" else 3)]
-        brave["observed_results"] = []
-        brave["all_results"] = []
-        brave["queries"] = (brave.get("queries") or [])[:3]
+        brave["top_hits"] = (brave.get("top_hits") or [])[: (10 if tier == "standard" else 4 if tier == "compact" else 3)]
+        brave["observed_results"] = (brave.get("observed_results") or [])[: (10 if tier == "standard" else 0)]
+        brave["all_results"] = (brave.get("all_results") or [])[: (10 if tier == "standard" else 0)]
+        brave["queries"] = (brave.get("queries") or [])[: (8 if tier == "standard" else 3)]
 
     js = compact.get("js_analysis")
     if isinstance(js, dict):
-        js["captured_requests"] = (js.get("captured_requests") or [])[: (25 if tier == "standard" else 10 if tier == "compact" else 4)]
-        js["request_domains"] = (js.get("request_domains") or [])[: (10 if tier == "standard" else 6 if tier == "compact" else 4)]
+        js["captured_requests"] = (js.get("captured_requests") or [])[: (80 if tier == "standard" else 10 if tier == "compact" else 4)]
+        js["request_domains"] = (js.get("request_domains") or [])[: (40 if tier == "standard" else 6 if tier == "compact" else 4)]
         post_endpoints = []
-        for item in (js.get("post_endpoints") or [])[:10]:
+        for item in (js.get("post_endpoints") or [])[: (25 if tier == "standard" else 10)]:
             if isinstance(item, dict) and (item.get("is_credential_form") or tier != "digest"):
                 post_endpoints.append(item)
-        js["post_endpoints"] = post_endpoints[: (8 if tier == "standard" else 5 if tier == "compact" else 3)]
+        js["post_endpoints"] = post_endpoints[: (20 if tier == "standard" else 5 if tier == "compact" else 3)]
 
     hybrid = compact.get("hybrid_analysis")
     if isinstance(hybrid, dict):
         summarized_items = []
-        for item in (hybrid.get("items") or [])[:3]:
+        for item in (hybrid.get("items") or [])[: (6 if tier == "standard" else 3)]:
             if not isinstance(item, dict):
                 continue
             dynamic = item.get("dynamic_io_summary") or {}
@@ -2774,9 +3207,9 @@ def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
                     "error": item.get("error"),
                     "cache_hit": item.get("cache_hit"),
                     "dynamic_io_summary": {
-                        "contacted_domains": (dynamic.get("contacted_domains") or [])[:5],
-                        "contacted_ips": (dynamic.get("contacted_ips") or [])[:5],
-                        "processes": (dynamic.get("processes") or [])[:5],
+                        "contacted_domains": (dynamic.get("contacted_domains") or [])[: (20 if tier == "standard" else 5)],
+                        "contacted_ips": (dynamic.get("contacted_ips") or [])[: (20 if tier == "standard" else 5)],
+                        "processes": (dynamic.get("processes") or [])[: (15 if tier == "standard" else 5)],
                     },
                     "sandbox_intelligence": _digest_anyrun_sandbox_intelligence(item.get("sandbox_intelligence") or {}),
                     "raw_summary": dict(list(raw.items())[:5]) if isinstance(raw, dict) else {},
@@ -2786,8 +3219,8 @@ def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
 
     http = compact.get("http")
     if isinstance(http, dict):
-        http["response_headers"] = dict(list((http.get("response_headers") or {}).items())[:8])
-        http["external_resources"] = (http.get("external_resources") or [])[:8]
+        http["response_headers"] = dict(list((http.get("response_headers") or {}).items())[: (16 if tier == "standard" else 8)])
+        http["external_resources"] = (http.get("external_resources") or [])[: (30 if tier == "standard" else 8)]
 
 
 def _run_analyst_with_compaction(
@@ -2949,6 +3382,3 @@ def _publish_progress(
         )
     except Exception as e:
         logger.warning(f"Failed to publish progress: {e}")
-
-
-

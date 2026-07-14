@@ -43,6 +43,9 @@ class HybridAnalysisCollector(BaseCollector):
         elif self.observable_type == "url":
             submit_on_not_found = True
 
+        network_profile = self.external_context.get("network_profile") if isinstance(self.external_context, dict) else {}
+        proxy_country = str((network_profile or {}).get("proxy_country") or "").strip() or None
+        use_residential_proxy = bool((network_profile or {}).get("use_residential_proxy") or proxy_country)
         result = lookup_hybrid_analysis(
             indicator=indicator,
             indicator_type=indicator_type,
@@ -53,6 +56,8 @@ class HybridAnalysisCollector(BaseCollector):
             # trusted over a fresh sandbox that may return CLEAN (e.g. phishing pages
             # that require user interaction). sandbox_first would bypass TI entirely.
             sandbox_first=False,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=proxy_country,
         )
         def _make_item(r: dict, *, is_primary: bool = True) -> HybridAnalysisItem:
             raw = r.get("raw_summary") or {}

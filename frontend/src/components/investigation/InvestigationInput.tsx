@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useRef } from "react";
-import { uploadReferenceImage } from "@/lib/api";
+import React, { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
+import { getProxyCountries, uploadReferenceImage } from "@/lib/api";
 import type { ObservableType } from "@/lib/types";
 
 interface Props {
@@ -14,6 +15,8 @@ interface Props {
     requestedCollectors?: string[],
     observableType?: ObservableType,
     fileToUpload?: File,
+    proxyCountry?: string,
+    useResidentialProxy?: boolean,
   ) => void;
   loading: boolean;
 }
@@ -63,12 +66,54 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   const [clientUrl, setClientUrl] = useState("");
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [uploadingRef, setUploadingRef] = useState(false);
+  const [proxyCountries, setProxyCountries] = useState<Array<{ country: string; label: string }>>([]);
+  const [proxyCountry, setProxyCountry] = useState("");
+  const [showProxyPrompt, setShowProxyPrompt] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sampleFileRef = useRef<HTMLInputElement>(null);
 
   const supportedCollectors = COLLECTORS_PER_TYPE[observableType];
   const canSubmit = (observableType === "file" ? !!fileToUpload : domain.trim().length > 0) && !loading;
+  const canUseAnyRunProxy =
+    proxyCountries.length > 0 &&
+    selectedCollectors.includes("hybrid_analysis") &&
+    (observableType === "domain" || observableType === "url" || observableType === "file");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!showProxyPrompt) return;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [showProxyPrompt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getProxyCountries()
+      .then((data) => {
+        if (cancelled) return;
+        const items = (data.items || [])
+          .filter((item) => item?.country)
+          .map((item) => ({ country: item.country, label: item.label || item.country }));
+        setProxyCountries(items);
+      })
+      .catch(() => {
+        if (!cancelled) setProxyCountries([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleTypeChange = (type: ObservableType) => {
     setObservableType(type);
@@ -77,8 +122,10 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     setFileToUpload(null);
   };
 
-  const handleSubmit = async () => {
+  const submitWithProxy = async (selectedProxyCountry: string, useResidentialProxy = false) => {
     if (!canSubmit) return;
+    setShowProxyPrompt(false);
+    setProxyCountry(selectedProxyCountry);
 
     // Upload reference image if provided
     if (referenceFile && clientDomain.trim()) {
@@ -102,7 +149,18 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       selectedCollectors.length > 0 ? selectedCollectors : undefined,
       observableType,
       fileToUpload || undefined,
+      selectedProxyCountry || undefined,
+      useResidentialProxy,
     );
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    if (canUseAnyRunProxy) {
+      setShowProxyPrompt(true);
+      return;
+    }
+    await submitWithProxy("", false);
   };
 
   const inputBase: React.CSSProperties = {
@@ -133,6 +191,123 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
 
   const placeholder = OBSERVABLE_TYPES.find((t) => t.id === observableType)?.placeholder ?? "";
 
+  const proxyPrompt = showProxyPrompt ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="anyrun-proxy-title"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        background: "rgba(3, 7, 18, 0.78)",
+        backdropFilter: "blur(10px)",
+      }}
+    >
+      <div
+        style={{
+          width: "min(860px, 100%)",
+          maxHeight: "calc(100dvh - 40px)",
+          overflow: "auto",
+          background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(8,13,24,0.98))",
+          border: "1px solid rgba(148, 163, 184, 0.28)",
+          borderRadius: 8,
+          boxShadow: "0 30px 90px rgba(0,0,0,0.52)",
+          padding: 22,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
+          <div>
+            <div
+              id="anyrun-proxy-title"
+              style={{
+                color: "var(--text)",
+                fontSize: 18,
+                fontWeight: 800,
+                fontFamily: "var(--font-sans)",
+                letterSpacing: 0,
+              }}
+            >
+              Use an AnyRun proxy?
+            </div>
+            <div
+              style={{
+                marginTop: 6,
+                color: "var(--text-dim)",
+                fontSize: 12,
+                lineHeight: 1.6,
+                maxWidth: 560,
+              }}
+            >
+              Choose whether this AnyRun sandbox task should use Residential Proxy, then pick a country when enabled.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowProxyPrompt(false)}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              border: "1px solid rgba(148, 163, 184, 0.22)",
+              background: "rgba(15, 23, 42, 0.72)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              fontSize: 18,
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+            aria-label="Close proxy selection"
+          >
+            ×
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+            gap: 10,
+            marginTop: 20,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => submitWithProxy("", false)}
+            style={proxyChoiceStyle(!proxyCountry)}
+          >
+            <span style={proxyFlagStyle}>•</span>
+            <span>
+              <span style={proxyChoiceTitleStyle}>Direct</span>
+              <span style={proxyChoiceSubStyle}>No proxy</span>
+            </span>
+          </button>
+          {proxyCountries.map((item) => {
+            const active = proxyCountry === item.country;
+            return (
+              <button
+                type="button"
+                key={item.country}
+                onClick={() => submitWithProxy(item.country, true)}
+                style={proxyChoiceStyle(active)}
+              >
+                <span style={proxyFlagStyle}>{countryFlag(item.country)}</span>
+                <span>
+                  <span style={proxyChoiceTitleStyle}>{item.label}</span>
+                  <span style={proxyChoiceSubStyle}>AnyRun residential</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div
       style={{
@@ -145,6 +320,8 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       }}
       className="animate-in"
     >
+      {mounted && proxyPrompt ? createPortal(proxyPrompt, document.body) : null}
+
       <div style={{
         fontSize: 13,
         color: "var(--text-dim)",
@@ -542,3 +719,56 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     </div>
   );
 }
+
+function countryFlag(country: string): string {
+  const code = String(country || "").trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  if (code.length !== 2) return "•";
+  return String.fromCodePoint(127397 + code.charCodeAt(0), 127397 + code.charCodeAt(1));
+}
+
+function proxyChoiceStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    minHeight: 72,
+    padding: "13px 14px",
+    borderRadius: 8,
+    border: `1px solid ${active ? "rgba(96, 165, 250, 0.72)" : "rgba(148, 163, 184, 0.18)"}`,
+    background: active ? "rgba(37, 99, 235, 0.2)" : "rgba(15, 23, 42, 0.72)",
+    color: "var(--text)",
+    cursor: "pointer",
+    textAlign: "left",
+    boxShadow: active ? "0 0 0 1px rgba(96, 165, 250, 0.18)" : "none",
+  };
+}
+
+const proxyFlagStyle: React.CSSProperties = {
+  width: 42,
+  height: 42,
+  borderRadius: 8,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(148, 163, 184, 0.1)",
+  border: "1px solid rgba(148, 163, 184, 0.16)",
+  fontSize: 24,
+  flexShrink: 0,
+};
+
+const proxyChoiceTitleStyle: React.CSSProperties = {
+  display: "block",
+  color: "var(--text)",
+  fontSize: 13,
+  fontWeight: 800,
+  fontFamily: "var(--font-sans)",
+  letterSpacing: 0,
+};
+
+const proxyChoiceSubStyle: React.CSSProperties = {
+  display: "block",
+  color: "var(--text-muted)",
+  fontSize: 11,
+  marginTop: 3,
+  fontFamily: "var(--font-mono)",
+};

@@ -369,7 +369,12 @@ class OpenCTICollector(BaseCollector):
             self._store_artifact(f"raw_search_{_safe_name(term)}", json.dumps(raw, default=str))
             edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
             logger.info("[opencti] search='%s' → %d edge(s)", term, len(edges))
-            node = _best_node(raw, "stixCyberObservables", term)
+            node = _best_node(
+                raw,
+                "stixCyberObservables",
+                term,
+                allowed_types=_opencti_types_for(self.observable_type),
+            )
             logger.info("[opencti] search='%s' best_node=%s", term, bool(node))
             if node:
                 return node
@@ -391,7 +396,12 @@ class OpenCTICollector(BaseCollector):
                 )
                 edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
                 logger.info("[opencti] typed v6 exact key=%s term='%s' -> %d edge(s)", key, term, len(edges))
-                node = _best_node(raw, "stixCyberObservables", term)
+                node = _best_node(
+                    raw,
+                    "stixCyberObservables",
+                    term,
+                    allowed_types=_opencti_types_for(self.observable_type),
+                )
                 logger.info("[opencti] typed v6 exact key=%s term='%s' best_node=%s", key, term, bool(node))
                 if node:
                     return node
@@ -410,7 +420,12 @@ class OpenCTICollector(BaseCollector):
                     "filters": [{"key": "value", "values": [term], "operator": "contains"}],
                 },
             )
-            node = _best_node(raw, "stixCyberObservables", term)
+            node = _best_node(
+                raw,
+                "stixCyberObservables",
+                term,
+                allowed_types=_opencti_types_for(self.observable_type),
+            )
             logger.info("[opencti] v5 filter='%s' best_node=%s", term, bool(node))
             if node:
                 return node
@@ -431,7 +446,12 @@ class OpenCTICollector(BaseCollector):
                 )
                 edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
                 logger.info("[opencti] v6 filter key=%s term='%s' -> %d edge(s)", key, term, len(edges))
-                node = _best_node(raw, "stixCyberObservables", term)
+                node = _best_node(
+                    raw,
+                    "stixCyberObservables",
+                    term,
+                    allowed_types=_opencti_types_for(self.observable_type),
+                )
                 logger.info("[opencti] v6 filter key=%s term='%s' best_node=%s", key, term, bool(node))
                 if node:
                     return node
@@ -458,7 +478,12 @@ class OpenCTICollector(BaseCollector):
             )
             edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
             logger.info("[opencti] v6 filter='%s' → %d edge(s)", term, len(edges))
-            node = _best_node(raw, "stixCyberObservables", term)
+            node = _best_node(
+                raw,
+                "stixCyberObservables",
+                term,
+                allowed_types=_opencti_types_for(self.observable_type),
+            )
             logger.info("[opencti] v6 filter='%s' best_node=%s", term, bool(node))
             if node:
                 return node
@@ -697,7 +722,13 @@ def _v6_filter_group(term: str, *, operator: str, key: str = "value") -> dict[st
     }
 
 
-def _best_node(raw: dict, query_field: str, term: str) -> dict | None:
+def _best_node(
+    raw: dict,
+    query_field: str,
+    term: str,
+    *,
+    allowed_types: list[str] | None = None,
+) -> dict | None:
     """Return the node whose observable_value actually matches the searched term."""
     edges = raw.get("data", {}).get(query_field, {}).get("edges", [])
     if not edges:
@@ -705,6 +736,8 @@ def _best_node(raw: dict, query_field: str, term: str) -> dict | None:
     sv = term.strip().lower()
     for edge in edges:
         node = edge.get("node") or {}
+        if allowed_types and node.get("entity_type") not in allowed_types:
+            continue
         val = str(node.get("observable_value") or "").strip()
         if _observable_matches_term(val, sv):
             return node

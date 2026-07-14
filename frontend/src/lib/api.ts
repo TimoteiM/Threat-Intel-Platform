@@ -60,6 +60,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(res.status, body || res.statusText);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -81,6 +82,7 @@ async function requestWithDirectFallback<T>(path: string, options?: RequestInit)
         throw new ApiError(res.status, body || res.statusText);
       }
 
+      if (res.status === 204) return undefined as T;
       return res.json();
     } catch (error) {
       lastError = error;
@@ -100,6 +102,7 @@ export function createInvestigation(data: {
   client_domain?: string;
   investigated_url?: string;
   client_url?: string;
+  network_profile?: { use_residential_proxy?: boolean; proxy_country?: string };
   requested_collectors?: string[];
   ai_model?: string;
 }) {
@@ -115,13 +118,26 @@ export function createInvestigation(data: {
   });
 }
 
+export function getProxyCountries() {
+  return request<{ items: Array<{ country: string; label: string; configured: string }> }>(
+    "/investigations/proxy-countries",
+  );
+}
+
 export async function uploadFileInvestigation(
   file: File,
   context?: string,
+  options?: { use_residential_proxy?: boolean; proxy_country?: string },
 ): Promise<{ investigation_id: string; domain: string; observable_type: string; state: string }> {
   const formData = new FormData();
   formData.append("file", file);
   if (context) formData.append("context", context);
+  if (options?.use_residential_proxy !== undefined) {
+    formData.append("use_residential_proxy", String(options.use_residential_proxy));
+  }
+  if (options?.proxy_country) {
+    formData.append("proxy_country", options.proxy_country);
+  }
 
   const res = await fetch(`${BASE}/investigations/upload-file`, {
     method: "POST",
@@ -296,6 +312,12 @@ export function getInvestigation(id: string) {
 export function cancelInvestigation(id: string) {
   return request<any>(`/investigations/${id}/cancel`, {
     method: "POST",
+  });
+}
+
+export function deleteInvestigation(id: string) {
+  return request<void>(`/investigations/${id}`, {
+    method: "DELETE",
   });
 }
 
@@ -675,5 +697,3 @@ export function subscribeToProgress(
   };
   return es;
 }
-
-

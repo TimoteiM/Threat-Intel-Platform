@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # —— API Keys ———
     openai_api_key: str = ""
     openai_model: str = "gpt-5-mini"
-    # Optional Anthropic fallback fields (used only when OpenAI fails/returns empty output)
+    # Anthropic primary analyst provider; OpenAI is used as fallback.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5-20251001"
     virustotal_api_key: str = ""
@@ -117,12 +117,15 @@ class Settings(BaseSettings):
 
     # —— Investigation Defaults ———
     max_analyst_iterations: int = 1
-    analyst_timeout_seconds: int = 75
+    analyst_timeout_seconds: int = 180
+    analyst_max_output_tokens: int = 16000
     collector_timeout: int = 20
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24
+    proxy_profiles: str = ""  # e.g. "US=http://user:pass@host:port,IN=http://user:pass@host:port"
+    anyrun_proxy_countries: str = ""  # e.g. "BE,US,IN" for AnyRun residential proxy geo choices
 
     @model_validator(mode="after")
     def _validate_ai_provider_keys(self) -> "Settings":

@@ -143,6 +143,24 @@ def test_lookup_prefers_anyrun_for_url(monkeypatch):
     assert called["retry"] is False
 
 
+def test_cache_key_separates_proxy_country():
+    direct = svc._cache_key(indicator="https://example.test", indicator_type="url")
+    be = svc._cache_key(
+        indicator="https://example.test",
+        indicator_type="url",
+        use_residential_proxy=True,
+        proxy_country="BE",
+    )
+    assert direct != be
+    assert direct == svc._cache_key(indicator="https://example.test", indicator_type="url", proxy_country="BE")
+    assert be == svc._cache_key(
+        indicator="https://example.test",
+        indicator_type="url",
+        use_residential_proxy=True,
+        proxy_country="be",
+    )
+
+
 def test_lookup_falls_back_to_hybrid_when_anyrun_fails(monkeypatch):
     monkeypatch.setattr(svc, "_cache_get", lambda _key: None)
     monkeypatch.setattr(svc, "_cache_set", lambda *args, **kwargs: None)

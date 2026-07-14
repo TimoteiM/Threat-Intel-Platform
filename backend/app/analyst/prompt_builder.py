@@ -33,21 +33,27 @@ def build_messages(
     """
     system = ANALYST_SYSTEM_PROMPT.replace("{max_iterations}", str(max_iterations))
 
-    # Serialize machine-collected evidence â€” exclude user-supplied free-text fields
-    # so they can be injected in a clearly-labelled, separate block below.
-    evidence_json = evidence.model_dump_json(
-        indent=2,
-        exclude_none=True,
-        exclude={"external_context", "analyst_digest"},
+    # Send an analyst support packet rather than raw megabyte-scale collector
+    # payloads. Keep enough detail for a useful report; trim only noisy fields.
+    supporting_evidence = _build_supporting_evidence(evidence)
+    evidence_json = json.dumps(
+        supporting_evidence,
+        ensure_ascii=True,
+        default=str,
+        separators=(",", ":"),
     )
 
     analyst_digest_block = ""
     if evidence.analyst_digest:
-        digest_json = json.dumps(evidence.analyst_digest, indent=2, ensure_ascii=True)
+        digest_json = json.dumps(
+            _compact_value(evidence.analyst_digest, depth=0),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
         analyst_digest_block = f"""
 <analyst_digest>
-This is a compact analyst-ready digest derived from the full evidence. Prefer it for
-high-signal reasoning and for determining what the observable appears to be about.
+This is an analyst-ready digest derived from the full evidence. Use it for orientation,
+then use supporting_evidence below for concrete source details and evidence references.
 
 {digest_json}
 </analyst_digest>
@@ -125,17 +131,8 @@ Multi-UA redirect analysis was performed with 3 User-Agents (browser, Googlebot,
 Cloaking detected: {ra.cloaking_detected} | Max chain length: {ra.max_chain_length}
 Evasion techniques: {len(ra.evasion_techniques)} | Intermediate domains: {len(ra.intermediate_domains)}
 
-CRITICAL GUIDANCE FOR REDIRECT ANALYSIS:
-- Different content hashes across User-Agents are COMPLETELY NORMAL for legitimate sites.
-  Responsive design, dynamic ads, Googlebot-optimized rendering, and A/B testing all cause
-  content hash variations. This MUST NOT increase the risk score or be treated as cloaking.
-- TRUE cloaking means different final URLs or different HTTP status codes per User-Agent.
-  cloaking_detected={ra.cloaking_detected} reflects only URL/status code differences.
-- Bot blocking (403 for Googlebot) is standard WAF behavior (Cloudflare, Akamai, etc.).
-  This is NOT an evasion technique and MUST NOT increase risk scores.
-- Redirect analysis findings should NOT independently raise risk scores for established,
-  legitimate domains. Only flag these as significant when combined with credential harvesting,
-  impersonation indicators, or phishing kit detection.
+Guidance: treat redirect variation as significant only when it shows true cloaking,
+malicious final destinations, credential harvesting, or impersonation support.
 </redirect_analysis_context>
 """
 
@@ -151,14 +148,8 @@ Total requests: {ja.total_requests} | External: {ja.external_requests} | POST en
 Credential harvesting POSTs: {len(cred_posts)} | Fingerprinting APIs: {len(ja.fingerprinting_apis)}
 Tracking pixels: {len(ja.tracking_pixels)} | WebSocket connections: {len(ja.websocket_connections)}
 
-CRITICAL GUIDANCE FOR JS ANALYSIS:
-- Fingerprinting APIs, tracking pixels, WebSocket connections, and high external request
-  counts are STANDARD on virtually all commercial/business websites. These are NOT indicators
-  of malicious intent and MUST NOT increase risk scores.
-- The ONLY strong malicious indicator is credential harvesting: {len(cred_posts)} external
-  POST(s) to auth endpoints found. This is significant ONLY when combined with impersonation.
-- Do NOT create findings about "tracking implementation" or "fingerprinting" for legitimate
-  sites â€” these are informational only and should not appear as findings.
+Guidance: tracking/fingerprinting is informational; credential-harvesting POSTs are the
+decisive JS signal, especially with impersonation.
 </js_analysis_context>
 """
 
@@ -224,14 +215,12 @@ CRITICAL GUIDANCE FOR JS ANALYSIS:
 <iteration>{iteration} of {max_iterations}</iteration>
 <analyst_focus>{focus_line}</analyst_focus>
 {similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}{analyst_digest_block}
-<machine_collected_evidence>
+<supporting_evidence>
 {evidence_json}
-</machine_collected_evidence>
+</supporting_evidence>
 {operator_context_block}</investigation>
 
-Produce your structured JSON assessment followed by the human-readable report.
-Follow your methodology strictly. Adapt every section to the observable_type above.
-Do not skip any step."""
+Produce valid JSON only. Be detailed, evidence-grounded, and adapt every field to the observable_type above."""
 
     messages = []
 
@@ -252,3 +241,125 @@ Do not skip any step."""
 
     return system, messages
 
+
+def _build_supporting_evidence(evidence: CollectedEvidence) -> dict:
+    data = evidence.model_dump(mode="json", exclude_none=True)
+    out: dict[str, object] = {
+        "domain": data.get("domain"),
+        "observable_type": data.get("observable_type"),
+        "investigation_id": data.get("investigation_id"),
+    }
+
+    for key in (
+        "final_risk",
+        "dns",
+        "whois",
+        "http",
+        "tls",
+        "hosting",
+        "asn",
+        "intel",
+        "vt",
+        "threat_feeds",
+        "urlscan",
+        "brave_osint",
+        "subdomains",
+        "cert_timeline",
+        "favicon_intel",
+        "infrastructure_pivot",
+        "email_security",
+        "redirect_analysis",
+        "js_analysis",
+        "domain_similarity",
+        "visual_comparison",
+        "redirect_destination_intel",
+        "opencti",
+    ):
+        value = data.get(key)
+        if value not in (None, {}, []):
+            out[key] = _compact_value(value, depth=0)
+
+    signals = data.get("signals") or []
+    if isinstance(signals, list):
+        out["signals"] = [_compact_value(item, depth=0) for item in signals[:15] if isinstance(item, dict)]
+
+    gaps = data.get("data_gaps") or []
+    if isinstance(gaps, list):
+        out["data_gaps"] = [_compact_value(item, depth=0) for item in gaps[:10] if isinstance(item, dict)]
+
+    digest = data.get("analyst_digest") or {}
+    hybrid_digest = (((digest.get("collector_summaries") or {}) if isinstance(digest, dict) else {}).get("hybrid_analysis") or {})
+    if hybrid_digest:
+        out["hybrid_analysis_digest"] = _compact_value(hybrid_digest, depth=0)
+
+    return out
+
+
+def _compact_value(value: object, *, depth: int) -> object:
+    if depth >= 4:
+        if isinstance(value, (dict, list)):
+            return "[omitted]"
+        return _compact_scalar(value)
+
+    if isinstance(value, dict):
+        blocked = {
+            "raw",
+            "raw_summary",
+            "raw_json",
+            "raw_html",
+            "html_report",
+            "html_report_bytes",
+            "behavior_graph",
+            "behavior_details",
+            "screenshots",
+            "artifact_hashes",
+            "collector_meta",
+            "meta",
+            "all_results",
+            "observed_results",
+            "cert_entries_raw",
+            "vendor_results",
+            "body",
+            "content",
+            "headers",
+            "redirect_chain",
+            "captured_requests",
+            "tracking_pixels",
+            "fingerprinting_apis",
+            "console_errors",
+            "technologies",
+            "links",
+            "iocs",
+            "extracted_iocs",
+            "network_requests",
+            "network_connections",
+            "processes",
+        }
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in blocked or key_text.endswith("_raw"):
+                continue
+            result[key_text] = _compact_value(item, depth=depth + 1)
+            if len(result) >= 24:
+                result["_truncated"] = True
+                break
+        return result
+
+    if isinstance(value, list):
+        limit = 12 if depth <= 1 else 6
+        compacted = [_compact_value(item, depth=depth + 1) for item in value[:limit]]
+        if len(value) > limit:
+            compacted.append(f"[{len(value) - limit} more omitted]")
+        return compacted
+
+    return _compact_scalar(value)
+
+
+def _compact_scalar(value: object) -> object:
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) > 800:
+            return text[:800] + "...[truncated]"
+        return text
+    return value

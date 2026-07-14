@@ -676,6 +676,25 @@ All configuration is via environment variables (`.env` file):
 | `COLLECTOR_TIMEOUT` | `30` | Collector timeout in seconds |
 | `DEFAULT_COLLECTORS` | `dns,http,tls,whois,asn,intel,vt` | Enabled collectors |
 
+### ANY.RUN Residential Proxy
+
+The Any.Run sandbox integration keeps API keys server-side only. Configure keys and proxy country choices in the backend environment:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ANYRUN_API_KEY` | Primary Any.Run API key used by the backend sandbox/lookup service | `...` |
+| `ANYRUN_API_KEY_FALLBACK` | Optional second Any.Run API key for fallback submissions | `...` |
+| `ANYRUN_PRIVACY_TYPE` | Any.Run privacy mode, when supported by the plan | `owner` |
+| `ANYRUN_SANDBOX_OS` | Sandbox OS connector family | `windows` |
+| `ANYRUN_URL_SANDBOX_ANALYSIS_TIMEOUT` | Any.Run URL task timeout option in seconds | `120` |
+| `ANYRUN_URL_SANDBOX_MITM` | Whether to enable Any.Run HTTPS MITM for URL tasks | `true` |
+| `ANYRUN_PROXY_COUNTRIES` | Comma-separated Residential Proxy geo choices exposed to the UI | `BE,US,GB,DE,FR` |
+
+Residential Proxy submissions use the official Any.Run SDK/API option names:
+`opt_network_residential_proxy=true` and `opt_network_residential_proxy_geo=<country>`.
+Country values should be Any.Run-supported uppercase country codes such as `US`, `GB`, or `BE`; when Residential Proxy is enabled without a country, the backend sends `fastest`.
+Availability depends on the Any.Run plan/API entitlement.
+
 ---
 
 ## Project Structure

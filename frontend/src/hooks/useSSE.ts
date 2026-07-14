@@ -13,6 +13,8 @@ interface SSEState {
   message: string;
   percent: number;
   totalElapsedMs?: number;
+  evidenceUpdateSeq: number;
+  reportRecomputed: boolean;
   done: boolean;
 }
 
@@ -23,6 +25,8 @@ export function useSSE(investigationId: string | null) {
     collectorDurations: {},
     message: "",
     percent: 0,
+    evidenceUpdateSeq: 0,
+    reportRecomputed: false,
     done: false,
   });
   const esRef = useRef<EventSource | null>(null);
@@ -52,6 +56,8 @@ export function useSSE(investigationId: string | null) {
           message: data.message || s.message,
           percent: data.percent_complete ?? s.percent,
           totalElapsedMs: data.total_elapsed_ms ?? s.totalElapsedMs,
+          evidenceUpdateSeq: data.type === "evidence_updated" ? s.evidenceUpdateSeq + 1 : s.evidenceUpdateSeq,
+          reportRecomputed: data.report_recomputed ?? s.reportRecomputed,
           done: data.done || data.state === "concluded" || data.state === "failed",
         }));
 

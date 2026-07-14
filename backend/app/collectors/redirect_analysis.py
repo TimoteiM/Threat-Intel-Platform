@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from app.services.proxy_profiles import resolve_proxy_profile
+
 logger = logging.getLogger(__name__)
 
 # User-Agent strings for cloaking detection
@@ -48,7 +50,7 @@ KNOWN_TRACKERS = {
 }
 
 
-def analyze_redirects(domain: str, timeout: int = 15) -> dict:
+def analyze_redirects(domain: str, timeout: int = 15, proxy_country: str | None = None) -> dict:
     """
     Probe a domain with multiple user agents and analyze redirect behavior.
 
@@ -64,7 +66,7 @@ def analyze_redirects(domain: str, timeout: int = 15) -> dict:
     """
     probes = []
     for ua_type, ua_string in USER_AGENTS.items():
-        probe = _probe_with_ua(domain, ua_type, ua_string, timeout)
+        probe = _probe_with_ua(domain, ua_type, ua_string, timeout, proxy_country=proxy_country)
         probes.append(probe)
 
     # Cloaking detection
@@ -85,6 +87,7 @@ def analyze_redirects(domain: str, timeout: int = 15) -> dict:
     if failed_count == len(probes):
         has_geo_block = True  # All probes failed, could be geo-block
 
+    proxy_profile = resolve_proxy_profile(proxy_country)
     return {
         "probes": probes,
         "cloaking_detected": cloaking_detected,
@@ -93,6 +96,7 @@ def analyze_redirects(domain: str, timeout: int = 15) -> dict:
         "evasion_techniques": evasion_techniques,
         "max_chain_length": max_chain,
         "has_geo_block": has_geo_block,
+        "network_profile": proxy_profile.safe_summary if proxy_profile else None,
     }
 
 
@@ -101,12 +105,16 @@ def _probe_with_ua(
     ua_type: str,
     ua_string: str,
     timeout: int,
+    proxy_country: str | None = None,
 ) -> dict:
     """Send a request with a specific User-Agent and capture redirect chain."""
     # Accept both bare domains ("phishing.com") and full URLs ("https://phishing.com/path")
     url = domain if domain.startswith(("http://", "https://")) else f"https://{domain}"
     session = requests.Session()
     session.headers["User-Agent"] = ua_string
+    proxy_profile = resolve_proxy_profile(proxy_country)
+    if proxy_profile:
+        session.proxies.update(proxy_profile.requests_proxies)
 
     try:
         resp = session.get(

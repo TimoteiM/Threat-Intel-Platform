@@ -5,6 +5,7 @@ POST /api/investigations                          → Start new investigation
 POST /api/investigations/upload-file              → Upload file sample for investigation
 GET  /api/investigations                          → List all investigations
 GET  /api/investigations/{id}                     → Get investigation details
+DELETE /api/investigations/{id}                  → Delete an investigation
 GET  /api/investigations/{id}/evidence            → Get raw evidence
 GET  /api/investigations/{id}/report              → Get analyst report
 POST /api/investigations/{id}/rerun-collector     → Re-run a single collector and merge result
@@ -36,6 +37,7 @@ from app.services.investigation_intelligence import build_investigation_intellig
 from app.tasks.cancellation import find_task_ids, revoke_task_ids
 from app.services.hybrid_analysis_service import evict_anyrun_cache
 from app.collectors.registry import get_collector, get_collectors_for_type
+from app.services.proxy_profiles import configured_proxy_profiles
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations"])
 settings = get_settings()
@@ -97,6 +99,19 @@ async def list_investigations(
     }
 
 
+@router.get("/proxy-countries")
+async def list_proxy_countries():
+    """Return configured outbound proxy countries without exposing proxy URLs."""
+    safe_keys = {"country", "label", "configured", "local_proxy", "anyrun_residential"}
+    return {
+        "items": [
+            {key: str(item.get(key) or "") for key in safe_keys if key in item}
+            for item in configured_proxy_profiles()
+            if isinstance(item, dict)
+        ],
+    }
+
+
 @router.get("/{investigation_id}")
 async def get_investigation(investigation_id: str, session: DBSession):
     """Get investigation metadata."""
@@ -116,6 +131,51 @@ async def get_investigation(investigation_id: str, session: DBSession):
         "created_at": inv.created_at.isoformat() if inv.created_at else None,
         "concluded_at": inv.concluded_at.isoformat() if inv.concluded_at else None,
     }
+
+
+@router.delete("/{investigation_id}", status_code=204)
+async def delete_investigation(investigation_id: str, session: DBSession):
+    """Delete an investigation and its dependent evidence/report records."""
+    try:
+        parsed_id = uuid.UUID(investigation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid investigation id format.") from exc
+
+    inv = (
+        (
+            await session.execute(
+                select(Investigation).where(Investigation.id == parsed_id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation not found.")
+
+    task_ids: list[str] = []
+    try:
+        r = redis_lib.Redis.from_url(settings.redis_url)
+        tracked = r.get(f"investigation-task:{investigation_id}")
+        if tracked:
+            task_ids.append(tracked.decode("utf-8", errors="ignore"))
+        r.delete(f"investigation-task:{investigation_id}")
+    except Exception:
+        pass
+
+    discovered = find_task_ids(
+        task_name="tasks.run_investigation",
+        kwarg_key="investigation_id",
+        kwarg_value=investigation_id,
+    )
+    for tid in discovered:
+        if tid not in task_ids:
+            task_ids.append(tid)
+    revoke_task_ids(task_ids)
+
+    await session.delete(inv)
+    await session.commit()
+    return None
 
 
 @router.get("/{investigation_id}/evidence")
@@ -408,6 +468,8 @@ async def upload_file_investigation(
     session: DBSession,
     file: UploadFile = File(...),
     context: str = Form(default=""),
+    use_residential_proxy: bool = Form(default=False),
+    proxy_country: str = Form(default=""),
 ):
     """
     Upload a file sample for fast hash-based analysis.
@@ -431,6 +493,10 @@ async def upload_file_investigation(
         domain=sha256,
         observable_type="hash",
         context=context or None,
+        network_profile={
+            "use_residential_proxy": use_residential_proxy,
+            "proxy_country": proxy_country.strip() or None,
+        } if (use_residential_proxy or proxy_country.strip()) else None,
         requested_collectors=["vt", "hybrid_analysis"],
     )
 
@@ -604,6 +670,22 @@ async def rerun_collector(
             )
             return
 
+        try:
+            from app.tasks.analysis_task import recompute_report_for_existing_investigation
+
+            recomputed = recompute_report_for_existing_investigation(
+                investigation_id,
+                reason=f"collector_rerun:{collector_name}",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "rerun-collector: failed to recompute report after %s result: %s",
+                collector_name,
+                exc,
+            )
+            recomputed = None
+
         # Notify frontend via SSE
         try:
             r = redis_lib.Redis.from_url(settings.redis_url)
@@ -613,7 +695,12 @@ async def rerun_collector(
                     "type": "evidence_updated",
                     "investigation_id": investigation_id,
                     "collector": collector_name,
-                    "message": f"{collector_name} re-run complete — evidence updated",
+                    "report_recomputed": bool(recomputed),
+                    "message": (
+                        f"{collector_name} re-run complete — evidence and report updated"
+                        if recomputed else
+                        f"{collector_name} re-run complete — evidence updated; report recompute failed"
+                    ),
                 }),
             )
         except Exception:

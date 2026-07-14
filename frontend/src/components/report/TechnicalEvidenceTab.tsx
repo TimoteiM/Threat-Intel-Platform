@@ -98,6 +98,9 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
     typeof redirectDestinationIntel === "object" &&
     Object.keys(redirectDestinationIntel).length > 0
   );
+  const httpPhishingIndicators = arr(http.phishing_indicators).filter(
+    (indicator: string) => !isContextualHttpObservation(indicator)
+  );
   const [jsDetailView, setJsDetailView] = React.useState<string | null>(null);
   const [isNarrow, setIsNarrow] = React.useState(false);
 
@@ -135,7 +138,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: !!(evidence?.redirect_analysis && arr(evidence.redirect_analysis.probes).length > 0),
       },
       { title: "Content Analysis", visible: !isFileHash && !!(
-        arr(http.phishing_indicators).length > 0 ||
+        httpPhishingIndicators.length > 0 ||
         arr(http.external_resources).length > 0 ||
         http.favicon_hash
       ), hasData: true },
@@ -840,13 +843,13 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
       )}
 
       {/* CONTENT ANALYSIS */}
-      {(arr(http.phishing_indicators).length > 0 ||
+      {(httpPhishingIndicators.length > 0 ||
         arr(http.brand_indicators).length > 0 ||
         arr(http.external_resources).length > 0 ||
         http.favicon_hash) && (
         <Section title="Content Analysis">
           {/* Phishing indicators */}
-          {arr(http.phishing_indicators).length > 0 && (
+          {httpPhishingIndicators.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <div style={{
                 fontSize: 12, fontWeight: 600, color: "var(--red)",
@@ -854,10 +857,10 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 padding: "6px 0", borderBottom: "1px solid var(--border-dim)",
                 fontFamily: "var(--font-sans)",
               }}>
-                Phishing Kit Indicators ({arr(http.phishing_indicators).length})
+                Phishing Kit Indicators ({httpPhishingIndicators.length})
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {arr(http.phishing_indicators).map((indicator: string, i: number) => (
+                {httpPhishingIndicators.map((indicator: string, i: number) => (
                   <div key={i} style={{
                     padding: "8px 12px",
                     background: "rgba(248,113,113,0.06)",
@@ -2454,6 +2457,16 @@ function arr(val: any): any[] {
   return [];
 }
 
+function isContextualHttpObservation(indicator: unknown): boolean {
+  const text = String(indicator || "").trim().toLowerCase();
+  return [
+    "email-only input",
+    "credential or account input fields",
+    "third-party brand reference",
+    "brand impersonation",
+  ].some((marker) => text.includes(marker));
+}
+
 /** Format a date string, return "—" if missing */
 function fmtDate(val: string | null | undefined): string {
   if (!val) return "—";
@@ -3286,8 +3299,6 @@ function VTStatBox({ label, count, total, color, highlight }: {
     </div>
   );
 }
-
-
 
 
 

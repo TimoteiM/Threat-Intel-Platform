@@ -153,15 +153,25 @@ def generate_signals(evidence: dict) -> list[Signal]:
     # ── Content / phishing signals ──
     phishing_indicators = http.get("phishing_indicators", [])
     if phishing_indicators:
+        high_confidence = [
+            item for item in phishing_indicators
+            if _is_high_confidence_http_phishing_indicator(item)
+        ]
+        contextual_only = all(
+            _is_contextual_http_phishing_indicator(item)
+            for item in phishing_indicators
+        )
+        severity = "high" if high_confidence else ("low" if contextual_only else "medium")
+        label = "High-confidence phishing behavior" if high_confidence else "HTTP content observations"
         signals.append(Signal(
             id="sig_phishing_indicators",
             category="content",
             description=(
-                f"Phishing kit patterns detected: "
+                f"{label}: "
                 f"{', '.join(phishing_indicators[:3])}"
                 f"{'...' if len(phishing_indicators) > 3 else ''}"
             ),
-            severity="high",
+            severity=severity,
             evidence_refs=["http.phishing_indicators"],
         ))
 
@@ -957,3 +967,31 @@ def _extract_domain(url: str) -> str | None:
         return parsed.hostname
     except Exception:
         return None
+
+
+def _is_contextual_http_phishing_indicator(indicator: object) -> bool:
+    text = str(indicator or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "email-only input",
+            "credential or account input fields",
+            "third-party brand reference",
+            "brand impersonation",
+        )
+    )
+
+
+def _is_high_confidence_http_phishing_indicator(indicator: object) -> bool:
+    text = str(indicator or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "form posts to external domain",
+            "telegram bot api",
+            "hardcoded external url",
+            "credential exfiltration",
+            "clickfix fake captcha",
+            "paste/run a command",
+        )
+    )

@@ -110,6 +110,7 @@ class HTTPEvidence(BaseModel):
     brand_indicators: list[str] = []
     phishing_indicators: list[str] = []
     external_resources: list[str] = []
+    network_profile: dict[str, Any] = {}
 
 
 # â”€â”€â”€ TLS â”€â”€â”€
@@ -920,6 +921,11 @@ class ExternalContext(BaseModel):
     additional_context: Optional[str] = None
 
 
+class NetworkProfile(BaseModel):
+    use_residential_proxy: bool = False
+    proxy_country: Optional[str] = None
+
+
 # â”€â”€â”€ Master Evidence Object â”€â”€â”€
 
 class CollectedEvidence(BaseModel):
@@ -1141,6 +1147,7 @@ class InvestigationCreate(BaseModel):
     investigated_url: Optional[str] = None   # Specific URL to screenshot (visual comparison)
     client_url: Optional[str] = None          # Client URL to compare against
     external_context: Optional[ExternalContext] = None
+    network_profile: Optional[NetworkProfile] = None
     requested_collectors: Optional[list[str]] = None
     ai_model: Optional[str] = None           # Override AI model: e.g. "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o-mini"
 
@@ -1302,5 +1309,3 @@ class APIProviderHealth(BaseModel):
 class APIHealthResponse(BaseModel):
     providers: list[APIProviderHealth] = Field(default_factory=list)
     generated_at: datetime
-
-

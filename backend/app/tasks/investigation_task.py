@@ -33,7 +33,7 @@ from app.models.enums import InvestigationState
 from app.collectors.registry import available_collectors, get_collector, get_collectors_for_type
 from app.db.session import sync_engine
 from app.tasks.celery_app import celery_app
-from app.tasks.analysis_task import run_analysis
+from app.tasks.analysis_task import recompute_report_for_existing_investigation, run_analysis
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -590,6 +590,11 @@ def _anyrun_background_update(
         )
         return
 
+    recomputed = recompute_report_for_existing_investigation(
+        investigation_id,
+        reason="deferred_anyrun_completed",
+    )
+
     # ── Notify frontend via SSE ──────────────────────────────────────────────
     try:
         r = redis_lib.Redis.from_url(settings.redis_url)
@@ -597,7 +602,12 @@ def _anyrun_background_update(
             "type": "evidence_updated",
             "investigation_id": investigation_id,
             "collector": ANYRUN_COLLECTOR_NAME,
-            "message": "AnyRun sandbox analysis complete — evidence updated",
+            "report_recomputed": bool(recomputed),
+            "message": (
+                "AnyRun sandbox analysis complete — evidence and report updated"
+                if recomputed else
+                "AnyRun sandbox analysis complete — evidence updated; report recompute failed"
+            ),
         }
         r.publish(f"investigation:{investigation_id}", json.dumps(payload))
         logger.info(f"[{investigation_id}] SSE evidence_updated published")

@@ -3,7 +3,7 @@ Analyst Orchestrator — calls the LLM and handles follow-up iterations.
 
 Flow:
 1. Build prompt from evidence
-2. Call Claude Haiku 4.5 (primary)
+2. Call the configured Claude model (primary)
 3. Fallback to GPT-5 Mini when primary fails or returns empty
 4. Parse response
 5. If analyst requests more data → return with data_needed
@@ -26,9 +26,10 @@ from app.models.schemas import AnalystReport, CollectedEvidence
 
 logger = logging.getLogger(__name__)
 
-# Fixed model strategy — primary Claude, fallback OpenAI
-PRIMARY_MODEL  = "claude-haiku-4-5-20251001"
-FALLBACK_MODEL = "gpt-5-mini"
+DEFAULT_PRIMARY_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_FALLBACK_MODEL = "gpt-5-mini"
+PRIMARY_MODEL = DEFAULT_PRIMARY_MODEL
+FALLBACK_MODEL = DEFAULT_FALLBACK_MODEL
 
 
 async def run_analyst(
@@ -40,7 +41,7 @@ async def run_analyst(
     """
     Call the configured LLM with evidence and return a structured report.
 
-    Always tries Claude Haiku 4.5 first; falls back to GPT-5 Mini on any
+    Always tries the configured Claude model first; falls back to GPT-5 Mini on any
     failure or empty response.
 
     Args:
@@ -60,38 +61,58 @@ async def run_analyst(
         max_iterations=max_iterations,
         previous_response=previous_response,
     )
+    message_chars = sum(
+        len(str(message.get("content") or ""))
+        for message in messages
+        if isinstance(message, dict)
+    )
+    prompt_chars = len(system) + message_chars
+    logger.info(
+        "[%s] Analyst prompt size: chars=%s system_chars=%s message_chars=%s messages=%s",
+        evidence.investigation_id,
+        prompt_chars,
+        len(system),
+        message_chars,
+        len(messages),
+    )
+
+    primary_model = (settings.anthropic_model or DEFAULT_PRIMARY_MODEL).strip() or DEFAULT_PRIMARY_MODEL
+    fallback_model = (settings.openai_model or DEFAULT_FALLBACK_MODEL).strip() or DEFAULT_FALLBACK_MODEL
+    max_output_tokens = max(1024, int(getattr(settings, "analyst_max_output_tokens", 8192) or 8192))
 
     raw_text = ""
-    actual_model = PRIMARY_MODEL
+    actual_model = primary_model
 
-    # ── Primary: Claude Haiku 4.5 ────────────────────────────────────────────
+    # ── Primary: Claude ──────────────────────────────────────────────────────
     if settings.anthropic_api_key:
         try:
             logger.info(
                 f"[{evidence.investigation_id}] Calling primary analyst "
-                f"(iteration {iteration}/{max_iterations}, model={PRIMARY_MODEL})"
+                f"(iteration {iteration}/{max_iterations}, model={primary_model}, max_output_tokens={max_output_tokens})"
             )
             raw_text = await _call_claude(
                 api_key=settings.anthropic_api_key,
-                model=PRIMARY_MODEL,
+                model=primary_model,
                 system=system,
                 messages=messages,
+                max_tokens=max_output_tokens,
+                investigation_id=str(evidence.investigation_id),
             )
             if raw_text.strip():
                 logger.info(
-                    f"[{evidence.investigation_id}] Haiku response received, "
+                    f"[{evidence.investigation_id}] Claude response received, "
                     f"length={len(raw_text)}"
                 )
             else:
                 logger.warning(
-                    f"[{evidence.investigation_id}] Haiku returned empty output — "
+                    f"[{evidence.investigation_id}] Claude returned empty output - "
                     "will fall back to GPT-5 Mini"
                 )
                 raw_text = ""
         except Exception as exc:
             logger.warning(
-                f"[{evidence.investigation_id}] Haiku call failed "
-                f"({type(exc).__name__}: {exc}) — will fall back to GPT-5 Mini"
+                f"[{evidence.investigation_id}] Claude call failed "
+                f"({type(exc).__name__}: {exc}) - will fall back to GPT-5 Mini"
             )
             raw_text = ""
     else:
@@ -104,19 +125,21 @@ async def run_analyst(
     if not raw_text.strip():
         if not settings.openai_api_key:
             raise ValueError(
-                "Both primary (Haiku) and fallback (GPT-5 Mini) are unavailable: "
+                "Both primary (Claude) and fallback (GPT-5 Mini) are unavailable: "
                 "ANTHROPIC_API_KEY and OPENAI_API_KEY are both unset."
             )
-        actual_model = FALLBACK_MODEL
+        actual_model = fallback_model
         logger.info(
             f"[{evidence.investigation_id}] Calling fallback analyst "
-            f"(iteration {iteration}/{max_iterations}, model={FALLBACK_MODEL})"
+            f"(iteration {iteration}/{max_iterations}, model={fallback_model}, max_output_tokens={max_output_tokens})"
         )
         raw_text = await _call_openai(
             api_key=settings.openai_api_key,
-            model=FALLBACK_MODEL,
+            model=fallback_model,
             system=system,
             messages=messages,
+            max_output_tokens=max_output_tokens,
+            investigation_id=str(evidence.investigation_id),
         )
         logger.info(
             f"[{evidence.investigation_id}] GPT-5 Mini response received, "
@@ -156,16 +179,33 @@ async def _call_claude(
     model: str,
     system: str,
     messages: list[dict],
+    max_tokens: int,
+    investigation_id: str = "",
 ) -> str:
     """Call Anthropic Claude."""
     client = anthropic.AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
         model=model,
-        max_tokens=8192,
+        max_tokens=max_tokens,
         system=system,
-        messages=messages,
+        messages=[*messages, {"role": "assistant", "content": "{"}],
     )
-    return response.content[0].text if response and response.content else ""
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        logger.info(
+            "[%s] Claude usage: model=%s input_tokens=%s output_tokens=%s cache_creation_input_tokens=%s cache_read_input_tokens=%s",
+            investigation_id,
+            model,
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "cache_creation_input_tokens", None),
+            getattr(usage, "cache_read_input_tokens", None),
+        )
+    text = response.content[0].text if response and response.content else ""
+    stripped = text.lstrip()
+    if not stripped:
+        return ""
+    return stripped if stripped.startswith("{") else "{" + stripped
 
 
 async def _call_openai(
@@ -173,6 +213,8 @@ async def _call_openai(
     model: str,
     system: str,
     messages: list[dict],
+    max_output_tokens: int,
+    investigation_id: str = "",
 ) -> str:
     """Call OpenAI Responses API."""
     client = AsyncOpenAI(api_key=api_key)
@@ -180,8 +222,18 @@ async def _call_openai(
     response = await client.responses.create(
         model=model,
         input=input_messages,
-        max_output_tokens=8192,
+        max_output_tokens=max_output_tokens,
     )
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        logger.info(
+            "[%s] OpenAI usage: model=%s input_tokens=%s output_tokens=%s total_tokens=%s",
+            investigation_id,
+            model,
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "total_tokens", None),
+        )
 
     raw_text = getattr(response, "output_text", None) or ""
     if raw_text:

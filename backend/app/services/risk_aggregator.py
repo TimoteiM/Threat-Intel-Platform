@@ -185,6 +185,8 @@ def _opencti_risk_floor(evidence: dict[str, Any]) -> int:
     for item in _opencti_items(evidence):
         if not item.get("found"):
             continue
+        if _is_opencti_contextual_account_compromise(item):
+            continue
         score = int(item.get("score") or 0)
         richness = _opencti_richness(item)
         component = _single_opencti_score(item)
@@ -215,4 +217,67 @@ def _single_opencti_score(opencti: dict[str, Any]) -> float:
     bonus = min(0.25, richness * 0.05)
     found_bonus = 0.1
 
-    return max(0.0, min(1.0, score * 0.7 + found_bonus + bonus))
+    component = max(0.0, min(1.0, score * 0.7 + found_bonus + bonus))
+    if _is_opencti_contextual_account_compromise(opencti):
+        return min(component, 0.35)
+    return component
+
+
+def _is_opencti_contextual_account_compromise(opencti: dict[str, Any]) -> bool:
+    """
+    Internal CTI about a compromised user/mailbox is useful triage context, but it
+    does not prove the investigated domain itself is attacker-controlled.
+    """
+    text_parts: list[str] = []
+    for key in ("labels", "notes"):
+        value = opencti.get(key)
+        if isinstance(value, list):
+            text_parts.extend(str(item) for item in value)
+        elif value:
+            text_parts.append(str(value))
+    for key in ("reports", "indicators"):
+        value = opencti.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            text_parts.extend(
+                str(item.get(field) or "")
+                for field in ("name", "description", "pattern")
+            )
+
+    text = " ".join(text_parts).lower()
+    entity_type = str(opencti.get("observable_entity_type") or "").strip().lower()
+    observable_value = str(opencti.get("observable_value") or "").strip().lower()
+    if not text:
+        return entity_type == "user-account" or "@" in observable_value
+
+    account_terms = (
+        "compromised account",
+        "account compromise",
+        "compromised user",
+        "user compromise",
+        "compromised mailbox",
+        "mailbox compromise",
+        "bec",
+        "business email compromise",
+        "credential leak",
+        "leaked credential",
+    )
+    domain_threat_terms = (
+        "phishing",
+        "malware",
+        "c2",
+        "command and control",
+        "botnet",
+        "ransomware",
+        "smishing",
+        "credential harvesting",
+    )
+    has_account_context = (
+        entity_type == "user-account"
+        or "@" in observable_value
+        or any(term in text for term in account_terms)
+    )
+    return has_account_context and not any(term in text for term in domain_threat_terms)

@@ -197,7 +197,7 @@ def _extract_urls(msg: Any, raw_email: bytes) -> list[str]:
 
 
 def _extract_urls_from_text(text: str) -> list[str]:
-    return _normalize_urls(URL_RE.findall(text or ""))
+    return _normalize_urls(URL_RE.findall(_preprocess_text_for_url_scan(text or "")))
 
 
 def _normalize_urls(values: list[str]) -> list[str]:
@@ -268,6 +268,7 @@ def _attachment_bytes(att: Any) -> bytes:
 
 def _extract_sender_ip(received_headers: list[str]) -> str | None:
     # Received headers are top-down; earliest sender-side hops are usually near the end.
+    fallback_ip: str | None = None
     for header in reversed(received_headers):
         for candidate in IPV4_RE.findall(header or ""):
             try:
@@ -276,7 +277,49 @@ def _extract_sender_ip(received_headers: list[str]) -> str | None:
                 continue
             if getattr(ip, "is_global", False):
                 return str(ip)
+            if fallback_ip is None:
+                fallback_ip = str(ip)
+    return fallback_ip
+
+
+def _extract_sender_ip_from_sources(
+    *,
+    received_headers: list[str],
+    direct_header_values: list[str] | None = None,
+) -> str | None:
+    sender_ip = _extract_sender_ip(received_headers)
+    if sender_ip:
+        return sender_ip
+
+    fallback_ip: str | None = None
+    for header in direct_header_values or []:
+        for candidate in IPV4_RE.findall(header or ""):
+            try:
+                ip = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if getattr(ip, "is_global", False):
+                return str(ip)
+            if fallback_ip is None:
+                fallback_ip = str(ip)
+    return fallback_ip
+
+
+def _extract_sender_email_from_header_blob(headers_blob: str) -> str | None:
+    for header in ("From", "Return-Path", "Sender", "Reply-To"):
+        for value in _extract_headers(headers_blob or "", header):
+            _, email = parseaddr(_safe_header(value))
+            email = (email or "").strip().lower()
+            if email:
+                return email
     return None
+
+
+def _extract_header_value_from_raw(raw_email: bytes, name: str) -> str:
+    values = _extract_headers_from_raw(raw_email, name)
+    if not values:
+        return ""
+    return _safe_header(values[0])
 
 
 def _extract_token(pattern: re.Pattern[str], blob: str) -> str | None:

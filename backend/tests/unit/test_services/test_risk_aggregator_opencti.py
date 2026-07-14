@@ -76,3 +76,34 @@ def test_aggregate_risk_applies_high_floor_for_strong_opencti_signal() -> None:
     assert out["risk_level"] == "high"
     assert out["risk_score"] >= 70
     assert any("risk floor raised to high" in item.lower() for item in out["rationale"])
+
+
+def test_aggregate_risk_does_not_floor_for_historical_account_compromise_context() -> None:
+    evidence = {
+        "opencti": {
+            "found": True,
+            "score": 95,
+            "labels": ["compromised user"],
+            "notes": ["Historical account compromise involving an expertware user."],
+            "reports": [
+                {
+                    "id": "r1",
+                    "name": "Historical compromised account",
+                    "description": "A user account was compromised in the past.",
+                }
+            ],
+            "threat_actors": [],
+            "malware_families": [],
+            "attack_patterns": [],
+            "campaigns": [],
+            "intrusion_sets": [],
+            "indicators": [],
+        }
+    }
+
+    out = svc.aggregate_risk(evidence)
+
+    assert out["components"]["opencti_score"] == 0.35
+    assert out["risk_score"] < 35
+    assert out["risk_level"] == "low"
+    assert not any("risk floor raised" in item.lower() for item in out["rationale"])

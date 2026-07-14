@@ -444,11 +444,23 @@ def build_confidence_engine(
     )
 
     final_risk = _as_dict(evidence.get("final_risk"))
+    opencti = _as_dict(evidence.get("opencti"))
+    contextual_opencti_account = bool(opencti.get("found")) and _is_opencti_contextual_account_compromise(opencti)
+    final_risk_score = final_risk.get("risk_score")
+    final_risk_level = final_risk.get("risk_level") or final_risk.get("verdict") or ""
+    final_risk_reasons = _as_list(final_risk.get("rationale"))
+    if contextual_opencti_account and _num(final_risk_score) >= 70:
+        final_risk_score = min(_num(final_risk_score), 35.0)
+        final_risk_level = "medium"
+        final_risk_reasons = [
+            "Stored composite risk was capped because the OpenCTI match is a user/account observable, not domain infrastructure.",
+            *final_risk_reasons,
+        ]
     add_component(
         "final_risk",
-        final_risk.get("risk_score"),
-        final_risk.get("risk_level") or final_risk.get("verdict") or "",
-        _as_list(final_risk.get("rationale")),
+        final_risk_score,
+        final_risk_level,
+        final_risk_reasons,
         1.05,
     )
 
@@ -504,19 +516,36 @@ def build_confidence_engine(
             1.2 if anyrun_score_value >= 35 else 0.35,
         )
 
-    opencti = _as_dict(evidence.get("opencti"))
     if opencti.get("found"):
         linked_count = sum(
             len(_as_list(opencti.get(key)))
             for key in ("indicators", "reports", "threat_actors", "malware_families", "attack_patterns", "campaigns", "intrusion_sets")
         )
+        contextual_account_compromise = _is_opencti_contextual_account_compromise(opencti)
         score = _num(opencti.get("score")) + min(20.0, linked_count * 3.0)
+        if contextual_account_compromise:
+            score = min(score, 35.0)
         add_component(
             "opencti",
             score if opencti.get("found") else 0,
-            "malicious" if _num(opencti.get("score")) >= 70 else "suspicious" if opencti.get("found") else "unknown",
-            [f"OpenCTI score {opencti.get('score', 0)} with {linked_count} linked object(s)." if opencti.get("found") else _join(opencti.get("notes"))],
-            1.1,
+            (
+                "suspicious"
+                if contextual_account_compromise
+                else "malicious" if _num(opencti.get("score")) >= 70
+                else "suspicious" if opencti.get("found")
+                else "unknown"
+            ),
+            [
+                (
+                    f"OpenCTI account-compromise context score {opencti.get('score', 0)} "
+                    f"with {linked_count} linked object(s)."
+                )
+                if contextual_account_compromise
+                else f"OpenCTI score {opencti.get('score', 0)} with {linked_count} linked object(s)."
+                if opencti.get("found")
+                else _join(opencti.get("notes"))
+            ],
+            0.35 if contextual_account_compromise else 1.1,
         )
 
     threat_feeds = _as_dict(evidence.get("threat_feeds"))
@@ -1266,6 +1295,59 @@ def _confidence_explanation(verdict: str, confidence: str, components: list[dict
         return "No trusted scoring components were available, so the platform cannot produce a confident derived verdict."
     sources = ", ".join(row["source"] for row in components[:5])
     return f"Derived {verdict} verdict with {confidence} confidence from {len(components)} source component(s): {sources}."
+
+
+def _is_opencti_contextual_account_compromise(opencti: dict[str, Any]) -> bool:
+    text_parts: list[str] = []
+    for key in ("labels", "notes"):
+        value = opencti.get(key)
+        if isinstance(value, list):
+            text_parts.extend(str(item) for item in value)
+        elif value:
+            text_parts.append(str(value))
+    for key in ("reports", "indicators"):
+        value = opencti.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            text_parts.extend(str(item.get(field) or "") for field in ("name", "description", "pattern"))
+
+    text = " ".join(text_parts).lower()
+    entity_type = str(opencti.get("observable_entity_type") or "").strip().lower()
+    observable_value = str(opencti.get("observable_value") or "").strip().lower()
+    if not text:
+        return entity_type == "user-account" or "@" in observable_value
+
+    account_terms = (
+        "compromised account",
+        "account compromise",
+        "compromised user",
+        "user compromise",
+        "compromised mailbox",
+        "mailbox compromise",
+        "bec",
+        "business email compromise",
+        "credential leak",
+        "leaked credential",
+    )
+    domain_threat_terms = (
+        "phishing",
+        "malware",
+        "c2",
+        "command and control",
+        "botnet",
+        "ransomware",
+        "smishing",
+        "credential harvesting",
+    )
+    has_account_context = (
+        entity_type == "user-account"
+        or "@" in observable_value
+        or any(term in text for term in account_terms)
+    )
+    return has_account_context and not any(term in text for term in domain_threat_terms)
 
 
 def _extract_iocs_from_pattern(pattern: Any) -> list[tuple[str, str]]:

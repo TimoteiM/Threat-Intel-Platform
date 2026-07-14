@@ -47,8 +47,8 @@ BRAND_PHRASES = [
     "unauthorized access",
 ]
 
-# Well-known brands — if mentioned in page content but domain doesn't belong to them,
-# it's a strong impersonation signal.
+# Well-known brands. A mention is contextual: many legitimate B2B/SaaS pages
+# reference Microsoft, Google, AWS, etc. Scoring decides whether context makes it suspicious.
 KNOWN_BRANDS = [
     "microsoft", "outlook", "office 365", "onedrive", "sharepoint",
     "google", "gmail", "google drive", "google docs",
@@ -63,10 +63,9 @@ KNOWN_BRANDS = [
     "dhl", "fedex", "ups", "usps",
 ]
 
-# Input field names that indicate credential/payment harvesting.
+# Input field names that may indicate account/payment collection.
 # Matched against name=, id=, and type= attributes of <input> tags.
-# Includes email-only harvesters — a very common phishing pattern where a single
-# email field is the entire credential collection mechanism.
+# Inputs are common on legitimate websites; they are not treated as phishing by themselves.
 CREDENTIAL_FIELD_RE = re.compile(
     r'<input[^>]+(?:name|id)\s*=\s*["\']?'
     r'(?:password|passwd|pass|pwd|cc|card(?:_?num(?:ber)?)?|cvv|cvc|'
@@ -104,6 +103,16 @@ PHISHING_PATTERNS = [
      "JS HTTP call to hardcoded external URL — possible credential exfiltration"),
     (re.compile(r'new\s+XMLHttpRequest', re.I), "XMLHttpRequest — JS-based form submission"),
 ]
+
+CLICKFIX_VERIFICATION_RE = re.compile(
+    r"(?:verify\s+you\s+are\s+human|additional\s+verification|required\s+verification|cloudflare|captcha)",
+    re.I,
+)
+CLICKFIX_USER_ACTION_RE = re.compile(
+    r"(?:\bwin\s*\+\s*r\b|\bwindows\s*\+\s*r\b|\bterminal\b|\bctrl\s*\+\s*v\b|"
+    r"\bpaste\s+(?:the\s+)?(?:command|code)\b|\bpress\s+enter\b|\brun\s+(?:dialog|box|command)\b)",
+    re.I,
+)
 
 # Simple technology detection patterns
 TECH_PATTERNS = {
@@ -146,6 +155,14 @@ def _detect_js_redirect(body: str) -> str | None:
     return None
 
 
+def _detect_clickfix_fake_verification(body: str) -> bool:
+    text = re.sub(r"<[^>]+>", " ", body or "")
+    text = re.sub(r"\s+", " ", text)
+    if not CLICKFIX_VERIFICATION_RE.search(text):
+        return False
+    return bool(CLICKFIX_USER_ACTION_RE.search(text))
+
+
 class HTTPCollector(BaseCollector):
     name = "http"
     supported_types = frozenset({"domain", "url"})
@@ -153,6 +170,12 @@ class HTTPCollector(BaseCollector):
     def _collect(self) -> HTTPEvidence:
         evidence = HTTPEvidence()
         session = requests.Session()
+        proxy_profile = self.proxy_profile
+        if proxy_profile:
+            session.proxies.update(proxy_profile.requests_proxies)
+            evidence.network_profile = proxy_profile.safe_summary
+        elif self.proxy_summary:
+            evidence.network_profile = self.proxy_summary
         session.max_redirects = 10
         session.headers.update({
             "User-Agent": "ThreatInvestigator/1.0 (Security Research)",
@@ -226,13 +249,13 @@ class HTTPCollector(BaseCollector):
                 headers={"X-Redirect-Type": "client-side (JavaScript/meta-refresh)"},
             ))
 
-        # Login / credential form detection — password fields OR email-only harvesters
+        # Login / account form detection — password fields OR email-only inputs.
         has_password_field = bool(re.search(r'type\s*=\s*["\']?password', body, re.I))
         has_email_field = bool(EMAIL_INPUT_RE.search(body))
         evidence.has_login_form = has_password_field or has_email_field
         if has_email_field and not has_password_field:
             evidence.phishing_indicators.append(
-                "Email-only input form — typical single-step credential harvester"
+                "Email-only input form observed"
             )
         evidence.has_input_fields = "<input" in body_lower
 
@@ -257,6 +280,10 @@ class HTTPCollector(BaseCollector):
         for pattern, desc in PHISHING_PATTERNS:
             if pattern.search(body):
                 evidence.phishing_indicators.append(desc)
+        if _detect_clickfix_fake_verification(body):
+            evidence.phishing_indicators.append(
+                "ClickFix fake CAPTCHA instructs user to paste/run a command"
+            )
 
         # Check for form actions posting to external domains
         own_host = self.target_domain
@@ -277,7 +304,7 @@ class HTTPCollector(BaseCollector):
         # Credential/payment/account field detection (name/id attributes)
         if CREDENTIAL_FIELD_RE.search(body):
             evidence.phishing_indicators.append(
-                "Credential or account input fields detected (email/username/password/card)"
+                "Credential or account input fields observed (email/username/password/card)"
             )
 
         # Suspicious keywords in the URL path
@@ -291,7 +318,8 @@ class HTTPCollector(BaseCollector):
         except Exception:
             pass
 
-        # Brand impersonation: known brand name in page but domain doesn't belong to it
+        # Brand reference: known brand name in page but domain doesn't belong to it.
+        # Legitimate partner/integration pages often mention third-party brands.
         own_host_lower = own_host.lower() if own_host else ""
         for brand in KNOWN_BRANDS:
             if brand in body_lower:
@@ -299,7 +327,7 @@ class HTTPCollector(BaseCollector):
                 brand_slug = brand.split()[0]  # e.g. "microsoft", "google", "paypal"
                 if brand_slug not in own_host_lower:
                     evidence.phishing_indicators.append(
-                        f"Brand impersonation: '{brand}' referenced on non-{brand_slug} domain"
+                        f"Third-party brand reference: '{brand}' on non-{brand_slug} domain"
                     )
                     break  # one brand match is enough to flag
 

@@ -877,6 +877,51 @@ def test_anyrun_conflicting_clean_lookup_retains_malicious_with_concrete_evidenc
     assert out["verdict_context"]["evidence_reasons"]
 
 
+def test_anyrun_conflicting_clean_lookup_retains_malicious_with_clickfix_tags():
+    sandbox = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "malicious",
+        "analysis_id": "sandbox-task-1",
+        "raw_summary": {
+            "source": "anyrun",
+            "mode": "sandbox",
+            "summary": {
+                "tags": ["clickfix", "phishing", "obfuscated-js", "tds", "clearfake"],
+                "tracker": "ClickFix",
+            },
+            "behavior_counts": {"network_threats": 0},
+        },
+    }
+    lookup = {
+        "checked": True,
+        "indicator_type": "url",
+        "verdict": "clean",
+        "threat_score": 0,
+        "raw_summary": {"source": "anyrun", "mode": "lookup"},
+    }
+
+    out = svc._reconcile_anyrun_sandbox_lookup_verdict(sandbox, lookup)
+
+    assert out["verdict"] == "malicious"
+    assert out["verdict_context"]["final_verdict"] == "malicious"
+    assert any("clickfix" in reason.lower() for reason in out["verdict_context"]["evidence_reasons"])
+
+
+def test_extract_anyrun_html_threat_labels_from_report_chips():
+    html = """
+    <span class="tag">clickfix</span>
+    <span class="tag">phishing</span>
+    <span class="tag">exploit-kit</span>
+    <span class="tag">obfuscated-js</span>
+    <span class="tag">clearfake</span>
+    """
+
+    labels = svc._extract_anyrun_html_threat_labels(html)
+
+    assert labels == ["clickfix", "clearfake", "phishing", "exploit-kit", "obfuscated-js"]
+
+
 def test_parallel_limit_error_helper_matches_provider_error_text():
     exc = Exception("[AnyRun Exception] Status code: 403. Description: Parallel task limit")
     assert svc._is_parallel_limit_error(exc) is True
@@ -926,6 +971,149 @@ def test_submit_anyrun_task_retries_without_privacy_on_provider_plan_restriction
         ("https://example.test", "owner"),
         ("https://example.test", None),
     ]
+
+
+def test_submit_anyrun_task_adds_residential_proxy_geo_when_country_selected(monkeypatch):
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+        anyrun_url_sandbox_analysis_timeout = 120
+        anyrun_url_sandbox_mitm = True
+
+    class _Connector:
+        def __init__(self):
+            self.calls = []
+
+        def run_url_analysis(self, target, **kwargs):
+            self.calls.append((target, kwargs))
+            return "task-ok"
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    connector = _Connector()
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=connector,
+        indicator="example.test",
+        indicator_type="url",
+        privacy_type="owner",
+        file_bytes=None,
+        file_name=None,
+        use_residential_proxy=True,
+        proxy_country="US",
+    )
+
+    assert out == "task-ok"
+    assert connector.calls[0][0] == "https://example.test"
+    assert connector.calls[0][1]["opt_network_residential_proxy"] is True
+    assert connector.calls[0][1]["opt_network_residential_proxy_geo"] == "US"
+
+
+def test_submit_anyrun_task_omits_residential_proxy_when_disabled(monkeypatch):
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+        anyrun_url_sandbox_analysis_timeout = 120
+        anyrun_url_sandbox_mitm = True
+
+    class _Connector:
+        def __init__(self):
+            self.calls = []
+
+        def run_url_analysis(self, target, **kwargs):
+            self.calls.append((target, kwargs))
+            return "task-ok"
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    connector = _Connector()
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=connector,
+        indicator="example.test",
+        indicator_type="url",
+        privacy_type="owner",
+        file_bytes=None,
+        file_name=None,
+        use_residential_proxy=False,
+        proxy_country=None,
+    )
+
+    assert out == "task-ok"
+    assert "opt_network_residential_proxy" not in connector.calls[0][1]
+    assert "opt_network_residential_proxy_geo" not in connector.calls[0][1]
+
+
+def test_submit_anyrun_task_uses_fastest_geo_when_residential_enabled_without_country(monkeypatch):
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+        anyrun_url_sandbox_analysis_timeout = 120
+        anyrun_url_sandbox_mitm = True
+
+    class _Connector:
+        def __init__(self):
+            self.calls = []
+
+        def run_url_analysis(self, target, **kwargs):
+            self.calls.append((target, kwargs))
+            return "task-ok"
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    connector = _Connector()
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=connector,
+        indicator="example.test",
+        indicator_type="url",
+        privacy_type="owner",
+        file_bytes=None,
+        file_name=None,
+        use_residential_proxy=True,
+        proxy_country=None,
+    )
+
+    assert out == "task-ok"
+    assert connector.calls[0][1]["opt_network_residential_proxy"] is True
+    assert connector.calls[0][1]["opt_network_residential_proxy_geo"] == "fastest"
+
+
+def test_submit_anyrun_file_task_adds_residential_proxy(monkeypatch):
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+
+    class _Connector:
+        def __init__(self):
+            self.calls = []
+
+        def run_file_analysis(self, **kwargs):
+            self.calls.append(kwargs)
+            return "task-ok"
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    connector = _Connector()
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=connector,
+        indicator="sha256",
+        indicator_type="hash",
+        privacy_type="owner",
+        file_bytes=b"sample",
+        file_name="sample.bin",
+        use_residential_proxy=True,
+        proxy_country="gb",
+    )
+
+    assert out == "task-ok"
+    assert connector.calls[0]["opt_network_residential_proxy"] is True
+    assert connector.calls[0]["opt_network_residential_proxy_geo"] == "GB"
 
 
 def test_transient_provider_error_matches_unknown_error():

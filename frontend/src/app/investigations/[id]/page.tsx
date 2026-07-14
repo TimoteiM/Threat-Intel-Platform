@@ -193,6 +193,7 @@ export default function InvestigationPage() {
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabError, setTabError] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [nowTs, setNowTs] = useState(Date.now());
   const completionRefreshInFlight = React.useRef(false);
@@ -237,6 +238,8 @@ export default function InvestigationPage() {
   const investigationState = String(sse.state || detail?.state || "created");
   const investigationStatusTone = resolveStateTone(investigationState, report);
   const reportReady = Boolean(report);
+  const reportFreshness = report?.report_freshness || null;
+  const reportWasRecomputed = Boolean(reportFreshness?.recomputed || sse.reportRecomputed);
   const collectorCompleteCount = collectorRows.filter((row) => String(row.status) === "completed").length;
   const collectorFailedCount = collectorRows.filter((row) => String(row.status) === "failed").length;
   const collectorPendingCount = Math.max(0, collectorRows.length - collectorCompleteCount - collectorFailedCount);
@@ -259,6 +262,7 @@ export default function InvestigationPage() {
     { label: "Completed", value: concludedLabel, hint: reportReady ? "Report ready" : "Still collecting" },
     { label: "Collector Coverage", value: `${collectorCoverage}%`, hint: `${collectorCompleteCount} completed / ${collectorPendingCount} pending`, tone: reportReady ? "success" : "info" },
     { label: "SSE", value: sse.connected ? "Live" : "Polling", hint: sse.connected ? "Streaming updates" : "Fallback refresh mode", tone: sse.connected ? "success" : "warning" },
+    { label: "Report Freshness", value: reportWasRecomputed ? "Recomputed" : reportReady ? "Fresh" : "Pending", hint: reportFreshness?.reason || "Current report state", tone: reportWasRecomputed ? "info" : reportReady ? "success" : "warning" },
   ];
 
   // Fetch all data
@@ -358,6 +362,11 @@ export default function InvestigationPage() {
     sse.state,
   ]);
 
+  useEffect(() => {
+    if (!sse.evidenceUpdateSeq) return;
+    void fetchData({ silent: true });
+  }, [fetchData, sse.evidenceUpdateSeq]);
+
   // Reset activeTab when observable type loads and the current tab isn't in the tab set
   useEffect(() => {
     const validIds = tabs.map((t) => t.id);
@@ -402,6 +411,23 @@ export default function InvestigationPage() {
       setCanceling(false);
     }
   }, [investigationId, canceling, isCancellable, fetchData]);
+
+  const handleDelete = useCallback(async () => {
+    if (!investigationId || deleting) return;
+    const label = detail?.domain || investigationId;
+    if (!window.confirm(`Delete ${label}? This removes the investigation, evidence, reports, and related artifacts.`)) {
+      return;
+    }
+    setCancelError(null);
+    setDeleting(true);
+    try {
+      await api.deleteInvestigation(investigationId);
+      router.push("/investigations");
+    } catch (e: any) {
+      setCancelError(e?.message || "Failed to delete investigation");
+      setDeleting(false);
+    }
+  }, [investigationId, deleting, detail?.domain, router]);
 
   const handleOpenAssistant = useCallback(async () => {
     if (!investigationId) return;
@@ -792,6 +818,9 @@ export default function InvestigationPage() {
             <StatusPill tone={reportReady ? "success" : "warning"} size="sm" outline mono>
               {reportReady ? "REPORT READY" : "COLLECTING"}
             </StatusPill>
+            {reportWasRecomputed ? (
+              <StatusPill tone="info" size="sm" outline mono>RECOMPUTED</StatusPill>
+            ) : null}
           </>
         )}
         actions={(
@@ -803,6 +832,9 @@ export default function InvestigationPage() {
                 {canceling ? "Cancelling..." : "Cancel"}
               </ConsoleActionButton>
             ) : null}
+            <ConsoleActionButton onClick={handleDelete} tone="danger" disabled={deleting}>
+              {deleting ? "Deleting..." : "Delete"}
+            </ConsoleActionButton>
             <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/pdf", "_blank"); }}>Export PDF</ConsoleActionButton>
             <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/markdown", "_blank"); }}>Export MD</ConsoleActionButton>
             <ConsoleActionButton onClick={() => {

@@ -26,6 +26,7 @@ from typing import Any
 
 from app.models.enums import CollectorStatus
 from app.models.schemas import CollectorMeta
+from app.services.proxy_profiles import selected_proxy_profile, selected_proxy_summary
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,14 @@ class BaseCollector(abc.ABC):
         self.file_artifact_id = file_artifact_id
         self.external_context = external_context or {}
         self._artifacts: dict[str, bytes] = {}
+
+    @property
+    def proxy_profile(self):
+        return selected_proxy_profile(self.external_context)
+
+    @property
+    def proxy_summary(self) -> dict[str, str] | None:
+        return selected_proxy_summary(self.external_context)
 
     @abc.abstractmethod
     def _collect(self) -> Any:

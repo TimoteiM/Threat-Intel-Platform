@@ -420,3 +420,59 @@ def test_opencti_collect_does_not_match_https_token_for_https_prefixed_domain_se
 
     assert ev.found is False
     assert any("Observable not found in OpenCTI" in note for note in ev.notes)
+
+
+def test_opencti_domain_search_rejects_user_account_full_text_match(monkeypatch):
+    class _Settings:
+        opencti_api_url = "https://opencti.example.test"
+        opencti_api_key = "token"
+        opencti_verify_ssl = False
+
+    class _Response:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None, verify=None):
+        query = (json or {}).get("query") or ""
+        variables = (json or {}).get("variables") or {}
+
+        if "SearchObservable" in query and variables.get("search") == "expertware.net":
+            return _Response(
+                {
+                    "data": {
+                        "stixCyberObservables": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "obs-user-account",
+                                        "entity_type": "User-Account",
+                                        "observable_value": "bachir.adouni@expertware.net",
+                                        "x_opencti_score": 100,
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+
+        return _Response({"data": {"stixCyberObservables": {"edges": []}}})
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+
+    collector = svc.OpenCTICollector(
+        domain="expertware.net",
+        observable_type="domain",
+        investigation_id=uuid.uuid4(),
+    )
+
+    ev = collector._collect()
+
+    assert ev.found is False
+    assert any("Observable not found in OpenCTI" in note for note in ev.notes)

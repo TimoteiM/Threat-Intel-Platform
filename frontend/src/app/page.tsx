@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import InvestigationInput from "@/components/investigation/InvestigationInput";
-import { createInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
+import { createInvestigation, deleteInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
 import type { ObservableType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
@@ -291,7 +291,17 @@ const STATE_LABEL: Record<string, { label: string; color: string }> = {
   failed:     { label: "failed",     color: "#f87171" },
 };
 
-function RecentInvestigations({ items, onOpen }: { items: any[]; onOpen: (id: string) => void }) {
+function RecentInvestigations({
+  items,
+  deletingId,
+  onDelete,
+  onOpen,
+}: {
+  items: any[];
+  deletingId?: string | null;
+  onDelete: (item: any) => void;
+  onOpen: (id: string) => void;
+}) {
   if (items.length === 0) return null;
 
   return (
@@ -333,9 +343,17 @@ function RecentInvestigations({ items, onOpen }: { items: any[]; onOpen: (id: st
           const isLast = index === items.length - 1;
 
           return (
-            <button
+            <div
               key={inv.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onOpen(inv.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onOpen(inv.id);
+                }
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -445,8 +463,34 @@ function RecentInvestigations({ items, onOpen }: { items: any[]; onOpen: (id: st
                 }}>
                   {timeAgo(inv.created_at)}
                 </span>
+
+                <button
+                  type="button"
+                  disabled={deletingId === inv.id}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(inv);
+                  }}
+                  style={{
+                    border: "1px solid rgba(251, 113, 133, 0.28)",
+                    background: "rgba(127, 29, 29, 0.14)",
+                    color: "#fda4af",
+                    borderRadius: 6,
+                    padding: "5px 8px",
+                    fontSize: 9,
+                    fontWeight: 800,
+                    fontFamily: "var(--font-mono)",
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase" as const,
+                    cursor: deletingId === inv.id ? "wait" : "pointer",
+                    flexShrink: 0,
+                    opacity: deletingId === inv.id ? 0.62 : 1,
+                  }}
+                >
+                  {deletingId === inv.id ? "Deleting" : "Delete"}
+                </button>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -465,6 +509,8 @@ interface SubmitArgs {
   requestedCollectors?: string[];
   observableType?: ObservableType;
   fileToUpload?: File;
+  proxyCountry?: string;
+  useResidentialProxy?: boolean;
 }
 
 function getTypeLabel(observableType?: string): string {
@@ -679,12 +725,13 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [recent, setRecent] = useState<any[]>([]);
   const [stats, setStats] = useState<Stats>({ total: 0, threats: 0, suspicious: 0 });
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Duplicate-check modal state
   const [duplicates, setDuplicates] = useState<any[] | null>(null);
   const [pendingArgs, setPendingArgs] = useState<SubmitArgs | null>(null);
 
-  useEffect(() => {
+  const refreshHomeData = useCallback(() => {
     listInvestigations({ limit: 10 })
       .then((data) => setRecent(data.items))
       .catch(() => {});
@@ -701,6 +748,26 @@ export default function HomePage() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    refreshHomeData();
+  }, [refreshHomeData]);
+
+  const handleDeleteRecent = useCallback(async (item: any) => {
+    const label = item?.domain || "this investigation";
+    if (!window.confirm(`Delete ${label}? This removes the investigation, evidence, reports, and related artifacts.`)) {
+      return;
+    }
+    setDeletingId(item.id);
+    try {
+      await deleteInvestigation(item.id);
+      await refreshHomeData();
+    } catch (error: any) {
+      alert(`Failed to delete investigation: ${error?.message || error}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [refreshHomeData]);
+
   const doCreate = useCallback(async (args: SubmitArgs) => {
     setLoading(true);
     setDuplicates(null);
@@ -710,7 +777,10 @@ export default function HomePage() {
 
       if (args.observableType === "file" && args.fileToUpload) {
         // File upload goes through a dedicated multipart endpoint
-        const result = await uploadFileInvestigation(args.fileToUpload, args.context);
+        const result = await uploadFileInvestigation(args.fileToUpload, args.context, {
+          use_residential_proxy: !!args.useResidentialProxy,
+          proxy_country: args.proxyCountry,
+        });
         investigationId = result.investigation_id;
       } else {
         const result = await createInvestigation({
@@ -720,6 +790,9 @@ export default function HomePage() {
           client_domain:        args.clientDomain,
           investigated_url:     args.investigatedUrl,
           client_url:           args.clientUrl,
+          network_profile:      args.useResidentialProxy
+            ? { use_residential_proxy: true, proxy_country: args.proxyCountry }
+            : undefined,
           requested_collectors: args.requestedCollectors,
         });
         investigationId = result.investigation_id;
@@ -742,10 +815,12 @@ export default function HomePage() {
       requestedCollectors?: string[],
       observableType?: ObservableType,
       fileToUpload?: File,
+      proxyCountry?: string,
+      useResidentialProxy?: boolean,
     ) => {
       const args: SubmitArgs = {
         domain, context, clientDomain, investigatedUrl, clientUrl,
-        requestedCollectors, observableType, fileToUpload,
+        requestedCollectors, observableType, fileToUpload, proxyCountry, useResidentialProxy,
       };
 
       // Duplicate check for all observable types
@@ -877,6 +952,8 @@ export default function HomePage() {
       {/* ── Recent investigations ── */}
       <RecentInvestigations
         items={recent}
+        deletingId={deletingId}
+        onDelete={handleDeleteRecent}
         onOpen={(id) => router.push(`/investigations/${id}`)}
       />
 

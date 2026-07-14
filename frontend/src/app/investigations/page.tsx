@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { listInvestigations } from "@/lib/api";
+import { deleteInvestigation, listInvestigations } from "@/lib/api";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import Spinner from "@/components/shared/Spinner";
 import PageHero from "@/components/ui/PageHero";
@@ -29,6 +29,7 @@ export default function InvestigationsListPage() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSearchChange = useCallback((value: string) => {
@@ -46,7 +47,7 @@ export default function InvestigationsListPage() {
     };
   }, []);
 
-  useEffect(() => {
+  const loadInvestigations = useCallback(() => {
     setLoading(true);
     const params: any = { limit: pageSize, offset: page * pageSize };
     if (filter !== "all") params.state = filter;
@@ -62,6 +63,32 @@ export default function InvestigationsListPage() {
       })
       .catch(() => setLoading(false));
   }, [filter, classificationFilter, hideDuplicates, debouncedSearch, page, pageSize]);
+
+  useEffect(() => {
+    loadInvestigations();
+  }, [loadInvestigations]);
+
+  const handleDelete = useCallback(async (inv: any) => {
+    const label = inv?.domain || "this investigation";
+    if (!window.confirm(`Delete ${label}? This removes the investigation, evidence, reports, and related artifacts.`)) {
+      return;
+    }
+    setDeletingId(inv.id);
+    try {
+      await deleteInvestigation(inv.id);
+      const nextCount = Math.max(0, total - 1);
+      const nextPage = page > 0 && page * pageSize >= nextCount ? page - 1 : page;
+      if (nextPage !== page) {
+        setPage(nextPage);
+      } else {
+        loadInvestigations();
+      }
+    } catch (error: any) {
+      alert(`Failed to delete investigation: ${error?.message || error}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [loadInvestigations, page, pageSize, total]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const showingFrom = total === 0 ? 0 : page * pageSize + 1;
@@ -299,6 +326,7 @@ export default function InvestigationsListPage() {
               <div>Risk</div>
               <div>State</div>
               <div>Date</div>
+              <div>Actions</div>
             </div>
 
             <div className="catalog-list">
@@ -309,10 +337,18 @@ export default function InvestigationsListPage() {
                 const stateTone = getStateTone(inv.state);
 
                 return (
-                  <button
+                  <div
                     key={inv.id}
                     className="catalog-row"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => router.push(`/investigations/${inv.id}`)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        router.push(`/investigations/${inv.id}`);
+                      }
+                    }}
                   >
                     <div className="row-domain">
                       <div className="row-domain__value">{inv.domain}</div>
@@ -346,7 +382,21 @@ export default function InvestigationsListPage() {
                     </div>
 
                     <div className="row-cell row-date">{formatDate(inv.created_at)}</div>
-                  </button>
+
+                    <div className="row-cell row-actions">
+                      <button
+                        type="button"
+                        className="delete-case-button"
+                        disabled={deletingId === inv.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDelete(inv);
+                        }}
+                      >
+                        {deletingId === inv.id ? "Deleting" : "Delete"}
+                      </button>
+                    </div>
+                  </div>
                 );
               })}
             </div>
@@ -360,10 +410,18 @@ export default function InvestigationsListPage() {
               const stateTone = getStateTone(inv.state);
 
               return (
-                <button
+                <div
                   key={inv.id}
                   className="mobile-card"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => router.push(`/investigations/${inv.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      router.push(`/investigations/${inv.id}`);
+                    }
+                  }}
                 >
                   <div className="mobile-card__top">
                     <div className="mobile-card__domain">{inv.domain}</div>
@@ -392,7 +450,19 @@ export default function InvestigationsListPage() {
                     <span>Created</span>
                     <span>{formatDate(inv.created_at)}</span>
                   </div>
-                </button>
+
+                  <button
+                    type="button"
+                    className="delete-case-button delete-case-button--mobile"
+                    disabled={deletingId === inv.id}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDelete(inv);
+                    }}
+                  >
+                    {deletingId === inv.id ? "Deleting" : "Delete investigation"}
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -514,7 +584,7 @@ export default function InvestigationsListPage() {
 
         .catalog-header {
           display: grid;
-          grid-template-columns: minmax(0, 2.1fr) minmax(150px, 0.9fr) minmax(90px, 0.55fr) minmax(120px, 0.7fr) minmax(120px, 0.85fr);
+          grid-template-columns: minmax(0, 2.1fr) minmax(150px, 0.9fr) minmax(90px, 0.55fr) minmax(120px, 0.7fr) minmax(120px, 0.85fr) minmax(96px, 0.55fr);
           gap: 12px;
           padding: 0 14px 12px;
           font-size: 10px;
@@ -538,7 +608,7 @@ export default function InvestigationsListPage() {
 
         .catalog-row {
           display: grid;
-          grid-template-columns: minmax(0, 2.1fr) minmax(150px, 0.9fr) minmax(90px, 0.55fr) minmax(120px, 0.7fr) minmax(120px, 0.85fr);
+          grid-template-columns: minmax(0, 2.1fr) minmax(150px, 0.9fr) minmax(90px, 0.55fr) minmax(120px, 0.7fr) minmax(120px, 0.85fr) minmax(96px, 0.55fr);
           gap: 12px;
           align-items: center;
           padding: 16px 14px;
@@ -643,6 +713,38 @@ export default function InvestigationsListPage() {
           color: var(--text-secondary);
         }
 
+        .row-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+        }
+
+        .delete-case-button {
+          border: 1px solid rgba(251, 113, 133, 0.28);
+          background: rgba(127, 29, 29, 0.16);
+          color: #fda4af;
+          border-radius: 10px;
+          padding: 7px 10px;
+          font-size: 10px;
+          font-weight: 800;
+          font-family: var(--font-mono);
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .delete-case-button:hover:not(:disabled) {
+          background: rgba(220, 38, 38, 0.22);
+          border-color: rgba(251, 113, 133, 0.52);
+          color: #fecdd3;
+        }
+
+        .delete-case-button:disabled {
+          cursor: wait;
+          opacity: 0.62;
+        }
+
         .mobile-card {
           display: grid;
           gap: 12px;
@@ -726,6 +828,11 @@ export default function InvestigationsListPage() {
         .pagination-summary__hint {
           font-size: 12px;
           color: var(--text-secondary);
+        }
+
+        .delete-case-button--mobile {
+          width: 100%;
+          margin-top: 2px;
         }
 
         .pagination-controls {

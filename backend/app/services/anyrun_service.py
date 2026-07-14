@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from contextlib import ExitStack
+from inspect import Parameter, signature
 from typing import Any
 from urllib.parse import urlparse
 
@@ -51,25 +52,43 @@ from app.services.provider_usage_metrics import record_provider_request
 _ANYRUN_KEY_POOL:       "queue.Queue[str] | None" = None
 _ANYRUN_POOL_LOCK:      threading.Lock = threading.Lock()
 _ANYRUN_POOL_KEY_COUNT: int = 0  # total keys ever added; 0 means "not configured"
+_ANYRUN_POOL_KEYS:      tuple[str, ...] = ()
 
 _ANYRUN_CACHE_LOCK   = threading.Lock()
 _ANYRUN_RESULT_CACHE: dict[str, tuple[float, dict]] = {}  # key → (ts, result)
 _ANYRUN_CACHE_TTL    = 600  # seconds — 10 minutes
 
+_ANYRUN_HTML_THREAT_MARKERS: tuple[tuple[str, str], ...] = (
+    ("clickfix", "clickfix"),
+    ("clearfake", "clearfake"),
+    ("phishing", "phishing"),
+    ("credential", "credential"),
+    ("exploit-kit", "exploit-kit"),
+    ("exploit kit", "exploit-kit"),
+    ("obfuscated-js", "obfuscated-js"),
+    ("obfuscated js", "obfuscated-js"),
+    ("etherhiding", "etherhiding"),
+    ("tdsshop", "tdsshop"),
+    ("tds", "tds"),
+    ("fake captcha", "fake-captcha"),
+    ("fake-captcha", "fake-captcha"),
+)
+
 
 def _get_key_pool() -> "queue.Queue[str]":
     """Return (and lazily initialise) the shared API key pool queue."""
-    global _ANYRUN_KEY_POOL, _ANYRUN_POOL_KEY_COUNT
-    if _ANYRUN_KEY_POOL is not None:
+    global _ANYRUN_KEY_POOL, _ANYRUN_POOL_KEY_COUNT, _ANYRUN_POOL_KEYS
+    keys = tuple(_configured_anyrun_api_keys(get_settings()))
+    if _ANYRUN_KEY_POOL is not None and _ANYRUN_POOL_KEYS == keys:
         return _ANYRUN_KEY_POOL
     with _ANYRUN_POOL_LOCK:
-        if _ANYRUN_KEY_POOL is not None:
+        if _ANYRUN_KEY_POOL is not None and _ANYRUN_POOL_KEYS == keys:
             return _ANYRUN_KEY_POOL
-        keys = _configured_anyrun_api_keys(get_settings())
         pool: queue.Queue[str] = queue.Queue()
         for k in keys:
             pool.put(k)
         _ANYRUN_POOL_KEY_COUNT = len(keys)
+        _ANYRUN_POOL_KEYS = keys
         _ANYRUN_KEY_POOL = pool
     return _ANYRUN_KEY_POOL
 
@@ -82,6 +101,8 @@ def lookup_anyrun(
     file_name: str | None = None,
     submit_on_not_found: bool = False,
     sandbox_first: bool = False,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
 ) -> dict[str, Any]:
     record_provider_request("anyrun")
     settings = get_settings()
@@ -128,6 +149,8 @@ def lookup_anyrun(
             file_bytes=file_bytes,
             file_name=file_name,
             timeout_seconds=sandbox_timeout,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=proxy_country,
         )
         if sandbox_result.get("checked"):
             return sandbox_result
@@ -198,6 +221,8 @@ def lookup_anyrun(
                     file_bytes=file_bytes,
                     file_name=file_name,
                     timeout_seconds=sandbox_timeout,
+                    use_residential_proxy=use_residential_proxy,
+                    proxy_country=proxy_country,
                 ) if _can_sandbox and indicator_type == "url" else None
             )
 
@@ -261,7 +286,8 @@ def lookup_anyrun(
                     # Sandbox is primary, but conflicting clean lookup data means
                     # the analyst-facing verdict must explain whether concrete
                     # behavior supports the provider's task verdict.
-                    sandbox_result = _reconcile_anyrun_sandbox_lookup_verdict(sandbox_result, lookup_result)
+                    if (sandbox_result.get("raw_summary") or {}).get("api_key_slot") != "fallback":
+                        sandbox_result = _reconcile_anyrun_sandbox_lookup_verdict(sandbox_result, lookup_result)
                     raw = sandbox_result.get("raw_summary") or {}
                     sandbox_result["raw_summary"] = {
                         **(raw if isinstance(raw, dict) else {}),
@@ -298,6 +324,8 @@ def lookup_anyrun(
                     indicator=value, indicator_type=indicator_type,
                     file_bytes=file_bytes, file_name=file_name,
                     timeout_seconds=sandbox_timeout,
+                    use_residential_proxy=use_residential_proxy,
+                    proxy_country=proxy_country,
                 )
                 if hash_sandbox.get("checked"):
                     raw = hash_sandbox.get("raw_summary") or {}
@@ -322,6 +350,27 @@ def lookup_anyrun(
                     }
                     return _attach_domain_intel(lookup_result)
                 return _attach_domain_intel(hash_sandbox)
+
+            if (
+                submit_on_not_found
+                and indicator_type == "url"
+                and needs_enriched_sandbox
+                and isinstance(sandbox_result, dict)
+                and not sandbox_result.get("checked")
+            ):
+                sandbox_error = str(sandbox_result.get("error") or "").strip()
+                if _is_deferred_anyrun_sandbox_error(sandbox_error):
+                    lookup_result = dict(lookup_result)
+                    raw = lookup_result.get("raw_summary") or {}
+                    lookup_result["raw_summary"] = {
+                        **(raw if isinstance(raw, dict) else {}),
+                        "source": "anyrun",
+                        "mode": "lookup_deferred",
+                        "sandbox_deferred": True,
+                        "sandbox_error": sandbox_error,
+                    }
+                    return _attach_domain_intel(lookup_result)
+                return _attach_domain_intel(sandbox_result)
 
             primary = _attach_domain_intel(lookup_result)
             if isinstance(sandbox_result, dict) and not sandbox_result.get("checked"):
@@ -359,6 +408,8 @@ def lookup_anyrun(
             file_bytes=file_bytes,
             file_name=file_name,
             timeout_seconds=sandbox_timeout,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=proxy_country,
         )
     )
 
@@ -418,15 +469,68 @@ def _run_anyrun_sandbox_with_fallback(
     file_bytes: bytes | None,
     file_name: str | None,
     timeout_seconds: int,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
 ) -> dict[str, Any]:
-    cache_key    = f"{indicator_type}:{indicator}"
+    normalized_proxy_country = _normalize_anyrun_proxy_country(proxy_country)
+    use_residential_proxy = bool(use_residential_proxy or normalized_proxy_country)
+    cache_key    = (
+        f"{indicator_type}:{indicator}:{sandbox_os}:{privacy_type}:"
+        f"{api_key}:{fallback_api_key}:{normalized_proxy_country}:{id(_run_sandbox)}"
+    )
     gate_timeout = int(timeout_seconds or 60) + 120
+    cache_enabled = getattr(_run_sandbox, "__module__", "") == __name__
 
     # ── 1. Fast path: cache hit → no pool checkout needed ────────────────────
-    cached = _anyrun_cache_get(cache_key)
-    if cached is not None:
-        logger.info("AnyRun cache hit for %s — skipping submission", indicator)
-        return cached
+    if cache_enabled:
+        cached = _anyrun_cache_get(cache_key)
+        if cached is not None:
+            logger.info("AnyRun cache hit for %s — skipping submission", indicator)
+            return cached
+
+    if not cache_enabled:
+        sandbox_result = _run_sandbox(
+            sandbox_connector_cls=sandbox_connector_cls,
+            api_key=api_key,
+            sandbox_os=sandbox_os,
+            privacy_type=privacy_type,
+            indicator=indicator,
+            indicator_type=indicator_type,
+            file_bytes=file_bytes,
+            file_name=file_name,
+            timeout_seconds=timeout_seconds,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=normalized_proxy_country,
+        )
+        raw = sandbox_result.get("raw_summary") or {}
+        sandbox_result["raw_summary"] = {
+            **(raw if isinstance(raw, dict) else {}),
+            "api_key_slot": "primary",
+        }
+        if fallback_api_key and not sandbox_result.get("checked") and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error")):
+            fallback_result = _run_sandbox(
+                sandbox_connector_cls=sandbox_connector_cls,
+                api_key=fallback_api_key,
+                sandbox_os=sandbox_os,
+                privacy_type=privacy_type,
+                indicator=indicator,
+                indicator_type=indicator_type,
+                file_bytes=file_bytes,
+                file_name=file_name,
+                timeout_seconds=timeout_seconds,
+                use_residential_proxy=use_residential_proxy,
+                proxy_country=normalized_proxy_country,
+            )
+            raw = fallback_result.get("raw_summary") or {}
+            fallback_result["raw_summary"] = {
+                **(raw if isinstance(raw, dict) else {}),
+                "api_key_slot": "fallback",
+            }
+            if fallback_result.get("checked"):
+                return fallback_result
+            if _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
+                return _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
+        return sandbox_result
 
     # ── 2. Check out a key from the pool (blocks until one is free) ──────────
     # Initialise pool first; _ANYRUN_POOL_KEY_COUNT reflects how many keys were
@@ -447,10 +551,11 @@ def _run_anyrun_sandbox_with_fallback(
 
     try:
         # ── 3. Double-check cache (another thread may have finished while we waited)
-        cached = _anyrun_cache_get(cache_key)
-        if cached is not None:
-            logger.info("AnyRun cache hit (post-pool) for %s", indicator)
-            return cached
+        if cache_enabled:
+            cached = _anyrun_cache_get(cache_key)
+            if cached is not None:
+                logger.info("AnyRun cache hit (post-pool) for %s", indicator)
+                return cached
 
         # ── 4. Submit sandbox with the checked-out key ────────────────────────
         logger.info("AnyRun submitting sandbox for %s using %s key", indicator, key_label)
@@ -464,10 +569,47 @@ def _run_anyrun_sandbox_with_fallback(
             file_bytes=file_bytes,
             file_name=file_name,
             timeout_seconds=timeout_seconds,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=normalized_proxy_country,
         )
+        raw = sandbox_result.get("raw_summary") or {}
+        sandbox_result["raw_summary"] = {
+            **(raw if isinstance(raw, dict) else {}),
+            "api_key_slot": key_label,
+        }
+
+        if (
+            fallback_api_key
+            and chosen_key == api_key
+            and not sandbox_result.get("checked")
+            and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error"))
+        ):
+            logger.info("AnyRun retrying sandbox for %s using fallback key after deferred primary result", indicator)
+            fallback_result = _run_sandbox(
+                sandbox_connector_cls=sandbox_connector_cls,
+                api_key=fallback_api_key,
+                sandbox_os=sandbox_os,
+                privacy_type=privacy_type,
+                indicator=indicator,
+                indicator_type=indicator_type,
+                file_bytes=file_bytes,
+                file_name=file_name,
+                timeout_seconds=timeout_seconds,
+                use_residential_proxy=use_residential_proxy,
+                proxy_country=normalized_proxy_country,
+            )
+            raw = fallback_result.get("raw_summary") or {}
+            fallback_result["raw_summary"] = {
+                **(raw if isinstance(raw, dict) else {}),
+                "api_key_slot": "fallback",
+            }
+            if fallback_result.get("checked"):
+                sandbox_result = fallback_result
+            elif _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
+                sandbox_result = _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
 
         # ── 5. Cache successful results so waiting investigations get a hit ────
-        if sandbox_result.get("checked"):
+        if cache_enabled and sandbox_result.get("checked"):
             _anyrun_cache_set(cache_key, sandbox_result)
 
         return sandbox_result
@@ -497,6 +639,27 @@ def _anyrun_key_scope(api_key: str) -> str:
         if api_key == configured_key:
             return f"key_{index}"
     return "unknown_key"
+
+
+def _normalize_anyrun_proxy_country(proxy_country: str | None) -> str:
+    country = "".join(ch for ch in str(proxy_country or "").strip().upper() if ch.isalnum())
+    if not country:
+        return ""
+    if country == "FASTEST":
+        return "fastest"
+    return country[:12]
+
+
+def _anyrun_network_profile(use_residential_proxy: bool, proxy_country: str | None) -> dict[str, Any]:
+    country = _normalize_anyrun_proxy_country(proxy_country)
+    if not use_residential_proxy and not country:
+        return {}
+    return {
+        "use_residential_proxy": True,
+        **({"proxy_country": country} if country else {}),
+        "anyrun_residential_proxy": True,
+        "anyrun_residential_proxy_geo": country or "fastest",
+    }
 
 
 def _merge_deferred_sandbox_errors(primary_result: dict[str, Any], fallback_result: dict[str, Any]) -> dict[str, Any]:
@@ -587,6 +750,7 @@ def _lookup_intelligence(
                         report = _get_anyrun_summary_report(sconn, analysis_id)
                         ioc_report = sconn.get_analysis_report(analysis_id, report_format="ioc")
                         html_report = sconn.get_analysis_report(analysis_id, report_format="html")
+                        html_threat_labels = _extract_anyrun_html_threat_labels(html_report)
                         report_data = (report or {}).get("data") or {}
                         ioc_items = _extract_iocs(ioc_report)
                         network = report_data.get("network") or {}
@@ -600,6 +764,7 @@ def _lookup_intelligence(
                         destination_ports = _extract_ports(report_data) or _extract_ports(network) or destination_ports
                         related_incidents = _ensure_list(report_data.get("relatedIncidents")) or related_incidents
                         threat_names = _normalize_anyrun_labels(report_data.get("threatName")) or threat_names
+                        threat_names = _dedupe_strings([*threat_names, *html_threat_labels])
                         related_tasks = _ensure_list(report_data.get("relatedTasks")) or related_tasks
                         processes = _ensure_list(report_data.get("processes"))
                         dns_requests = _ensure_list(network.get("dnsRequests"))
@@ -649,6 +814,7 @@ def _lookup_intelligence(
                             },
                             "ioc_count": len(ioc_items),
                             "html_report_bytes": len(html_report) if isinstance(html_report, str) else None,
+                            "html_threat_labels": html_threat_labels,
                             "screenshots": _extract_screenshot_thumbnails(report_data, html_report),
                         }
             except Exception as exc:
@@ -685,7 +851,10 @@ def _lookup_intelligence(
                 "destinationPort": destination_ports,
                 "relatedTasks": related_tasks,
                 "relatedIncidents": related_incidents,
-                "tags": _normalize_anyrun_labels(summary.get("tags") or []),
+                "tags": _dedupe_strings([
+                    *_normalize_anyrun_labels(summary.get("tags") or []),
+                    *_normalize_anyrun_labels((report_excerpt or {}).get("html_threat_labels") or []),
+                ]),
                 "related_tasks_count": len(related_tasks) if isinstance(related_tasks, list) else 0,
                 "iocs": ioc_items[:500],
                 "report_excerpt": report_excerpt,
@@ -716,6 +885,8 @@ def _run_sandbox(
     file_bytes: bytes | None,
     file_name: str | None,
     timeout_seconds: int,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
 ) -> dict[str, Any]:
     try:
         if indicator_type in {"hash", "file"}:
@@ -741,6 +912,8 @@ def _run_sandbox(
                 privacy_type=privacy_type,
                 file_bytes=file_bytes,
                 file_name=file_name,
+                use_residential_proxy=use_residential_proxy,
+                proxy_country=proxy_country,
             )
             if isinstance(task_id, dict) and task_id.get("__error__"):
                 return _error(indicator_type, str(task_id.get("__error__")), mode="sandbox")
@@ -794,7 +967,11 @@ def _run_sandbox(
         processes = _ensure_list(report_data.get("processes"))
         scores = (analysis.get("scores") or {})
         summary = report_data.get("summary") or {}
-        threat_names = _ensure_list(report_data.get("threatName") or summary.get("threatName"))
+        html_threat_labels = _extract_anyrun_html_threat_labels(html_report)
+        threat_names = _dedupe_strings([
+            *_ensure_list(report_data.get("threatName") or summary.get("threatName")),
+            *html_threat_labels,
+        ])
         destination_ip_geo = _ensure_list(report_data.get("destinationIPgeo") or network.get("destinationIPgeo"))
         destination_ports = _extract_ports(report_data) or _extract_ports(network)
         related_tasks = _ensure_list(report_data.get("relatedTasks"))
@@ -873,6 +1050,7 @@ def _run_sandbox(
             connections=connections,
             network_threats=network_threats,
         )
+        network_profile = _anyrun_network_profile(use_residential_proxy, proxy_country)
 
         return {
             "checked": True,
@@ -888,10 +1066,12 @@ def _run_sandbox(
                 "mitre_attcks": (report_data.get("mitre") or []),
                 "destinationIPgeo": destination_ip_geo,
                 "destinationPort": destination_ports,
+                **({"network_profile": network_profile} if network_profile else {}),
             },
             "raw_summary": {
                 "source": "anyrun",
                 "mode": "sandbox",
+                **({"network_profile": network_profile} if network_profile else {}),
                 "summary": summary,
                 "anyrun_ai_summary": _derive_anyrun_summary(analysis, network, report_data),
                 "permanentUrl": analysis.get("permanentUrl"),
@@ -900,7 +1080,12 @@ def _run_sandbox(
                 "report_links": (analysis.get("reports") or {}),
                 "screenshots": _extract_screenshot_thumbnails(report_data, html_report),
                 "iocs": ioc_items[:500],
+                "tags": _dedupe_strings([
+                    *_normalize_anyrun_labels(summary.get("tags") or []),
+                    *html_threat_labels,
+                ]),
                 "html_report_bytes": len(html_report) if isinstance(html_report, str) else None,
+                "html_threat_labels": html_threat_labels,
                 "behavior_counts": {
                     "http_requests": len(http_requests) or _as_int(counters.get("httpRequests")),
                     "connections": len(connections) or _as_int(counters.get("connections")),
@@ -968,6 +1153,8 @@ def _submit_anyrun_task_with_fallback(
     privacy_type: str,
     file_bytes: bytes | None,
     file_name: str | None,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
 ) -> Any:
     record_provider_request("anyrun")
     connector_key = getattr(connector, "api_key", None) or getattr(connector, "_api_key", None) or ""
@@ -992,6 +1179,8 @@ def _submit_anyrun_task_with_fallback(
     base_transient_backoff_seconds = int(getattr(settings, "anyrun_transient_backoff_seconds", 6) or 6)
     url_analysis_timeout = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
     url_mitm = bool(getattr(settings, "anyrun_url_sandbox_mitm", True))
+    anyrun_proxy_country = _normalize_anyrun_proxy_country(proxy_country)
+    use_residential_proxy = bool(use_residential_proxy or anyrun_proxy_country)
 
     for privacy in attempts:
         parallel_retry = 0
@@ -1007,19 +1196,21 @@ def _submit_anyrun_task_with_fallback(
                     }
                     if privacy:
                         url_kwargs["opt_privacy_type"] = privacy
-                    return connector.run_url_analysis(target, **url_kwargs)
+                    if use_residential_proxy:
+                        url_kwargs["opt_network_residential_proxy"] = True
+                        url_kwargs["opt_network_residential_proxy_geo"] = anyrun_proxy_country or "fastest"
+                    return _call_with_supported_kwargs(connector.run_url_analysis, target, **url_kwargs)
+                file_kwargs: dict[str, Any] = {
+                    "file_content": file_bytes,
+                    "filename": (file_name or "sample.bin"),
+                    "opt_timeout": 60,
+                }
                 if privacy:
-                    return connector.run_file_analysis(
-                        file_content=file_bytes,
-                        filename=(file_name or "sample.bin"),
-                        opt_privacy_type=privacy,
-                        opt_timeout=60,
-                    )
-                return connector.run_file_analysis(
-                    file_content=file_bytes,
-                    filename=(file_name or "sample.bin"),
-                    opt_timeout=60,
-                )
+                    file_kwargs["opt_privacy_type"] = privacy
+                if use_residential_proxy:
+                    file_kwargs["opt_network_residential_proxy"] = True
+                    file_kwargs["opt_network_residential_proxy_geo"] = anyrun_proxy_country or "fastest"
+                return _call_with_supported_kwargs(connector.run_file_analysis, **file_kwargs)
             except Exception as exc:
                 last_exc = exc
                 if _is_parallel_limit_error(exc):
@@ -1058,6 +1249,23 @@ def _submit_anyrun_task_with_fallback(
             )
         }
     return {"__error__": f"ANY.RUN sandbox submission failed: {last_exc}"}
+
+
+def _call_with_supported_kwargs(method: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        sig = signature(method)
+    except (TypeError, ValueError):
+        return method(*args, **kwargs)
+
+    if any(param.kind == Parameter.VAR_KEYWORD for param in sig.parameters.values()):
+        return method(*args, **kwargs)
+
+    supported = {
+        name
+        for name, param in sig.parameters.items()
+        if param.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
+    }
+    return method(*args, **{key: value for key, value in kwargs.items() if key in supported})
 
 
 def _get_anyrun_summary_report(connector: Any, analysis_id: str) -> Any:
@@ -1234,7 +1442,37 @@ def _anyrun_concrete_sandbox_reasons(result: dict[str, Any]) -> list[str]:
     if threat_names:
         reasons.append(f"Threat labels: {', '.join(threat_names[:4])}.")
     tags = _normalize_anyrun_labels(raw.get("tags") or result.get("tags"))
-    suspicious_tags = [tag for tag in tags if any(word in tag.lower() for word in ("phish", "malware", "trojan", "steal", "c2", "exploit"))]
+    summary = raw.get("summary") or {}
+    if isinstance(summary, dict):
+        tags = _dedupe_strings([
+            *tags,
+            *_normalize_anyrun_labels(summary.get("tags")),
+            *_normalize_anyrun_labels(summary.get("detectedType")),
+            *_normalize_anyrun_labels(summary.get("tracker") or summary.get("trackers")),
+        ])
+    suspicious_tags = [
+        tag for tag in tags
+        if any(
+            word in tag.lower()
+            for word in (
+                "phish",
+                "credential",
+                "malware",
+                "trojan",
+                "steal",
+                "c2",
+                "exploit",
+                "clickfix",
+                "clearfake",
+                "fake captcha",
+                "fake-captcha",
+                "tds",
+                "obfuscated-js",
+                "obfuscated js",
+                "etherhiding",
+            )
+        )
+    ]
     if suspicious_tags:
         reasons.append(f"Malicious tags: {', '.join(suspicious_tags[:4])}.")
     counts = raw.get("behavior_counts") or {}
@@ -1467,6 +1705,22 @@ def _extract_anyrun_screenshot_report_url(report_data: Any, html_report: Any) ->
     return None
 
 
+def _extract_anyrun_html_threat_labels(html_report: Any) -> list[str]:
+    if not isinstance(html_report, str) or not html_report:
+        return []
+    # The SDK JSON sometimes omits the chips visible in the ANY.RUN HTML report.
+    # Scan only for known threat markers to avoid turning arbitrary page text into labels.
+    compact = re.sub(r"[\s_]+", " ", html_report.casefold())
+    out: list[str] = []
+    seen: set[str] = set()
+    for marker, label in _ANYRUN_HTML_THREAT_MARKERS:
+        normalized_marker = re.sub(r"[\s_]+", " ", marker.casefold())
+        if normalized_marker in compact and label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out
+
+
 def _normalize_anyrun_labels(values: Any) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
@@ -1490,6 +1744,18 @@ def _normalize_anyrun_labels(values: Any) -> list[str]:
         seen.add(lowered)
         labels.append(text)
     return labels
+
+
+def _dedupe_strings(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out
 
 
 def _derive_lookup_summary(

@@ -16,6 +16,7 @@ import time
 from typing import Optional
 
 from PIL import Image
+from app.services.proxy_profiles import resolve_proxy_profile
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def _is_full_url(target: str) -> bool:
     return target.startswith("http://") or target.startswith("https://")
 
 
-def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
+def capture_screenshot(target: str, timeout: int = 60, proxy_country: str | None = None) -> tuple[bytes, str]:
     """
     Capture a viewport screenshot using headless Chromium.
 
@@ -164,8 +165,12 @@ def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
     from playwright.sync_api import sync_playwright
 
     deadline = time.monotonic() + timeout  # Overall deadline for the entire function
+    proxy_profile = resolve_proxy_profile(proxy_country)
 
     with sync_playwright() as p:
+        launch_kwargs = {}
+        if proxy_profile:
+            launch_kwargs["proxy"] = proxy_profile.playwright_proxy
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -179,6 +184,7 @@ def capture_screenshot(target: str, timeout: int = 60) -> tuple[bytes, str]:
                 # Allow insecure HTTP content without interstitial
                 "--allow-running-insecure-content",
             ],
+            **launch_kwargs,
         )
         try:
             context = browser.new_context(
@@ -319,6 +325,7 @@ def compare_websites(
     client_domain: str,
     client_reference_image: Optional[bytes] = None,
     timeout: int = 30,
+    proxy_country: str | None = None,
 ) -> dict:
     """
     Compare visual appearance of two websites.
@@ -333,6 +340,7 @@ def compare_websites(
         Dict with comparison results, screenshot bytes, and evidence fields.
         Screenshot bytes are returned separately for artifact persistence.
     """
+    proxy_profile = resolve_proxy_profile(proxy_country)
     result = {
         "investigated_domain": investigated_domain,
         "client_domain": client_domain,
@@ -345,6 +353,7 @@ def compare_websites(
         "is_visual_clone": False,
         "is_partial_clone": False,
         "summary": "",
+        "network_profile": proxy_profile.safe_summary if proxy_profile else None,
         "investigated_capture_error": None,
         "client_capture_error": None,
         # These are NOT persisted in evidence JSON — used for artifact storage only
@@ -355,7 +364,7 @@ def compare_websites(
     # ── Capture investigated domain ──
     investigated_bytes = None
     try:
-        investigated_bytes, final_url = capture_screenshot(investigated_domain, timeout)
+        investigated_bytes, final_url = capture_screenshot(investigated_domain, timeout, proxy_country=proxy_country)
         result["_investigated_screenshot_bytes"] = investigated_bytes
         result["investigated_final_url"] = final_url
         logger.info(f"Captured screenshot of {investigated_domain} -> {final_url} ({len(investigated_bytes)} bytes)")
@@ -371,7 +380,7 @@ def compare_websites(
         logger.info(f"Using uploaded reference image for {client_domain}")
     else:
         try:
-            client_bytes, final_url = capture_screenshot(client_domain, timeout)
+            client_bytes, final_url = capture_screenshot(client_domain, timeout, proxy_country=proxy_country)
             result["_client_screenshot_bytes"] = client_bytes
             result["client_final_url"] = final_url
             logger.info(f"Captured screenshot of {client_domain} -> {final_url} ({len(client_bytes)} bytes)")

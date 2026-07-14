@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.investigation_intelligence import (
+    build_confidence_engine,
     build_evidence_matrix_rows,
     build_investigation_intelligence,
 )
@@ -181,6 +182,50 @@ def test_ioc_quality_does_not_escalate_low_risk_verdict() -> None:
     assert confidence["score"] < 35
     assert confidence["score"] == 15
     assert confidence["verdict"] == "suspicious"
+
+
+def test_confidence_engine_caps_historical_opencti_account_compromise_context() -> None:
+    confidence = build_confidence_engine(
+        evidence={
+            "final_risk": {
+                "risk_score": 70,
+                "risk_level": "high",
+                "rationale": [
+                    "OpenCTI indicates known malicious or previously tracked infrastructure",
+                    "Risk floor raised to high by trusted OpenCTI intelligence",
+                ],
+            },
+            "opencti": {
+                "found": True,
+                "score": 95,
+                "observable_entity_type": "User-Account",
+                "observable_value": "bachir.adouni@expertware.net",
+                "labels": ["luminar_monitoring_plan_terms:@expertware.net"],
+                "reports": [
+                    {
+                        "name": "Historical user compromise",
+                        "description": "A user account at the domain was compromised in the past.",
+                    }
+                ],
+            }
+        },
+        report={
+            "classification": "benign",
+            "risk_score": 5,
+            "primary_reasoning": "No current malicious domain behavior was observed.",
+        },
+        detail={},
+        ioc_quality={"summary": {}},
+    )
+    opencti_component = next(row for row in confidence["components"] if row["source"] == "opencti")
+    final_risk_component = next(row for row in confidence["components"] if row["source"] == "final_risk")
+
+    assert opencti_component["score"] == 35.0
+    assert opencti_component["weight"] == 0.35
+    assert opencti_component["verdict"] == "suspicious"
+    assert final_risk_component["score"] == 35.0
+    assert confidence["score"] < 30
+    assert confidence["verdict"] == "benign"
 
 
 def test_build_evidence_matrix_rows_falls_back_to_collector_values() -> None:

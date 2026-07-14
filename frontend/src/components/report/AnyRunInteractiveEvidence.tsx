@@ -76,6 +76,15 @@ function analystAssessment(item: any): string {
   return String(verdictContext(item)?.final_verdict || item?.verdict || "unknown").toUpperCase();
 }
 
+function anyrunNetworkLabel(item: any): string {
+  const profile = item?.raw_summary?.network_profile || item?.dynamic_io_summary?.network_profile || {};
+  if (!profile?.use_residential_proxy && !profile?.anyrun_residential_proxy) return "Direct";
+  const country = String(profile?.proxy_country || profile?.anyrun_residential_proxy_geo || "").trim();
+  return country && country.toLowerCase() !== "fastest"
+    ? `Residential ${country.toUpperCase()}`
+    : "Residential fastest";
+}
+
 function anyrunConflictItems(items: any[]): any[] {
   return items.filter((item) => Boolean(verdictContext(item)?.conflict));
 }
@@ -399,11 +408,47 @@ type ProcessSuspicionFinding = {
   severity: "danger" | "warning" | "info";
 };
 
-function _processSuspicionFindings(proc: any, detail: any): ProcessSuspicionFinding[] {
+function _processSuspicionFindings(
+  proc: any,
+  detail: any,
+  context: {
+    threatLevel?: number;
+    indicatorCount?: number;
+  } = {}
+): ProcessSuspicionFinding[] {
   const commandLine = String(detail?.command_line || proc?.commandLine || proc?.cmd || "").trim();
   const image = String(detail?.image || proc?.image || proc?.fileName || proc?.processName || proc?.name || "").toLowerCase();
   const findings: ProcessSuspicionFinding[] = [];
-  if (!commandLine && !image) return findings;
+  const threatLevel = _num(context.threatLevel ?? detail?.threat_level ?? proc?.threat_level ?? proc?.threatLevel);
+  const indicatorCount = _num(context.indicatorCount);
+  const threatNames = normalizedAnyrunLabels(detail?.threat_name || detail?.threatName || proc?.threat_name || proc?.threatName);
+
+  if (threatLevel >= 2) {
+    findings.push({
+      title: "High process threat level",
+      detail: "ANY.RUN or the normalized graph data assigned a high threat level to this process. Treat this as a direct process-level signal when correlated with the surrounding process chain.",
+      evidence: `Threat level ${threatLevel}${threatNames.length ? `; tags: ${threatNames.join(", ")}` : ""}`,
+      severity: "danger",
+    });
+  } else if (threatLevel === 1) {
+    findings.push({
+      title: "Suspicious process threat level",
+      detail: "The sandbox telemetry assigned a low/medium suspicious threat level to this process. Review the surrounding process chain and event details before blocking from this signal alone.",
+      evidence: `Threat level ${threatLevel}${threatNames.length ? `; tags: ${threatNames.join(", ")}` : ""}`,
+      severity: "warning",
+    });
+  }
+
+  if (indicatorCount > 0) {
+    findings.push({
+      title: "Linked threat indicators",
+      detail: "Threat indicators or network threat rows are linked to this process identity. These are stronger when they reference the same PID/GUID rather than only a shared executable name.",
+      evidence: `${indicatorCount} linked indicator${indicatorCount === 1 ? "" : "s"}`,
+      severity: threatLevel >= 2 ? "danger" : "warning",
+    });
+  }
+
+  if (!commandLine && !image) return _dedupeFindings(findings).slice(0, 8);
 
   const lowerCommand = commandLine.toLowerCase();
   const isBrowser = /\b(chrome|msedge|firefox|iexplore)\.exe\b/i.test(`${image} ${commandLine}`);
@@ -457,15 +502,6 @@ function _processSuspicionFindings(proc: any, detail: any): ProcessSuspicionFind
       detail: "The command suppresses first-run/default-browser prompts. These flags are common in automation and sandboxes; they are weak evidence alone but add context when combined with a suspicious URL.",
       evidence: ["--no-first-run", "--no-default-browser-check"].filter((flag) => commandLine.includes(flag)).join(", "),
       severity: "info",
-    });
-  }
-
-  if (!findings.length && _num(detail?.threat_score ?? proc?.threat_score ?? proc?.threatScore) > 0) {
-    findings.push({
-      title: "Sandbox process score assigned",
-      detail: "ANY.RUN assigned a non-zero process score, but the returned telemetry did not include a more specific command-line explanation.",
-      evidence: `Process score: ${_num(detail?.threat_score ?? proc?.threat_score ?? proc?.threatScore)}`,
-      severity: "warning",
     });
   }
 
@@ -1699,10 +1735,6 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
     selectedSandboxScore,
     selectedProcessThreatLevel >= 2 ? 70 : selectedNodeSuspicious || selectedThreatCount > 0 || selectedProcessThreatLevel >= 1 ? 35 : 0
   );
-  const selectedProcessFindings = React.useMemo(
-    () => _processSuspicionFindings(selected || {}, selectedProcessDetail || {}),
-    [selected, selectedProcessDetail]
-  );
   const selectedRiskTone =
     selectedProcessThreatLevel >= 2 || selectedProcessScore >= 70
       ? {
@@ -1730,6 +1762,18 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
             bg: "rgba(14,116,144,0.10)",
             panel: "rgba(4,39,61,0.97)",
           };
+  const selectedProcessFindings = React.useMemo(
+    () => _processSuspicionFindings(selected || {}, selectedProcessDetail || {}, {
+      threatLevel: selectedProcessThreatLevel,
+      indicatorCount: selectedThreatCount,
+    }),
+    [
+      selected,
+      selectedProcessDetail,
+      selectedProcessThreatLevel,
+      selectedThreatCount,
+    ]
+  );
   const selectedEventCounts = React.useMemo(() => {
     const counts: Record<EventCategoryKey, number> = {
       modified_files: 0,
@@ -3090,6 +3134,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           type: item?.indicator_type || "unknown",
           mode: String(item?.raw_summary?.mode || "lookup").toUpperCase(),
           execution: item?.cache_hit ? "CACHED" : "LIVE",
+          network: anyrunNetworkLabel(item),
           provider_verdict: providerVerdict(item),
           verdict: analystAssessment(item),
           confidence: verdictContext(item)?.confidence || "—",
@@ -3103,6 +3148,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           { key: "type", label: "Indicator Type" },
           { key: "mode", label: "Mode" },
           { key: "execution", label: "Execution" },
+          { key: "network", label: "Network" },
           { key: "provider_verdict", label: "Provider Verdict" },
           { key: "verdict", label: "App Assessment" },
           { key: "confidence", label: "Confidence" },

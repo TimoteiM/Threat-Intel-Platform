@@ -35,6 +35,8 @@ def lookup_hybrid_analysis(
     submit_on_not_found: bool = False,
     prefer_anyrun: bool = True,
     sandbox_first: bool = False,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
 ) -> dict[str, Any]:
     """
     indicator_type: "url" | "hash"
@@ -44,7 +46,12 @@ def lookup_hybrid_analysis(
     anyrun_key = (getattr(settings, "anyrun_api_key", "") or "").strip()
     api_key = (getattr(settings, "hybrid_analysis_api_key", "") or "").strip()
 
-    key = _cache_key(indicator=indicator, indicator_type=indicator_type)
+    key = _cache_key(
+        indicator=indicator,
+        indicator_type=indicator_type,
+        use_residential_proxy=use_residential_proxy,
+        proxy_country=proxy_country,
+    )
     cached = _cache_get(key)
     if cached and prefer_anyrun and anyrun_key and indicator_type in {"url", "hash"}:
         require_domain_intel = _requires_domain_intelligence_for_indicator(
@@ -124,6 +131,8 @@ def lookup_hybrid_analysis(
             file_name=file_name,
             submit_on_not_found=submit_on_not_found,
             sandbox_first=sandbox_first,
+            use_residential_proxy=use_residential_proxy,
+            proxy_country=proxy_country,
         )
         if anyrun_result.get("checked"):
             anyrun_result = dict(anyrun_result)
@@ -532,10 +541,22 @@ def _normalize_verdict(value: Any) -> str:
         return "unknown"
 
 
-def _cache_key(*, indicator: str, indicator_type: str) -> str:
-    raw = f"hybrid:{indicator_type}:{str(indicator).strip()}"
+def _cache_key(
+    *,
+    indicator: str,
+    indicator_type: str,
+    use_residential_proxy: bool = False,
+    proxy_country: str | None = None,
+) -> str:
+    country_scope = _normalize_cache_proxy_country(proxy_country) if use_residential_proxy else "DIRECT"
+    raw = f"hybrid:{indicator_type}:{str(indicator).strip()}:{country_scope}"
     digest = hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()
     return f"hybrid:{indicator_type}:{digest}"
+
+
+def _normalize_cache_proxy_country(proxy_country: str | None) -> str:
+    country = "".join(ch for ch in str(proxy_country or "").strip().upper() if ch.isalnum())
+    return country or "DIRECT"
 
 
 def _cache_get(key: str) -> dict[str, Any] | None:

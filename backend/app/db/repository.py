@@ -43,6 +43,8 @@ class InvestigationRepository:
         client_domain: Optional[str] = None,
         max_iterations: int = 3,
         batch_id: Optional[uuid.UUID] = None,
+        anyrun_use_residential_proxy: bool = False,
+        anyrun_proxy_country: Optional[str] = None,
     ) -> Investigation:
         inv = Investigation(
             domain=domain,
@@ -52,6 +54,8 @@ class InvestigationRepository:
             state="created",
             max_analyst_iterations=max_iterations,
             batch_id=batch_id,
+            anyrun_use_residential_proxy=anyrun_use_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
         )
         self.session.add(inv)
         await self.session.flush()
@@ -284,7 +288,7 @@ class ReportRepository:
         result = await self.session.execute(
             select(Report)
             .where(Report.investigation_id == investigation_id)
-            .order_by(Report.iteration.desc())
+            .order_by(Report.iteration.desc(), Report.created_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()

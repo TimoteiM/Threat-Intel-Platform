@@ -97,6 +97,10 @@ class Investigation(Base):
     confidence: Mapped[str | None] = mapped_column(String(20), nullable=True)
     risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recommended_action: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    anyrun_use_residential_proxy: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    anyrun_proxy_country: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # Iteration tracking
     analyst_iterations: Mapped[int] = mapped_column(Integer, default=0)

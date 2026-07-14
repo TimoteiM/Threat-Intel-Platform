@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
+from app.services.proxy_profiles import resolve_proxy_profile
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ def analyze_js_behavior(
     investigation_id: str,
     save_artifact_fn: Optional[Callable] = None,
     timeout: int = 60,
+    proxy_country: str | None = None,
 ) -> dict:
     """
     Load a page in Playwright and analyze JavaScript behavior.
@@ -116,8 +118,12 @@ def analyze_js_behavior(
     captured_responses: list[dict] = []
     websocket_urls: list[str] = []
     console_errors: list[str] = []
+    proxy_profile = resolve_proxy_profile(proxy_country)
 
     with sync_playwright() as p:
+        launch_kwargs = {}
+        if proxy_profile:
+            launch_kwargs["proxy"] = proxy_profile.playwright_proxy
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -129,6 +135,7 @@ def analyze_js_behavior(
                 "--window-size=1280,720",
                 "--allow-running-insecure-content",
             ],
+            **launch_kwargs,
         )
 
         try:
@@ -381,4 +388,5 @@ def analyze_js_behavior(
         "data_exfil_indicators": data_exfil,
         "console_errors": console_errors,
         "har_artifact_id": har_artifact_id,
+        "network_profile": proxy_profile.safe_summary if proxy_profile else None,
     }

@@ -2,6 +2,7 @@ import pytest
 
 from app.tasks.analysis_task import (
     _annotate_compact_analyst_report,
+    _generate_automated_report,
     _build_prompt_too_long_fallback_report,
     _build_analyst_input_evidence,
     _build_iocs_from_evidence,
@@ -24,9 +25,9 @@ def test_compact_evidence_trims_large_lists_for_llm():
 
     compact = _build_analyst_input_evidence(evidence)
 
-    assert len(compact["intel"]["related_urls"]) == 30
-    assert len(compact["js_analysis"]["captured_requests"]) == 25
-    assert len(compact["signals"]) == 40
+    assert len(compact["intel"]["related_urls"]) == 80
+    assert len(compact["js_analysis"]["captured_requests"]) == 80
+    assert len(compact["signals"]) == 80
 
 
 def test_compact_evidence_digest_tier_reduces_large_sections_more_aggressively():
@@ -42,9 +43,12 @@ def test_compact_evidence_digest_tier_reduces_large_sections_more_aggressively()
         "signals": [{"id": str(i)} for i in range(90)],
     }
 
+    standard = _build_analyst_input_evidence(evidence, tier="standard")
     compact = _build_analyst_input_evidence(evidence, tier="compact")
     digest = _build_analyst_input_evidence(evidence, tier="digest")
 
+    assert len(standard["intel"]["related_urls"]) == 80
+    assert len(standard["js_analysis"]["captured_requests"]) == 80
     assert len(digest["intel"]["related_urls"]) < len(compact["intel"]["related_urls"])
     assert len(digest["js_analysis"]["captured_requests"]) < len(compact["js_analysis"]["captured_requests"])
     assert len(digest["signals"]) < len(compact["signals"])
@@ -84,6 +88,42 @@ def test_analyst_input_includes_grounded_associated_with_digest():
 
     assert "paypal" in digest["associated_with"].lower()
     assert any("title" in basis.lower() or "osint" in basis.lower() for basis in digest["association_basis"])
+
+
+def test_automated_report_does_not_escalate_contextual_http_inputs_without_suspicious_domain_context():
+    report = _generate_automated_report(
+        {
+            "domain": "expertware.net",
+            "observable_type": "domain",
+            "http": {
+                "reachable": True,
+                "has_login_form": True,
+                "phishing_indicators": [
+                    "Email-only input form observed",
+                    "Credential or account input fields observed (email/username/password/card)",
+                    "Third-party brand reference: 'microsoft' on non-microsoft domain",
+                ],
+            },
+            "vt": {
+                "found": True,
+                "malicious_count": 0,
+                "suspicious_count": 0,
+                "total_vendors": 91,
+            },
+            "urlscan": {"verdict": "benign", "score": 0},
+            "hybrid_analysis": {"verdict": "clean", "score": 0},
+            "whois": {"domain_age_days": 5000},
+            "threat_feeds": {},
+            "intel": {"blocklist_hits": []},
+        },
+        "domain",
+    )
+
+    assert report["classification"] == "benign"
+    assert report["risk_score"] == 15
+    finding = next(f for f in report["findings"] if f["id"] == "static_http_phishing")
+    assert finding["severity"] == "low"
+    assert "were not used to raise risk" in finding["description"]
 
 
 def test_digest_mode_summarizes_heavyweight_collectors():
@@ -160,7 +200,7 @@ def test_compact_evidence_truncates_long_strings():
     }
     compact = _build_analyst_input_evidence(evidence)
     assert compact["http"]["title"].endswith("...[truncated]")
-    assert len(compact["http"]["title"]) <= 2015
+    assert len(compact["http"]["title"]) <= 4015
 
 
 def test_is_prompt_too_long_error_only_matches_prompt_overflow():
@@ -183,11 +223,14 @@ def test_run_analyst_with_compaction_retries_prompt_too_long(monkeypatch):
                 "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
                 "'message': 'prompt is too long: 205366 tokens > 200000 maximum'}}"
             )
-        return {"classification": "benign", "primary_reasoning": "Reasoning", "executive_summary": "Summary"}
+        return (
+            {"classification": "benign", "primary_reasoning": "Reasoning", "executive_summary": "Summary"},
+            "claude-haiku-4-5-20251001",
+        )
 
     monkeypatch.setattr("app.tasks.analysis_task._run_analyst_sync", fake_run_analyst_sync)
 
-    report, tier = _run_analyst_with_compaction(
+    report, tier, actual_model = _run_analyst_with_compaction(
         {"domain": "example.com", "investigation_id": "x", "timestamps": {}},
         max_iterations=3,
         timeout_seconds=120,
@@ -195,6 +238,7 @@ def test_run_analyst_with_compaction_retries_prompt_too_long(monkeypatch):
 
     assert calls == ["standard", "compact"]
     assert tier == "compact"
+    assert actual_model == "claude-haiku-4-5-20251001"
     assert report["classification"] == "benign"
 
 
@@ -276,6 +320,30 @@ def test_ensure_report_completeness_backfills_sparse_ai_output():
     assert len(normalized["iocs"]) > 0
 
 
+def test_ensure_report_completeness_uses_ai_summary_before_automated_primary():
+    evidence = {
+        "domain": "activelyintimate.com",
+        "observable_type": "domain",
+        "vt": {"found": True, "malicious_count": 0, "suspicious_count": 3, "total_vendors": 91},
+        "http": {},
+        "threat_feeds": {},
+        "intel": {"blocklist_hits": []},
+    }
+    sparse_report = {
+        "classification": "suspicious",
+        "confidence": "low",
+        "investigation_state": "concluded",
+        "primary_reasoning": "",
+        "executive_summary": "AI analyst summary with concrete evidence.",
+        "recommended_action": "investigate",
+    }
+
+    normalized = _ensure_report_completeness(sparse_report, evidence, "domain")
+
+    assert normalized["primary_reasoning"] == "AI analyst summary with concrete evidence."
+    assert "Automated analysis" not in normalized["primary_reasoning"]
+
+
 def test_build_iocs_from_evidence_includes_domain_url_and_ip_pivots():
     evidence = {
         "domain": "example.com",
@@ -293,6 +361,37 @@ def test_build_iocs_from_evidence_includes_domain_url_and_ip_pivots():
     assert ("domain", "example.com") in ioc_pairs
     assert ("url", "https://example.com/login") in ioc_pairs
     assert ("ip", "93.184.216.34") in ioc_pairs
+
+
+def test_build_iocs_from_evidence_bounds_long_anyrun_urls_and_noise():
+    long_url = "https://region1.analytics.google.com/g/collect?" + ("x" * 900)
+    evidence = {
+        "domain": "lists.com",
+        "hybrid_analysis": {
+            "items": [
+                {
+                    "sandbox_intelligence": {
+                        "extracted_iocs": [
+                            {"type": "url", "value": long_url, "confidence": "medium"}
+                        ]
+                    },
+                    "raw_summary": {
+                        "iocs": [
+                            {"category": "url", "ioc": f"https://telemetry.example/{idx}"}
+                            for idx in range(80)
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+    iocs = _build_iocs_from_evidence(evidence, "domain")
+    url_iocs = [ioc for ioc in iocs if ioc["type"] == "url"]
+
+    assert all(len(ioc["value"]) <= 512 for ioc in iocs)
+    assert any(ioc["value"].endswith("...") for ioc in url_iocs)
+    assert len([ioc for ioc in url_iocs if "telemetry.example" in ioc["value"]]) <= 25
 
 
 def test_ensure_report_completeness_simplifies_overly_verbose_reasoning():

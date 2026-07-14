@@ -81,6 +81,23 @@ class TestGenerateSignals:
         signals = generate_signals({})
         assert isinstance(signals, list)
 
+    def test_contextual_http_inputs_are_low_severity_signal(self):
+        evidence = {
+            "http": {
+                "phishing_indicators": [
+                    "Email-only input form observed",
+                    "Credential or account input fields observed (email/username/password/card)",
+                    "Third-party brand reference: 'microsoft' on non-microsoft domain",
+                ]
+            }
+        }
+
+        signals = generate_signals(evidence)
+        signal = next(s for s in signals if s.id == "sig_phishing_indicators")
+
+        assert signal.severity == "low"
+        assert "HTTP content observations" in signal.description
+
 
 class TestDetectDataGaps:
 

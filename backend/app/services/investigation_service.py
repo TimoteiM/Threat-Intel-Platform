@@ -28,6 +28,7 @@ from app.models.schemas import InvestigationCreate
 from app.tasks.investigation_task import run_investigation
 from app.utils.domain_utils import normalize_domain, validate_domain
 from app.collectors.registry import get_collectors_for_type
+from app.services.proxy_profiles import is_configured_network_country
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,27 @@ class InvestigationService:
 
         # ── Cortex-style: find matched clients for default collector selection ──
         matched_clients = await self._find_matching_clients(domain)
+        external_context = (
+            request.external_context.model_dump()
+            if request.external_context else {}
+        )
+        use_anyrun_residential_proxy = bool(
+            request.network_profile and request.network_profile.use_residential_proxy
+        )
+        anyrun_proxy_country: str | None = None
+        if request.network_profile and request.network_profile.proxy_country:
+            anyrun_proxy_country = request.network_profile.proxy_country.strip().upper()
+            if not is_configured_network_country(anyrun_proxy_country):
+                raise ValueError(
+                    f"Proxy country '{anyrun_proxy_country}' is not configured. "
+                    "Set ANYRUN_PROXY_COUNTRIES or PROXY_PROFILES in the backend environment."
+                )
+            use_anyrun_residential_proxy = True
+        if use_anyrun_residential_proxy:
+            external_context["network_profile"] = {
+                "use_residential_proxy": True,
+                **({"proxy_country": anyrun_proxy_country} if anyrun_proxy_country else {}),
+            }
 
         # ── Determine effective collectors ────────────────────────────────────
         # Priority: requested → client defaults → settings defaults
@@ -209,6 +231,8 @@ class InvestigationService:
             context=request.context,
             client_domain=client_domain,
             max_iterations=settings.max_analyst_iterations,
+            anyrun_use_residential_proxy=use_anyrun_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
         )
         await self.session.flush()
 
@@ -230,10 +254,7 @@ class InvestigationService:
                 client_domain=client_domain,
                 investigated_url=request.investigated_url,
                 client_url=request.client_url,
-                external_context=(
-                    request.external_context.model_dump()
-                    if request.external_context else None
-                ),
+                external_context=external_context or None,
                 requested_collectors=effective_collectors,
                 ai_model=request.ai_model,
             )
@@ -276,11 +297,35 @@ class InvestigationService:
                 f"create_file only supports observable_type 'file' or 'hash', got '{observable_type}'"
             )
 
+        use_anyrun_residential_proxy = bool(
+            request.network_profile and request.network_profile.use_residential_proxy
+        )
+        anyrun_proxy_country: str | None = None
+        external_context = (
+            request.external_context.model_dump()
+            if request.external_context else {}
+        )
+        if request.network_profile and request.network_profile.proxy_country:
+            anyrun_proxy_country = request.network_profile.proxy_country.strip().upper()
+            if not is_configured_network_country(anyrun_proxy_country):
+                raise ValueError(
+                    f"Proxy country '{anyrun_proxy_country}' is not configured. "
+                    "Set ANYRUN_PROXY_COUNTRIES or PROXY_PROFILES in the backend environment."
+                )
+            use_anyrun_residential_proxy = True
+        if use_anyrun_residential_proxy:
+            external_context["network_profile"] = {
+                "use_residential_proxy": True,
+                **({"proxy_country": anyrun_proxy_country} if anyrun_proxy_country else {}),
+            }
+
         inv = await self.repo.create(
             domain=request.domain,
             observable_type=observable_type,
             context=request.context,
             max_iterations=settings.max_analyst_iterations,
+            anyrun_use_residential_proxy=use_anyrun_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
         )
         await self.session.flush()
 
@@ -332,6 +377,7 @@ class InvestigationService:
                 domain=request.domain,
                 observable_type=observable_type,
                 context=request.context,
+                external_context=external_context or None,
                 requested_collectors=effective_collectors,
                 file_artifact_id=file_artifact_id,
             )

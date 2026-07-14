@@ -995,6 +995,7 @@ export interface ProgressEvent {
   percent_complete?: number;
   duration_ms?: number;
   total_elapsed_ms?: number;
+  report_recomputed?: boolean;
   done?: boolean;
 }
 
@@ -1348,6 +1349,5 @@ export interface AssistantSessionListItem {
 export interface AssistantSessionDetail extends AssistantSessionListItem {
   entries: AssistantEntry[];
 }
-
 
 
