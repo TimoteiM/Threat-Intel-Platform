@@ -143,7 +143,8 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
     if not recommended_steps:
         recommended_steps = _recommended_steps(classification)
 
-    evidence_str = "; ".join(key_evidence) if key_evidence else "No significant threat indicators found."
+    headline_evidence = _headline_evidence(key_evidence)
+    evidence_str = "; ".join(headline_evidence) if headline_evidence else "No significant threat indicators found."
     risk_text = f"Risk score: {risk_score}/100." if risk_score is not None else "Risk score undetermined."
     summary = (
         f"Deterministic decision for {observable_type.upper()} - {domain}. "
@@ -235,7 +236,7 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     http_score = len(strong_http) * 2 + len(scored_http)
     weak_score, weak_evidence = _domain_weak_signal_score(evidence_data, contextual_http=bool(contextual_http))
 
-    anyrun_verdict, anyrun_names = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
+    anyrun_verdict, anyrun_names, anyrun_context = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
     anyrun_malicious = anyrun_verdict == "malicious"
     anyrun_suspicious = anyrun_verdict == "suspicious"
 
@@ -263,15 +264,37 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     data_needed: list[str] = []
     if anyrun_verdict:
         names = (", ".join(anyrun_names[:4]) + " ") if anyrun_names else ""
-        key_evidence.append(f"AnyRun TI verdict: {anyrun_verdict.upper()} - {names}community threat intelligence")
+        source_label = "sandbox" if anyrun_context.get("sandbox") else "TI"
+        network_label = f" via {anyrun_context['network']}" if anyrun_context.get("network") else ""
+        score_label = f" score {anyrun_context['threat_score']}" if anyrun_context.get("threat_score") is not None else ""
+        details: list[str] = [
+            f"AnyRun {source_label} returned a {anyrun_verdict.upper()} verdict for the investigated indicator."
+        ]
+        if anyrun_context.get("threat_score") is not None:
+            details.append(f"Provider threat score: {anyrun_context['threat_score']}/100.")
+        if anyrun_context.get("network"):
+            details.append(f"Execution network profile: {anyrun_context['network']}.")
+        if anyrun_names:
+            details.append(f"Structured provider labels: {', '.join(anyrun_names[:6])}.")
+        else:
+            details.append("No structured AnyRun threat labels were returned; review the linked sandbox telemetry before treating the verdict as confirmed malicious behavior.")
+        if anyrun_malicious:
+            details.append("Decision impact: a MALICIOUS sandbox verdict sets the deterministic domain/URL score to 90 before lexical blending and trusted-source floors.")
+        elif anyrun_suspicious:
+            details.append("Decision impact: a SUSPICIOUS sandbox verdict sets the deterministic domain/URL score to 60 before lexical blending and trusted-source floors.")
+        else:
+            details.append("Decision impact: a CLEAN AnyRun verdict does not independently raise the deterministic risk score.")
+        key_evidence.append(
+            f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}{score_label}{network_label} - {names}provider evidence"
+        )
         findings.append({
             "id": "anyrun_verdict",
-            "title": f"AnyRun threat intelligence: {anyrun_verdict.upper()}",
-            "description": f"AnyRun community threat intelligence classified this indicator as {anyrun_verdict}.",
-            "severity": "critical" if anyrun_malicious else "high",
+            "title": f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}",
+            "description": " ".join(details),
+            "severity": "critical" if anyrun_malicious else ("high" if anyrun_suspicious else "info"),
             "evidence_refs": ["hybrid_analysis.items"],
         })
-    if vt_found:
+    if vt_found and (vt_malicious > 0 or vt_suspicious > 0 or not (anyrun_malicious or anyrun_suspicious)):
         key_evidence.append(f"VirusTotal: {vt_malicious} malicious, {vt_suspicious} suspicious of {vt_total}")
     if intel_hits:
         key_evidence.append(f"Intel blocklist hits: {len(intel_hits)}")
@@ -290,12 +313,14 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         })
         if not phishtank_verified:
             data_needed.append("Confirm whether the PhishTank listing is a true positive or stale/unverified entry.")
-    for sig in strong_http:
-        key_evidence.append(f"Static HTTP: {sig}")
-    if contextual_http and not domain_context:
+    if not anyrun_malicious:
+        for sig in strong_http:
+            key_evidence.append(f"Static HTTP: {sig}")
+    if contextual_http and not domain_context and not anyrun_malicious:
         key_evidence.append("Static HTTP input/brand observations were treated as contextual because no independent suspicious-domain signal was present")
-    for item in weak_evidence:
-        key_evidence.append(item)
+    if not anyrun_malicious:
+        for item in weak_evidence:
+            key_evidence.append(item)
 
     if vt_malicious > 0 or vt_suspicious > 0:
         findings.append({
@@ -384,24 +409,73 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
     return score, reasons
 
 
-def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str]]:
+def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
     verdict = str(hybrid.get("verdict") or "").strip().lower()
     names: list[str] = _anyrun_labels_from_item(hybrid)
+    context: dict[str, Any] = _anyrun_context_from_item(hybrid)
     malicious_labels = _anyrun_malicious_labels(names)
     for item in hybrid.get("items") or []:
         if not isinstance(item, dict):
             continue
         item_verdict = str(item.get("verdict") or "").strip().lower()
         item_names = _anyrun_labels_from_item(item)
+        item_context = _anyrun_context_from_item(item)
         malicious_labels.extend(label for label in _anyrun_malicious_labels(item_names) if label not in malicious_labels)
         if item_verdict == "malicious":
-            return "malicious", item_names or names
+            return "malicious", item_names or names, item_context or context
         if item_verdict == "suspicious" and verdict != "malicious":
             verdict = "suspicious"
             names = names or item_names
+            context = item_context or context
     if malicious_labels:
-        return "malicious", malicious_labels
-    return verdict if verdict in {"malicious", "suspicious", "clean"} else "", names
+        return "malicious", malicious_labels, context
+    return verdict if verdict in {"malicious", "suspicious", "clean"} else "", names, context
+
+
+def _anyrun_context_from_item(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.get("raw_summary") or {}
+    dynamic = item.get("dynamic_io_summary") or {}
+    mode = str((raw or {}).get("mode") or item.get("mode") or "").strip().lower()
+    profile = {}
+    if isinstance(raw, dict):
+        profile = raw.get("network_profile") or {}
+    if not profile and isinstance(dynamic, dict):
+        profile = dynamic.get("network_profile") or {}
+    network = ""
+    if isinstance(profile, dict) and (profile.get("use_residential_proxy") or profile.get("anyrun_residential_proxy")):
+        country = str(profile.get("proxy_country") or profile.get("anyrun_residential_proxy_geo") or "").strip().upper()
+        network = f"Residential Proxy {country}" if country and country != "FASTEST" else "Residential Proxy fastest"
+    return {
+        "sandbox": mode == "sandbox",
+        "network": network,
+        "threat_score": item.get("threat_score"),
+    }
+
+
+def _headline_evidence(items: list[str], limit: int = 5) -> list[str]:
+    def priority(value: str) -> int:
+        text = value.casefold()
+        if text.startswith("anyrun sandbox"):
+            return 0
+        if text.startswith("anyrun"):
+            return 1
+        if "openphish" in text or "phishtank" in text or "threatfox" in text:
+            return 2
+        if "virustotal" in text and not ("0 malicious" in text and "0 suspicious" in text):
+            return 3
+        if "static http" in text or "email spoofability" in text:
+            return 8
+        return 5
+
+    filtered = [
+        item for item in items
+        if not (
+            ("VirusTotal:" in item and "0 malicious" in item and "0 suspicious" in item)
+            or item == "High email spoofability"
+            or item == "Static HTTP brand/input observation present"
+        )
+    ]
+    return sorted(filtered or items, key=priority)[:limit]
 
 
 def _anyrun_labels_from_item(item: dict[str, Any]) -> list[str]:
@@ -578,7 +652,7 @@ def _has_domain_suspicion_context(evidence_data: dict[str, Any]) -> bool:
         for hit in (intel.get("blocklist_hits") or [])
     ):
         return True
-    verdict, _ = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
+    verdict, _, _ = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
     if verdict in {"malicious", "suspicious"}:
         return True
     similarity = evidence_data.get("domain_similarity") or {}

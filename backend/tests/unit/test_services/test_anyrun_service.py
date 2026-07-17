@@ -922,6 +922,21 @@ def test_extract_anyrun_html_threat_labels_from_report_chips():
     assert labels == ["clickfix", "clearfake", "phishing", "exploit-kit", "obfuscated-js"]
 
 
+def test_extract_anyrun_html_threat_labels_ignores_generic_ui_words():
+    html = """
+    <script>const credentialField = true; const tds = window.trackingData;</script>
+    <div>Enter your credential to continue. Internal TDS component.</div>
+    <span class="tag">credential harvesting</span>
+    <span class="tag">tdsshop</span>
+    """
+
+    labels = svc._extract_anyrun_html_threat_labels(html)
+
+    assert "credential" not in labels
+    assert "tds" not in labels
+    assert labels == ["credential-harvesting", "tdsshop"]
+
+
 def test_parallel_limit_error_helper_matches_provider_error_text():
     exc = Exception("[AnyRun Exception] Status code: 403. Description: Parallel task limit")
     assert svc._is_parallel_limit_error(exc) is True

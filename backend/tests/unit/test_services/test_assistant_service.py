@@ -265,12 +265,41 @@ async def test_run_session_marks_failed_when_openai_errors(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "_call_openai", broken_openai)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ValueError, match="fallback.*unavailable"):
         await service.run_session(session_obj.id)
 
     assert session_obj.status == "failed"
-    assert "provider down" in (session_obj.error or "")
+    assert "fallback" in (session_obj.error or "")
     fake_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_assistant_falls_back_to_haiku_when_openai_fails(monkeypatch) -> None:
+    settings = _build_settings()
+    settings.anthropic_api_key = "anthropic-test-key"
+    settings.anthropic_model = "claude-haiku-4-5-20251001"
+    settings.openai_model = "gpt-5.6-luna"
+    service = AssistantService(SimpleNamespace(), settings=settings)
+    seen = {}
+
+    async def broken_openai(*, model: str, system: str, user_text: str) -> str:
+        seen["primary"] = model
+        raise RuntimeError("provider down")
+
+    async def fake_claude(*, model: str, system: str, user_text: str) -> str:
+        seen["fallback"] = model
+        return "fallback report"
+
+    monkeypatch.setattr(service, "_call_openai", broken_openai)
+    monkeypatch.setattr(service, "_call_claude", fake_claude)
+
+    result = await service._call_with_fallback(model=None, system="system", user_text="evidence")
+
+    assert result == "fallback report"
+    assert seen == {
+        "primary": "gpt-5.6-luna",
+        "fallback": "claude-haiku-4-5-20251001",
+    }
 
 
 @pytest.mark.asyncio

@@ -48,8 +48,8 @@ class Settings(BaseSettings):
 
     # —— API Keys ———
     openai_api_key: str = ""
-    openai_model: str = "gpt-5-mini"
-    # Anthropic primary analyst provider; OpenAI is used as fallback.
+    openai_model: str = "gpt-5.6-luna"
+    # OpenAI is the primary AI provider; Anthropic is used as fallback.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5-20251001"
     virustotal_api_key: str = ""

@@ -24,10 +24,10 @@ def test_assistant_entry_create_schema_requires_text() -> None:
         schemas.AssistantEntryCreate(text="")
 
 
-def test_assistant_run_schema_defaults_to_gpt5_mini() -> None:
+def test_assistant_run_schema_uses_configured_provider_order_by_default() -> None:
     payload = schemas.AssistantSessionRunRequest()
 
-    assert payload.model == "gpt-5-mini"
+    assert payload.model is None
 
 
 def test_assistant_session_detail_schema_captures_entries_and_result() -> None:

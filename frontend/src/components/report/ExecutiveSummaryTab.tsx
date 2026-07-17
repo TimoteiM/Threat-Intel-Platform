@@ -62,6 +62,7 @@ export default function ExecutiveSummaryTab({ report, intelligence }: Props) {
               ? report.ai_model.startsWith("claude-sonnet") ? "Claude Sonnet 4.6"
               : report.ai_model.startsWith("claude-haiku") ? "Claude Haiku 4.5"
               : report.ai_model.startsWith("claude-opus") ? "Claude Opus 4.6"
+              : report.ai_model === "gpt-5.6-luna" ? "GPT-5.6 Luna"
               : report.ai_model === "gpt-5-mini" ? "GPT-5 Mini"
               : report.ai_model === "gpt-4o-mini" ? "GPT-4o Mini"
               : report.ai_model === "gpt-4o" ? "GPT-4o"

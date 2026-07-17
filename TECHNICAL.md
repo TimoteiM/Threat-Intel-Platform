@@ -728,8 +728,10 @@ All configuration is in `backend/app/config.py` as a Pydantic `Settings` class. 
 
 | Variable | Default | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `""` | Required for AI analysis |
-| `ANTHROPIC_MODEL` | `"claude-sonnet-4-20250514"` | Claude model to use |
+| `OPENAI_API_KEY` | `""` | Primary provider API key |
+| `OPENAI_MODEL` | `"gpt-5.6-luna"` | Primary AI model |
+| `ANTHROPIC_API_KEY` | `""` | Fallback provider API key |
+| `ANTHROPIC_MODEL` | `"claude-haiku-4-5-20251001"` | Fallback AI model |
 | `VIRUSTOTAL_API_KEY` | `""` | Optional — skipped if empty |
 | `ABUSEIPDB_API_KEY` | `""` | Optional — skipped if empty |
 | `PHISHTANK_API_KEY` | `""` | Optional — higher rate limits |
@@ -829,7 +831,7 @@ python -m alembic upgrade head
 
 Required env keys in `backend/.env`:
 - `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default: `gpt-5-mini`)
+- `OPENAI_MODEL` (default: `gpt-5.6-luna`)
 - `REDIS_URL`
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
@@ -838,7 +840,7 @@ Required env keys in `backend/.env`:
 
 Optional fallback keys:
 - `ANTHROPIC_API_KEY`
-- `ANTHROPIC_MODEL`
+- `ANTHROPIC_MODEL` (default: `claude-haiku-4-5-20251001`)
 
 ### 13.3 Start API + Celery Worker (recommended script)
 

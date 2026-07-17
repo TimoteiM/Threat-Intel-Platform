@@ -24,8 +24,8 @@ from app.services.soc_indicator_service import SOCIndicatorService
 
 logger = logging.getLogger(__name__)
 
-PRIMARY_MODEL = "claude-haiku-4-5-20251001"
-FALLBACK_MODEL = "gpt-5-mini"
+PRIMARY_MODEL = "gpt-5.6-luna"
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 
 class AssistantService:
@@ -253,27 +253,30 @@ class AssistantService:
                 return await self._call_claude(model=model, system=system, user_text=user_text)
             return await self._call_openai(model=model, system=system, user_text=user_text)
 
-        if self.settings.anthropic_api_key:
+        primary_model = (getattr(self.settings, "openai_model", None) or PRIMARY_MODEL).strip()
+        fallback_model = (getattr(self.settings, "anthropic_model", None) or FALLBACK_MODEL).strip()
+
+        if self.settings.openai_api_key:
             try:
-                logger.info("Assistant primary model=%s", PRIMARY_MODEL)
-                text = await self._call_claude(model=PRIMARY_MODEL, system=system, user_text=user_text)
+                logger.info("Assistant primary model=%s", primary_model)
+                text = await self._call_openai(model=primary_model, system=system, user_text=user_text)
                 if text.strip():
                     return text
-                logger.warning("Assistant Haiku returned empty output; falling back to GPT-5 Mini")
+                logger.warning("Assistant OpenAI returned empty output; falling back to Claude Haiku 4.5")
             except Exception as exc:
                 logger.warning(
-                    "Assistant Haiku call failed (%s: %s); falling back to GPT-5 Mini",
+                    "Assistant OpenAI call failed (%s: %s); falling back to Claude Haiku 4.5",
                     type(exc).__name__,
                     exc,
                 )
 
-        if not self.settings.openai_api_key:
+        if not self.settings.anthropic_api_key:
             raise ValueError(
-                "Both primary (Haiku) and fallback (GPT-5 Mini) are unavailable: "
-                "ANTHROPIC_API_KEY and OPENAI_API_KEY are both unset."
+                "Both primary (OpenAI) and fallback (Claude Haiku 4.5) are unavailable: "
+                "OPENAI_API_KEY and ANTHROPIC_API_KEY are both unset."
             )
-        logger.info("Assistant fallback model=%s", FALLBACK_MODEL)
-        return await self._call_openai(model=FALLBACK_MODEL, system=system, user_text=user_text)
+        logger.info("Assistant fallback model=%s", fallback_model)
+        return await self._call_claude(model=fallback_model, system=system, user_text=user_text)
 
     async def _call_openai(self, *, model: str, system: str, user_text: str) -> str:
         client = AsyncOpenAI(api_key=self.settings.openai_api_key)

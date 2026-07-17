@@ -13,7 +13,6 @@ import PageHero from "@/components/ui/PageHero";
 import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
 
-import ExecutiveSummaryTab from "@/components/report/ExecutiveSummaryTab";
 import TechnicalEvidenceTab from "@/components/report/TechnicalEvidenceTab";
 import FindingsTab from "@/components/report/FindingsTab";
 import IndicatorsTab from "@/components/report/IndicatorsTab";
@@ -21,6 +20,7 @@ import SignalsTab from "@/components/report/SignalsTab";
 import InfrastructureTab from "@/components/report/InfrastructureTab";
 import AnyRunProcessGraphTab from "@/components/report/AnyRunProcessGraphTab";
 import SocIntelligenceTab from "@/components/report/SocIntelligenceTab";
+import AICaseStoryTab from "@/components/report/AICaseStoryTab";
 
 import * as api from "@/lib/api";
 import { useSSE } from "@/hooks/useSSE";
@@ -32,7 +32,7 @@ const { shouldTriggerDomainCompletionRefresh } = completionRefresh;
 
 // Full tab set for domain / URL investigations (Claude analysis available)
 const DOMAIN_TABS = [
-  { id: "summary", label: "Executive Summary" },
+  { id: "case_story", label: "AI Case Story" },
   { id: "intelligence", label: "SOC Intelligence" },
   { id: "evidence", label: "Technical Evidence" },
   { id: "findings", label: "Findings" },
@@ -46,6 +46,7 @@ const DOMAIN_TABS = [
 // Minimal tab set for fast-path types (hash / ip / file)
 // No AI-generated narrative - just technical evidence and IOCs.
 const FAST_PATH_TABS = [
+  { id: "case_story", label: "AI Case Story" },
   { id: "intelligence", label: "SOC Intelligence" },
   { id: "evidence", label: "Technical Evidence" },
   { id: "indicators", label: "Indicators & Pivots" },
@@ -69,7 +70,7 @@ const DEFAULT_COLLECTOR_ORDER = [
   "opencti",
 ] as const;
 
-type TabId = "summary" | "intelligence" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
+type TabId = "case_story" | "intelligence" | "evidence" | "findings" | "indicators" | "signals" | "infrastructure" | "anyrun" | "raw";
 
 const pageShellStyle: React.CSSProperties = {
   paddingTop: 24,
@@ -189,7 +190,7 @@ export default function InvestigationPage() {
   const observableType = detail?.observable_type || "domain";
   const isFastPath = FAST_PATH_TYPES.has(observableType);
   const tabs = isFastPath ? FAST_PATH_TABS : DOMAIN_TABS;
-  const defaultTab: TabId = isFastPath ? "evidence" : "summary";
+  const defaultTab: TabId = "case_story";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
   const [tabError, setTabError] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
@@ -726,8 +727,8 @@ export default function InvestigationPage() {
   function renderTab() {
     try {
       switch (activeTab) {
-        case "summary":
-          return report ? <ExecutiveSummaryTab report={report} intelligence={intelligence} /> : <NoData label="report" />;
+        case "case_story":
+          return report ? <AICaseStoryTab investigationId={investigationId} initialStory={report?.ai_case_story} /> : <NoData label="completed report" />;
         case "intelligence":
           return <SocIntelligenceTab intelligence={intelligence} report={report} evidence={evidence} detail={detail} loading={!intelligence && !evidence && !report} />;
         case "evidence":
@@ -808,6 +809,7 @@ export default function InvestigationPage() {
               >
                 {String(report.ai_model).startsWith("claude-sonnet") ? "Sonnet 4.6"
                   : String(report.ai_model).startsWith("claude-haiku") ? "Haiku 4.5"
+                  : report.ai_model === "gpt-5.6-luna" ? "GPT-5.6 Luna"
                   : String(report.ai_model).startsWith("claude-opus") ? "Opus 4.6"
                   : String(report.ai_model).replace(" (default)", "")}
               </StatusPill>

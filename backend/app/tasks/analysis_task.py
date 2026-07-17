@@ -993,6 +993,34 @@ def run_analysis(
     evidence_data["pipeline_timings_ms"] = phase_timings_ms
     logger.info(f"[{investigation_id}] Analysis phase timings (ms): {phase_timings_ms}")
 
+    # Build and persist the default Case Story from the already-paid analyst
+    # report plus deterministic intelligence. This makes it the primary summary
+    # without a second model request or provider-side retention.
+    try:
+        from app.services.investigation_case_story_service import build_saved_case_story, compact_case_context
+        from app.services.investigation_intelligence import build_investigation_intelligence
+
+        detail_for_story = {
+            "id": investigation_id, "domain": domain, "observable_type": observable_type,
+            "state": "concluded", "classification": report_data.get("classification"),
+            "confidence": report_data.get("confidence"), "risk_score": report_data.get("risk_score"),
+            "recommended_action": report_data.get("recommended_action"),
+            "created_at": evidence_data.get("timestamps", {}).get("started"),
+            "concluded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        story_intelligence = build_investigation_intelligence(
+            evidence=evidence_data, report=report_data, detail=detail_for_story,
+        )
+        story_context = compact_case_context(
+            detail=detail_for_story, evidence=evidence_data, report=report_data, intelligence=story_intelligence,
+        )
+        report_data["ai_case_story"] = build_saved_case_story(
+            context=story_context,
+            model=str(report_data.get("ai_model") or "Automated report synthesis"),
+        ).model_dump(mode="json")
+    except Exception as e:
+        logger.warning("[%s] Saved Case Story synthesis failed: %s", investigation_id, e)
+
     # -- 5. Build final result --
     result = {
         "investigation_id": investigation_id,

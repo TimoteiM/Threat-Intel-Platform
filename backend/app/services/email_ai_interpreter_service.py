@@ -21,8 +21,8 @@ from app.services.provider_usage_metrics import record_provider_request
 
 logger = logging.getLogger(__name__)
 
-PRIMARY_MODEL = "claude-haiku-4-5-20251001"
-FALLBACK_MODEL = "gpt-5-mini"
+PRIMARY_MODEL = "gpt-5.6-luna"
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 
 SYSTEM_PROMPT = """You are a Senior SOC Analyst AI performing structured email threat investigations.
@@ -130,34 +130,36 @@ async def interpret_email_results_with_ai(
     )
 
     text = ""
-    if settings.anthropic_api_key:
+    primary_model = (settings.openai_model or PRIMARY_MODEL).strip() or PRIMARY_MODEL
+    fallback_model = (settings.anthropic_model or FALLBACK_MODEL).strip() or FALLBACK_MODEL
+    if settings.openai_api_key:
         try:
-            text = await _call_claude(
-                api_key=settings.anthropic_api_key,
-                model=PRIMARY_MODEL,
+            text = await _call_openai(
+                api_key=settings.openai_api_key,
+                model=primary_model,
                 system=SYSTEM_PROMPT,
                 user_text=user_text,
             )
             if not (text or "").strip():
-                logger.warning("Claude Haiku email interpretation returned empty output. Falling back to GPT-5 Mini.")
+                logger.warning("OpenAI email interpretation returned empty output. Falling back to Claude Haiku 4.5.")
                 text = ""
-        except Exception as anthropic_err:
+        except Exception as openai_err:
             logger.warning(
-                "Claude Haiku email interpretation failed (%s: %s). Falling back to GPT-5 Mini.",
-                type(anthropic_err).__name__,
-                anthropic_err,
+                "OpenAI email interpretation failed (%s: %s). Falling back to Claude Haiku 4.5.",
+                type(openai_err).__name__,
+                openai_err,
             )
             text = ""
 
     if not (text or "").strip():
-        if not settings.openai_api_key:
+        if not settings.anthropic_api_key:
             raise ValueError(
-                "Both primary (Haiku) and fallback (GPT-5 Mini) are unavailable: "
-                "ANTHROPIC_API_KEY and OPENAI_API_KEY are both unset."
+                "Both primary (OpenAI) and fallback (Claude Haiku 4.5) are unavailable: "
+                "OPENAI_API_KEY and ANTHROPIC_API_KEY are both unset."
             )
-        text = await _call_openai(
-            api_key=settings.openai_api_key,
-            model=FALLBACK_MODEL,
+        text = await _call_claude(
+            api_key=settings.anthropic_api_key,
+            model=fallback_model,
             system=SYSTEM_PROMPT,
             user_text=user_text,
         )

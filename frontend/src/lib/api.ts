@@ -86,11 +86,31 @@ async function requestWithDirectFallback<T>(path: string, options?: RequestInit)
       return res.json();
     } catch (error) {
       lastError = error;
+      // A backend HTTP response means the request was delivered. Retrying it
+      // through another endpoint can duplicate expensive/non-idempotent work.
+      if (error instanceof ApiError) throw error;
       if (!canUseDirectBackendFallback()) break;
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error("Request failed");
+}
+
+async function requestLongRunning<T>(path: string, options?: RequestInit): Promise<T> {
+  // Exactly one submission: long-running AI requests must never be replayed
+  // automatically because the first request may already be billable.
+  const endpoint = canUseDirectBackendFallback()
+    ? `${resolveDirectBackendBase()}${BASE}${path}`
+    : `${BASE}${path}`;
+  const res = await fetch(endpoint, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+  return res.json();
 }
 
 // ─── Investigation endpoints ───
@@ -338,6 +358,20 @@ export function getReport(id: string) {
 
 export function getInvestigationIntelligence(id: string) {
   return request<any>(`/investigations/${id}/intelligence`);
+}
+
+export function generateCaseStory(id: string) {
+  // Case Story generation can exceed the Next.js rewrite proxy timeout while
+  // the reasoning model is still successfully working. Use the browser-to-API
+  // path on local/private deployments and retain the proxy as fallback.
+  return requestLongRunning<any>(`/investigations/${id}/case-story`, { method: "POST" });
+}
+
+export function askCaseStory(id: string, question: string) {
+  return requestLongRunning<any>(`/investigations/${id}/case-story/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
 }
 
 export function getSOCIndicatorGraph(params?: { search?: string; severity?: string; limit?: number }) {

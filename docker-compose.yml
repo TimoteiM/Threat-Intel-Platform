@@ -45,6 +45,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "opencti.siembiot.expertware.net:172.20.30.16"
@@ -78,6 +80,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "opencti.siembiot.expertware.net:172.20.30.16"
@@ -104,6 +108,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
     depends_on:
       postgres:
         condition: service_healthy

@@ -68,8 +68,8 @@ Copy-Item .env.example .env -Force
 Edit `C:\apps\threat-intel\.env` and set real values for:
 
 1. `OPENAI_API_KEY`
-2. `OPENAI_MODEL=gpt-5-mini`
-3. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (fallback)
+2. `OPENAI_MODEL=gpt-5.6-luna` (primary)
+3. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL=claude-haiku-4-5-20251001` (fallback)
 4. `VIRUSTOTAL_API_KEY`
 5. `ABUSEIPDB_API_KEY`
 6. `DATABASE_URL`

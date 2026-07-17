@@ -131,12 +131,28 @@ export default function FindingsTab({ report, evidence }: Props) {
                     borderLeft: `3px solid ${color}`,
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: f?.ttp ? 8 : 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
                     <Badge label={f?.severity || "info"} color={color} />
                     <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
                       {f?.title || "Untitled finding"}
                     </span>
                   </div>
+                  {f?.description && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-secondary)",
+                        lineHeight: 1.65,
+                        whiteSpace: "pre-line",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {String(f.description).replace(/\s+\*\s+/g, "\n• ")}
+                    </div>
+                  )}
+                  {Array.isArray(f?.evidence_refs) && f.evidence_refs.length > 0 && (
+                    <FindingEvidenceRefs refs={f.evidence_refs} evidence={evidence || undefined} />
+                  )}
                   {f?.ttp && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                       {f.ttp_url ? (
@@ -278,6 +294,72 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function FindingEvidenceRefs({ refs, evidence }: { refs: string[]; evidence?: Record<string, any> }) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: "var(--text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          marginBottom: 6,
+        }}
+      >
+        Supporting evidence
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {refs.map((ref, index) => {
+          const evidencePath = extractEvidencePath(String(ref)) || String(ref);
+          const resolved = evidence ? resolveByPath(evidence, evidencePath) : undefined;
+          const relevant = summarizeRelevantEvidence(evidencePath, resolved);
+          return (
+            <details key={`${ref}-${index}`} style={{ maxWidth: "100%" }}>
+              <summary
+                style={{
+                  cursor: "pointer",
+                  listStyle: "none",
+                  padding: "4px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-card)",
+                  color: "var(--accent)",
+                  fontSize: 10,
+                  fontFamily: "var(--font-mono)",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {ref}
+              </summary>
+              <div
+                style={{
+                  margin: "6px 0 0",
+                  padding: "10px 12px",
+                  maxWidth: "min(760px, 80vw)",
+                  maxHeight: 280,
+                  overflow: "auto",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                {resolved === undefined ? (
+                  <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                    Evidence path is referenced by the finding but no direct value is available in this report payload.
+                  </span>
+                ) : (
+                  <RelevantEvidence value={relevant} />
+                )}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function RefList({
   items,
   color,
@@ -392,11 +474,153 @@ function extractEvidencePath(text: string): string | null {
 
 function resolveByPath(obj: any, path: string): any {
   if (!obj || !path) return undefined;
-  const parts = path.split(".");
+  const parts = path.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
   let cur: any = obj;
   for (const part of parts) {
     if (cur == null || typeof cur !== "object") return undefined;
     cur = cur[part];
   }
   return cur;
+}
+
+const OMIT_EVIDENCE_KEYS = new Set([
+  "screenshots",
+  "screenshot",
+  "behavior_graph",
+  "graph",
+  "html",
+  "html_report",
+  "raw_html",
+  "report_links",
+  "api_key_slot",
+  "cache_hit",
+]);
+
+const IMPORTANT_EVIDENCE_KEYS = [
+  "verdict",
+  "classification",
+  "threat_score",
+  "risk_score",
+  "risk_level",
+  "confidence",
+  "threat_names",
+  "threatName",
+  "tags",
+  "phishing_indicators",
+  "malicious_count",
+  "suspicious_count",
+  "total_vendors",
+  "behavior_counts",
+  "network_threats",
+  "analysis_id",
+  "analysis_link",
+  "permanentUrl",
+  "mode",
+  "source",
+  "summary",
+  "score",
+  "label",
+  "top_features",
+];
+
+function summarizeRelevantEvidence(path: string, value: any): any {
+  if (value === undefined || value === null) return value;
+
+  if (path === "hybrid_analysis.items" && Array.isArray(value)) {
+    return value.slice(0, 4).map((item: any) => {
+      const raw = item?.raw_summary || {};
+      const behavior = raw?.behavior_details || {};
+      return compactEvidence({
+        verdict: item?.verdict,
+        threat_score: item?.threat_score,
+        threat_names: item?.threat_names?.length ? item.threat_names : raw?.threatName,
+        tags: item?.tags?.length ? item.tags : raw?.tags,
+        mode: raw?.mode,
+        analysis_id: item?.analysis_id,
+        analysis_link: item?.analysis_link || raw?.permanentUrl,
+        behavior_counts: raw?.behavior_counts,
+        network_threats: Array.isArray(behavior?.network_threats)
+          ? behavior.network_threats.slice(0, 5)
+          : undefined,
+      });
+    });
+  }
+
+  return compactEvidence(value);
+}
+
+function compactEvidence(value: any, depth = 0): any {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/") || value.length > 4000) {
+      return `[large content omitted: ${value.length.toLocaleString()} characters]`;
+    }
+    return value.length > 600 ? `${value.slice(0, 600)}…` : value;
+  }
+  if (typeof value !== "object") return value;
+  if (depth >= 4) return "[nested details omitted]";
+  if (Array.isArray(value)) {
+    const compacted = value
+      .slice(0, 8)
+      .map((item) => compactEvidence(item, depth + 1))
+      .filter((item) => item !== undefined);
+    if (value.length > 8) compacted.push(`[${value.length - 8} additional items omitted]`);
+    return compacted;
+  }
+
+  const entries = Object.entries(value).filter(([key, item]) => (
+    !OMIT_EVIDENCE_KEYS.has(key) &&
+    item !== null &&
+    item !== undefined &&
+    item !== "" &&
+    (!Array.isArray(item) || item.length > 0) &&
+    (typeof item !== "object" || Array.isArray(item) || Object.keys(item as object).length > 0)
+  ));
+  entries.sort(([a], [b]) => {
+    const ai = IMPORTANT_EVIDENCE_KEYS.indexOf(a);
+    const bi = IMPORTANT_EVIDENCE_KEYS.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+
+  const out: Record<string, any> = {};
+  for (const [key, item] of entries.slice(0, 18)) {
+    const compacted = compactEvidence(item, depth + 1);
+    if (compacted !== undefined) out[key] = compacted;
+  }
+  if (entries.length > 18) out._omitted = `${entries.length - 18} lower-priority fields`;
+  return out;
+}
+
+function RelevantEvidence({ value }: { value: any }) {
+  if (value === null || value === undefined) {
+    return <span style={{ color: "var(--text-dim)", fontSize: 10 }}>No relevant value available.</span>;
+  }
+  if (typeof value !== "object") {
+    return <span style={{ color: "var(--text)", fontSize: 11, overflowWrap: "anywhere" }}>{String(value)}</span>;
+  }
+
+  const rows = Array.isArray(value) ? value.map((item, index) => [String(index + 1), item]) : Object.entries(value);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      {rows.map(([key, item]: any) => (
+        <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(110px, 180px) minmax(0, 1fr)", gap: 10 }}>
+          <span style={{ color: "var(--accent)", fontSize: 10, fontWeight: 700, fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
+            {Array.isArray(value) ? `Result ${key}` : String(key).replaceAll("_", " ")}
+          </span>
+          {typeof item === "object" && item !== null ? (
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", color: "var(--text-secondary)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
+              {JSON.stringify(item, null, 2)}
+            </pre>
+          ) : (
+            <span style={{ color: "var(--text)", fontSize: 10, fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
+              {String(item)}
+            </span>
+          )}
+        </div>
+      ))}
+      <div style={{ color: "var(--text-muted)", fontSize: 9, fontStyle: "italic", marginTop: 2 }}>
+        Relevant fields only; large raw artifacts and low-signal metadata are omitted.
+      </div>
+    </div>
+  );
 }

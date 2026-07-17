@@ -37,8 +37,8 @@ copy .env.example .env
 
 Edit `.env` and set at least:
 1. `OPENAI_API_KEY`
-2. `OPENAI_MODEL=gpt-5-mini`
-3. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (fallback)
+2. `OPENAI_MODEL=gpt-5.6-luna` (primary)
+3. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL=claude-haiku-4-5-20251001` (fallback)
 4. Any intel keys you use (`VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, etc.)
 
 Do not commit `.env`.

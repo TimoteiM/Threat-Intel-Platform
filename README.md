@@ -662,7 +662,8 @@ All configuration is via environment variables (`.env` file):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | Claude model for analysis |
+| `OPENAI_MODEL` | `gpt-5.6-luna` | Primary AI model |
+| `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | Fallback AI model |
 | `VIRUSTOTAL_API_KEY` | _(empty)_ | VirusTotal API key (collector skipped if empty) |
 | `ARTIFACT_STORAGE` | `local` | Storage backend (`local` or `s3`) |
 | `ARTIFACT_LOCAL_PATH` | `./artifacts` | Local artifact directory |

@@ -62,14 +62,14 @@ _ANYRUN_HTML_THREAT_MARKERS: tuple[tuple[str, str], ...] = (
     ("clickfix", "clickfix"),
     ("clearfake", "clearfake"),
     ("phishing", "phishing"),
-    ("credential", "credential"),
+    ("credential harvesting", "credential-harvesting"),
+    ("credential theft", "credential-theft"),
     ("exploit-kit", "exploit-kit"),
     ("exploit kit", "exploit-kit"),
     ("obfuscated-js", "obfuscated-js"),
     ("obfuscated js", "obfuscated-js"),
     ("etherhiding", "etherhiding"),
     ("tdsshop", "tdsshop"),
-    ("tds", "tds"),
     ("fake captcha", "fake-captcha"),
     ("fake-captcha", "fake-captcha"),
 )
@@ -1709,7 +1709,9 @@ def _extract_anyrun_html_threat_labels(html_report: Any) -> list[str]:
     if not isinstance(html_report, str) or not html_report:
         return []
     # The SDK JSON sometimes omits the chips visible in the ANY.RUN HTML report.
-    # Scan only for known threat markers to avoid turning arbitrary page text into labels.
+    # Scan only for specific threat-family/behavior phrases. Generic words such as
+    # "credential" and "tds" occur in AnyRun's own UI/scripts and must not become
+    # threat labels merely because they exist somewhere in the HTML document.
     compact = re.sub(r"[\s_]+", " ", html_report.casefold())
     out: list[str] = []
     seen: set[str] = set()

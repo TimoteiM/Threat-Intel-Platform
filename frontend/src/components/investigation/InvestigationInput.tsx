@@ -295,7 +295,18 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                 onClick={() => submitWithProxy(item.country, true)}
                 style={proxyChoiceStyle(active)}
               >
-                <span style={proxyFlagStyle}>{countryFlag(item.country)}</span>
+                <span style={proxyFlagStyle}>
+                  <img
+                    src={countryFlagUrl(item.country)}
+                    alt={`${item.country} flag`}
+                    width={28}
+                    height={20}
+                    style={proxyFlagImageStyle}
+                    onError={(event) => {
+                      event.currentTarget.style.display = "none";
+                    }}
+                  />
+                </span>
                 <span>
                   <span style={proxyChoiceTitleStyle}>{item.label}</span>
                   <span style={proxyChoiceSubStyle}>AnyRun residential</span>
@@ -720,10 +731,9 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   );
 }
 
-function countryFlag(country: string): string {
-  const code = String(country || "").trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
-  if (code.length !== 2) return "•";
-  return String.fromCodePoint(127397 + code.charCodeAt(0), 127397 + code.charCodeAt(1));
+function countryFlagUrl(country: string): string {
+  const code = String(country || "").trim().toLowerCase().replace(/[^a-z]/g, "").slice(0, 2);
+  return code ? `https://flagcdn.com/w40/${code}.png` : "";
 }
 
 function proxyChoiceStyle(active: boolean): React.CSSProperties {
@@ -754,6 +764,14 @@ const proxyFlagStyle: React.CSSProperties = {
   border: "1px solid rgba(148, 163, 184, 0.16)",
   fontSize: 24,
   flexShrink: 0,
+  overflow: "hidden",
+};
+
+const proxyFlagImageStyle: React.CSSProperties = {
+  display: "block",
+  objectFit: "cover",
+  borderRadius: 3,
+  boxShadow: "0 0 0 1px rgba(15, 23, 42, 0.5)",
 };
 
 const proxyChoiceTitleStyle: React.CSSProperties = {

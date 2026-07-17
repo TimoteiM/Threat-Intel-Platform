@@ -14,6 +14,7 @@ POST /api/investigations/{id}/rerun-collector     → Re-run a single collector 
 from __future__ import annotations
 
 import json
+import base64
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -28,12 +29,17 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import sync_engine
-from app.dependencies import DBSession
-from app.models.database import Investigation, Evidence
+from app.dependencies import DBSession, Storage
+from app.models.database import Artifact, Investigation, Evidence
 from app.models.schemas import InvestigationCreate
 from app.services.evidence_diff_service import diff_evidence
 from app.services.investigation_service import InvestigationService
 from app.services.investigation_intelligence import build_investigation_intelligence
+from app.services.investigation_case_story_service import (
+    CaseQuestionRequest,
+    InvestigationCaseStoryService,
+    compact_case_context,
+)
 from app.tasks.cancellation import find_task_ids, revoke_task_ids
 from app.services.hybrid_analysis_service import evict_anyrun_cache
 from app.collectors.registry import get_collector, get_collectors_for_type
@@ -237,6 +243,112 @@ async def get_intelligence(investigation_id: str, session: DBSession):
     intelligence["summary"]["similar_investigations"] = len(intelligence["similar_investigations"].get("items") or [])
     intelligence["summary"]["rescan_changes"] = len((intelligence["rescan_diff"].get("changes") or {}))
     return intelligence
+
+
+@router.post("/{investigation_id}/case-story")
+async def generate_case_story(investigation_id: str, session: DBSession, storage: Storage):
+    """Generate one evidence-grounded SOC narrative, timeline, correlations and handoff."""
+    cache_key = f"case-story:v3:{investigation_id}"
+    try:
+        cached = redis_lib.Redis.from_url(settings.redis_url).get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+    detail, evidence, report, intelligence = await _load_case_material(investigation_id, session)
+    if isinstance(report.get("ai_case_story"), dict):
+        return report["ai_case_story"]
+    context = compact_case_context(detail=detail, evidence=evidence, report=report, intelligence=intelligence)
+    images = await _load_case_images(investigation_id, evidence, session, storage)
+    try:
+        story = await InvestigationCaseStoryService().generate(context=context, images=images)
+        payload = story.model_dump(mode="json")
+        try:
+            redis_lib.Redis.from_url(settings.redis_url).setex(cache_key, 604800, json.dumps(payload))
+        except Exception:
+            pass
+        return payload
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.post("/{investigation_id}/case-story/ask")
+async def ask_case_story(investigation_id: str, request: CaseQuestionRequest, session: DBSession, storage: Storage):
+    """Answer a free-form analyst question strictly from this investigation's evidence."""
+    detail, evidence, report, intelligence = await _load_case_material(investigation_id, session)
+    context = compact_case_context(detail=detail, evidence=evidence, report=report, intelligence=intelligence)
+    images = await _load_case_images(investigation_id, evidence, session, storage)
+    try:
+        return await InvestigationCaseStoryService().answer(context=context, question=request.question, images=images)
+    except ValueError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+async def _load_case_material(investigation_id: str, session: DBSession):
+    service = InvestigationService(session)
+    inv = await service.get(investigation_id)
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    evidence = await service.get_evidence(investigation_id) or {}
+    report = await service.get_report(investigation_id) or {}
+    detail = {
+        "id": str(inv.id), "domain": inv.domain, "observable_type": getattr(inv, "observable_type", "domain"),
+        "state": inv.state, "classification": inv.classification, "confidence": inv.confidence,
+        "risk_score": inv.risk_score, "recommended_action": inv.recommended_action,
+        "created_at": inv.created_at.isoformat() if inv.created_at else None,
+        "concluded_at": inv.concluded_at.isoformat() if inv.concluded_at else None,
+    }
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    intelligence["similar_investigations"] = await _build_similar_investigations(
+        session=session, current=inv, current_evidence=evidence,
+        current_iocs=(intelligence.get("ioc_quality") or {}).get("items") or [],
+    )
+    intelligence["rescan_diff"] = await _build_rescan_diff(session=session, current=inv, current_evidence=evidence)
+    return detail, evidence, report, intelligence
+
+
+async def _load_case_images(investigation_id: str, evidence: dict[str, Any], session: DBSession, storage: Storage):
+    """Resolve locally stored screenshot evidence to private data URLs for model vision."""
+    try:
+        inv_uuid = uuid.UUID(investigation_id)
+    except ValueError:
+        return []
+    candidates: list[tuple[str, str]] = []
+    def walk(value: Any, path: str = "evidence") -> None:
+        if len(candidates) >= 8:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if isinstance(child, str) and "artifact_id" in key.lower():
+                    candidates.append((child_path, child))
+                else:
+                    walk(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value[:30]):
+                walk(child, f"{path}[{index}]")
+    walk(evidence)
+    images: list[tuple[str, str]] = []
+    for ref, artifact_id in candidates:
+        try:
+            art_uuid = uuid.UUID(artifact_id)
+        except ValueError:
+            continue
+        artifact = (await session.execute(select(Artifact).where(Artifact.id == art_uuid, Artifact.investigation_id == inv_uuid))).scalar_one_or_none()
+        if not artifact:
+            continue
+        content_type = (artifact.content_type or "").lower()
+        if not content_type.startswith("image/") and not artifact.artifact_name.lower().endswith(("png", "jpg", "jpeg")):
+            continue
+        try:
+            data = await storage.load(artifact.storage_path)
+        except FileNotFoundError:
+            continue
+        mime = content_type if content_type.startswith("image/") else "image/png"
+        images.append((ref, f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"))
+        if len(images) >= 3:
+            break
+    return images
 
 
 async def _build_rescan_diff(

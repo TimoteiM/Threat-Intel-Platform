@@ -59,6 +59,44 @@ def test_decision_engine_flags_anyrun_malicious_without_ai():
     assert decision["risk_score"] == 90
 
 
+def test_decision_engine_summary_prioritizes_anyrun_residential_sandbox():
+    decision = build_decision_report(
+        {
+            "domain": "apnsolar.com",
+            "observable_type": "domain",
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "http": {"phishing_indicators": ["Third-party brand reference: 'google' on non-google domain"]},
+            "email_security": {"spoofability_score": "high"},
+            "hybrid_analysis": {
+                "items": [
+                    {
+                        "verdict": "malicious",
+                        "threat_score": 100,
+                        "threat_names": ["phishing"],
+                        "raw_summary": {
+                            "mode": "sandbox",
+                            "network_profile": {
+                                "use_residential_proxy": True,
+                                "proxy_country": "US",
+                                "anyrun_residential_proxy": True,
+                            },
+                        },
+                    }
+                ],
+            },
+            "threat_feeds": {},
+            "intel": {"blocklist_hits": []},
+        },
+        "domain",
+    )
+
+    reasoning = decision["primary_reasoning"]
+    assert "AnyRun sandbox verdict: MALICIOUS score 100 via Residential Proxy US" in reasoning
+    assert "VirusTotal: 0 malicious" not in reasoning
+    assert "High email spoofability" not in reasoning
+    assert "Third-party brand reference" not in reasoning
+
+
 def test_decision_engine_flags_anyrun_clickfix_tags_as_malicious():
     decision = build_decision_report(
         {
