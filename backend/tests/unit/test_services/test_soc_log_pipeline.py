@@ -172,3 +172,12 @@ def test_edge_cases_invalid_ipv4_and_non_string_inputs() -> None:
         reinject(None, {})  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         validate_ai_output(None)  # type: ignore[arg-type]
+
+
+def test_tokenize_ignores_user_agent_versions_that_look_like_ipv4() -> None:
+    sanitized, mapping = tokenize(
+        '@src_ip=45.148.10.62 full_log="GET /.env.tmp" "Chrome/131.0.0.0 Safari/537.36"'
+    )
+
+    assert mapping == {"IP_1": "45.148.10.62"}
+    assert "Chrome/131.0.0.0" in sanitized

@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     analyst_timeout_seconds: int = 180
     analyst_max_output_tokens: int = 16000
     collector_timeout: int = 20
+    urlscan_analysis_timeout_seconds: int = 75
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6

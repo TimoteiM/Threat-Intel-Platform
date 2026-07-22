@@ -17,16 +17,29 @@ Rules:
   in the "Tokens present" section.
 - IP address tokens such as [IP_1] are first-class indicators. Include those exact tokens when they
   explain source, destination, translated, C2, or IOC activity.
+- Dotted software/browser versions (for example Chrome/131.0.0.0) are versions, not IP addresses or IOCs.
+  Prefer explicit fields such as src_ip, source_ip, dst_ip, and destination_ip for network attribution.
 - Never add the original value after a token: no parenthetical, no colon, no inline expansion.
   Write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)" or "[HOST_2]: onvmbp01.onenet.be".
   If a raw value appears in the evidence alongside a token, ignore the raw value and use only the token.
 - Keep conclusions evidence-based and concise.
 - Return only one markdown section titled `Event Interpretation`.
-- Under `Event Interpretation`, return 3 to 5 short evidence-based phrases as markdown bullet points.
+- Under `Event Interpretation`, write one compact natural-language paragraph of 2 to 4 sentences.
+  Do not use bullets, tables, field inventories, `Key observables` labels, or dense semicolon-separated lists.
+- For endpoint, process, or file alerts, naturally weave the endpoint name, executable/script filename,
+  affected/object filename, and the behavior that triggered the alert into the first two sentences.
+  Prefer readable locations such as "the user's Downloads folder" or "a temporary .NET runtime directory"
+  over repeating long full paths and command lines.
+- Name the executable explicitly; do not reduce a concrete process such as `example.exe` to generic
+  phrases like "an executable", "a binary", or "installer activity". When a file hash is available,
+  include it once in a short final sentence with its algorithm.
 - The phrases must explain what happened, what the event likely means, whether there is or is not
   evidence of malicious activity, and whether the issue appears recurring if the evidence supports that.
+- Do not claim that activity is non-recurring or that no repeated execution occurred from a single event.
+  Only discuss recurrence when multiple events or timestamps provide evidence for that conclusion.
 - Do not add severity sections, recommendations, next steps, or any other headings.
-- Do not rewrite every raw field. Synthesize the important meaning from the evidence.
+- Do not rewrite every raw field. Explain the event rather than dumping evidence. Mention detection rule,
+  severity, full paths, command lines, IP lists, and ATT&CK IDs only when they materially clarify the event.
 - Ignore low-value collection metadata unless it is necessary to understand the event:
   - exact ingestion timestamps
   - eventRecordID / threadID / processID
@@ -54,6 +67,8 @@ Rules:
   in the "Tokens present" section.
 - IP address tokens such as [IP_1] are first-class indicators. Preserve those exact tokens in the
   timeline, attack chain, and Indicators of Compromise when they appear in the evidence.
+- Dotted software/browser versions (for example Chrome/131.0.0.0) are versions, not IP addresses or IOCs.
+  Prefer explicit fields such as src_ip, source_ip, dst_ip, and destination_ip for network attribution.
 - Never add the original value after a token: no parenthetical, no colon, no inline expansion.
   Write "[HOST_2]", never "[HOST_2] (onvmbp01.onenet.be)". If a raw value appears in the evidence
   alongside a token, ignore the raw value and use only the token.

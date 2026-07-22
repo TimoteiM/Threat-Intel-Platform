@@ -922,6 +922,70 @@ def test_extract_anyrun_html_threat_labels_from_report_chips():
     assert labels == ["clickfix", "clearfake", "phishing", "exploit-kit", "obfuscated-js"]
 
 
+def test_extract_anyrun_screenshots_uses_thumbnail_only_as_preview():
+    report_data = {
+        "analysis": {"permanentUrl": "https://app.any.run/tasks/task-1"},
+        "screenshots": [
+            {
+                "time": 8011,
+                "permanentUrl": "https://content.any.run/tasks/task-1/download/screens/shot-1/image.jpeg",
+                "thumbnailUrl": "https://content.any.run/tasks/task-1/download/thumbnails/shot-1/image.jpeg",
+            }
+        ],
+    }
+
+    screenshots = svc._extract_screenshot_thumbnails(report_data, "")
+
+    assert screenshots == [
+        {
+            "label": "ANY.RUN sandbox screenshot",
+            "url": "https://content.any.run/tasks/task-1/download/screens/shot-1/image.jpeg",
+            "thumbnail_url": "https://content.any.run/tasks/task-1/download/thumbnails/shot-1/image.jpeg",
+            "captured_at": 8011,
+            "report_url": "https://app.any.run/tasks/task-1#Screenshots",
+        }
+    ]
+
+
+def test_extract_anyrun_screenshots_reads_analysis_content_path():
+    report_data = {
+        "analysis": {
+            "permanentUrl": "https://app.any.run/tasks/task-1",
+            "content": {
+                "screenshots": [
+                    {
+                        "uuid": "shot-1",
+                        "time": 3193,
+                        "permanentUrl": "https://content.any.run/tasks/task-1/download/screens/shot-1/image.jpeg",
+                        "thumbnailUrl": "https://content.any.run/tasks/task-1/download/thumbnails/shot-1/image.jpeg",
+                    }
+                ]
+            },
+        }
+    }
+
+    screenshots = svc._extract_screenshot_thumbnails(report_data, "")
+
+    assert len(screenshots) == 1
+    assert screenshots[0]["url"].endswith("/download/screens/shot-1/image.jpeg")
+    assert screenshots[0]["thumbnail_url"].endswith("/download/thumbnails/shot-1/image.jpeg")
+
+
+def test_extract_anyrun_screenshots_supports_serialized_report_objects():
+    report_data = {
+        "screenshots": [
+            "@{time=2980; uuid=shot-1; permanentUrl=https://content.any.run/tasks/task-1/download/screens/shot-1/image.jpeg; "
+            "thumbnailUrl=https://content.any.run/tasks/task-1/download/thumbnails/shot-1/image.jpeg}"
+        ]
+    }
+
+    screenshots = svc._extract_screenshot_thumbnails(report_data, "")
+
+    assert screenshots[0]["url"].endswith("/download/screens/shot-1/image.jpeg")
+    assert screenshots[0]["thumbnail_url"].endswith("/download/thumbnails/shot-1/image.jpeg")
+    assert screenshots[0]["captured_at"] == "2980"
+
+
 def test_extract_anyrun_html_threat_labels_ignores_generic_ui_words():
     html = """
     <script>const credentialField = true; const tds = window.trackingData;</script>
@@ -963,8 +1027,8 @@ def test_submit_anyrun_task_retries_without_privacy_on_provider_plan_restriction
         def __init__(self):
             self.calls = []
 
-        def run_url_analysis(self, target, opt_privacy_type=None):
-            self.calls.append((target, opt_privacy_type))
+        def run_url_analysis(self, target, opt_privacy_type=None, opt_automated_interactivity=None):
+            self.calls.append((target, opt_privacy_type, opt_automated_interactivity))
             if opt_privacy_type == "owner":
                 raise RuntimeError("[AnyRun Exception] Status code: 403. Description: API is not available on the free plan")
             return "task-ok"
@@ -983,8 +1047,8 @@ def test_submit_anyrun_task_retries_without_privacy_on_provider_plan_restriction
 
     assert out == "task-ok"
     assert connector.calls == [
-        ("https://example.test", "owner"),
-        ("https://example.test", None),
+        ("https://example.test", "owner", True),
+        ("https://example.test", None, True),
     ]
 
 
@@ -1021,6 +1085,7 @@ def test_submit_anyrun_task_adds_residential_proxy_geo_when_country_selected(mon
 
     assert out == "task-ok"
     assert connector.calls[0][0] == "https://example.test"
+    assert connector.calls[0][1]["opt_automated_interactivity"] is True
     assert connector.calls[0][1]["opt_network_residential_proxy"] is True
     assert connector.calls[0][1]["opt_network_residential_proxy_geo"] == "US"
 
@@ -1059,6 +1124,7 @@ def test_submit_anyrun_task_omits_residential_proxy_when_disabled(monkeypatch):
     assert out == "task-ok"
     assert "opt_network_residential_proxy" not in connector.calls[0][1]
     assert "opt_network_residential_proxy_geo" not in connector.calls[0][1]
+    assert connector.calls[0][1]["opt_automated_interactivity"] is True
 
 
 def test_submit_anyrun_task_uses_fastest_geo_when_residential_enabled_without_country(monkeypatch):
@@ -1129,6 +1195,35 @@ def test_submit_anyrun_file_task_adds_residential_proxy(monkeypatch):
     assert out == "task-ok"
     assert connector.calls[0]["opt_network_residential_proxy"] is True
     assert connector.calls[0]["opt_network_residential_proxy_geo"] == "GB"
+    assert connector.calls[0]["opt_automated_interactivity"] is True
+
+
+def test_submit_anyrun_task_fails_closed_when_sdk_cannot_enable_interactivity(monkeypatch):
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+        anyrun_url_sandbox_analysis_timeout = 120
+        anyrun_url_sandbox_mitm = True
+
+    class _OutdatedConnector:
+        def run_url_analysis(self, target, opt_timeout=120):
+            return "task-should-not-run"
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=_OutdatedConnector(),
+        indicator="example.test",
+        indicator_type="url",
+        privacy_type="owner",
+        file_bytes=None,
+        file_name=None,
+    )
+
+    assert "required Enterprise sandbox option" in out["__error__"]
+    assert "opt_automated_interactivity" in out["__error__"]
 
 
 def test_transient_provider_error_matches_unknown_error():
@@ -1159,7 +1254,8 @@ def test_run_sandbox_returns_report_not_ready_when_task_still_running(monkeypatc
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def run_url_analysis(self, target, opt_privacy_type=None):
+        def run_url_analysis(self, target, opt_privacy_type=None, opt_automated_interactivity=None):
+            assert opt_automated_interactivity is True
             return "task-1"
 
         def get_task_status(self, task_id):
@@ -1197,7 +1293,8 @@ def test_run_sandbox_uses_completed_report_after_wait(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def run_url_analysis(self, target, opt_privacy_type=None):
+        def run_url_analysis(self, target, opt_privacy_type=None, opt_automated_interactivity=None):
+            assert opt_automated_interactivity is True
             return "task-1"
 
         def get_task_status(self, task_id):
@@ -1253,7 +1350,8 @@ def test_run_sandbox_retries_summary_report_without_explicit_format(monkeypatch)
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def run_url_analysis(self, target, opt_privacy_type=None):
+        def run_url_analysis(self, target, opt_privacy_type=None, opt_automated_interactivity=None):
+            assert opt_automated_interactivity is True
             return "task-1"
 
         def get_task_status(self, task_id):

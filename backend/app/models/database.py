@@ -129,6 +129,9 @@ class Investigation(Base):
     soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
         back_populates="investigation", cascade="all, delete-orphan"
     )
+    case_chat_messages: Mapped[list["InvestigationCaseChatMessage"]] = relationship(
+        back_populates="investigation", cascade="all, delete-orphan"
+    )
 
     # Indexes
     __table_args__ = (
@@ -538,6 +541,38 @@ class AssistantSession(Base):
         Index("idx_assistant_sessions_mode", "mode"),
         Index("idx_assistant_sessions_status", "status"),
         Index("idx_assistant_sessions_investigation", "linked_investigation_id"),
+    )
+
+
+class InvestigationCaseChatMessage(Base):
+    """A durable message in the evidence-grounded chat for one investigation."""
+
+    __tablename__ = "investigation_case_chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    investigation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    evidence_refs_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    limitations_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    suggested_followups_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    investigation: Mapped[Investigation] = relationship(back_populates="case_chat_messages")
+
+    __table_args__ = (
+        Index("idx_case_chat_investigation", "investigation_id"),
+        Index("idx_case_chat_investigation_created", "investigation_id", "created_at"),
     )
 
 

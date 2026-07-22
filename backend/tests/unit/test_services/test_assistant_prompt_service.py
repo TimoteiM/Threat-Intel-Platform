@@ -53,6 +53,22 @@ def test_alert_prompt_requires_key_indicator_ips_and_tokens_to_be_preserved() ->
     assert "source, destination, translated, c2, or ioc activity" in system.lower()
 
 
+def test_alert_prompt_requires_endpoint_process_hash_and_attack_observables() -> None:
+    system, _ = prompt_service.build_alert_analysis_prompt(
+        title="Endpoint alert",
+        sanitized_entries=[{"entry_label": "alert-1", "sanitized_text": "processFilePath=C:\\\\Temp\\\\sample.exe"}],
+    )
+
+    lowered = system.lower()
+    assert "one compact natural-language paragraph" in lowered
+    assert "do not use bullets" in lowered
+    assert "endpoint name" in lowered
+    assert "executable/script filename" in lowered
+    assert "file hash is available" in lowered
+    assert "name the executable explicitly" in lowered
+    assert "do not claim that activity is non-recurring" in lowered
+
+
 def test_incident_prompt_contains_timeline_iocs_root_cause_sections() -> None:
     system, user = prompt_service.build_incident_correlation_prompt(
         title="Multi-stage incident",

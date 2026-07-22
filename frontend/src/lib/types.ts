@@ -482,8 +482,12 @@ export interface URLLexicalMLEvidence {
   label?: "low" | "medium" | "high" | string;
   top_features?: string[];
   feature_contributions?: Record<string, number>;
+  features?: Record<string, number>;
   thresholds?: Record<string, number>;
   weights?: Record<string, number>;
+  raw_score?: number;
+  calibration_applied?: boolean;
+  rule_floor_applied?: boolean;
   error?: string;
 }
 
@@ -1349,5 +1353,4 @@ export interface AssistantSessionListItem {
 export interface AssistantSessionDetail extends AssistantSessionListItem {
   entries: AssistantEntry[];
 }
-
 

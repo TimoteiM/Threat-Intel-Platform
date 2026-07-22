@@ -2,10 +2,24 @@
 
 import React, { useEffect, useState } from "react";
 import * as api from "@/lib/api";
+import InvestigationCaseChat from "./InvestigationCaseChat";
 
 const panel: React.CSSProperties = { background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 18 };
 const muted: React.CSSProperties = { color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.6 };
 const button: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg-elevated)", color: "var(--text)", padding: "8px 12px", cursor: "pointer", fontWeight: 650, fontSize: 12 };
+
+function verdictTone(verdict: unknown): { color: string; background: string } {
+  switch (String(verdict || "").toLowerCase()) {
+    case "benign":
+      return { color: "#34d399", background: "rgba(52,211,153,.12)" };
+    case "suspicious":
+      return { color: "#fbbf24", background: "rgba(251,191,36,.12)" };
+    case "malicious":
+      return { color: "#fb7185", background: "rgba(239,68,68,.12)" };
+    default:
+      return { color: "#94a3b8", background: "rgba(148,163,184,.12)" };
+  }
+}
 
 function RefPills({ refs }: { refs?: string[] }) {
   // Evidence paths remain in the structured response for grounding, audit,
@@ -24,9 +38,6 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
   const [story, setStory] = useState<any>(initialStory || null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<any>(null);
-  const [asking, setAsking] = useState(false);
 
   useEffect(() => {
     if (initialStory) setStory(initialStory);
@@ -38,13 +49,6 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
     catch (e: any) { setError(e?.message || "Case Story generation failed"); }
     finally { setLoading(false); }
   }
-  async function ask() {
-    if (!question.trim()) return;
-    setAsking(true); setAnswer(null);
-    try { setAnswer(await api.askCaseStory(investigationId, question.trim())); }
-    catch (e: any) { setAnswer({ answer: e?.message || "The question could not be answered.", confidence: "low", limitations: [] }); }
-    finally { setAsking(false); }
-  }
   if (!story) return <div style={{ ...panel, padding: 32, textAlign: "center", background: "linear-gradient(135deg, var(--bg-card), rgba(59,130,246,.08))" }}>
     <div style={{ fontSize: 11, letterSpacing: ".12em", color: "var(--accent)", fontWeight: 800 }}>AI CASE STORY</div>
     <h2 style={{ margin: "10px 0 8px", fontSize: 22 }}>Turn the evidence into one SOC-ready investigation story</h2>
@@ -53,11 +57,13 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
     {error && <div style={{ color: "var(--red)", marginTop: 14, fontSize: 12 }}>{error}</div>}
   </div>;
 
+  const storyTone = verdictTone(story.verdict);
+
   return <div style={{ display: "grid", gap: 14 }}>
     <div style={{ ...panel, background: "linear-gradient(135deg, var(--bg-card), rgba(59,130,246,.10))", borderLeft: "3px solid var(--accent)" }}>
       <div style={{ display: "flex", gap: 14, justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div><div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 800, letterSpacing: ".1em" }}>AI CASE STORY · {story.model}</div><h2 style={{ margin: "7px 0", fontSize: 21 }}>{story.headline}</h2><div style={muted}>{story.generated_at ? new Date(story.generated_at).toLocaleString() : ""}</div></div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><strong style={{ fontSize: 26 }}>{story.risk_score}</strong><span style={{ padding: "6px 9px", borderRadius: 6, background: "rgba(239,68,68,.12)", color: "#fb7185", fontWeight: 800, fontSize: 12 }}>{story.verdict}</span><span style={muted}>{story.confidence} confidence</span></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><strong style={{ fontSize: 26 }}>{story.risk_score}</strong><span style={{ padding: "6px 9px", borderRadius: 6, background: storyTone.background, color: storyTone.color, fontWeight: 800, fontSize: 12 }}>{story.verdict}</span><span style={muted}>{story.confidence} confidence</span></div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 16, marginTop: 18 }}><div><b style={{ fontSize: 12 }}>What happened</b><p style={muted}>{story.what_happened}</p></div><div><b style={{ fontSize: 12 }}>Why it matters</b><p style={muted}>{story.why_it_matters}</p></div></div>
     </div>
@@ -78,7 +84,7 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
 
     <Section title="Prioritized SOC actions"><div style={{ display: "grid", gap: 8 }}>{story.recommended_actions?.map((item: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, padding: 10, background: "var(--bg-elevated)", borderRadius: 7 }}><b style={{ color: item.priority === "P1" ? "#fb7185" : item.priority === "P2" ? "#fbbf24" : "#60a5fa" }}>{item.priority}</b><div><b style={{ fontSize: 12 }}>{item.action}</b><div style={muted}>{item.rationale}</div><RefPills refs={item.evidence_refs} /></div></div>)}</div>{story.data_gaps?.length > 0 && <div style={{ marginTop: 14 }}><b style={{ fontSize: 11 }}>Data gaps</b>{story.data_gaps.map((x: string) => <div key={x} style={muted}>• {x}</div>)}</div>}</Section>
 
-    <Section title="Ask this investigation"><div style={{ display: "flex", gap: 8 }}><input value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="e.g. What evidence most strongly supports blocking this domain?" style={{ flex: 1, minWidth: 0, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 7, padding: "10px 12px", color: "var(--text)" }} /><button style={button} onClick={ask} disabled={asking}>{asking ? "Analyzing…" : "Ask"}</button></div>{answer && <div style={{ marginTop: 12, padding: 13, background: "var(--bg-elevated)", borderRadius: 7 }}><div style={{ ...muted, color: "var(--text)", whiteSpace: "pre-wrap" }}>{answer.answer}</div><RefPills refs={answer.evidence_refs} /><div style={{ ...muted, marginTop: 8 }}>Confidence: {answer.confidence}{answer.limitations?.length ? ` · Limitations: ${answer.limitations.join("; ")}` : ""}</div></div>}</Section>
+    <InvestigationCaseChat investigationId={investigationId} />
 
   </div>;
 }

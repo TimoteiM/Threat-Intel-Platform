@@ -55,7 +55,7 @@ def aggregate_risk(evidence: dict[str, Any], *, weights: dict[str, float] | None
     if attachment >= 0.55:
         rationale.append("Attachment static analysis indicates elevated risk")
     if sandbox >= 0.55:
-        rationale.append("Hybrid Analysis indicates suspicious/malicious behavior")
+        rationale.append("AnyRun indicates suspicious/malicious behavior")
     if infra >= 0.55:
         rationale.append("Infrastructure/reputation collectors indicate elevated risk")
     if opencti >= 0.55:
@@ -114,7 +114,21 @@ def _sandbox_score(hybrid: dict[str, Any]) -> float:
         for e in entries:
             if not isinstance(e, dict):
                 continue
+            scope = e.get("scope_validation") or (e.get("raw_summary") or {}).get("scope_validation") or {}
+            if isinstance(scope, dict) and scope.get("scope_match") is False:
+                continue
             verdict = str(e.get("verdict") or "unknown").lower()
+            verdict_context = e.get("verdict_context") or {}
+            if (
+                verdict == "clean"
+                and isinstance(verdict_context, dict)
+                and verdict_context.get("msdw_false_positive_exclusion_applied") is True
+                and verdict_context.get("excluded_from_final_risk") is True
+            ):
+                # The provider verdict was caused solely by a qualified benign
+                # MSDW diagnostic signature. It must contribute zero, not the
+                # normal small baseline assigned to a clean sandbox result.
+                continue
             if verdict == "malicious":
                 best = max(best, 0.9)
             elif verdict == "suspicious":

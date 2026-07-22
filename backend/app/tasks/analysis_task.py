@@ -30,6 +30,7 @@ from app.models.enums import InvestigationState
 from app.config import get_settings
 from app.services.decision_engine import apply_decision_to_report, build_decision_report
 from app.services.proxy_profiles import selected_proxy_summary
+from app.services.provider_branding import normalize_anyrun_branding
 from app.utils.domain_utils import extract_registered_domain
 
 logger = logging.getLogger(__name__)
@@ -439,6 +440,8 @@ def run_analysis(
             if art_id:
                 artifact_ids[artifact_name] = art_id
 
+        _attach_artifact_ids(evidence_data[field_name], artifact_ids)
+
         # Normalize known artifact id fields to true DB UUID ids.
         if name == "urlscan":
             urlscan_ev = evidence_data.get("urlscan") or {}
@@ -820,6 +823,8 @@ def run_analysis(
         _time_phase("attachment_static_analysis", attachment_phase_start)
 
     # -- 4. Generate signals and detect gaps --
+    from app.services.anyrun_scope import apply_anyrun_scope_guard
+    apply_anyrun_scope_guard(evidence_data)
     signal_phase_start = time.monotonic()
     signals = generate_signals(evidence_data)
     gaps = detect_data_gaps(evidence_data)
@@ -959,6 +964,7 @@ def run_analysis(
         _time_phase("report_generation", report_phase_start)
 
     report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
+    report_data = normalize_anyrun_branding(report_data)
 
     # Record which AI model produced this report — set after _ensure_report_completeness
     # so it is guaranteed to survive into the persisted report_json.
@@ -2446,6 +2452,8 @@ def recompute_report_for_existing_investigation(
             evidence_data.setdefault("domain", domain)
             evidence_data.setdefault("observable_type", observable_type)
             evidence_data.setdefault("investigation_id", investigation_id)
+            from app.services.anyrun_scope import apply_anyrun_scope_guard
+            apply_anyrun_scope_guard(evidence_data)
 
             signals = generate_signals(evidence_data)
             gaps = detect_data_gaps(evidence_data)
@@ -2461,16 +2469,17 @@ def recompute_report_for_existing_investigation(
             except Exception as exc:
                 logger.warning("[%s] Recompute risk aggregation failed: %s", investigation_id, exc)
 
-            decision_report = build_decision_report(evidence_data, observable_type)
+            canonical_decision = build_decision_report(evidence_data, observable_type)
             report_data = apply_decision_to_report(
                 _generate_automated_report(evidence_data, observable_type),
-                decision_report,
+                canonical_decision,
             )
             _inject_lexical_contribution(report_data, evidence_data)
             _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
-            decision_report = apply_decision_to_report(decision_report, report_data)
+            decision_report = apply_decision_to_report(canonical_decision, report_data)
             report_data = apply_decision_to_report(report_data, decision_report)
             report_data = _ensure_report_completeness(report_data, evidence_data, observable_type)
+            report_data = normalize_anyrun_branding(report_data)
             report_data["ai_model"] = None
             report_data["report_freshness"] = {
                 "status": "fresh",
@@ -2478,11 +2487,58 @@ def recompute_report_for_existing_investigation(
                 "reason": reason,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
+            # Automated fallback prose may have been produced before the
+            # canonical overrides were applied. Keep every visible narrative
+            # and list consistent with the corrected deterministic decision.
+            for field in ("key_evidence", "findings", "data_needed", "recommended_steps"):
+                report_data[field] = canonical_decision.get(field) or []
+            evidence_summary = "; ".join((report_data.get("key_evidence") or [])[:5])
             report_data["primary_reasoning"] = (
-                f"Report recomputed after {reason}. "
-                + str(report_data.get("primary_reasoning") or "")
-            ).strip()
+                f"Deterministic report recomputed after {reason} for {observable_type.upper()} - {domain}. "
+                f"Classification: {str(report_data.get('classification') or 'inconclusive').upper()} "
+                f"({report_data.get('confidence') or 'low'} confidence). Risk score: "
+                f"{report_data.get('risk_score')}/100. Key evidence: {evidence_summary or 'no high-risk indicators found.'}"
+            )
+            report_data["executive_summary"] = report_data["primary_reasoning"]
+            report_data["recommendations_narrative"] = " ".join(
+                f"{idx}. {step}" for idx, step in enumerate(report_data.get("recommended_steps") or [], start=1)
+            )
             _align_final_risk_with_report(evidence_data, report_data)
+
+            # Keep the default Case Story in sync without another LLM request.
+            # It is derived from this deterministic report and saved in the new
+            # report iteration just like an initially completed investigation.
+            try:
+                from app.services.investigation_case_story_service import build_saved_case_story, compact_case_context
+                from app.services.investigation_intelligence import build_investigation_intelligence
+
+                detail_for_story = {
+                    "id": investigation_id,
+                    "domain": domain,
+                    "observable_type": observable_type,
+                    "state": "concluded",
+                    "classification": report_data.get("classification"),
+                    "confidence": report_data.get("confidence"),
+                    "risk_score": report_data.get("risk_score"),
+                    "recommended_action": report_data.get("recommended_action"),
+                    "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                    "concluded_at": datetime.now(timezone.utc).isoformat(),
+                }
+                story_intelligence = build_investigation_intelligence(
+                    evidence=evidence_data, report=report_data, detail=detail_for_story,
+                )
+                story_context = compact_case_context(
+                    detail=detail_for_story,
+                    evidence=evidence_data,
+                    report=report_data,
+                    intelligence=story_intelligence,
+                )
+                report_data["ai_case_story"] = build_saved_case_story(
+                    context=story_context,
+                    model="Automated report synthesis",
+                ).model_dump(mode="json")
+            except Exception as exc:
+                logger.warning("[%s] Recomputed Case Story synthesis failed: %s", investigation_id, exc)
 
             latest_iteration = session.execute(
                 select(func.max(Report.iteration)).where(Report.investigation_id == inv_id)
@@ -2737,6 +2793,8 @@ def _guess_content_type(artifact_name: str) -> str:
         return "image/png"
     if name.endswith(".jpg") or name.endswith(".jpeg") or name.endswith("_jpg") or name.endswith("_jpeg"):
         return "image/jpeg"
+    if name.endswith(".webp") or name.endswith("_webp"):
+        return "image/webp"
     if name.endswith(".har") or name.endswith(".json") or name.endswith("_json"):
         return "application/json"
     if name.endswith(".html") or name.endswith("_html"):
@@ -2744,6 +2802,19 @@ def _guess_content_type(artifact_name: str) -> str:
     if name.endswith(".txt") or name.endswith(".log") or name.endswith("_txt") or name.endswith("_log"):
         return "text/plain"
     return "application/octet-stream"
+
+
+def _attach_artifact_ids(value: object, artifact_ids: dict[str, str]) -> None:
+    """Replace collector artifact-name references with persisted artifact IDs."""
+    if isinstance(value, dict):
+        artifact_name = value.get("artifact_name")
+        if isinstance(artifact_name, str) and artifact_name in artifact_ids:
+            value["artifact_id"] = artifact_ids[artifact_name]
+        for child in value.values():
+            _attach_artifact_ids(child, artifact_ids)
+    elif isinstance(value, list):
+        for child in value:
+            _attach_artifact_ids(child, artifact_ids)
 
 
 def _build_analyst_input_evidence(evidence_data: dict, tier: str = "standard") -> dict:
@@ -2947,11 +3018,19 @@ def _infer_observable_association(evidence_data: dict) -> tuple[str, list[str]]:
 
     normalized = {}
     for candidate in candidates:
-        key = re.sub(r"[^a-z0-9]+", " ", candidate.lower()).strip()
+        # Preserve letters and digits from every Unicode script. The previous
+        # ASCII-only expression reduced titles such as Russian/Cyrillic brand
+        # names to an empty key, which made max(normalized.values()) fail.
+        key = " ".join(
+            "".join(char.lower() if char.isalnum() else " " for char in candidate).split()
+        )
         if not key:
             continue
         normalized[key] = normalized.get(key, {"label": candidate, "count": 0})
         normalized[key]["count"] += 1
+
+    if not normalized:
+        return "", basis[:6]
 
     best = max(normalized.values(), key=lambda item: item["count"])
     label = str(best["label"]).strip()

@@ -312,7 +312,7 @@ function FindingEvidenceRefs({ refs, evidence }: { refs: string[]; evidence?: Re
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {refs.map((ref, index) => {
           const evidencePath = extractEvidencePath(String(ref)) || String(ref);
-          const resolved = evidence ? resolveByPath(evidence, evidencePath) : undefined;
+          const resolved = evidence ? resolveEvidenceReference(evidence, evidencePath) : undefined;
           const relevant = summarizeRelevantEvidence(evidencePath, resolved);
           return (
             <details key={`${ref}-${index}`} style={{ maxWidth: "100%" }}>
@@ -330,7 +330,7 @@ function FindingEvidenceRefs({ refs, evidence }: { refs: string[]; evidence?: Re
                   overflowWrap: "anywhere",
                 }}
               >
-                {ref}
+                {friendlyEvidenceLabel(evidencePath)}
               </summary>
               <div
                 style={{
@@ -346,7 +346,7 @@ function FindingEvidenceRefs({ refs, evidence }: { refs: string[]; evidence?: Re
               >
                 {resolved === undefined ? (
                   <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
-                    Evidence path is referenced by the finding but no direct value is available in this report payload.
+                    Supporting value is not present in the saved evidence for this investigation.
                   </span>
                 ) : (
                   <RelevantEvidence value={relevant} />
@@ -415,7 +415,7 @@ function EvidenceDetail({
 }) {
   const text = typeof item === "string" ? item : JSON.stringify(item);
   const extractedPath = extractEvidencePath(text);
-  const resolvedValue = extractedPath && evidence ? resolveByPath(evidence, extractedPath) : undefined;
+  const resolvedValue = extractedPath && evidence ? resolveEvidenceReference(evidence, extractedPath) : undefined;
   const linkedFindings = (Array.isArray(report.findings) ? report.findings : []).filter((f: any) => {
     const refs = Array.isArray(f?.evidence_refs) ? f.evidence_refs : [];
     return refs.includes(extractedPath || text);
@@ -481,6 +481,48 @@ function resolveByPath(obj: any, path: string): any {
     cur = cur[part];
   }
   return cur;
+}
+
+function resolveEvidenceReference(evidence: Record<string, any>, originalPath: string): any {
+  const normalized = String(originalPath || "")
+    .replace(/^supporting_evidence\./, "")
+    .replace(/^hybrid_analysis_digest(?=\.|$)/, "hybrid_analysis")
+    .replace(/^anyrun(?=\.|$)/, "hybrid_analysis");
+  const exact = resolveByPath(evidence, normalized);
+  if (exact !== undefined) return exact;
+
+  // Compact prompt objects can omit a nested leaf while the persisted parent
+  // still contains the relevant provider record. Show the nearest available
+  // ancestor instead of a broken evidence card.
+  const parts = normalized.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+  for (let length = parts.length - 1; length >= 1; length -= 1) {
+    const parent = resolveByPath(evidence, parts.slice(0, length).join("."));
+    if (parent !== undefined) return parent;
+  }
+  return undefined;
+}
+
+function friendlyEvidenceLabel(path: string): string {
+  const normalized = String(path || "")
+    .replace(/^supporting_evidence\./, "")
+    .replace(/^hybrid_analysis_digest(?=\.|$)/, "anyrun")
+    .replace(/^hybrid_analysis(?=\.|$)/, "anyrun");
+  const parts = normalized.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+  const provider = parts.shift() || "evidence";
+  const providerLabels: Record<string, string> = {
+    anyrun: "AnyRun",
+    final_risk: "Final risk",
+    vt: "VirusTotal",
+    threat_feeds: "Threat feeds",
+    urlscan: "URLScan",
+    brave_osint: "Brave OSINT",
+    opencti: "OpenCTI",
+  };
+  const detail = parts
+    .filter((part) => !/^\d+$/.test(part) && part !== "items")
+    .map((part) => part.replaceAll("_", " "))
+    .join(" · ");
+  return `${providerLabels[provider] || provider.replaceAll("_", " ")}${detail ? ` · ${detail}` : ""}`;
 }
 
 const OMIT_EVIDENCE_KEYS = new Set([

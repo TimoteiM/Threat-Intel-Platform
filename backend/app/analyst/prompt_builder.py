@@ -289,8 +289,11 @@ def _build_supporting_evidence(evidence: CollectedEvidence) -> dict:
 
     digest = data.get("analyst_digest") or {}
     hybrid_digest = (((digest.get("collector_summaries") or {}) if isinstance(digest, dict) else {}).get("hybrid_analysis") or {})
-    if hybrid_digest:
-        out["hybrid_analysis_digest"] = _compact_value(hybrid_digest, depth=0)
+    anyrun_evidence = data.get("hybrid_analysis") or hybrid_digest
+    if anyrun_evidence:
+        # `hybrid_analysis` is a legacy internal storage key for our ANY.RUN
+        # integration. Never expose that implementation name to the analyst.
+        out["anyrun"] = _compact_value(anyrun_evidence, depth=0)
 
     return out
 

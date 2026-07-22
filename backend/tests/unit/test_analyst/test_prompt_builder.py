@@ -18,3 +18,21 @@ def test_build_messages_includes_analyst_digest_block():
     content = messages[0]["content"]
     assert "<analyst_digest>" in content
     assert "Appears associated with a login-themed PayPal lure." in content
+
+
+def test_anyrun_digest_is_not_exposed_as_hybrid_analysis_provider():
+    evidence = CollectedEvidence(
+        domain="example.com",
+        investigation_id="inv-2",
+        timestamps={},
+        analyst_digest={
+            "collector_summaries": {
+                "hybrid_analysis": {"items": [{"verdict": "suspicious"}]},
+            },
+        },
+    )
+
+    _, messages = build_messages(evidence, iteration=0, max_iterations=1)
+    content = messages[0]["content"]
+    assert '"anyrun"' in content
+    assert "hybrid_analysis_digest" not in content

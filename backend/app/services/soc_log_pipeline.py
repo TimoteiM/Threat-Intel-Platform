@@ -6,6 +6,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, TypedDict
 
+from app.services.ip_context import is_ipv4_indicator_match, valid_ipv4
+
 
 class AIOutput(TypedDict):
     summary: str
@@ -218,7 +220,7 @@ def _collect_non_overlapping_matches(text: str) -> list[_Match]:
 def _regex_matches(text: str, pattern: re.Pattern[str], kind: str) -> Iterable[_Match]:
     for match in pattern.finditer(text):
         value = match.group(0)
-        if kind == "IP" and not _valid_ipv4(value):
+        if kind == "IP" and not is_ipv4_indicator_match(text, match):
             continue
         yield _Match(match.start(), match.end(), kind, value)
 
@@ -240,10 +242,7 @@ def _ranges_overlap(left: range, right: range) -> bool:
 
 
 def _valid_ipv4(value: str) -> bool:
-    try:
-        return all(0 <= int(part) <= 255 for part in value.split("."))
-    except ValueError:
-        return False
+    return valid_ipv4(value)
 
 
 def _normalize_token(token: str) -> str:

@@ -666,8 +666,12 @@ class URLLexicalMLEvidence(BaseModel):
     label: str = "low"
     top_features: list[str] = []
     feature_contributions: dict[str, float] = {}
+    features: dict[str, float] = {}
     thresholds: dict[str, float] = {"low_max": 0.30, "medium_max": 0.65}
     weights: dict[str, float] = {"lexical_weight": 0.25}
+    raw_score: Optional[float] = None
+    calibration_applied: bool = False
+    rule_floor_applied: bool = False
     error: Optional[str] = None
 
 

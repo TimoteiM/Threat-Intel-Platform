@@ -35,6 +35,10 @@ class URLScanCollector(BaseCollector):
     def _collect(self) -> URLScanEvidence:
         settings = get_settings()
         api_key = settings.urlscan_api_key
+        analysis_timeout = max(
+            30,
+            int(getattr(settings, "urlscan_analysis_timeout_seconds", 75) or 75),
+        )
         evidence = URLScanEvidence()
 
         if self.observable_type == "url":
@@ -71,7 +75,7 @@ class URLScanCollector(BaseCollector):
                 continue
 
             evidence.scan_id = scan_uuid
-            result_data = self._poll_result(scan_uuid)
+            result_data = self._poll_result(scan_uuid, wait_seconds=analysis_timeout)
             if result_data:
                 if visibility != "public":
                     evidence.notes.append(
@@ -79,7 +83,10 @@ class URLScanCollector(BaseCollector):
                     )
                 return self._parse_result(evidence, result_data)
 
-            last_error = "URLScan analysis timed out after 30s"
+            # The scan was accepted. Do not submit an unlisted duplicate merely
+            # because the accepted public scan is still processing.
+            last_error = f"URLScan analysis was still processing after {analysis_timeout}s"
+            break
 
         if last_error:
             evidence.notes.append(last_error)
@@ -199,7 +206,7 @@ class URLScanCollector(BaseCollector):
                 f"{URLSCAN_API}/scan/",
                 headers=headers,
                 json={"url": target_url, "visibility": visibility},
-                timeout=self.timeout,
+                timeout=min(self.timeout, 15),
             )
         except requests.exceptions.RequestException as e:
             return None, f"URLScan submission failed ({visibility}): {e}"
@@ -215,14 +222,20 @@ class URLScanCollector(BaseCollector):
         submit_data = submit_resp.json() or {}
         return submit_data.get("uuid"), None
 
-    def _poll_result(self, scan_uuid: str) -> dict:
-        for attempt in range(4):
-            time.sleep(3)
+    def _poll_result(self, scan_uuid: str, *, wait_seconds: int = 75) -> dict:
+        deadline = time.monotonic() + max(3, wait_seconds)
+        attempt = 0
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            time.sleep(min(3, max(0, remaining)))
+            if time.monotonic() >= deadline:
+                break
+            attempt += 1
             try:
                 record_provider_request("urlscan")
                 result_resp = requests.get(
                     f"{URLSCAN_API}/result/{scan_uuid}/",
-                    timeout=self.timeout,
+                    timeout=min(self.timeout, 10, max(1, int(deadline - time.monotonic()))),
                 )
                 if result_resp.status_code == 200:
                     return result_resp.json() or {}
@@ -230,11 +243,11 @@ class URLScanCollector(BaseCollector):
                     continue
                 logger.debug(
                     "[urlscan] Poll attempt %s: HTTP %s",
-                    attempt + 1,
+                    attempt,
                     result_resp.status_code,
                 )
             except requests.exceptions.RequestException as e:
-                logger.debug("[urlscan] Poll attempt %s failed: %s", attempt + 1, e)
+                logger.debug("[urlscan] Poll attempt %s failed: %s", attempt, e)
         return {}
 
     def _parse_result(self, evidence: URLScanEvidence, result_data: dict) -> URLScanEvidence:

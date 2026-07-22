@@ -374,6 +374,14 @@ export function askCaseStory(id: string, question: string) {
   });
 }
 
+export function getCaseStoryChat(id: string) {
+  return request<any>(`/investigations/${id}/case-story/chat`);
+}
+
+export function clearCaseStoryChat(id: string) {
+  return request<void>(`/investigations/${id}/case-story/chat`, { method: "DELETE" });
+}
+
 export function getSOCIndicatorGraph(params?: { search?: string; severity?: string; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.search) qs.set("search", params.search);

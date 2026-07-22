@@ -1,4 +1,5 @@
 import sys
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +144,45 @@ async def test_run_session_restores_sanitized_tokens_in_final_output(monkeypatch
     assert "admin@example.com" in report_body
     assert "10.0.0.1" in report_body
     assert "[HOST_1]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_adds_omitted_endpoint_key_observables(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = json.dumps({
+        "endpoint": {"name": "NBM0582"},
+        "filters": [{
+            "level": "medium",
+            "name": "Uncommon File Path of Executable File",
+            "tactics": ["TA0005"],
+            "techniques": ["T1036"],
+            "highlightedObjects": [
+                {"field": "objectFileHashSha1", "value": "b74961868a4af731a7c352968413634bfb6ee9a0"},
+                {"field": "objectFilePath", "value": r"C:\Users\M0534\AppData\Local\Temp\.net\BingWallpaperInstaller\11a4\Microsoft.CSharp.dll"},
+                {"field": "processFilePath", "value": r"C:\Users\M0534\Downloads\BingWallpaperInstaller.exe"},
+                {"field": "processCmd", "value": r'"C:\Users\M0534\Downloads\BingWallpaperInstaller.exe"'},
+            ],
+        }],
+    })
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "## Event Interpretation\n\nInstaller-like activity was observed."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+    report_body = _report_body(result.report_markdown)
+
+    assert "**Key observables:**" not in report_body
+    assert "BingWallpaperInstaller.exe" in report_body
+    assert "Microsoft.CSharp.dll" in report_body
+    assert "b74961868a4af731a7c352968413634bfb6ee9a0" in report_body
+    assert "SHA-1" in report_body
+    assert r"C:\Users\M0534\Downloads" not in report_body
+    assert "TA0005" not in report_body
 
 
 @pytest.mark.asyncio

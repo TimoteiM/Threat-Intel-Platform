@@ -194,3 +194,30 @@ def test_sanitize_entry_replaces_escaped_json_agent_computer_name() -> None:
     assert "172.16.0.2" not in result.sanitized_text
     assert "[IP_1]" in result.sanitized_text
     assert result.token_map["[HOST_1]"] == "5CG5452NBD"
+
+
+def test_sanitize_entry_does_not_tokenize_browser_version_as_ip() -> None:
+    text = (
+        "{agent={ip=192.168.5.12}, @src_ip=45.148.10.62, "
+        'full_log=\"GET /.env.tmp HTTP/1.1\" 403 \"Mozilla/5.0 '
+        'Chrome/131.0.0.0 Safari/537.36\"}'
+    )
+
+    result = sanitizer.sanitize_entry(text, {})
+
+    assert "131.0.0.0" in result.sanitized_text
+    assert "131.0.0.0" not in result.token_map.values()
+    assert set(value for value in result.token_map.values() if value.count(".") == 3) == {
+        "192.168.5.12",
+        "45.148.10.62",
+    }
+
+
+def test_sanitize_entry_distinguishes_json_version_from_explicit_ip_field() -> None:
+    result = sanitizer.sanitize_entry(
+        '{"browser_version":"120.1.2.3","source_ip":"198.51.100.7"}',
+        {},
+    )
+
+    assert '"browser_version":"120.1.2.3"' in result.sanitized_text
+    assert result.token_map == {"[IP_1]": "198.51.100.7"}

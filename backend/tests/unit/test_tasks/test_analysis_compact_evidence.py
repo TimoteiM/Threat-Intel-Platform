@@ -90,6 +90,32 @@ def test_analyst_input_includes_grounded_associated_with_digest():
     assert any("title" in basis.lower() or "osint" in basis.lower() for basis in digest["association_basis"])
 
 
+def test_analyst_input_accepts_non_ascii_association_candidates():
+    evidence = {
+        "domain": "weblinks.ru",
+        "investigation_id": "x",
+        "timestamps": {"started": "2026-07-20T00:00:00Z"},
+        "http": {"title": "Веблинкс — Каталог сайтов"},
+    }
+
+    compact = _build_analyst_input_evidence(evidence, tier="standard")
+
+    assert "Веблинкс" in compact["analyst_digest"]["associated_with"]
+
+
+def test_analyst_input_ignores_punctuation_only_association_candidates():
+    evidence = {
+        "domain": "example.test",
+        "investigation_id": "x",
+        "timestamps": {"started": "2026-07-20T00:00:00Z"},
+        "http": {"title": "———"},
+    }
+
+    compact = _build_analyst_input_evidence(evidence, tier="standard")
+
+    assert compact["analyst_digest"]["associated_with"] == ""
+
+
 def test_automated_report_does_not_escalate_contextual_http_inputs_without_suspicious_domain_context():
     report = _generate_automated_report(
         {

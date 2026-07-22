@@ -236,6 +236,21 @@ def build_anyrun_sandbox_intelligence(result: dict[str, Any] | None) -> dict[str
 
     process_tree = _build_process_tree_summary(processes, graph)
     screenshots = _collect_screenshot_links(result, raw)
+    informational_events = [
+        {
+            "title": str(item.get("classification") or "Informational ANY.RUN event"),
+            "description": str(item.get("reason") or ""),
+            "severity": str(item.get("severity") or "informational"),
+            "process": str(item.get("process") or ""),
+            "process_path": str(item.get("process_path") or ""),
+            "signature": str(item.get("signature") or ""),
+            "user_agent": str(item.get("user_agent") or ""),
+            "timestamp": item.get("timestamp"),
+            "preserved_for_timeline": bool(item.get("preserved_for_timeline")),
+        }
+        for item in _as_list(raw.get("false_positive_exclusions"))
+        if isinstance(item, dict)
+    ]
 
     contacted_hosts.sort(key=lambda row: (-_as_int(row.get("threat_level")), str(row.get("host") or "")))
     contacted_ips.sort(key=lambda row: (-_as_int(row.get("threat_level")), str(row.get("ip") or "")))
@@ -257,6 +272,7 @@ def build_anyrun_sandbox_intelligence(result: dict[str, Any] | None) -> dict[str
             "suspicious_command_count": len(suspicious_commands),
             "screenshot_count": len(screenshots),
             "extracted_ioc_count": len(extracted_iocs),
+            "informational_event_count": len(informational_events),
         },
         "process_tree_summary": process_tree,
         "contacted_hosts": contacted_hosts[:200],
@@ -265,6 +281,7 @@ def build_anyrun_sandbox_intelligence(result: dict[str, Any] | None) -> dict[str
         "suspicious_commands": suspicious_commands[:100],
         "screenshot_thumbnails": screenshots[:12],
         "extracted_iocs": extracted_iocs[:500],
+        "informational_events": informational_events[:100],
     }
 
 
@@ -348,13 +365,21 @@ def _collect_screenshot_links(result: dict[str, Any], raw: dict[str, Any]) -> li
 
     def add(value: Any, *, label: str = "Screenshot", kind: str = "screenshot") -> None:
         report_url = ""
+        thumbnail_url = ""
+        captured_at: Any = None
         if isinstance(value, dict):
-            url = _first(value, "thumbnail_url", "thumbnailUrl", "preview_url", "previewUrl", "url", "src", "href", "link")
+            url = _first(value, "url", "full_url", "fullUrl", "permanent_url", "permanentUrl", "href", "link", "src", "thumbnail_url", "thumbnailUrl")
+            thumbnail_url = _clean_text(_first(value, "thumbnail_url", "thumbnailUrl", "preview_url", "previewUrl"))
             label_text = _clean_text(_first(value, "label", "title", "name", "type")) or label
-            report_url = _clean_text(_first(value, "report_url", "reportUrl", "full_url", "fullUrl", "analysis_link", "analysisLink"))
+            report_url = _clean_text(_first(value, "report_url", "reportUrl", "analysis_link", "analysisLink"))
+            captured_at = _first(value, "captured_at", "capturedAt", "time", "timestamp")
+            artifact_id = _clean_text(_first(value, "artifact_id", "artifactId"))
+            artifact_name = _clean_text(_first(value, "artifact_name", "artifactName"))
         else:
             url = value
             label_text = label
+            artifact_id = ""
+            artifact_name = ""
         url_text = _clean_text(url)
         if not url_text or url_text.lower() in seen:
             return
@@ -364,6 +389,14 @@ def _collect_screenshot_links(result: dict[str, Any], raw: dict[str, Any]) -> li
             return
         seen.add(url_text.lower())
         row = {"label": label_text[:80], "url": url_text, "kind": kind}
+        if thumbnail_url.startswith(("http://", "https://", "data:image/")) and thumbnail_url != url_text:
+            row["thumbnail_url"] = thumbnail_url
+        if captured_at not in (None, ""):
+            row["captured_at"] = captured_at
+        if artifact_id:
+            row["artifact_id"] = artifact_id
+        if artifact_name:
+            row["artifact_name"] = artifact_name
         if report_url.startswith("http://") or report_url.startswith("https://"):
             row["report_url"] = report_url
         out.append(row)

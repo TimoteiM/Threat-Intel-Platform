@@ -68,3 +68,26 @@ def test_build_anyrun_sandbox_intelligence_extracts_network_process_and_iocs():
     assert "encoded" in out["suspicious_commands"][0]["reason"].lower()
     assert any(row["type"] == "url" and row["value"] == "https://evil.example/payload.bin" for row in out["extracted_iocs"])
     assert any(row["type"] == "hash" and row["value"] == "b" * 64 for row in out["extracted_iocs"])
+
+
+def test_build_anyrun_sandbox_intelligence_preserves_full_screenshot_and_preview():
+    full_url = "https://content.any.run/tasks/task-1/download/screens/shot-1/image.jpeg"
+    preview_url = "https://content.any.run/tasks/task-1/download/thumbnails/shot-1/image.jpeg"
+    result = {
+        "raw_summary": {
+            "screenshots": [
+                {
+                    "url": full_url,
+                    "thumbnail_url": preview_url,
+                    "report_url": "https://app.any.run/tasks/task-1#Screenshots",
+                    "captured_at": 8011,
+                }
+            ]
+        }
+    }
+
+    screenshots = build_anyrun_sandbox_intelligence(result)["screenshot_thumbnails"]
+
+    assert screenshots[0]["url"] == full_url
+    assert screenshots[0]["thumbnail_url"] == preview_url
+    assert screenshots[0]["captured_at"] == 8011

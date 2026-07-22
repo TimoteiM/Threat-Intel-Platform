@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
@@ -192,6 +193,8 @@ export default function InvestigationPage() {
   const tabs = isFastPath ? FAST_PATH_TABS : DOMAIN_TABS;
   const defaultTab: TabId = "case_story";
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  const [reportTabsNode, setReportTabsNode] = useState<HTMLDivElement | null>(null);
+  const [showFloatingTabNav, setShowFloatingTabNav] = useState(false);
   const [tabError, setTabError] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -380,6 +383,32 @@ export default function InvestigationPage() {
   useEffect(() => {
     setTabError(null);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!reportTabsNode) {
+      setShowFloatingTabNav(false);
+      return;
+    }
+    const updateVisibility = () => {
+      setShowFloatingTabNav(reportTabsNode.getBoundingClientRect().bottom <= 72);
+    };
+    updateVisibility();
+    window.addEventListener("scroll", updateVisibility, { passive: true });
+    window.addEventListener("resize", updateVisibility);
+    return () => {
+      window.removeEventListener("scroll", updateVisibility);
+      window.removeEventListener("resize", updateVisibility);
+    };
+  }, [reportTabsNode]);
+
+  const changeTabFromFloatingNav = useCallback((id: string) => {
+    setActiveTab(id as TabId);
+    window.requestAnimationFrame(() => {
+      if (!reportTabsNode) return;
+      const top = reportTabsNode.getBoundingClientRect().top + window.scrollY - 76;
+      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    });
+  }, [reportTabsNode]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTs(Date.now()), 1000);
@@ -914,12 +943,20 @@ export default function InvestigationPage() {
           tone="info"
           variant="glass"
         >
-          <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+          <div ref={setReportTabsNode}>
+            <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
+          </div>
           <ErrorBoundary key={activeTab} fallback={activeTab} onRaw={() => setActiveTab("raw")}>
             {renderTab()}
           </ErrorBoundary>
         </ConsoleModule>
       </div>
+      <FloatingTabNavigator
+        tabs={tabs}
+        active={activeTab}
+        visible={showFloatingTabNav}
+        onChange={changeTabFromFloatingNav}
+      />
       {false && <div style={{ paddingTop: 24, paddingBottom: 80 }}>
       {/* Domain header */}
       <div style={{
@@ -1038,6 +1075,133 @@ export default function InvestigationPage() {
 }
 
 // ─── Helper Components ───
+
+function FloatingTabNavigator({
+  tabs,
+  active,
+  visible,
+  onChange,
+}: {
+  tabs: readonly { id: string; label: string }[];
+  active: string;
+  visible: boolean;
+  onChange: (id: string) => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
+  const previous = activeIndex > 0 ? tabs[activeIndex - 1] : null;
+  const next = activeIndex < tabs.length - 1 ? tabs[activeIndex + 1] : null;
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <nav
+      aria-label="Floating report tab navigation"
+      aria-hidden={!visible}
+      style={{
+        position: "fixed",
+        zIndex: 80,
+        left: "50%",
+        bottom: 22,
+        transform: `translate(-50%, ${visible ? "0" : "18px"})`,
+        display: "grid",
+        gridTemplateColumns: "minmax(112px, 1fr) auto minmax(112px, 1fr)",
+        alignItems: "stretch",
+        width: "min(620px, calc(100vw - 28px))",
+        padding: 5,
+        border: "1px solid rgba(102,168,255,.34)",
+        borderRadius: 16,
+        background: "rgba(7,18,33,.9)",
+        boxShadow: "0 18px 48px rgba(0,0,0,.42), 0 0 24px rgba(55,125,210,.12)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
+        opacity: visible ? 1 : 0,
+        pointerEvents: visible ? "auto" : "none",
+        transition: "opacity .18s ease, transform .18s ease",
+      }}
+    >
+      <FloatingTabButton
+        direction="previous"
+        tab={previous}
+        onClick={() => previous && onChange(previous.id)}
+      />
+      <div style={{
+        display: "grid",
+        placeContent: "center",
+        minWidth: 150,
+        padding: "7px 16px",
+        borderLeft: "1px solid rgba(120,145,178,.14)",
+        borderRight: "1px solid rgba(120,145,178,.14)",
+        textAlign: "center",
+      }}>
+        <span style={{ color: "var(--accent)", fontSize: 8, fontWeight: 800, letterSpacing: ".11em", textTransform: "uppercase" }}>
+          Current section
+        </span>
+        <strong style={{ marginTop: 3, color: "var(--text-strong)", fontSize: 11, whiteSpace: "nowrap" }}>
+          {tabs[activeIndex]?.label}
+        </strong>
+        <span style={{ marginTop: 2, color: "var(--text-muted)", fontSize: 8 }}>
+          {activeIndex + 1} of {tabs.length}
+        </span>
+      </div>
+      <FloatingTabButton
+        direction="next"
+        tab={next}
+        onClick={() => next && onChange(next.id)}
+      />
+    </nav>,
+    document.body,
+  );
+}
+
+function FloatingTabButton({
+  direction,
+  tab,
+  onClick,
+}: {
+  direction: "previous" | "next";
+  tab: { id: string; label: string } | null;
+  onClick: () => void;
+}) {
+  const isNext = direction === "next";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!tab}
+      aria-label={tab ? `${direction === "previous" ? "Previous" : "Next"} tab: ${tab.label}` : `No ${direction} tab`}
+      style={{
+        display: "flex",
+        flexDirection: isNext ? "row-reverse" : "row",
+        alignItems: "center",
+        justifyContent: isNext ? "flex-start" : "flex-start",
+        gap: 9,
+        minWidth: 0,
+        padding: "9px 12px",
+        border: 0,
+        borderRadius: 11,
+        background: "transparent",
+        color: tab ? "var(--text-secondary)" : "var(--text-muted)",
+        cursor: tab ? "pointer" : "default",
+        opacity: tab ? 1 : 0.35,
+        textAlign: isNext ? "right" : "left",
+      }}
+    >
+      <span aria-hidden="true" style={{ color: tab ? "var(--accent)" : "inherit", fontSize: 17, lineHeight: 1 }}>
+        {isNext ? "→" : "←"}
+      </span>
+      <span style={{ minWidth: 0, display: "grid" }}>
+        <small style={{ color: "var(--text-muted)", fontSize: 7, fontWeight: 750, letterSpacing: ".09em", textTransform: "uppercase" }}>
+          {direction}
+        </small>
+        <strong title={tab?.label} style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }}>
+          {tab?.label || "End"}
+        </strong>
+      </span>
+    </button>
+  );
+}
 
 function ConsoleActionButton({ onClick, children, tone = "neutral", disabled = false }: { onClick: () => void; children: React.ReactNode; tone?: "neutral" | "info" | "success" | "warning" | "danger"; disabled?: boolean }) {
   const palette = actionButtonPalette(tone);

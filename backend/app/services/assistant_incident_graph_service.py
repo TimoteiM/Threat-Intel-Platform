@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.models.database import AssistantSession
+from app.services.ip_context import first_keyed_ipv4, iter_ipv4_indicators, valid_ipv4
 
 
 SUPPORTED_NODE_TYPES = {
@@ -1194,7 +1195,12 @@ def _normalize_one_event(raw: Any, index: int) -> dict[str, Any]:
 
     if not email:
         email = _first_regex(EMAIL_RE, text)
-    source_ips = sorted({ip for ip in IP_RE.findall(text or "") if _valid_source_ip(ip)})
+    source_ips = sorted({match.group(0) for match in iter_ipv4_indicators(text) if _valid_source_ip(match.group(0))})
+    if not source_ip:
+        source_ip = first_keyed_ipv4(
+            text,
+            ("src_ip", "srcip", "source_ip", "sourceip", "client_ip", "clientip", "remote_ip", "actoripaddress"),
+        )
     if not source_ip:
         source_ip = source_ips[0] if source_ips else (_first_regex(IPV6_RE, text))
     if not hostname:
@@ -1419,7 +1425,7 @@ def _payload_domains(text: str) -> list[str]:
 
 
 def _valid_source_ip(value: str) -> bool:
-    if not value or value in {"0.0.0.0", "255.255.255.255"}:
+    if not valid_ipv4(value) or value in {"0.0.0.0", "255.255.255.255"}:
         return False
     if value.startswith("127."):
         return False

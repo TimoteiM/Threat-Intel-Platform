@@ -675,6 +675,7 @@ All configuration is via environment variables (`.env` file):
 | `LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `MAX_ANALYST_ITERATIONS` | `3` | Maximum analyst re-analysis iterations |
 | `COLLECTOR_TIMEOUT` | `30` | Collector timeout in seconds |
+| `URLSCAN_ANALYSIS_TIMEOUT_SECONDS` | `75` | Maximum time to poll an accepted URLScan analysis |
 | `DEFAULT_COLLECTORS` | `dns,http,tls,whois,asn,intel,vt` | Enabled collectors |
 
 ### ANY.RUN Residential Proxy

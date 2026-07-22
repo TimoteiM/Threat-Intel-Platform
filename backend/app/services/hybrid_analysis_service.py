@@ -21,6 +21,7 @@ from app.services.anyrun_service import (
     _requires_domain_intelligence_for_indicator,
 )
 from app.services.provider_usage_metrics import record_provider_request
+from app.services.anyrun_false_positive import apply_anyrun_msdw_false_positive_exclusion
 
 HYBRID_CACHE_TTL_HOURS = 24
 DEFAULT_BASE_URL = "https://hybrid-analysis.com/api/v2"
@@ -117,6 +118,8 @@ def lookup_hybrid_analysis(
             cached = None
     if cached:
         out = dict(cached)
+        if str(((out.get("raw_summary") or {}).get("source") or "")).strip().lower() == "anyrun":
+            out = apply_anyrun_msdw_false_positive_exclusion(out)
         out["cache_hit"] = True
         return out
 
@@ -135,7 +138,7 @@ def lookup_hybrid_analysis(
             proxy_country=proxy_country,
         )
         if anyrun_result.get("checked"):
-            anyrun_result = dict(anyrun_result)
+            anyrun_result = apply_anyrun_msdw_false_positive_exclusion(anyrun_result)
             anyrun_result["cache_hit"] = False
             raw = anyrun_result.get("raw_summary")
             anyrun_result["raw_summary"] = {

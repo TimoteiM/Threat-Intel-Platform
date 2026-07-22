@@ -24,13 +24,13 @@ from urllib.parse import urlparse
 import redis as redis_lib
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.dependencies import DBSession, Storage
-from app.models.database import Artifact, Investigation, Evidence
+from app.models.database import Artifact, Investigation, Evidence, InvestigationCaseChatMessage
 from app.models.schemas import InvestigationCreate
 from app.services.evidence_diff_service import diff_evidence
 from app.services.investigation_service import InvestigationService
@@ -38,6 +38,7 @@ from app.services.investigation_intelligence import build_investigation_intellig
 from app.services.investigation_case_story_service import (
     CaseQuestionRequest,
     InvestigationCaseStoryService,
+    clean_case_answer_text,
     compact_case_context,
 )
 from app.tasks.cancellation import find_task_ids, revoke_task_ids
@@ -274,14 +275,89 @@ async def generate_case_story(investigation_id: str, session: DBSession, storage
 
 @router.post("/{investigation_id}/case-story/ask")
 async def ask_case_story(investigation_id: str, request: CaseQuestionRequest, session: DBSession, storage: Storage):
-    """Answer a free-form analyst question strictly from this investigation's evidence."""
+    """Answer from case evidence and persist the exchange to this investigation."""
     detail, evidence, report, intelligence = await _load_case_material(investigation_id, session)
     context = compact_case_context(detail=detail, evidence=evidence, report=report, intelligence=intelligence)
     images = await _load_case_images(investigation_id, evidence, session, storage)
+    history_result = await session.execute(
+        select(InvestigationCaseChatMessage)
+        .where(InvestigationCaseChatMessage.investigation_id == uuid.UUID(investigation_id))
+        .order_by(InvestigationCaseChatMessage.created_at.desc())
+        .limit(8)
+    )
+    recent = list(reversed(history_result.scalars().all()))
+    transcript = "\n".join(f"{item.role.upper()}: {item.content}" for item in recent)
+    contextual_question = request.question
+    if transcript:
+        contextual_question = (
+            "Use the earlier conversation only to resolve follow-up context. Keep every claim grounded "
+            f"in the case data.\n\nEARLIER CONVERSATION:\n{transcript}\n\nCURRENT QUESTION:\n{request.question}"
+        )
     try:
-        return await InvestigationCaseStoryService().answer(context=context, question=request.question, images=images)
+        answer = await InvestigationCaseStoryService().answer(
+            context=context, question=contextual_question, images=images
+        )
+        user_message = InvestigationCaseChatMessage(
+            investigation_id=uuid.UUID(investigation_id), role="user", content=request.question
+        )
+        assistant_message = InvestigationCaseChatMessage(
+            investigation_id=uuid.UUID(investigation_id),
+            role="assistant",
+            content=answer.answer,
+            confidence=answer.confidence,
+            evidence_refs_json=answer.evidence_refs,
+            limitations_json=answer.limitations,
+            suggested_followups_json=answer.suggested_followups,
+            model=answer.model,
+        )
+        session.add_all([user_message, assistant_message])
+        await session.commit()
+        await session.refresh(user_message)
+        await session.refresh(assistant_message)
+        return {
+            "answer": answer.model_dump(mode="json"),
+            "messages": [_serialize_case_chat_message(user_message), _serialize_case_chat_message(assistant_message)],
+        }
     except ValueError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+def _serialize_case_chat_message(message: InvestigationCaseChatMessage) -> dict[str, Any]:
+    return {
+        "id": str(message.id),
+        "role": message.role,
+        "content": clean_case_answer_text(message.content) if message.role == "assistant" else message.content,
+        "confidence": message.confidence,
+        "evidence_refs": message.evidence_refs_json or [],
+        "limitations": message.limitations_json or [],
+        "suggested_followups": message.suggested_followups_json or [],
+        "model": message.model,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+@router.get("/{investigation_id}/case-story/chat")
+async def get_case_story_chat(investigation_id: uuid.UUID, session: DBSession):
+    if not await session.get(Investigation, investigation_id):
+        raise HTTPException(404, "Investigation not found")
+    result = await session.execute(
+        select(InvestigationCaseChatMessage)
+        .where(InvestigationCaseChatMessage.investigation_id == investigation_id)
+        .order_by(InvestigationCaseChatMessage.created_at, InvestigationCaseChatMessage.id)
+    )
+    return {"messages": [_serialize_case_chat_message(item) for item in result.scalars().all()]}
+
+
+@router.delete("/{investigation_id}/case-story/chat", status_code=204)
+async def clear_case_story_chat(investigation_id: uuid.UUID, session: DBSession):
+    if not await session.get(Investigation, investigation_id):
+        raise HTTPException(404, "Investigation not found")
+    await session.execute(
+        delete(InvestigationCaseChatMessage).where(
+            InvestigationCaseChatMessage.investigation_id == investigation_id
+        )
+    )
+    await session.commit()
 
 
 async def _load_case_material(investigation_id: str, session: DBSession):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -90,7 +91,7 @@ class CaseAnswer(BaseModel):
 SYSTEM = """You are a senior SOC investigation analyst. Produce a precise, operational case story from the supplied canonical investigation data.
 Hard rules:
 - Treat the canonical verdict, risk score and confidence as immutable. Explain them; never recalculate or override them.
-- Every factual claim must cite one or more exact evidence paths supplied in the JSON (for example report.findings[0] or evidence.vt.stats.malicious).
+- Ground every factual claim in exact evidence paths supplied in the JSON, but put those paths only in the structured evidence_refs field. Never print raw implementation paths such as evidence.*, report.*, or intelligence.* inside analyst-facing prose.
 - Clearly separate observations from inference. Never invent malware behavior, attribution, credentials, TDS, or user impact.
 - Prefer decisive evidence and contradictions. Exclude repetitive low-value telemetry.
 - Timeline events must form a concise attack/investigation story, not a dump of timestamps.
@@ -98,6 +99,44 @@ Hard rules:
 - If screenshots are attached, analyze only visible security-relevant details and cite the associated artifact reference.
 - The handoff must be concise Markdown suitable for pasting into a SOC ticket, with verdict, score, summary, decisive evidence, gaps, and actions.
 """
+
+CASE_ANSWER_STYLE = """
+Answer style for Threat Analyzer - Assistant:
+- Lead with a direct answer in the first sentence.
+- Then explain the 2-4 most important reasons in plain language, ordered by decision impact.
+- Explain model scores as percentages and state what each score does and does not measure.
+- Distinguish the final case risk score from component scores and weights.
+- End with one practical analyst takeaway when relevant.
+- Keep the answer under 260 words unless the analyst explicitly asks for more detail.
+- Do not enumerate raw evidence paths, JSON keys, or implementation field names in the answer text. Store grounding paths only in evidence_refs.
+"""
+
+
+def clean_case_answer_text(text: str) -> str:
+    """Keep internal grounding references out of analyst-facing chat prose."""
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(
+        r"\[(?=[^\]]*(?:evidence|report|intelligence)\.)[^\]]+\]",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\((?=[^)]*(?:evidence|report|intelligence)\.)[^)]+\)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"(?<!\w)(?:evidence|report|intelligence)\.[\w.\[\]-]+(?:\s*[;,]\s*)?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"[ \t]+([.,;:])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def compact_case_context(*, detail: dict[str, Any], evidence: dict[str, Any], report: dict[str, Any], intelligence: dict[str, Any]) -> dict[str, Any]:
@@ -113,7 +152,8 @@ def compact_case_context(*, detail: dict[str, Any], evidence: dict[str, Any], re
         "report": _bounded(report, depth=4, list_limit=12, string_limit=1200),
         "evidence": _bounded({key: evidence.get(key) for key in (
             "signals", "data_gaps", "vt", "threat_feeds", "anyrun", "hybrid_analysis",
-            "urlscan", "screenshot", "visual_comparison", "opencti", "dns", "http", "tls", "whois", "hosting",
+            "urlscan", "url_lexical_ml", "ml_url_score", "final_risk", "screenshot", "visual_comparison",
+            "opencti", "dns", "http", "tls", "whois", "hosting", "email_security",
         ) if evidence.get(key) is not None}, depth=4, list_limit=10, string_limit=900),
         "derived_intelligence": _bounded({
             "timeline": intelligence.get("timeline"), "summary": intelligence.get("summary"),
@@ -152,8 +192,9 @@ class InvestigationCaseStoryService:
         return story
 
     async def answer(self, *, context: dict[str, Any], question: str, images: list[tuple[str, str]]) -> CaseAnswer:
-        prompt = f"Answer this analyst question using only the case data: {question}\n\nCASE DATA:\n{json.dumps(context, default=str, ensure_ascii=False)}"
+        prompt = f"{CASE_ANSWER_STYLE}\nAnswer this analyst question using only the case data: {question}\n\nCASE DATA:\n{json.dumps(context, default=str, ensure_ascii=False)}"
         answer, model = await self._structured_call(CaseAnswer, prompt, images)
+        answer.answer = clean_case_answer_text(answer.answer)
         answer.model = model
         return answer
 

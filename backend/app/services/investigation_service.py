@@ -472,4 +472,7 @@ class InvestigationService:
     async def get_report(self, investigation_id: str) -> Optional[dict]:
         """Get the latest analyst report."""
         report = await self.report_repo.get_latest(uuid.UUID(investigation_id))
-        return report.report_json if report else None
+        if not report:
+            return None
+        from app.services.provider_branding import normalize_anyrun_branding
+        return normalize_anyrun_branding(report.report_json)

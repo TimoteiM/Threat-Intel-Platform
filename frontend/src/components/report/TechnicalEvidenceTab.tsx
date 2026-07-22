@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { createPortal } from "react-dom";
 import { CollectedEvidence } from "@/lib/types";
 import { getArtifactUrl } from "@/lib/api";
 import EvidenceTable from "@/components/evidence/EvidenceTable";
@@ -11,6 +12,10 @@ import FaviconIntelSection from "@/components/report/FaviconIntelSection";
 import CertTimelineSection from "@/components/report/CertTimelineSection";
 import AnyRunInteractiveEvidence from "@/components/report/AnyRunInteractiveEvidence";
 import AnyRunSandboxIntelligence from "@/components/report/AnyRunSandboxIntelligence";
+import LexicalRiskExplainer from "@/components/report/LexicalRiskExplainer";
+import FinalRiskExplainer from "@/components/report/FinalRiskExplainer";
+import RedirectDestinationGraph from "@/components/report/RedirectDestinationGraph";
+import { ContentMLSummary, URLBehaviorSummary } from "@/components/report/EvidenceScoreSummaries";
 
 interface Props {
   evidence: CollectedEvidence;
@@ -274,6 +279,9 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
     [sectionDefs],
   );
   const [activeSectionTitle, setActiveSectionTitle] = React.useState<string | null>(null);
+  const [sectionNavNode, setSectionNavNode] = React.useState<HTMLDivElement | null>(null);
+  const [sectionContentNode, setSectionContentNode] = React.useState<HTMLDivElement | null>(null);
+  const [showFloatingSectionNav, setShowFloatingSectionNav] = React.useState(false);
 
   React.useEffect(() => {
     if (!availableSections.length) {
@@ -292,6 +300,32 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
     return () => window.removeEventListener("resize", update);
   }, []);
 
+  React.useEffect(() => {
+    if (!sectionNavNode) {
+      setShowFloatingSectionNav(false);
+      return;
+    }
+    const updateVisibility = () => {
+      setShowFloatingSectionNav(sectionNavNode.getBoundingClientRect().top <= 72);
+    };
+    updateVisibility();
+    window.addEventListener("scroll", updateVisibility, { passive: true });
+    window.addEventListener("resize", updateVisibility);
+    return () => {
+      window.removeEventListener("scroll", updateVisibility);
+      window.removeEventListener("resize", updateVisibility);
+    };
+  }, [sectionNavNode]);
+
+  const selectFloatingSection = React.useCallback((title: string) => {
+    setActiveSectionTitle(title);
+    window.requestAnimationFrame(() => {
+      if (!sectionContentNode) return;
+      const top = sectionContentNode.getBoundingClientRect().top + window.scrollY - 86;
+      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    });
+  }, [sectionContentNode]);
+
   return (
     <div
       style={{
@@ -302,6 +336,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
       }}
     >
       <div
+        ref={setSectionNavNode}
         style={{
           position: isNarrow ? "static" : "sticky",
           top: 82,
@@ -352,7 +387,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         </div>
       </div>
 
-      <div>
+      <div ref={setSectionContentNode}>
       <EvidenceSplitContext.Provider value={{ activeTitle: activeSectionTitle }}>
 
       {/* —— DOMAIN/URL/IP sections — hidden for file/hash investigations —— */}
@@ -1851,31 +1886,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           {!urlLexical || Object.keys(urlLexical).length === 0 ? (
             <EmptyNote>URL lexical ML data not available (collector not run)</EmptyNote>
           ) : (
-            <EvidenceTable
-              title="Lexical Risk Summary"
-              data={[
-                { field: "Model Source", value: urlLexical?.model_source || "built_in" },
-                {
-                  field: "Phishing Probability",
-                  value: typeof urlMlScore?.phishing_probability === "number"
-                    ? urlMlScore.phishing_probability.toFixed(4)
-                    : typeof urlLexical?.score === "number"
-                      ? urlLexical.score.toFixed(4)
-                      : "—",
-                },
-                { field: "Risk Label", value: String(urlMlScore?.risk_level || urlLexical?.label || "unknown").toUpperCase() },
-                { field: "Model Version", value: urlMlScore?.model_version || "—" },
-                { field: "Thresholds", value: "<0.3 low | 0.3-0.65 medium | >0.65 high" },
-                {
-                  field: "Top Features",
-                  value: arr(urlLexical?.top_features).length
-                    ? arr(urlLexical?.top_features).slice(0, 5).join(", ")
-                    : "—",
-                },
-                { field: "Error", value: urlLexical?.error || "—" },
-              ]}
-              columns={[{ key: "field" }, { key: "value", wrap: true }]}
-            />
+            <LexicalRiskExplainer lexical={urlLexical} normalized={urlMlScore} />
           )}
         </Section>
       )}
@@ -1884,18 +1895,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         {!contentMl || Object.keys(contentMl).length === 0 ? (
           <EmptyNote>Content ML data not available</EmptyNote>
         ) : (
-          <EvidenceTable
-            title="Header/Metadata Risk Signals"
-            data={[
-              { field: "Social Engineering", value: typeof contentMl?.social_engineering_probability === "number" ? contentMl.social_engineering_probability.toFixed(4) : "—" },
-              { field: "Urgency", value: typeof contentMl?.urgency_probability === "number" ? contentMl.urgency_probability.toFixed(4) : "—" },
-              { field: "Impersonation", value: typeof contentMl?.impersonation_probability === "number" ? contentMl.impersonation_probability.toFixed(4) : "—" },
-              { field: "BEC", value: typeof contentMl?.bec_probability === "number" ? contentMl.bec_probability.toFixed(4) : "—" },
-              { field: "Top Terms", value: arr(contentMl?.top_content_terms).join(", ") || "—" },
-              { field: "Model Source", value: contentMl?.model_source || "—" },
-            ]}
-            columns={[{ key: "field" }, { key: "value", wrap: true }]}
-          />
+          <ContentMLSummary content={contentMl} />
         )}
       </Section>
 
@@ -1947,18 +1947,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           {!urlBehavior || Object.keys(urlBehavior).length === 0 ? (
             <EmptyNote>URL behavior data not available</EmptyNote>
           ) : (
-            <EvidenceTable
-              title="Behavior Summary"
-              data={[
-                { field: "Redirect Count", value: urlBehavior?.redirect_count ?? 0 },
-                { field: "UA Cloaking", value: urlBehavior?.ua_cloaking_detected ? "Yes" : "No" },
-                { field: "Credential Form", value: urlBehavior?.credential_form_present ? "Yes" : "No" },
-                { field: "Multiple Domain Hops", value: urlBehavior?.multiple_domain_hops ? "Yes" : "No" },
-                { field: "Behavior Score", value: typeof urlBehavior?.behavior_score === "number" ? urlBehavior.behavior_score.toFixed(4) : "—" },
-                { field: "Final URL", value: urlBehavior?.final_url || "—" },
-              ]}
-              columns={[{ key: "field" }, { key: "value", wrap: true }]}
-            />
+            <URLBehaviorSummary behavior={urlBehavior} />
           )}
         </Section>
       )}
@@ -1976,44 +1965,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         {!finalRisk || Object.keys(finalRisk).length === 0 ? (
           <EmptyNote>Final risk data not available</EmptyNote>
         ) : (
-          <>
-            <EvidenceTable
-              title="Risk Summary"
-              data={[
-                { field: "Risk Score", value: finalRisk?.risk_score ?? "—" },
-                { field: "Risk Level", value: String(finalRisk?.risk_level || "unknown").toUpperCase() },
-                { field: "Confidence", value: String(finalRisk?.confidence || "unknown").toUpperCase() },
-              ]}
-              columns={[{ key: "field" }, { key: "value", wrap: true }]}
-            />
-            {finalRisk?.components && Object.keys(finalRisk.components).length > 0 && (
-              <EvidenceTable
-                title="Component Signals"
-                data={Object.entries(finalRisk.components)
-                  .sort((a, b) => Number(b[1]) - Number(a[1]))
-                  .map(([key, value]) => ({
-                    signal: formatRiskComponentLabel(key),
-                    contribution: typeof value === "number" ? value.toFixed(2) : "—",
-                    weight:
-                      typeof finalRisk?.weights?.[key] === "number"
-                        ? finalRisk.weights[key].toFixed(2)
-                        : "—",
-                  }))}
-                columns={[
-                  { key: "signal" },
-                  { key: "contribution" },
-                  { key: "weight" },
-                ]}
-              />
-            )}
-            {arr(finalRisk?.rationale).length > 0 && (
-              <EvidenceTable
-                title="Rationale"
-                data={arr(finalRisk.rationale).map((r: string) => ({ rationale: r }))}
-                columns={[{ key: "rationale", wrap: true }]}
-              />
-            )}
-          </>
+          <FinalRiskExplainer risk={finalRisk} />
         )}
       </Section>
 
@@ -2023,95 +1975,10 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           {!hasRedirectDestinationIntel ? (
             <EmptyNote>No cross-domain redirect destination intel available</EmptyNote>
           ) : (
-            <>
-              <EvidenceTable
-                title="Redirect Comparison"
-                data={[
-                  {
-                    field: "Source vs Destination Root",
-                    value: redirectDestinationIntel?.comparison?.source_vs_destination_root || "—",
-                  },
-                  { field: "Final URL", value: redirectDestinationIntel?.final_url || "—" },
-                  { field: "Source Host", value: redirectDestinationIntel?.investigated_host || "—" },
-                  { field: "Destination Host", value: redirectDestinationIntel?.destination_host || "—" },
-                  {
-                    field: "Source Domain Age (days)",
-                    value: redirectDestinationIntel?.comparison?.source_age_days ?? "—",
-                  },
-                  {
-                    field: "Destination Domain Age (days)",
-                    value: redirectDestinationIntel?.comparison?.destination_age_days ?? "—",
-                  },
-                ]}
-                columns={[{ key: "field" }, { key: "value", wrap: true }]}
-              />
-
-              {redirectDestinationIntel?.whois && (
-                <EvidenceTable
-                  title="Destination WHOIS"
-                  data={[
-                    { field: "Collector Status", value: redirectDestinationIntel.whois.status || "—" },
-                    { field: "Registrar", value: redirectDestinationIntel.whois.registrar || "—" },
-                    { field: "Domain Age (days)", value: redirectDestinationIntel.whois.domain_age_days ?? "—" },
-                    { field: "Created Date", value: fmtDate(redirectDestinationIntel.whois.created_date) },
-                    { field: "Expiry Date", value: fmtDate(redirectDestinationIntel.whois.expiry_date) },
-                    {
-                      field: "Registrant",
-                      value: redirectDestinationIntel.whois.registrant_org || redirectDestinationIntel.whois.registrant_country || "—",
-                    },
-                    {
-                      field: "Name Servers",
-                      value: arr(redirectDestinationIntel.whois.name_servers).join(", ") || "—",
-                    },
-                    { field: "Error", value: redirectDestinationIntel.whois.error || "—" },
-                  ]}
-                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
-                />
-              )}
-
-              {redirectDestinationIntel?.vt && (
-                <EvidenceTable
-                  title="Destination VirusTotal"
-                  data={[
-                    { field: "Collector Status", value: redirectDestinationIntel.vt.status || "—" },
-                    { field: "Found in VT", value: redirectDestinationIntel.vt.found ? "Yes" : "No" },
-                    { field: "Malicious", value: redirectDestinationIntel.vt.malicious_count ?? 0 },
-                    { field: "Suspicious", value: redirectDestinationIntel.vt.suspicious_count ?? 0 },
-                    { field: "Total Vendors", value: redirectDestinationIntel.vt.total_vendors ?? 0 },
-                    { field: "Reputation Score", value: redirectDestinationIntel.vt.reputation_score ?? "—" },
-                    {
-                      field: "Categories",
-                      value: redirectDestinationIntel.vt.categories
-                        ? Object.entries(redirectDestinationIntel.vt.categories)
-                            .map(([k, v]) => `${k}:${v}`)
-                            .join(", ") || "—"
-                        : "—",
-                    },
-                    { field: "Error", value: redirectDestinationIntel.vt.error || "—" },
-                  ]}
-                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
-                />
-              )}
-
-              {(redirectDestinationIntel?.dns || redirectDestinationIntel?.hosting) && (
-                <EvidenceTable
-                  title="Destination Infrastructure"
-                  data={[
-                    { field: "DNS Status", value: redirectDestinationIntel?.dns?.status || "—" },
-                    { field: "A / AAAA", value: [...arr(redirectDestinationIntel?.dns?.a), ...arr(redirectDestinationIntel?.dns?.aaaa)].join(", ") || "—" },
-                    { field: "MX", value: arr(redirectDestinationIntel?.dns?.mx).join(", ") || "—" },
-                    { field: "NS", value: arr(redirectDestinationIntel?.dns?.ns).join(", ") || "—" },
-                    { field: "Hosting Status", value: redirectDestinationIntel?.hosting?.status || "—" },
-                    { field: "IP", value: redirectDestinationIntel?.hosting?.ip || "—" },
-                    { field: "ASN", value: redirectDestinationIntel?.hosting?.asn ?? "—" },
-                    { field: "ASN Org", value: redirectDestinationIntel?.hosting?.asn_org || "—" },
-                    { field: "Country", value: redirectDestinationIntel?.hosting?.country || "—" },
-                    { field: "CDN / Cloud", value: `${redirectDestinationIntel?.hosting?.is_cdn ? "CDN" : "no CDN"} | ${redirectDestinationIntel?.hosting?.is_cloud ? "cloud" : "non-cloud"}` },
-                  ]}
-                  columns={[{ key: "field" }, { key: "value", wrap: true }]}
-                />
-              )}
-            </>
+            <RedirectDestinationGraph
+              intelligence={redirectDestinationIntel}
+              redirectChain={arr(http.redirect_chain)}
+            />
           )}
         </Section>
       )}
@@ -2445,11 +2312,99 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
       </Section>
       </EvidenceSplitContext.Provider>
       </div>
+      <FloatingEvidenceNavigator
+        sections={availableSections}
+        active={activeSectionTitle}
+        visible={showFloatingSectionNav}
+        onChange={selectFloatingSection}
+      />
     </div>
   );
 }
 
 // --- Helpers ---
+
+function FloatingEvidenceNavigator({
+  sections,
+  active,
+  visible,
+  onChange,
+}: {
+  sections: { title: string; hasData: boolean }[];
+  active: string | null;
+  visible: boolean;
+  onChange: (title: string) => void;
+}) {
+  const [mounted, setMounted] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  React.useEffect(() => {
+    if (!visible) setOpen(false);
+  }, [visible]);
+  if (!mounted) return null;
+
+  return createPortal(
+    <div style={{
+      position: "fixed", zIndex: 90, top: 84, right: 18,
+      width: "min(290px, calc(100vw - 28px))",
+      opacity: visible ? 1 : 0,
+      transform: `translateX(${visible ? "0" : "16px"})`,
+      pointerEvents: visible ? "auto" : "none",
+      transition: "opacity .18s ease, transform .18s ease",
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label="Choose Technical Evidence section"
+        style={{
+          width: "100%", display: "grid", gridTemplateColumns: "32px minmax(0,1fr) 20px",
+          alignItems: "center", gap: 9, padding: "9px 11px",
+          border: "1px solid rgba(102,168,255,.38)", borderRadius: 13,
+          background: "rgba(7,18,33,.92)", color: "var(--text-secondary)",
+          boxShadow: "0 14px 36px rgba(0,0,0,.38), 0 0 20px rgba(55,125,210,.1)",
+          backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <span aria-hidden="true" style={{ width: 30, height: 30, display: "grid", placeContent: "center", borderRadius: 9, background: "rgba(102,168,255,.12)", color: "var(--accent)", fontSize: 15 }}>☷</span>
+        <span style={{ minWidth: 0, display: "grid" }}>
+          <small style={{ color: "var(--accent)", fontSize: 7, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>Evidence section</small>
+          <strong style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }}>{active || "Choose section"}</strong>
+        </span>
+        <span aria-hidden="true" style={{ color: "var(--text-muted)", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>⌄</span>
+      </button>
+
+      {open && (
+        <div role="menu" aria-label="Technical Evidence sections" style={{
+          marginTop: 7, maxHeight: "calc(100vh - 160px)", overflowY: "auto", padding: 7,
+          border: "1px solid rgba(102,168,255,.3)", borderRadius: 13,
+          background: "rgba(7,18,33,.97)", boxShadow: "0 20px 50px rgba(0,0,0,.46)",
+          backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+        }}>
+          {sections.map((section) => (
+            <button
+              key={section.title}
+              type="button"
+              role="menuitem"
+              onClick={() => { onChange(section.title); setOpen(false); }}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 8,
+                padding: "8px 9px", border: active === section.title ? "1px solid rgba(102,168,255,.34)" : "1px solid transparent",
+                borderRadius: 8, background: active === section.title ? "rgba(102,168,255,.12)" : "transparent",
+                color: active === section.title ? "var(--accent)" : section.hasData ? "var(--text-secondary)" : "var(--text-muted)",
+                cursor: "pointer", textAlign: "left", fontSize: 10, fontWeight: active === section.title ? 750 : 550,
+              }}
+            >
+              <span style={{ color: section.hasData ? "var(--green)" : "var(--text-muted)", fontSize: 8 }}>{section.hasData ? "●" : "○"}</span>
+              <span>{section.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
 
 /** Safely coerce anything to an array */
 function arr(val: any): any[] {
@@ -2599,19 +2554,6 @@ function buildOpenCtiSummary(openCti: any): string {
   }
 
   return parts.join(" ");
-}
-
-function formatRiskComponentLabel(key: string): string {
-  const labels: Record<string, string> = {
-    lexical_score: "Lexical Model",
-    behavior_score: "Behavior Signals",
-    content_ml_score: "Content ML",
-    attachment_score: "Attachment Analysis",
-    sandbox_score: "Sandbox Verdict",
-    infrastructure_score: "Infrastructure Reputation",
-    opencti_score: "OpenCTI Intelligence",
-  };
-  return labels[key] || key.replace(/_/g, " ");
 }
 
 function OpenCtiPill({ label, color }: { label: string; color: string }) {
@@ -3299,8 +3241,3 @@ function VTStatBox({ label, count, total, color, highlight }: {
     </div>
   );
 }
-
-
-
-
-

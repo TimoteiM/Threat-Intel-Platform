@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import re
 from collections import defaultdict
 
+from app.services.ip_context import is_ipv4_indicator_match
+
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -206,6 +208,8 @@ def _replace_pattern(
 
     def repl(match: re.Match[str]) -> str:
         original = match.group(0)
+        if token_prefix == "IP" and not is_ipv4_indicator_match(text, match):
+            return original
         if token_prefix == "HOST" and not _looks_like_host(original):
             return original
         token = reverse_token_map.get(original)

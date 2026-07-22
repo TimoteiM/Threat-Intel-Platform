@@ -17,6 +17,21 @@ from app.services.assistant_incident_graph_service import (
 )
 
 
+def test_normalize_event_prioritizes_explicit_source_ip_and_ignores_browser_version() -> None:
+    event = (
+        "{agent={ip=192.168.5.12}, @src_ip=45.148.10.62, data={url=/.env.tmp}, "
+        'full_log=45.148.10.62 - - \"GET /.env.tmp HTTP/1.1\" 403 '
+        '\"Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36\"}'
+    )
+
+    normalized = normalizeEvents([event])[0]
+
+    assert normalized["sourceIp"] == "45.148.10.62"
+    assert "45.148.10.62" in normalized["sourceIps"]
+    assert "192.168.5.12" in normalized["sourceIps"]
+    assert "131.0.0.0" not in normalized["sourceIps"]
+
+
 def sample_password_spray_events() -> list[dict]:
     return [
         {

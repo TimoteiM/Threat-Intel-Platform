@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import PureWindowsPath
 from uuid import UUID
 
 import anthropic
@@ -191,6 +193,8 @@ class AssistantService:
             # table so analysts always see every resolved value.
             restored = self._restore_tokens(cleaned, merged_token_map)
             restored = self._replace_unresolved_tokens(restored, merged_token_map)
+            if assistant_session.mode == "alert_analysis":
+                restored = self._ensure_alert_key_observables(restored, raw_entries)
             final_report = self._append_resolved_identifiers(restored, merged_token_map)
 
             incident_graph = build_assistant_incident_graph(assistant_session, final_report)
@@ -384,3 +388,104 @@ class AssistantService:
             + "\n".join(rows)
         )
         return report + table
+
+    def _ensure_alert_key_observables(self, report: str, raw_entries: list[str]) -> str:
+        """Add one readable sentence when the model omits core endpoint observables."""
+        observables = self._extract_endpoint_observables(raw_entries)
+        if not observables:
+            return report
+        core: list[tuple[str, str]] = []
+        for label, value in observables:
+            if label in {"process", "object file"}:
+                core.append((label, PureWindowsPath(value).name or value))
+            elif label in {"endpoint", "SHA-1", "SHA-256", "MD5", "process SHA-1", "process SHA-256", "process MD5"}:
+                core.append((label, value))
+        if not core:
+            return report
+        report_folded = report.casefold()
+        if all(value.casefold() in report_folded for _, value in core):
+            return report
+
+        endpoint = next((value for label, value in core if label == "endpoint"), "")
+        process = next((value for label, value in core if label == "process"), "")
+        object_file = next((value for label, value in core if label == "object file"), "")
+        hash_item = next(((label, value) for label, value in core if "SHA" in label or "MD5" in label), None)
+        clauses: list[str] = []
+        if process:
+            clauses.append(f"the process as {process}")
+        if endpoint:
+            clauses.append(f"the endpoint as {endpoint}")
+        if object_file:
+            clauses.append(f"the extracted file as {object_file}")
+        sentence = "The observed evidence identifies " + self._join_natural_clauses(clauses) + "."
+        if hash_item:
+            sentence += f" Its {hash_item[0]} is {hash_item[1]}."
+
+        if "event interpretation" not in report.casefold():
+            return f"## Event Interpretation\n\n{report.strip()} {sentence}".strip()
+        return report.rstrip() + " " + sentence
+
+    @staticmethod
+    def _join_natural_clauses(clauses: list[str]) -> str:
+        if not clauses:
+            return "the relevant endpoint activity"
+        if len(clauses) == 1:
+            return clauses[0]
+        if len(clauses) == 2:
+            return f"{clauses[0]} and {clauses[1]}"
+        return ", ".join(clauses[:-1]) + f", and {clauses[-1]}"
+
+    @staticmethod
+    def _extract_endpoint_observables(raw_entries: list[str]) -> list[tuple[str, str]]:
+        observables: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(label: str, value: object) -> None:
+            text = str(value or "").strip()
+            key = (label, text.casefold())
+            if not text or key in seen:
+                return
+            seen.add(key)
+            observables.append((label, text[:700]))
+
+        field_labels = {
+            "processFilePath": "process",
+            "processCmd": "command line",
+            "objectFilePath": "object file",
+            "objectFileHashSha1": "SHA-1",
+            "objectFileHashSha256": "SHA-256",
+            "objectFileHashMd5": "MD5",
+            "processFileHashSha1": "process SHA-1",
+            "processFileHashSha256": "process SHA-256",
+            "processFileHashMd5": "process MD5",
+        }
+
+        for raw in raw_entries:
+            try:
+                payload = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            endpoint = payload.get("endpoint") or {}
+            if isinstance(endpoint, dict):
+                add("endpoint", endpoint.get("name"))
+            for detection in payload.get("filters") or []:
+                if not isinstance(detection, dict):
+                    continue
+                add("detection", detection.get("name"))
+                add("severity", detection.get("level"))
+                tactics = [str(value) for value in detection.get("tactics") or [] if value]
+                techniques = [str(value) for value in detection.get("techniques") or [] if value]
+                if tactics or techniques:
+                    add("ATT&CK", ", ".join([*tactics, *techniques]))
+                for highlighted in detection.get("highlightedObjects") or []:
+                    if not isinstance(highlighted, dict):
+                        continue
+                    field = str(highlighted.get("field") or "")
+                    label = field_labels.get(field)
+                    if label:
+                        add(label, highlighted.get("value"))
+            if observables:
+                break
+        return observables

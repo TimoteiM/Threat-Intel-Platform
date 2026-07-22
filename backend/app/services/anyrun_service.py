@@ -20,8 +20,14 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Enterprise sandbox submissions must always use ANY.RUN's ML-driven
+# Automated Interactivity.  Keep this explicit rather than relying on the SDK
+# default so CAPTCHA and multi-stage phishing flows are detonated consistently.
+_ANYRUN_AUTOMATED_INTERACTIVITY = True
+
 from app.config import get_settings
 from app.services.provider_usage_metrics import record_provider_request
+from app.services.anyrun_scope import scope_anyrun_lookup_item, task_matches_domain
 
 # ── AnyRun sandbox scheduling ─────────────────────────────────────────────────
 #
@@ -718,6 +724,14 @@ def _lookup_intelligence(
         )
         destination_ip_geo = _ensure_list(data.get("destinationIPgeo") or data.get("destination_ip_geo"))
         destination_ports = _extract_ports(data)
+        # Domain intelligence can return textual matches where the victim domain
+        # appears only in an email address or URL fragment. Prefer an actual
+        # main-object host match before fetching a related sandbox report.
+        if indicator_type == "domain" and related_tasks:
+            in_scope_tasks = [task for task in related_tasks if isinstance(task, dict) and task_matches_domain(task, indicator)]
+            if in_scope_tasks:
+                related_tasks = in_scope_tasks + [task for task in related_tasks if task not in in_scope_tasks]
+
         analysis_id = None
         analysis_link = None
         if isinstance(related_tasks, list) and related_tasks:
@@ -820,7 +834,7 @@ def _lookup_intelligence(
             except Exception as exc:
                 report_excerpt = {"report_error": str(exc)}
 
-        return {
+        result = {
             "checked": True,
             "indicator_type": indicator_type,
             "verdict": verdict,
@@ -870,6 +884,7 @@ def _lookup_intelligence(
                 ),
             },
         }
+        return scope_anyrun_lookup_item(result, indicator=indicator, indicator_type=indicator_type)
     except Exception as exc:
         return _error(indicator_type, f"ANY.RUN intelligence lookup failed: {exc}")
 
@@ -1071,6 +1086,9 @@ def _run_sandbox(
             "raw_summary": {
                 "source": "anyrun",
                 "mode": "sandbox",
+                "sandbox_options": {
+                    "automated_interactivity": _ANYRUN_AUTOMATED_INTERACTIVITY,
+                },
                 **({"network_profile": network_profile} if network_profile else {}),
                 "summary": summary,
                 "anyrun_ai_summary": _derive_anyrun_summary(analysis, network, report_data),
@@ -1191,7 +1209,7 @@ def _submit_anyrun_task_with_fallback(
                     target = _normalize_submission_url(indicator)
                     url_kwargs: dict[str, Any] = {
                         "opt_timeout": url_analysis_timeout,
-                        "opt_automated_interactivity": True,
+                        "opt_automated_interactivity": _ANYRUN_AUTOMATED_INTERACTIVITY,
                         "opt_network_mitm": url_mitm,
                     }
                     if privacy:
@@ -1199,18 +1217,28 @@ def _submit_anyrun_task_with_fallback(
                     if use_residential_proxy:
                         url_kwargs["opt_network_residential_proxy"] = True
                         url_kwargs["opt_network_residential_proxy_geo"] = anyrun_proxy_country or "fastest"
-                    return _call_with_supported_kwargs(connector.run_url_analysis, target, **url_kwargs)
+                    return _call_with_supported_kwargs(
+                        connector.run_url_analysis,
+                        target,
+                        required_kwargs={"opt_automated_interactivity"},
+                        **url_kwargs,
+                    )
                 file_kwargs: dict[str, Any] = {
                     "file_content": file_bytes,
                     "filename": (file_name or "sample.bin"),
                     "opt_timeout": 60,
+                    "opt_automated_interactivity": _ANYRUN_AUTOMATED_INTERACTIVITY,
                 }
                 if privacy:
                     file_kwargs["opt_privacy_type"] = privacy
                 if use_residential_proxy:
                     file_kwargs["opt_network_residential_proxy"] = True
                     file_kwargs["opt_network_residential_proxy_geo"] = anyrun_proxy_country or "fastest"
-                return _call_with_supported_kwargs(connector.run_file_analysis, **file_kwargs)
+                return _call_with_supported_kwargs(
+                    connector.run_file_analysis,
+                    required_kwargs={"opt_automated_interactivity"},
+                    **file_kwargs,
+                )
             except Exception as exc:
                 last_exc = exc
                 if _is_parallel_limit_error(exc):
@@ -1251,7 +1279,12 @@ def _submit_anyrun_task_with_fallback(
     return {"__error__": f"ANY.RUN sandbox submission failed: {last_exc}"}
 
 
-def _call_with_supported_kwargs(method: Any, *args: Any, **kwargs: Any) -> Any:
+def _call_with_supported_kwargs(
+    method: Any,
+    *args: Any,
+    required_kwargs: set[str] | None = None,
+    **kwargs: Any,
+) -> Any:
     try:
         sig = signature(method)
     except (TypeError, ValueError):
@@ -1265,6 +1298,13 @@ def _call_with_supported_kwargs(method: Any, *args: Any, **kwargs: Any) -> Any:
         for name, param in sig.parameters.items()
         if param.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
     }
+    missing_required = set(required_kwargs or ()) - supported
+    if missing_required:
+        missing = ", ".join(sorted(missing_required))
+        raise RuntimeError(
+            "ANY.RUN SDK does not support required Enterprise sandbox option(s): "
+            f"{missing}. Upgrade anyrun-sdk before submitting the task."
+        )
     return method(*args, **{key: value for key, value in kwargs.items() if key in supported})
 
 
@@ -1635,7 +1675,13 @@ def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[d
     seen: set[str] = set()
     screenshot_report_url = _extract_anyrun_screenshot_report_url(report_data, html_report)
 
-    def add(url: Any, label: str = "ANY.RUN screenshot") -> None:
+    def add(
+        url: Any,
+        label: str = "ANY.RUN screenshot",
+        *,
+        thumbnail_url: Any = None,
+        captured_at: Any = None,
+    ) -> None:
         text = str(url or "").strip()
         if not text:
             return
@@ -1650,9 +1696,54 @@ def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[d
             return
         seen.add(key)
         row = {"label": label[:80], "url": text}
+        preview = str(thumbnail_url or "").strip()
+        if preview.startswith("//"):
+            preview = f"https:{preview}"
+        if preview.startswith(("http://", "https://", "data:image/")) and preview != text:
+            row["thumbnail_url"] = preview
+        if captured_at not in (None, ""):
+            row["captured_at"] = captured_at
         if screenshot_report_url:
             row["report_url"] = screenshot_report_url
         screenshots.append(row)
+
+    def add_structured(value: Any) -> bool:
+        if isinstance(value, dict):
+            full_url = next(
+                (
+                    value.get(key)
+                    for key in ("permanentUrl", "permanent_url", "fullUrl", "full_url", "downloadUrl", "imageUrl", "url")
+                    if value.get(key)
+                ),
+                None,
+            )
+            thumbnail_url = next(
+                (value.get(key) for key in ("thumbnailUrl", "thumbnail_url", "previewUrl", "preview_url") if value.get(key)),
+                None,
+            )
+            if full_url or thumbnail_url:
+                add(
+                    full_url or thumbnail_url,
+                    str(value.get("label") or value.get("title") or "ANY.RUN sandbox screenshot"),
+                    thumbnail_url=thumbnail_url,
+                    captured_at=value.get("time") or value.get("timestamp"),
+                )
+                return True
+            return False
+        if isinstance(value, str) and "permanentUrl=" in value:
+            # Some SDK/report serializers expose PowerShell-style object strings.
+            full_match = re.search(r"permanentUrl=(https?://[^;}\s]+)", value, flags=re.I)
+            thumb_match = re.search(r"thumbnailUrl=(https?://[^;}\s]+)", value, flags=re.I)
+            time_match = re.search(r"(?:^|[;{])time=([^;}]+)", value, flags=re.I)
+            if full_match or thumb_match:
+                add(
+                    (full_match or thumb_match).group(1),
+                    "ANY.RUN sandbox screenshot",
+                    thumbnail_url=thumb_match.group(1) if thumb_match else None,
+                    captured_at=time_match.group(1) if time_match else None,
+                )
+                return True
+        return False
 
     def walk(value: Any, label: str = "ANY.RUN screenshot") -> None:
         if isinstance(value, dict):
@@ -1673,8 +1764,17 @@ def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[d
 
     if isinstance(report_data, dict):
         analysis = report_data.get("analysis") or {}
+        content = analysis.get("content") if isinstance(analysis, dict) else {}
+        nested_media = (
+            _ensure_list((content or {}).get("screenshots"))
+            + _ensure_list((content or {}).get("images"))
+            if isinstance(content, dict)
+            else []
+        )
+        for value in nested_media + _ensure_list(report_data.get("screenshots")) + _ensure_list(report_data.get("images")):
+            if not add_structured(value):
+                walk(value, "ANY.RUN screenshot")
         walk((analysis or {}).get("reports") or {}, "ANY.RUN report image")
-        walk(report_data.get("screenshots") or report_data.get("images") or [], "ANY.RUN screenshot")
 
     if isinstance(html_report, str) and html_report:
         for match in re.finditer(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"'][^>]*>", html_report, flags=re.I):

@@ -326,6 +326,16 @@ def build_evidence_timeline(
                 entity_type="file",
                 value=dropped.get("path") or dropped.get("name"),
             )
+        for info_event in _as_list(intel.get("informational_events"))[:8]:
+            add(
+                timestamp=info_event.get("timestamp"),
+                source="anyrun",
+                title=info_event.get("title") or "Informational ANY.RUN event",
+                description=info_event.get("description"),
+                severity="info",
+                entity_type="process",
+                value=info_event.get("process_path") or info_event.get("process"),
+            )
 
     opencti = _as_dict(evidence.get("opencti"))
     if opencti.get("found"):

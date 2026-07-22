@@ -239,6 +239,16 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     anyrun_verdict, anyrun_names, anyrun_context = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
     anyrun_malicious = anyrun_verdict == "malicious"
     anyrun_suspicious = anyrun_verdict == "suspicious"
+    observable_clean = (
+        anyrun_verdict == "clean"
+        and vt_found
+        and vt_malicious == 0
+        and vt_suspicious == 0
+        and int((evidence_data.get("whois") or {}).get("domain_age_days") or 0) >= 365
+        and not high_conf_http
+        and not http_has_login
+        and weak_score < 4
+    )
 
     if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_listed or anyrun_malicious:
         classification, confidence, risk_score, action = "malicious", "high", 90, "block"
@@ -252,6 +262,10 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         classification, confidence, risk_score, action = "inconclusive", "low", 30, "investigate"
     elif http_score >= 1:
         classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"
+    elif observable_clean:
+        # A medium lexical score, shared hosting, or a brand word found in a
+        # CSP/resource list must not outweigh several direct clean controls.
+        classification, confidence, risk_score, action = "benign", "high", 15, "monitor"
     elif weak_score >= 4:
         classification, confidence, risk_score, action = "suspicious", "medium", 50, "investigate"
     elif weak_score >= 3:
@@ -293,6 +307,19 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "description": " ".join(details),
             "severity": "critical" if anyrun_malicious else ("high" if anyrun_suspicious else "info"),
             "evidence_refs": ["hybrid_analysis.items"],
+        })
+    excluded_anyrun_tasks = _excluded_anyrun_task_count(evidence_data.get("hybrid_analysis") or {})
+    if excluded_anyrun_tasks:
+        findings.append({
+            "id": "anyrun_scope_exclusions",
+            "title": "AnyRun third-party mentions excluded from domain risk",
+            "description": (
+                f"{excluded_anyrun_tasks} related AnyRun task(s) were not scored because their main-object hosts "
+                "were third-party infrastructure. A domain appearing only in an email address, URL path, query, "
+                "or fragment is victim/mention evidence, not proof that the investigated domain hosted the threat."
+            ),
+            "severity": "info",
+            "evidence_refs": ["hybrid_analysis.items.scope_validation"],
         })
     if vt_found and (vt_malicious > 0 or vt_suspicious > 0 or not (anyrun_malicious or anyrun_suspicious)):
         key_evidence.append(f"VirusTotal: {vt_malicious} malicious, {vt_suspicious} suspicious of {vt_total}")
@@ -338,7 +365,7 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "severity": "high" if high_conf_http else ("medium" if strong_http else "low"),
             "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
         })
-    if weak_score >= 3:
+    if weak_score >= 3 and classification != "benign":
         findings.append({
             "id": "weak_signal_cluster",
             "title": "Suspicious weak-signal cluster",
@@ -346,8 +373,37 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "severity": "medium" if weak_score >= 4 else "low",
             "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
         })
+    elif weak_score >= 3 and observable_clean:
+        findings.append({
+            "id": "weak_signals_overridden_by_clean_controls",
+            "title": "Weak signals did not outweigh direct clean evidence",
+            "description": (
+                "Lexical, shared-hosting, or contextual HTTP observations were retained for review but did not "
+                "raise the verdict because VirusTotal and AnyRun were clean, the domain is established, and no "
+                "high-confidence phishing behavior or login collection was observed."
+            ),
+            "severity": "info",
+            "evidence_refs": ["url_lexical_ml", "hybrid_analysis.items", "vt", "whois.domain_age_days"],
+        })
 
     return classification, confidence, risk_score, action, key_evidence, findings, data_needed
+
+
+def _excluded_anyrun_task_count(hybrid: dict[str, Any]) -> int:
+    total = 0
+    if not isinstance(hybrid, dict):
+        return total
+    entries = hybrid.get("items") if isinstance(hybrid.get("items"), list) else [hybrid]
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        scope = item.get("scope_validation") or (item.get("raw_summary") or {}).get("scope_validation") or {}
+        if isinstance(scope, dict):
+            try:
+                total += max(0, int(scope.get("excluded_tasks") or 0))
+            except (TypeError, ValueError):
+                continue
+    return total
 
 
 def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http: bool = False) -> tuple[int, list[str]]:
@@ -417,6 +473,9 @@ def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[s
     for item in hybrid.get("items") or []:
         if not isinstance(item, dict):
             continue
+        scope = item.get("scope_validation") or (item.get("raw_summary") or {}).get("scope_validation") or {}
+        if isinstance(scope, dict) and scope.get("scope_match") is False:
+            continue
         item_verdict = str(item.get("verdict") or "").strip().lower()
         item_names = _anyrun_labels_from_item(item)
         item_context = _anyrun_context_from_item(item)
@@ -425,6 +484,10 @@ def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[s
             return "malicious", item_names or names, item_context or context
         if item_verdict == "suspicious" and verdict != "malicious":
             verdict = "suspicious"
+            names = names or item_names
+            context = item_context or context
+        elif item_verdict == "clean" and verdict not in {"malicious", "suspicious"}:
+            verdict = "clean"
             names = names or item_names
             context = item_context or context
     if malicious_labels:

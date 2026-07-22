@@ -85,8 +85,125 @@ function anyrunNetworkLabel(item: any): string {
     : "Residential fastest";
 }
 
+function anyrunInteractionLabel(item: any): string {
+  const mode = String(item?.raw_summary?.mode || "").toLowerCase();
+  if (mode !== "sandbox") return "—";
+  return item?.raw_summary?.sandbox_options?.automated_interactivity === true
+    ? "AI ENABLED"
+    : "NOT CONFIRMED";
+}
+
 function anyrunConflictItems(items: any[]): any[] {
   return items.filter((item) => Boolean(verdictContext(item)?.conflict));
+}
+
+function isActionableNetworkThreat(threat: any): boolean {
+  return Boolean(threat) && threat?.excluded_from_final_risk !== true;
+}
+
+function AnyRunProviderFindings({ item }: { item: any }) {
+  const raw = item?.raw_summary || {};
+  if (String(raw?.mode || "").toLowerCase() !== "sandbox") return null;
+
+  const details = raw?.behavior_details || {};
+  const threats = arr(details?.network_threats).filter(isActionableNetworkThreat);
+  const labels = _uniq([
+    ...normalizedAnyrunLabels(item?.tags),
+    ...normalizedAnyrunLabels(item?.threat_names),
+    ...normalizedAnyrunLabels(raw?.tags),
+    ...normalizedAnyrunLabels(raw?.html_threat_labels),
+  ]).filter(Boolean);
+  const verdict = providerVerdict(item);
+  if (!threats.length && !labels.length && !["MALICIOUS", "SUSPICIOUS"].includes(verdict)) return null;
+
+  const counts = raw?.behavior_counts || {};
+  const attributed = new Map<string, { name: string; pid: string; count: number }>();
+  for (const threat of threats) {
+    const name = String(threat?.processName || threat?.process_name || "Unattributed process");
+    const pid = String(threat?.pid ?? "-");
+    const key = `${name.toLowerCase()}|${pid}`;
+    const current = attributed.get(key) || { name, pid, count: 0 };
+    current.count += 1;
+    attributed.set(key, current);
+  }
+
+  return (
+    <section style={{
+      marginBottom: 12,
+      padding: 14,
+      border: "1px solid rgba(251,113,133,.32)",
+      borderLeft: "3px solid #fb7185",
+      borderRadius: 10,
+      background: "linear-gradient(135deg, rgba(127,29,29,.14), rgba(15,23,42,.5))",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ maxWidth: 820 }}>
+          <div style={{ color: "#fda4af", fontSize: 12, fontWeight: 850, letterSpacing: ".03em" }}>
+            What ANY.RUN actually detected
+          </div>
+          <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 11, lineHeight: 1.55 }}>
+            The task verdict is supported by provider classifications and {threats.length} actionable network detection{threats.length === 1 ? "" : "s"}.
+            Red process nodes can also reflect provider chain-level scoring; they do not mean every event inside that process is malicious.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {labels.map((label) => <span key={label} style={{ padding: "3px 8px", borderRadius: 99, color: "#fecdd3", background: "rgba(244,63,94,.13)", border: "1px solid rgba(244,63,94,.3)", fontSize: 10, fontWeight: 750 }}>{label}</span>)}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 7, marginTop: 12 }}>
+        {[
+          ["Direct detections", threats.length],
+          ["Attributed processes", attributed.size],
+          ["HTTP requests", counts?.http_requests ?? arr(details?.http_requests).length],
+          ["Connections", counts?.connections ?? arr(details?.connections).length],
+          ["DNS requests", counts?.dns_requests ?? arr(details?.dns_requests).length],
+          ["Screenshots", arr(raw?.screenshots).length],
+        ].map(([label, value]) => (
+          <div key={String(label)} style={{ padding: "8px 9px", border: "1px solid rgba(148,163,184,.15)", borderRadius: 7, background: "rgba(15,23,42,.38)" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 8, textTransform: "uppercase", letterSpacing: ".06em" }}>{label}</div>
+            <strong style={{ display: "block", marginTop: 2, color: "var(--text)", fontSize: 15 }}>{String(value ?? 0)}</strong>
+          </div>
+        ))}
+      </div>
+
+      {attributed.size > 0 && (
+        <div style={{ marginTop: 11, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ color: "var(--text-muted)", fontSize: 9, textTransform: "uppercase" }}>Open these PIDs in the process graph</span>
+          {Array.from(attributed.values()).map((process) => (
+            <span key={`${process.name}-${process.pid}`} style={{ padding: "3px 7px", borderRadius: 5, color: "#bae6fd", background: "rgba(14,165,233,.1)", border: "1px solid rgba(14,165,233,.25)", fontSize: 10 }}>
+              {process.name} · PID {process.pid} · {process.count} detection{process.count === 1 ? "" : "s"}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {threats.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <EvidenceTable
+            title="Direct ANY.RUN detections"
+            data={threats.slice(0, 12).map((threat: any) => ({
+              time: threat?.time || threat?.timestamp || "-",
+              process: `${threat?.processName || threat?.process_name || "-"}${threat?.pid != null ? ` (PID ${threat.pid})` : ""}`,
+              detection: threat?.msg || threat?.signature || threat?.name || "-",
+              category: threat?.class || threat?.category || "-",
+              severity: threat?.threatLevel ?? threat?.priority ?? threat?.severity ?? "-",
+              destination: `${threat?.dstip || threat?.destinationIP || threat?.ip || "-"}${threat?.dstport != null ? `:${threat.dstport}` : ""}`,
+            }))}
+            columns={[
+              { key: "time", label: "Time", wrap: true },
+              { key: "process", label: "Attributed Process", wrap: true },
+              { key: "detection", label: "Detection", wrap: true },
+              { key: "category", label: "Category", wrap: true },
+              { key: "severity", label: "Priority" },
+              { key: "destination", label: "Destination", wrap: true },
+            ]}
+            showHeader
+          />
+        </div>
+      )}
+    </section>
+  );
 }
 
 function isFlagged(item: any): boolean {
@@ -766,13 +883,16 @@ const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: 
   const selected = Boolean(data?.__selected);
 
   const threatNames = normalizedAnyrunLabels(
-    Array.isArray(proc?.threat_name) ? proc.threat_name : Array.isArray(proc?.threatName) ? proc.threatName : []
+    proc?.threat_name || proc?.threatName
   );
+  const directThreatCount = _num(proc?.network_threat_count ?? proc?.event_counts?.network_threats);
 
   let statusText = "no specs";
   let statusColor = "#5fa8c5";
   if (malicious) {
-    statusText = threatNames[0] || "malicious";
+    statusText = threatNames[0] || (directThreatCount > 0
+      ? `${directThreatCount} network threat${directThreatCount === 1 ? "" : "s"}`
+      : "malicious");
     statusColor = "#ef4444";
   } else if (suspicious) {
     statusText = threatNames[0] || "suspicious";
@@ -897,6 +1017,15 @@ function _hasDirectThreatSignal(p: any): boolean {
     Boolean(p?.suspicious_flag) ||
     arr(p?.threatName).length > 0 ||
     arr(p?.mitre_tags ?? p?.mitreTags).length > 0
+  );
+}
+
+function _hasDirectAttributedThreat(p: any): boolean {
+  const threatNames = normalizedAnyrunLabels(p?.threat_name || p?.threatName);
+  return (
+    _num(p?.network_threat_count ?? p?.event_counts?.network_threats) > 0 ||
+    threatNames.length > 0 ||
+    Boolean(p?.scores?.specs?.knownThreat)
   );
 }
 
@@ -1274,12 +1403,17 @@ function buildProcessTreeGraph(raw: any): { nodes: any[]; edges: any[]; details:
       bySig.get(sig)!.push(sid);
     }
     bySig.forEach((ids) => {
-      if (ids.length <= 1) return;
-      const rep = ids[0];
+      // Preserve each PID that owns a detection. Collapsing it into an identical
+      // sibling makes a graph click open the representative's unrelated events.
+      const collapsibleIds = ids.filter(
+        (id) => !_hasDirectAttributedThreat(nodesById.get(id)?.process || {})
+      );
+      if (collapsibleIds.length <= 1) return;
+      const rep = collapsibleIds[0];
       const repNode = nodesById.get(rep);
       if (!repNode) return;
-      for (let i = 1; i < ids.length; i++) {
-        const rid = ids[i];
+      for (let i = 1; i < collapsibleIds.length; i++) {
+        const rid = collapsibleIds[i];
         const rn = nodesById.get(rid);
         if (!rn) continue;
         repNode.process.duplicate_count = _num(repNode.process.duplicate_count) + 1;
@@ -1605,7 +1739,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
   }, [rawNodes]);
   const threatByProcess = React.useMemo(() => {
     const m: Record<string, { count: number; maxLevel: number }> = {};
-    for (const t of threatRows) {
+    for (const t of threatRows.filter(isActionableNetworkThreat)) {
       const refs = [t?.process, t?.processUuid, t?.uuid, t?.pid].filter(Boolean).map((x: any) => String(x));
       const lvl = Number(t?.threatLevel ?? t?.severity ?? t?.priority ?? 0);
       for (const r of refs) {
@@ -1615,6 +1749,33 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
     }
     return m;
   }, [threatRows]);
+
+  const directDetectionTargets = React.useMemo(() => {
+    const grouped = new Map<string, { nodeId: string; process: any; count: number; labels: string[] }>();
+    for (const threat of threatRows.filter(isActionableNetworkThreat)) {
+      const refs = [threat?.process, threat?.processUuid, threat?.uuid, threat?.pid]
+        .filter(Boolean)
+        .map((value: any) => String(value));
+      const detail = refs.map((ref) => processIndexByRef[ref]).find(Boolean) || null;
+      const graphProcess = refs.map((ref) => graphProcessByRef[ref]).find(Boolean) || null;
+      const process = detail || graphProcess || {
+        pid: threat?.pid,
+        name: threat?.processName || threat?.process_name,
+        uuid: threat?.process,
+      };
+      const allRefs = _uniq([...refs, ..._processRefs(process)]);
+      const nodeId = allRefs.map((ref) => nodeIdByRef[ref]).find(Boolean) || "";
+      const key = nodeId || allRefs[0] || `${threat?.processName || "process"}-${threat?.pid || "-"}`;
+      const current = grouped.get(key) || { nodeId, process, count: 0, labels: [] };
+      current.count += 1;
+      current.labels = _uniq([
+        ...current.labels,
+        String(threat?.msg || threat?.signature || threat?.name || "network detection"),
+      ]);
+      grouped.set(key, current);
+    }
+    return Array.from(grouped.values());
+  }, [threatRows, processIndexByRef, graphProcessByRef, nodeIdByRef]);
 
   const nodesBase = React.useMemo<Node[]>(
     () =>
@@ -1694,9 +1855,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
   if (!rawNodes.length) return <EmptyNote>No AnyRun process tree available.</EmptyNote>;
 
   const selectedFromNode = selectedNode ? (detailByNode[selectedNode] || {}) : null;
-  const selected = (selectedFromNode && Object.keys(selectedFromNode).length > 0)
-    ? selectedFromNode
-    : (selectedProcessManual || null);
+  const selected = selectedProcessManual || (
+    selectedFromNode && Object.keys(selectedFromNode).length > 0 ? selectedFromNode : null
+  );
   const selectedProcessDetail = React.useMemo(() => {
     if (!selected) return selectedProcessManual || null;
     const refs = [selected?.uuid, selected?.guid, selected?.pid]
@@ -1927,6 +2088,30 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
           or zero process score means AnyRun did not assign malicious behavior to that specific process in this run.
         </div>
       )}
+      {directDetectionTargets.length > 0 && (
+        <div style={{ marginBottom: 10, padding: "9px 11px", border: "1px solid rgba(244,63,94,.3)", borderRadius: 7, background: "rgba(127,29,29,.1)" }}>
+          <div style={{ color: "#fda4af", fontSize: 10, fontWeight: 800, marginBottom: 6 }}>Processes with directly attributed ANY.RUN detections</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {directDetectionTargets.map((target, index) => {
+              const name = _filenameFromPath(target.process?.name || target.process?.fileName || target.process?.image || "process");
+              return (
+                <button
+                  key={`${target.nodeId}-${index}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedNode(target.nodeId || null);
+                    setSelectedProcessManual(target.process || null);
+                  }}
+                  title={target.labels.join("\n")}
+                  style={{ padding: "5px 8px", border: "1px solid rgba(251,113,133,.35)", borderRadius: 6, background: "rgba(244,63,94,.1)", color: "#fecdd3", cursor: "pointer", fontSize: 10, fontWeight: 700 }}
+                >
+                  {name} · PID {target.process?.pid ?? "-"} · {target.count} detection{target.count === 1 ? "" : "s"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ height, border: "1px solid #132e45", borderRadius: 6, overflow: "hidden", background: "#09202f" }}>
         <ReactFlow
           nodes={nodes}
@@ -1934,7 +2119,11 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
           nodeTypes={GRAPH_NODE_TYPES}
           onNodeClick={(_, n) => {
             setSelectedNode(String(n.id));
-            setSelectedProcessManual((n as any)?.data?.kind === "process" ? ((n as any)?.data?.process || null) : null);
+            const graphProcess = (n as any)?.data?.kind === "process" ? ((n as any)?.data?.process || null) : null;
+            const exactProcess = _processRefs(graphProcess)
+              .map((ref) => processIndexByRef[ref])
+              .find(Boolean);
+            setSelectedProcessManual(exactProcess || graphProcess);
           }}
           onPaneClick={() => {
             setSelectedNode(null);
@@ -2063,6 +2252,12 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                   <ProcessSuspicionFindingsCard findings={selectedProcessFindings} compact />
                 </div>
               ) : null}
+              {selectedThreatCount === 0 && directDetectionTargets.length > 0 && (
+                <div style={{ marginBottom: 10, padding: "9px 10px", border: "1px solid rgba(251,191,36,.3)", borderRadius: 7, background: "rgba(120,80,10,.12)", color: "var(--text-secondary)", fontSize: 10, lineHeight: 1.5 }}>
+                  <strong style={{ color: "#fde68a" }}>No direct detection rows are attached to this PID.</strong>{" "}
+                  Its red state comes from ANY.RUN process/chain scoring. Use the directly attributed process buttons above to inspect the signatures and network events that support the task verdict.
+                </div>
+              )}
               <div>
                 <div style={{ marginBottom: 4, color: "var(--accent)" }}><strong>Command line</strong></div>
                 <div
@@ -3134,6 +3329,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           type: item?.indicator_type || "unknown",
           mode: String(item?.raw_summary?.mode || "lookup").toUpperCase(),
           execution: item?.cache_hit ? "CACHED" : "LIVE",
+          interaction: anyrunInteractionLabel(item),
           network: anyrunNetworkLabel(item),
           provider_verdict: providerVerdict(item),
           verdict: analystAssessment(item),
@@ -3148,6 +3344,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           { key: "type", label: "Indicator Type" },
           { key: "mode", label: "Mode" },
           { key: "execution", label: "Execution" },
+          { key: "interaction", label: "Interaction" },
           { key: "network", label: "Network" },
           { key: "provider_verdict", label: "Provider Verdict" },
           { key: "verdict", label: "App Assessment" },
@@ -3291,13 +3488,33 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
         const threatRows = arr(behaviorDetails?.network_threats).map((t: any) => ({
           type: t?.class || t?.category || t?.type || "-",
           indicator: t?.indicator || t?.domain || t?.destinationIP || t?.url || "-",
-          threat_level: t?.threatLevel ?? t?.priority ?? t?.severity ?? "-",
-          threat_name: normalizedAnyrunLabels(t?.threatName).join(", ") || t?.name || "-",
-          description: t?.description || t?.msg || "-",
+          threat_level: t?.excluded_from_final_risk ? "Informational" : (t?.threatLevel ?? t?.priority ?? t?.severity ?? "-"),
+          threat_name: normalizedAnyrunLabels(t?.threatName).join(", ") || t?.signature || t?.name || "-",
+          disposition: t?.disposition || t?.classification || (t?.excluded_from_final_risk ? "Excluded from risk" : "Actionable"),
+          description: t?.reason || t?.description || t?.msg || "-",
         }));
 
         return (
           <div key={`anyrun-${idx}`} style={{ marginTop: 14 }}>
+            {arr(raw?.false_positive_exclusions).length > 0 && (
+              <div style={{
+                marginBottom: 10,
+                padding: "10px 12px",
+                border: "1px solid rgba(56,217,169,.28)",
+                borderLeft: "3px solid #38d9a9",
+                background: "rgba(56,217,169,.07)",
+                borderRadius: 8,
+              }}>
+                <div style={{ color: "#5ee7c0", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>
+                  Likely benign detections preserved in the report
+                </div>
+                {arr(raw.false_positive_exclusions).map((exclusion: any, exclusionIndex: number) => (
+                  <div key={`${exclusion?.signature}-${exclusionIndex}`} style={{ color: "var(--text-secondary)", fontSize: 10, lineHeight: 1.5 }}>
+                    <b>{exclusion?.classification || "Informational"}</b> · {exclusion?.process_path || exclusion?.process || "process unavailable"} · {exclusion?.reason}
+                  </div>
+                ))}
+              </div>
+            )}
             {sourceLower !== "anyrun" && anyrunFallbackError && (
               <div
                 style={{
@@ -3314,6 +3531,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
                 {" "}Reason: {anyrunFallbackError}
               </div>
             )}
+            <AnyRunProviderFindings item={item} />
             {(() => {
               const tiThreatNames = normalizedAnyrunLabels(raw?.threatName || item?.threat_names);
               const tiTags = normalizedAnyrunLabels(raw?.tags);
@@ -3687,6 +3905,7 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
                         { key: "indicator", label: "Indicator", minWidth: 320, maxWidth: 560 },
                         { key: "threat_level", label: "Threat Level", minWidth: 170 },
                         { key: "threat_name", label: "Threat Name", minWidth: 280, maxWidth: 480 },
+                        { key: "disposition", label: "Disposition", minWidth: 260, maxWidth: 420 },
                         { key: "description", label: "Description", minWidth: 360, maxWidth: 700 },
                       ]}
                     />

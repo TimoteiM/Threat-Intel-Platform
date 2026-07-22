@@ -33,7 +33,13 @@ from app.models.enums import InvestigationState
 from app.collectors.registry import available_collectors, get_collector, get_collectors_for_type
 from app.db.session import sync_engine
 from app.tasks.celery_app import celery_app
-from app.tasks.analysis_task import recompute_report_for_existing_investigation, run_analysis
+from app.tasks.analysis_task import (
+    _attach_artifact_ids,
+    _guess_content_type,
+    _save_artifact_sync,
+    recompute_report_for_existing_investigation,
+    run_analysis,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -74,6 +80,13 @@ def _sandbox_collector_timeout(base_timeout: int) -> int:
 def _collector_timeout(name: str, base_timeout: int) -> int:
     if name == "hybrid_analysis":
         return _sandbox_collector_timeout(base_timeout)
+    if name == "urlscan":
+        analysis_wait = max(
+            30,
+            int(getattr(get_settings(), "urlscan_analysis_timeout_seconds", 75) or 75),
+        )
+        # Leave room for the initial search, submission, and response parsing.
+        return max(base_timeout, analysis_wait + 20)
     return base_timeout
 
 
@@ -574,8 +587,24 @@ def _anyrun_background_update(
                 except Exception:
                     existing = {}
 
-            # Merge hybrid_analysis collector result into evidence
             evidence_from_result = result.get("evidence", {})
+            artifact_ids: dict[str, str] = {}
+            for artifact_name, hex_data in result.get("artifacts", {}).items():
+                try:
+                    artifact_id = _save_artifact_sync(
+                        investigation_id=investigation_id,
+                        collector_name=ANYRUN_COLLECTOR_NAME,
+                        artifact_name=artifact_name,
+                        data=bytes.fromhex(hex_data),
+                        content_type=_guess_content_type(artifact_name),
+                    )
+                    if artifact_id:
+                        artifact_ids[artifact_name] = artifact_id
+                except Exception as exc:
+                    logger.warning("[%s] Failed to persist deferred ANY.RUN artifact %s: %s", investigation_id, artifact_name, exc)
+            _attach_artifact_ids(evidence_from_result, artifact_ids)
+
+            # Merge hybrid_analysis collector result into evidence
             existing[ANYRUN_COLLECTOR_NAME] = evidence_from_result
 
             evidence_row.evidence_json = existing

@@ -32,6 +32,15 @@ def test_collector_timeout_keeps_non_sandbox_collectors_fast():
     assert _collector_timeout("dns", 20) == 20
 
 
+def test_urlscan_collector_gets_full_analysis_budget(monkeypatch):
+    monkeypatch.setattr(
+        investigation_task,
+        "get_settings",
+        lambda: SimpleNamespace(urlscan_analysis_timeout_seconds=75),
+    )
+    assert _collector_timeout("urlscan", 20) == 95
+
+
 class _DummyEvidence:
     def __init__(self, collector_name: str, duration_ms: int):
         self.meta = SimpleNamespace(duration_ms=duration_ms)

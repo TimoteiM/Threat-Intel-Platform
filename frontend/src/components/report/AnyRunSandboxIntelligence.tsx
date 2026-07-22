@@ -18,6 +18,7 @@ type Intelligence = {
   suspicious_commands?: any[];
   screenshot_thumbnails?: any[];
   extracted_iocs?: any[];
+  informational_events?: any[];
 };
 
 function arr(value: any): any[] {
@@ -41,94 +42,6 @@ function uniqueRows(rows: any[], keyFn: (row: any) => string): any[] {
   return out;
 }
 
-function openThumbnailUrl(url: string, reportUrl?: string): void {
-  if (typeof window === "undefined") return;
-  if (!url.startsWith("data:image/")) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  const blob = dataUrlToBlob(url);
-  if (!blob) {
-    openThumbnailViewerHtml(buildThumbnailViewerHtml(url, false, reportUrl));
-    return;
-  }
-  const objectUrl = URL.createObjectURL(blob);
-  openThumbnailViewerHtml(buildThumbnailViewerHtml(objectUrl, true, reportUrl));
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120_000);
-}
-
-function openThumbnailViewerHtml(html: string): void {
-  const viewerBlob = new Blob([html], { type: "text/html" });
-  const viewerUrl = URL.createObjectURL(viewerBlob);
-  const win = window.open(viewerUrl, "_blank", "noopener,noreferrer");
-  if (!win) {
-    URL.revokeObjectURL(viewerUrl);
-    return;
-  }
-  window.setTimeout(() => URL.revokeObjectURL(viewerUrl), 120_000);
-}
-
-function dataUrlToBlob(url: string): Blob | null {
-  const match = url.match(/^data:([^;,]+)(;base64)?,(.*)$/);
-  if (!match) return null;
-  const mime = match[1] || "image/jpeg";
-  const isBase64 = Boolean(match[2]);
-  try {
-    const raw = isBase64 ? window.atob(match[3]) : decodeURIComponent(match[3]);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-    return new Blob([bytes], { type: mime });
-  } catch {
-    return null;
-  }
-}
-
-function buildThumbnailViewerHtml(url: string, isObjectUrl = false, reportUrl?: string): string {
-  const safeUrl = url.replace(/"/g, "&quot;");
-  const safeReportUrl = reportUrl?.replace(/"/g, "&quot;");
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>ANY.RUN thumbnail</title>
-  <style>
-    html, body { margin: 0; min-height: 100%; background: #020617; color: #cbd5e1; font-family: Inter, system-ui, sans-serif; }
-    .bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: rgba(2, 6, 23, 0.92); border-bottom: 1px solid rgba(148, 163, 184, 0.18); }
-    .title { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #93c5fd; }
-    .hint { font-size: 12px; color: #94a3b8; }
-    .actions { display: flex; align-items: center; gap: 8px; }
-    button, a { border: 1px solid rgba(147, 197, 253, .35); background: rgba(96, 165, 250, .12); color: #bfdbfe; border-radius: 6px; padding: 6px 9px; font: 700 12px Inter, system-ui, sans-serif; text-decoration: none; cursor: pointer; }
-    .stage { min-height: calc(100vh - 45px); display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
-    img { display: block; max-width: none; width: auto; height: auto; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.22); box-shadow: 0 20px 60px rgba(0,0,0,.35); image-rendering: auto; transform-origin: center top; }
-  </style>
-</head>
-<body>
-  <div class="bar">
-    <div>
-      <div class="title">ANY.RUN embedded HTML thumbnail</div>
-      <div class="hint">Use the report link for AnyRun's highest-quality screenshot viewer when available.</div>
-    </div>
-    <div class="actions">
-      <button type="button" onclick="setZoom(1)">1x</button>
-      <button type="button" onclick="setZoom(2)">2x</button>
-      <button type="button" onclick="setZoom(3)">3x</button>
-      ${safeReportUrl ? `<a href="${safeReportUrl}" target="_blank" rel="noreferrer">Open AnyRun report</a>` : ""}
-    </div>
-  </div>
-  <div class="stage">
-    <img id="shot" src="${safeUrl}" alt="ANY.RUN thumbnail" />
-  </div>
-  <script>
-    function setZoom(z) {
-      var img = document.getElementById("shot");
-      if (img) img.style.transform = "scale(" + z + ")";
-    }
-  </script>
-  ${isObjectUrl ? "" : ""}
-</body>
-</html>`;
-}
-
 function collectIntelligence(hybridAnalysis: any): Intelligence[] {
   return arr(hybridAnalysis?.items)
     .map((item: any) => item?.sandbox_intelligence || {})
@@ -141,6 +54,7 @@ function collectIntelligence(hybridAnalysis: any): Intelligence[] {
           summary?.dropped_file_count ||
           summary?.suspicious_command_count ||
           summary?.extracted_ioc_count ||
+          summary?.informational_event_count ||
           arr(intel?.screenshot_thumbnails).length
       );
     });
@@ -169,8 +83,12 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
     (row) => `${text(row?.type)}:${text(row?.value)}`
   );
   const screenshots = uniqueRows(
-    intelligence.flatMap((i) => arr(i.screenshot_thumbnails)),
-    (row) => text(row?.url)
+    intelligence.flatMap((i) => arr(i.screenshot_thumbnails)).filter((row) => Boolean(row?.artifact_id)),
+    (row) => text(row?.artifact_id || row?.url)
+  );
+  const informationalEvents = uniqueRows(
+    intelligence.flatMap((i) => arr(i.informational_events)),
+    (row) => `${text(row?.signature)}:${text(row?.process_path)}:${text(row?.timestamp)}`
   );
   const primaryTree = intelligence.find((i) => i?.process_tree_summary)?.process_tree_summary || {};
   const summary = intelligence.reduce(
@@ -200,6 +118,26 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
 
       {primaryTree?.narrative && (
         <div style={noteStyle}>{String(primaryTree.narrative)}</div>
+      )}
+
+      {informationalEvents.length > 0 && (
+        <div style={{
+          marginBottom: 14,
+          padding: "12px 14px",
+          border: "1px solid rgba(56, 217, 169, .28)",
+          borderLeft: "3px solid #38d9a9",
+          borderRadius: 9,
+          background: "rgba(56, 217, 169, .07)",
+        }}>
+          <div style={{ color: "#5ee7c0", fontSize: 11, fontWeight: 800, marginBottom: 5 }}>
+            Informational detections retained for visibility
+          </div>
+          {informationalEvents.map((event, index) => (
+            <div key={`${event?.signature}-${index}`} style={{ color: "var(--text-secondary)", fontSize: 10, lineHeight: 1.55 }}>
+              <b>{text(event?.title)}</b> · {text(event?.process_path || event?.process)} · {text(event?.description)}
+            </div>
+          ))}
+        </div>
       )}
 
       <EvidenceTable
@@ -329,31 +267,28 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
 
       {screenshots.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={tableTitleStyle}>Screenshot Thumbnails</div>
+          <div style={tableTitleStyle}>ANY.RUN Sandbox Screenshots</div>
+          <div style={screenshotHintStyle}>
+            Select a capture to open the full-resolution image. The gallery uses lightweight previews only.
+          </div>
           <div style={thumbGridStyle}>
-            {screenshots.slice(0, 8).map((shot, idx) => (
-              <button
-                key={`${shot?.url}-${idx}`}
-                type="button"
-                onClick={() => openThumbnailUrl(String(shot?.url || ""), String(shot?.report_url || ""))}
-                style={thumbLinkStyle}
-                title="Open thumbnail viewer"
-              >
-                <img src={String(shot?.url || "")} alt={text(shot?.label)} style={thumbImageStyle} />
-                <span style={thumbLabelStyle}>{text(shot?.label)}</span>
-                {shot?.report_url ? (
-                  <span
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      window.open(String(shot.report_url), "_blank", "noopener,noreferrer");
-                    }}
-                    style={thumbReportLinkStyle}
-                  >
-                    Open AnyRun report
-                  </span>
-                ) : null}
-              </button>
-            ))}
+            {screenshots.slice(0, 8).map((shot, idx) => {
+              const artifactUrl = getArtifactUrl(String(shot.artifact_id));
+              return (
+                <a
+                  key={`${shot?.url}-${idx}`}
+                  href={artifactUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={thumbLinkStyle}
+                  title="Open full-resolution screenshot"
+                >
+                  <img src={artifactUrl} alt={text(shot?.label)} style={thumbImageStyle} />
+                  <span style={thumbLabelStyle}>{text(shot?.label)}</span>
+                  <span style={thumbResolutionStyle}>Open original quality</span>
+                </a>
+              );
+            })}
           </div>
         </div>
       )}
@@ -460,11 +395,17 @@ const thumbLabelStyle: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 
-const thumbReportLinkStyle: React.CSSProperties = {
-  display: "block",
-  padding: "0 8px 8px",
+const screenshotHintStyle: React.CSSProperties = {
+  margin: "-1px 0 8px",
   fontSize: 10,
-  color: "var(--accent)",
+  color: "var(--text-muted)",
+};
+
+const thumbResolutionStyle: React.CSSProperties = {
+  display: "block",
+  padding: "2px 8px 6px",
+  fontSize: 10,
+  color: "#93c5fd",
   fontWeight: 700,
 };
 
