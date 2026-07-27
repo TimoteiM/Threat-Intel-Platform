@@ -1,6 +1,6 @@
 # Domain Threat Investigation Platform
 
-Automated domain threat investigation with evidence-based analysis powered by Claude.
+Automated domain threat investigation with evidence-based analysis powered by OpenAI.
 
 ## Architecture
 
