@@ -137,6 +137,19 @@ class Settings(BaseSettings):
     # file hashes. Domains/URLs/IPs are covered by the DNS/WHOIS/ASN/intel/
     # threat-feed/URLScan/OpenCTI chain. Set false to let VT run on every type.
     alert_vt_hash_only: bool = True
+    # Let the AI propose ATT&CK techniques the deterministic signals cannot see.
+    # Every proposal is whitelist-checked and must quote evidence that exists,
+    # so this widens what is found without widening what can be invented.
+    alert_attack_ai_enabled: bool = True
+    # Add indicators an alert run concluded on to the watchlist, so a verdict
+    # that changes later is noticed rather than silently going stale.
+    alert_watchlist_autoenrol: bool = True
+    alert_watchlist_autoenrol_interval: str = "weekly"
+    # Only enrol indicators that concluded at or above this risk score — the
+    # point is to re-check what mattered, not to watch the whole internet.
+    alert_watchlist_autoenrol_min_risk: int = 40
+    # POST alert.updated to the original sender when a re-check changes a verdict.
+    alert_reverdict_notify: bool = True
     # Reuse a recent concluded investigation of the same indicator instead of
     # re-running its collectors.
     alert_reuse_prior_investigations: bool = True

@@ -55,8 +55,23 @@ CALLBACK_BASE_BACKOFF_SECONDS = 10
     # exception, leaving the run recorded as "retrying" for ever.
     max_retries=None,
 )
-def deliver_alert_callback(self, run_id: str) -> str:
-    """POST the run's report list to its callback URL."""
+def deliver_alert_callback(
+    self,
+    run_id: str,
+    *,
+    event: str | None = None,
+    override_url: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """
+    POST the run's report list to its callback URL.
+
+    `event`/`extra` carry a re-notification: when a re-check changes a verdict
+    this run already reported, the same sender is called again with
+    `alert.updated` and an `update` block saying what changed. The documents are
+    rebuilt from the run as it stands, so the receiver gets the current report
+    rather than a diff it has to apply itself.
+    """
     settings = get_settings()
     try:
         parsed_id = uuid.UUID(run_id)
@@ -69,7 +84,7 @@ def deliver_alert_callback(self, run_id: str) -> str:
         if not run:
             logger.error("Callback skipped — alert run %s not found", run_id)
             return run_id
-        callback_url = str(run.callback_url or "").strip()
+        callback_url = str(override_url or run.callback_url or "").strip()
         payload = dict(run.result_json or {})
         status = str(run.status or "")
         overall_verdict = run.overall_verdict
@@ -94,7 +109,7 @@ def deliver_alert_callback(self, run_id: str) -> str:
     documents = build_documents(payload, outcomes, shape="report")
 
     envelope: dict[str, Any] = {
-        "event": "alert.failed" if status in FAILED_STATUSES else "alert.completed",
+        "event": event or ("alert.failed" if status in FAILED_STATUSES else "alert.completed"),
         "run_id": run_id,
         "external_ref": payload.get("external_ref"),
         "status": status,
@@ -104,6 +119,11 @@ def deliver_alert_callback(self, run_id: str) -> str:
         "document_count": len(documents),
         "documents": documents,
     }
+    if extra:
+        # Says what changed and why this arrived a second time. Kept in its own
+        # block so a receiver that only handles alert.completed sees a familiar
+        # envelope with one unfamiliar key, not a different shape.
+        envelope["update"] = extra
     body = json.dumps(envelope, ensure_ascii=False, default=str).encode("utf-8")
 
     headers = {

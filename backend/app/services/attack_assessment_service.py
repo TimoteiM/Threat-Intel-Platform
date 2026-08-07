@@ -36,11 +36,15 @@ from typing import Any, Iterable, Sequence
 
 from app.analyst.attack_mapping import (
     AMBIGUOUS_SIGNAL_GROUPS,
+    COLLECTOR_ATTACK_RULES,
     get_technique_info,
     normalize_technique_id,
     parent_technique,
     techniques_for_signal,
 )
+
+# Same threshold the decision engine uses for "newly registered".
+NEWLY_REGISTERED_DAYS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +97,9 @@ def assess_attack(
     alert_body: str,
     event_reports: Sequence[dict[str, Any]],
     *,
+    indicator_reports: Sequence[dict[str, Any]] = (),
     detection_techniques: Sequence[str] | None = None,
+    ai_proposals: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any] | None:
     """
     Compare the detection's mapping with the techniques the evidence supports.
@@ -105,8 +111,9 @@ def assess_attack(
     claimed = list(detection_techniques if detection_techniques is not None
                    else extract_detection_techniques(alert_body))
     evidenced = _evidenced_techniques(event_reports)
+    _merge(evidenced, _collector_techniques(indicator_reports))
 
-    if not claimed and not evidenced:
+    if not claimed and not evidenced and not ai_proposals:
         return None
 
     assessed_claims = [_assess_one(technique, evidenced) for technique in claimed]
@@ -119,16 +126,41 @@ def assess_attack(
         if technique not in claimed_keys and technique not in claimed_parents
     ]
 
+    # AI proposals are already validated (whitelisted id, quote located in the
+    # evidence) and never displace a deterministic result — they are appended,
+    # marked, and kept out of confirmed_count.
+    evidenced_ids = set(evidenced)
+    additional.extend(
+        proposal
+        for proposal in ai_proposals
+        if proposal.get("id") not in evidenced_ids
+        and proposal.get("id") not in claimed_keys
+    )
+
     return {
         "detection_claimed": claimed,
         "techniques": assessed_claims,
         "additional_techniques": additional,
         "evidence_available": bool(evidenced),
         "confirmed_count": sum(1 for item in assessed_claims if item["status"] == "confirmed"),
-        "sources": ["endpoint_behaviour"] if evidenced else [],
-        "method": "deterministic_behaviour_signals",
+        "sources": _sources(evidenced, ai_proposals),
+        "method": "deterministic_signals" + ("_plus_ai" if ai_proposals else ""),
         "note": _summary_note(assessed_claims, additional, bool(evidenced)),
     }
+
+
+def _sources(evidenced: dict[str, Any], ai_proposals: Sequence[dict[str, Any]]) -> list[str]:
+    sources: list[str] = []
+    for entry in evidenced.values():
+        for signal_id in entry.get("signal_ids") or []:
+            source = "collector_findings" if any(
+                signal_id == rule[0] for rule in COLLECTOR_ATTACK_RULES
+            ) else "endpoint_behaviour"
+            if source not in sources:
+                sources.append(source)
+    if ai_proposals:
+        sources.append("ai_suggested")
+    return sources
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────
@@ -174,6 +206,107 @@ def _evidenced_techniques(event_reports: Iterable[dict[str, Any]]) -> dict[str, 
                     }
                 )
     return evidenced
+
+
+def _collector_techniques(
+    indicator_reports: Iterable[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """
+    Techniques supported by what the collectors found about an indicator.
+
+    Endpoint signals say what a command *is*; these say what a domain or URL
+    turned out to *be*. The conditions are strict on purpose — a reachable page
+    supports nothing, a malicious page serving a login form supports credential
+    capture — and every rule that fires cites the finding it read.
+    """
+    evidenced: dict[str, dict[str, Any]] = {}
+
+    for report in indicator_reports or []:
+        if not isinstance(report, dict):
+            continue
+        verdict = report.get("verdict") or {}
+        classification = str(verdict.get("classification") or "")
+        is_malicious = classification == "malicious"
+        indicator = (report.get("indicator") or {}).get("value")
+
+        by_collector: dict[str, list[dict[str, Any]]] = {}
+        for finding in report.get("findings") or []:
+            if isinstance(finding, dict):
+                by_collector.setdefault(str(finding.get("collector") or ""), []).append(finding)
+
+        for rule_id, collector, technique, confidence, requires_malicious in COLLECTOR_ATTACK_RULES:
+            if requires_malicious and not is_malicious:
+                continue
+            for finding in by_collector.get(collector, []):
+                if not _collector_rule_matches(rule_id, finding):
+                    continue
+                entry = evidenced.setdefault(
+                    technique, {"confidence": confidence, "evidence": [], "signal_ids": []}
+                )
+                if CONFIDENCE_RANK.get(confidence, 0) > CONFIDENCE_RANK.get(entry["confidence"], 0):
+                    entry["confidence"] = confidence
+                if rule_id not in entry["signal_ids"]:
+                    entry["signal_ids"].append(rule_id)
+                entry["evidence"].append(
+                    {
+                        "signal_id": rule_id,
+                        "signal": finding.get("summary"),
+                        "severity": finding.get("severity"),
+                        "matched": _collector_citation(rule_id, finding),
+                        "indicator": indicator,
+                        "collector": collector,
+                    }
+                )
+                break  # one citation per rule per indicator is enough
+    return evidenced
+
+
+def _collector_rule_matches(rule_id: str, finding: dict[str, Any]) -> bool:
+    """Whether this finding actually satisfies the rule's condition."""
+    data = finding.get("data") or {}
+    if rule_id == "credential_page":
+        return bool(data.get("has_login_form"))
+    if rule_id == "brand_impersonation":
+        return bool(data.get("brand_indicators"))
+    if rule_id == "newly_registered":
+        age = data.get("domain_age_days")
+        return isinstance(age, int) and 0 <= age <= NEWLY_REGISTERED_DAYS
+    if rule_id == "phish_feed_hit":
+        blob = f"{finding.get('summary')} {data}".lower()
+        return "phish" in blob
+    if rule_id == "sandbox_c2":
+        return bool(data.get("urls") or data.get("connections") or data.get("network"))
+    return False
+
+
+def _collector_citation(rule_id: str, finding: dict[str, Any]) -> str | None:
+    """The specific value that made the rule fire, for the report to quote."""
+    data = finding.get("data") or {}
+    if rule_id == "credential_page":
+        return f"login form on {data.get('final_url') or 'the live page'}"
+    if rule_id == "brand_impersonation":
+        brands = data.get("brand_indicators")
+        return f"brand indicators: {', '.join(map(str, brands[:3]))}" if isinstance(brands, list) else str(brands)
+    if rule_id == "newly_registered":
+        return f"registered {data.get('domain_age_days')} day(s) ago"
+    if rule_id in ("phish_feed_hit", "sandbox_c2"):
+        return str(finding.get("summary") or "")[:120]
+    return None
+
+
+def _merge(target: dict[str, dict[str, Any]], extra: dict[str, dict[str, Any]]) -> None:
+    """Fold one evidence map into another, keeping the strongest confidence."""
+    for technique, entry in extra.items():
+        existing = target.get(technique)
+        if existing is None:
+            target[technique] = entry
+            continue
+        if CONFIDENCE_RANK.get(entry["confidence"], 0) > CONFIDENCE_RANK.get(existing["confidence"], 0):
+            existing["confidence"] = entry["confidence"]
+        existing["evidence"].extend(entry["evidence"])
+        for signal_id in entry["signal_ids"]:
+            if signal_id not in existing["signal_ids"]:
+                existing["signal_ids"].append(signal_id)
 
 
 def _assess_one(technique: str, evidenced: dict[str, dict[str, Any]]) -> dict[str, Any]:

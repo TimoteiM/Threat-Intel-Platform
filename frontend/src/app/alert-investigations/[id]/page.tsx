@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
+import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
@@ -311,6 +312,10 @@ export default function AlertInvestigationDetailPage() {
           <div style={{ fontSize: 12, color: "#fca5a5", fontFamily: "var(--font-mono)" }}>{run.error}</div>
         </ConsoleModule>
       )}
+
+      {/* Asked once the run has an answer to judge — measuring the decision
+          engine is impossible without the analyst's call on it. */}
+      {!isActive && <AnalystFeedbackControl subjectType="alert_run" subjectId={runId} compact />}
 
       {run.alert_body && (
         <ConsoleModule

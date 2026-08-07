@@ -1488,6 +1488,125 @@ export interface AlertExtractionResult {
   max_indicators?: number;
 }
 
+/** One detection rule's measured quality — see /api/detections/quality. */
+export interface DetectionQualityRule {
+  rule_id: string;
+  rule_name: string | null;
+  alerts: number;
+  verdicts: { malicious: number; suspicious: number; benign: number; inconclusive: number };
+  highest_risk_score: number;
+  fully_excluded_alerts: number;
+  attack_claims: number;
+  attack_confirmed: number;
+  attack_uncorroborated: number;
+  attack_additional: number;
+  /** null below the scoring threshold — a rate from two alerts is not a rate. */
+  noise_rate: number | null;
+  actionable_rate: number | null;
+  attack_confirm_rate: number | null;
+  analyst_feedback: {
+    true_positive: number;
+    false_positive: number;
+    unclear: number;
+    false_positive_rate: number | null;
+  };
+  scored: boolean;
+  assessment: string;
+  last_seen: string | null;
+}
+
+export interface DetectionQualityResponse {
+  window_days: number;
+  rules_seen: number;
+  alerts_total: number;
+  min_alerts_to_score: number;
+  rules: DetectionQualityRule[];
+  /** Alerts with no rule id — so the totals visibly do not cover everything. */
+  unattributed_alerts: number;
+}
+
+export interface AttackCoverageTechnique {
+  id: string;
+  name: string | null;
+  tactic: string;
+  url: string | null;
+  claimed: number;
+  confirmed: number;
+  uncorroborated: number;
+  observed: number;
+  ai_suggested: number;
+  confirm_rate: number | null;
+}
+
+export interface AttackCoverageResponse {
+  window_days: number;
+  runs_assessed: number;
+  techniques_seen: number;
+  techniques: AttackCoverageTechnique[];
+  tactics: Array<{ tactic: string; techniques: number; claimed: number; confirmed: number; observed: number }>;
+  /** Claimed by a rule, never once corroborated by evidence. */
+  unvalidated_mappings: AttackCoverageTechnique[];
+  /** Seen in evidence, never claimed by any detection. */
+  undetected_behaviour: AttackCoverageTechnique[];
+  blind_spots: Array<{ tactic: string; techniques_we_could_evidence: number }>;
+}
+
+export interface AnalystFeedback {
+  id: string;
+  subject_type: "investigation" | "alert_run";
+  subject_id: string;
+  verdict: "true_positive" | "false_positive" | "unclear";
+  platform_classification: string | null;
+  platform_risk_score: number | null;
+  detection_rule_id: string | null;
+  note: string | null;
+  analyst: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface FeedbackAccuracy {
+  window_days: number;
+  feedback_total: number;
+  judged: number;
+  unclear: number;
+  agreed: number;
+  disagreed: number;
+  agreement_rate: number | null;
+  missed_by_platform: AnalystFeedback[];
+  over_flagged_by_platform: AnalystFeedback[];
+  note: string;
+}
+
+export interface CostDashboard {
+  window_days: number;
+  providers: Array<{
+    key: string;
+    provider: string;
+    requests_today: number;
+    requests_this_month: number;
+    daily_limit: number | null;
+    monthly_limit: number | null;
+    percent_used: number | null;
+    remaining_today: number | null;
+  }>;
+  providers_idle: string[];
+  ai_requests_today: number;
+  at_risk: CostDashboard["providers"];
+  savings: {
+    alert_runs: number;
+    indicator_lookups_performed: number;
+    indicator_lookups_avoided: number;
+    avoided_by_exclusion_list: number;
+    avoided_by_prior_investigation_reuse: number;
+    duplicate_alert_deliveries_absorbed: number;
+    ai_analyses_skipped: number;
+    exclusion_hits_all_time: number;
+    avoidance_rate: number | null;
+  };
+  note: string;
+}
+
 /** An indicator the platform treats as benign without collecting — see /exclusions. */
 export interface Exclusion {
   id: string;

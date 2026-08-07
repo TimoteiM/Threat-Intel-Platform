@@ -28,6 +28,7 @@ back, so the contract is versioned with ALERT_REPORT_SCHEMA_VERSION.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +52,8 @@ from app.services.alert_investigation_spawn_service import (
     spawn_types,
     wait_for_investigation,
 )
+from app.services.attack_ai_service import propose_attack_techniques
+from app.services.reverdict_service import enrol_indicators as enrol_watchlist_indicators
 from app.services.attack_assessment_service import assess_attack
 from app.services.exclusion_service import (
     apply_to_indicators as apply_exclusions,
@@ -196,14 +199,6 @@ def run_alert_body_investigation(
         for event in parse_endpoint_events(alert_body)
     ]
 
-    # The detection arrived with its own ATT&CK mapping — the rule author's
-    # hypothesis, decided before anything was investigated. Now that the
-    # behaviour has been scored, say which parts of it the evidence supports.
-    try:
-        attack_assessment = assess_attack(alert_body, event_reports)
-    except Exception as exc:  # an assessment is commentary, never the run
-        logger.warning("ATT&CK assessment failed: %s", exc)
-        attack_assessment = None
 
     # Has the platform already investigated these exact indicators? A recent
     # concluded investigation answers the question without touching a collector.
@@ -314,6 +309,24 @@ def run_alert_body_investigation(
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
+    # The detection arrived with its own ATT&CK mapping — the rule author's
+    # hypothesis, decided before anything was investigated. Now that the
+    # behaviour is scored and the collectors have reported, say which parts of
+    # it the evidence supports. Runs after both so it can read either.
+    attack_assessment = _assess_attack_safely(
+        alert_body,
+        event_reports,
+        reports,
+        run_ai=run_ai and not nothing_to_analyse,
+        ai_model=ai_model,
+        findings_digest=indicator_summary,
+    )
+
+    # Indicators this run reached a real conclusion about go on the watchlist,
+    # so a verdict that changes later is noticed rather than going stale in a
+    # report somebody already acted on.
+    enrolled = enrol_watchlist_indicators(reports, run_id=run_id)
+
     completed = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "schema_version": ALERT_REPORT_SCHEMA_VERSION,
@@ -336,6 +349,10 @@ def run_alert_body_investigation(
         "exclusions": {
             "applied": excluded_total,
             "list_size": len(exclusion_matcher),
+        },
+        "watchlist": {
+            "auto_enrolled": enrolled,
+            "enabled": settings.alert_watchlist_autoenrol,
         },
         "prior_investigations": {
             "checked": bool(indicators),
@@ -758,6 +775,48 @@ def _reused_report(
         "completed_at": now,
         "duration_ms": 0,
     }
+
+
+def _assess_attack_safely(
+    alert_body: str,
+    event_reports: list[dict[str, Any]],
+    indicator_reports: list[dict[str, Any]],
+    *,
+    run_ai: bool,
+    ai_model: str | None,
+    findings_digest: Any,
+) -> dict[str, Any] | None:
+    """
+    ATT&CK assessment, including the constrained AI pass when AI is enabled.
+
+    Wrapped whole: an assessment is commentary on a run, never the run itself,
+    so any failure here costs the commentary and nothing else.
+    """
+    try:
+        proposals: list[dict[str, Any]] = []
+        if run_ai and get_settings().alert_attack_ai_enabled:
+            deterministic = assess_attack(alert_body, event_reports, indicator_reports=indicator_reports)
+            established = [item["id"] for item in (deterministic or {}).get("additional_techniques", [])]
+            established += [
+                item["id"]
+                for item in (deterministic or {}).get("techniques", [])
+                if item.get("status") == "confirmed"
+            ]
+            proposals = propose_attack_techniques(
+                alert_body=alert_body,
+                findings_digest=json.dumps(findings_digest, default=str)[:8000],
+                already_evidenced=established,
+                model=ai_model,
+            )
+        return assess_attack(
+            alert_body,
+            event_reports,
+            indicator_reports=indicator_reports,
+            ai_proposals=proposals,
+        )
+    except Exception as exc:
+        logger.warning("ATT&CK assessment failed: %s", exc)
+        return None
 
 
 def _excluded_report(indicator: dict[str, Any], observable_type: str) -> dict[str, Any]:

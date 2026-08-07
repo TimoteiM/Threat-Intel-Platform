@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import ProgressTimeline from "@/components/investigation/ProgressTimeline";
 import CollectorTimingTable from "@/components/investigation/CollectorTimingTable";
+import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import Spinner from "@/components/shared/Spinner";
 import TabBar from "@/components/shared/TabBar";
 import ConsoleModule from "@/components/ui/ConsoleModule";
@@ -1060,6 +1061,12 @@ export default function InvestigationPage() {
             title="Collector Timings"
           />
         </>
+      )}
+
+      {/* Only once there is a verdict to judge — measuring the decision engine
+          is impossible without the analyst's call on what it decided. */}
+      {detail?.state === "concluded" && (
+        <AnalystFeedbackControl subjectType="investigation" subjectId={investigationId} compact />
       )}
 
       {/* Tabs */}

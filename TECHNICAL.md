@@ -664,6 +664,11 @@ Base URL: `http://localhost:8000`
 | `POST` | `/api/watchlist` | Add domain to watchlist |
 | `GET` | `/api/watchlist` | List watchlist |
 | `DELETE` | `/api/watchlist/{id}` | Remove from watchlist |
+| `GET` | `/api/detections/quality` | Per-rule signal-to-noise, ATT&CK confirm rate, analyst FP rate |
+| `GET` | `/api/detections/attack-coverage` | What detections claim vs what evidence shows, by technique and tactic |
+| `POST` | `/api/detections/feedback` | Record an analyst's true/false-positive call |
+| `GET` | `/api/detections/feedback/accuracy` | How often the platform agreed with the analysts |
+| `GET` | `/api/cost/dashboard` | Provider usage against limits, and the work avoidance saved |
 | `GET` | `/api/exclusions` | List the exclusion list (`?indicator_type=`, `?search=`, `?active=`) |
 | `POST` | `/api/exclusions` | Exclude a domain/IP/URL/hash — reason required |
 | `POST` | `/api/exclusions/check` | Which of these indicators are already excluded? |
@@ -911,6 +916,128 @@ domain/URL alerts where there is no endpoint telemetry at all — in that case t
 note says the mapping could not be checked either way, which is the truthful
 answer rather than a broken feature.
 
+**Collector findings are a second evidence source.** Endpoint signals say what a
+command *is*; collector findings say what a domain or URL turned out to *be*.
+`COLLECTOR_ATTACK_RULES` holds the whole set, and its conditions are strict: a
+reachable page supports nothing, a **malicious** page serving a login form
+supports T1056.003 and T1566.002, a malicious domain registered inside 30 days
+supports T1583.001. Each rule cites the finding it read.
+
+**The AI pass proposes; validation disposes.** A regex cannot read a narrative —
+an alert describing a user opening an attachment that then reached a
+newly-registered domain is a chain a model recognises. So the model may propose,
+and then `app/services/attack_ai_service.py` checks every proposal before any of
+it reaches a report:
+
+1. **Whitelist** — the id must be in `TECHNIQUE_DB`. An unknown id is dropped,
+   not repaired.
+2. **Citation** — it must supply `evidence_quote`, and that quote must actually
+   appear in the alert body or a finding from this run (matched on collapsed
+   whitespace and case). A quote we cannot locate is a fabrication, and the
+   proposal is dropped whole.
+3. **No overriding** — it cannot restate or downgrade what the deterministic
+   pass already established.
+4. **All-or-nothing parsing** — output that is not valid JSON yields *no*
+   techniques rather than a partial guess.
+
+Accepted proposals are marked `source: "ai_suggested"` with `confidence: "low"`,
+are excluded from `confirmed_count`, and say in their own explanation to treat
+them as a lead rather than a finding. The model therefore cannot introduce a
+technique out of nothing; the worst it can do is fail to propose one.
+
+In practice it earns its place. On a Sysmon alert containing
+`taskkill /F /IM MsMpEng.exe`, the deterministic pass sees only forced process
+termination (T1489) — its defence-tampering regex looks for `set-mppreference`
+and `sc stop *defend*`. The AI recognises `MsMpEng.exe` as Defender and proposes
+T1562.001, quoting the command line, which validation confirms is really there.
+Set `ALERT_ATTACK_AI_ENABLED=false` to run deterministic-only.
+
+### Detection quality
+
+A SIEM reports how often a rule fired. It cannot report whether firing was
+*useful*, because it never investigates what it produced. This platform does, and
+records `detection_rule_id` per run — so `/api/detections/quality` answers what a
+detection engineer actually asks (`app/services/detection_quality_service.py`):
+
+| Measure | Meaning |
+|---|---|
+| `noise_rate` | share of the rule's alerts that concluded benign or inconclusive |
+| `actionable_rate` | share that concluded malicious or suspicious |
+| `attack_confirm_rate` | of the ATT&CK techniques the rule claims, how often evidence bore them out — the rule's mapping is a testable assertion |
+| `fully_excluded_alerts` | alerts containing nothing but whitelisted indicators. Pure waste, now countable |
+| `analyst_feedback.false_positive_rate` | what the analysts themselves said |
+
+**A rule with fewer than five alerts in the window gets counts and no rates.**
+A proportion from two alerts is not a rate, and presenting one as a score would
+mislead the person tuning the rule. Alerts with no rule id — analyst-pasted, or
+from a sender that does not send one — are reported as `unattributed_alerts` so
+the totals visibly do not cover everything.
+
+`/api/detections/attack-coverage` rolls the same assessments up across runs into
+three counts per technique: **claimed** (detections asserted it), **confirmed**
+(evidence bore it out), **observed** (evidence showed it at all). The gaps are
+the point — `unvalidated_mappings` are claims nothing has ever validated,
+`undetected_behaviour` is behaviour no rule describes, and `blind_spots` are
+tactics this platform *could* evidence but never has. Blind spots are scoped to
+the technique whitelist deliberately: claiming a gap in a tactic we could not
+detect even in principle would overstate it.
+
+### Analyst feedback
+
+Without it the decision engine cannot be measured, and every tuning decision is a
+guess. One click on an investigation or a finished alert run records
+true positive / false positive / unclear; the note is optional, because a
+required note is a reason not to click at all. Re-submitting **replaces** the
+judgement — an analyst changing their mind is a correction, not a second data
+point.
+
+The platform's classification is copied onto the feedback row rather than joined,
+because a run can be re-analysed later and the feedback is about the answer *as
+it was given*. `/api/detections/feedback/accuracy` then splits disagreements the
+way a SOC experiences them: `missed_by_platform` (we said benign, the analyst
+says real) and `over_flagged_by_platform`. The asymmetry matters far more than
+the headline agreement rate. `unclear` is reported separately, never folded in
+as a miss.
+
+### Closing the staleness loop
+
+A report is a snapshot. A domain investigated as benign on Tuesday and weaponised
+on Friday leaves every SOAR holding an answer nobody will correct. Two halves fix
+that (`app/services/reverdict_service.py`):
+
+**Auto-enrolment.** An alert run that concludes something about a domain at or
+above `ALERT_WATCHLIST_AUTOENROL_MIN_RISK` (default 40) puts it on the watchlist
+on a weekly schedule, so it is re-checked on a clock instead of only when it
+happens to appear in another alert. Domains only — the re-check pipeline
+investigates domains, and enrolling an IP or hash would create an entry nothing
+can ever re-check. Excluded, skipped and reused indicators are not enrolled, and
+an existing entry is never overridden: an analyst's own schedule wins.
+
+**Re-notification.** When a watchlist re-check concludes with a different
+classification, the alert runs that reported the old verdict are found and their
+original `callback_url` is called again with `X-Alert-Event: alert.updated` and
+an `update` block naming the indicator, both verdicts and the investigation that
+changed it. The documents are rebuilt from the run as it stands, so the receiver
+gets a current report rather than a diff to apply.
+
+Only genuine changes notify. Benign → inconclusive is a re-phrasing, not a
+correction, and both directions across the actionable line do notify — a
+retraction matters as much as an escalation. `ALERT_REVERDICT_NOTIFY=false` and
+`ALERT_WATCHLIST_AUTOENROL=false` turn each half off.
+
+### Cost and quota
+
+Every avoidance layer records what it skipped on the run that skipped it, and
+nothing was reading those records back — the saving was real but invisible.
+`/api/cost/dashboard` is the other half: provider requests today and this month
+against configured limits, alongside indicator lookups avoided, split by
+exclusion list and prior-investigation reuse, plus duplicate deliveries absorbed
+and AI analyses skipped.
+
+Savings are reported as **counts of work not done, not money**. A skipped
+VirusTotal lookup is worth a different amount to everyone, so the valuation is
+left to the reader.
+
 **Domains and URLs get a real investigation, not just inline collectors.** A few
 collectors are enough to triage an IP or a hash, but a domain deserves the full
 pipeline, so the alert-body run does what an analyst would do:
@@ -1104,13 +1231,18 @@ by `tasks.deliver_alert_callback`:
 
 ```
 POST <callback_url>
-X-Alert-Event: alert.completed | alert.failed
+X-Alert-Event: alert.completed | alert.failed | alert.updated
 X-Alert-Run-Id: <run id>
 X-Alert-Signature: sha256=<hmac>        ← only when ALERT_CALLBACK_SECRET is set
 
 { "event", "run_id", "external_ref", "status", "overall_verdict",
   "highest_risk_score", "delivered_at", "document_count",
-  "documents": [ …the format=report list… ] }
+  "documents": [ …the format=report list… ],
+  "update": {                           ← only on alert.updated
+    "reason": "indicator_verdict_changed",
+    "indicator": "evil-corp.net",
+    "previous_classification": "benign", "current_classification": "malicious",
+    "investigation_id": "…", "message": "…" } }
 ```
 
 Delivery retries with exponential backoff (`ALERT_CALLBACK_MAX_RETRIES`, default
@@ -1409,6 +1541,11 @@ All configuration is in `backend/app/config.py` as a Pydantic `Settings` class. 
 | `ALERT_VT_HASH_ONLY` | `true` | Alert-body runs spend VirusTotal on hashes only |
 | `ALERT_REUSE_PRIOR_INVESTIGATIONS` | `true` | Reuse a recent concluded investigation of the same indicator |
 | `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` | `7` | Base reuse window — scaled per verdict (malicious ×4, benign/suspicious ×0.5, inconclusive never, low confidence ×0.25) |
+| `ALERT_ATTACK_AI_ENABLED` | `true` | Let the AI propose ATT&CK techniques (every proposal whitelist- and citation-checked) |
+| `ALERT_WATCHLIST_AUTOENROL` | `true` | Put domains an alert concluded on onto the watchlist |
+| `ALERT_WATCHLIST_AUTOENROL_MIN_RISK` | `40` | Minimum risk score to auto-enrol |
+| `ALERT_WATCHLIST_AUTOENROL_INTERVAL` | `weekly` | Re-check schedule for auto-enrolled domains |
+| `ALERT_REVERDICT_NOTIFY` | `true` | POST `alert.updated` to the original sender when a re-check changes a verdict |
 | `ALERT_INGEST_DEDUPE` | `true` | Reuse the run an identical alert body already produced |
 | `ALERT_INGEST_DEDUPE_WINDOW_MINUTES` | `60` | How long that run stays reusable |
 | `ALERT_CALLBACK_SECRET` | `""` | HMAC key for `X-Alert-Signature` (empty = unsigned) |

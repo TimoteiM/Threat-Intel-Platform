@@ -56,6 +56,11 @@ MAX_EXTRA_FIELDS = 120
 MAX_FIELD_CHARS = 600
 ID_KEYS = ("_id", "id", "alert_id", "event.id")
 
+# The *rule*, not the alert. ID_KEYS identify one delivery; these identify the
+# detection that keeps producing them — what detection-quality reporting needs.
+RULE_ID_KEYS = ("rule.id", "rule_id", "signal.rule.id", "detection.rule.id", "sigma_id")
+RULE_NAME_KEYS = ("rule.description", "rule.name", "title", "trigger", "alert.name")
+
 
 def normalize_alert_payload(payload: Any) -> dict[str, Any]:
     """
@@ -65,10 +70,18 @@ def normalize_alert_payload(payload: Any) -> dict[str, Any]:
     `alert_body` field is left alone — this only rescues payloads shaped like the
     sender's own alert.
     """
+    empty = {
+        "alert_body": "",
+        "title": None,
+        "external_ref": None,
+        "detection_rule_id": None,
+        "detection_rule_name": None,
+        "fields": {},
+    }
     if isinstance(payload, str):
-        return {"alert_body": payload, "title": None, "external_ref": None, "fields": {}}
+        return {**empty, "alert_body": payload}
     if not isinstance(payload, dict):
-        return {"alert_body": str(payload or ""), "title": None, "external_ref": None, "fields": {}}
+        return {**empty, "alert_body": str(payload or "")}
 
     fields = _flatten(payload)
     message = _first_value(fields, MESSAGE_KEYS)
@@ -87,6 +100,8 @@ def normalize_alert_payload(payload: Any) -> dict[str, Any]:
         "alert_body": "\n\n".join(sections).strip(),
         "title": _first_value(fields, ("title", "rule.description", "trigger")),
         "external_ref": _first_value(fields, ID_KEYS),
+        "detection_rule_id": _first_value(fields, RULE_ID_KEYS),
+        "detection_rule_name": _first_value(fields, RULE_NAME_KEYS),
         "fields": fields,
     }
 

@@ -400,6 +400,31 @@ ATTACK_BY_SIGNAL: dict[str, tuple[tuple[str, str], ...]] = {
     "long_command_line": (),
 }
 
+# Techniques a *collector* finding can support, and the condition under which it
+# does. Endpoint signals say what a command is; collector findings say what a
+# domain or URL turned out to be, which supports a different and smaller set.
+#
+# Each rule names the finding it reads, the condition that must hold, and the
+# technique that follows. The conditions are deliberately strict: "the page was
+# reachable" supports nothing, "the page is malicious *and* serves a login form"
+# supports credential capture. A rule that would fire on a merely-suspicious
+# verdict is not in this table.
+#
+#   (rule_id, collector, technique, confidence, requires_malicious)
+COLLECTOR_ATTACK_RULES: tuple[tuple[str, str, str, str, bool], ...] = (
+    # A malicious page asking for credentials is a phishing capture page.
+    ("credential_page", "http", "T1056.003", "high", True),
+    ("credential_page", "http", "T1566.002", "medium", True),
+    # A page impersonating a brand it does not own.
+    ("brand_impersonation", "http", "T1036.005", "medium", True),
+    # Infrastructure registered for the operation rather than compromised.
+    ("newly_registered", "whois", "T1583.001", "medium", True),
+    # A confirmed phishing entry in a feed is a link the user was meant to click.
+    ("phish_feed_hit", "threat_feeds", "T1566.002", "high", True),
+    # Sandbox-observed HTTP callbacks from a malicious sample.
+    ("sandbox_c2", "anyrun", "T1071.001", "medium", True),
+)
+
 # A persistence or recon signal supports several techniques at once and cannot
 # say which. When a detection rule already claims one of them, that is the one
 # the evidence corroborates — these are the groups within which such a match is

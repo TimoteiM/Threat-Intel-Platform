@@ -29,6 +29,8 @@ export const APP_NAV_LINKS = [
   { href: "/batches", label: "Bulk Analysis" },
   { href: "/watchlist", label: "Watchlist" },
   { href: "/exclusions", label: "Exclusion" },
+  { href: "/detections", label: "Detections" },
+  { href: "/cost", label: "Cost" },
   { href: "/email-investigations", label: "Email" },
   { href: "/alert-investigations", label: "Alert Body" },
   { href: "/assistant", label: "AI Assistant" },

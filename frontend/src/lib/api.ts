@@ -11,7 +11,12 @@ import type {
   AlertInvestigationRun,
   AlertReportDocument,
   APIHealthResponse,
+  AnalystFeedback,
+  AttackCoverageResponse,
+  CostDashboard,
+  DetectionQualityResponse,
   Exclusion,
+  FeedbackAccuracy,
 } from "./types";
 
 const BASE = "/api";
@@ -722,6 +727,58 @@ export function checkExclusions(indicators: Array<{ indicator_type: string; valu
     method: "POST",
     body: JSON.stringify({ indicators }),
   });
+}
+
+// ─── Detection quality, ATT&CK coverage, analyst feedback ───
+
+export function getDetectionQuality(params?: { days?: number; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const query = qs.toString();
+  return request<DetectionQualityResponse>(`/detections/quality${query ? `?${query}` : ""}`);
+}
+
+export function getAttackCoverage(params?: { days?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  const query = qs.toString();
+  return request<AttackCoverageResponse>(`/detections/attack-coverage${query ? `?${query}` : ""}`);
+}
+
+export function submitAnalystFeedback(data: {
+  subject_type: "investigation" | "alert_run";
+  subject_id: string;
+  verdict: "true_positive" | "false_positive" | "unclear";
+  note?: string;
+  analyst?: string;
+}) {
+  return request<AnalystFeedback & { replaced_previous: boolean }>("/detections/feedback", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function getAnalystFeedbackFor(subjectType: string, subjectId: string) {
+  return request<{ feedback: AnalystFeedback | null }>(
+    `/detections/feedback/${subjectType}/${subjectId}`,
+  );
+}
+
+export function getFeedbackAccuracy(params?: { days?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  const query = qs.toString();
+  return request<FeedbackAccuracy>(`/detections/feedback/accuracy${query ? `?${query}` : ""}`);
+}
+
+// ─── Cost and quota ───
+
+export function getCostDashboard(params?: { days?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  const query = qs.toString();
+  return request<CostDashboard>(`/cost/dashboard${query ? `?${query}` : ""}`);
 }
 
 // ─── WHOIS History ───

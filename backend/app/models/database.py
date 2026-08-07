@@ -571,6 +571,11 @@ class AlertBodyInvestigationRun(Base):
     # Unlike the body hash this identifies the alert itself, so a re-delivery
     # whose formatting or enrichment changed is still recognised as the same one.
     external_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Which *detection* produced this alert — the rule, not the alert instance.
+    # external_ref identifies one alert; these identify the thing that keeps
+    # producing them, which is what detection-quality reporting groups by.
+    detection_rule_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    detection_rule_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Where to POST the finished report list, when the sender asked for one.
     callback_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -585,6 +590,49 @@ class AlertBodyInvestigationRun(Base):
         Index("idx_alert_body_runs_status", "status"),
         Index("idx_alert_body_runs_hash_created", "alert_body_hash", "created_at"),
         Index("idx_alert_body_runs_extref_created", "external_ref", "created_at"),
+        Index("idx_alert_body_runs_rule_created", "detection_rule_id", "created_at"),
+    )
+
+
+class AnalystFeedback(Base):
+    """
+    An analyst's verdict on what the platform concluded.
+
+    Without this the decision engine cannot be measured: every tuning decision
+    is a guess about whether a classification was right. One row per judgement,
+    keyed loosely by subject so an investigation and an alert run can both be
+    judged without a table each.
+    """
+    __tablename__ = "analyst_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # investigation | alert_run
+    subject_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # true_positive | false_positive | unclear
+    verdict: Mapped[str] = mapped_column(String(20), nullable=False)
+    # What the platform said at the time, copied rather than joined: the run can
+    # be re-analysed later, and the feedback is about the answer as it was given.
+    platform_classification: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    platform_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Which detection produced it, so rule quality can be read off feedback.
+    detection_rule_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    analyst: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
+
+    __table_args__ = (
+        # One standing judgement per subject — re-submitting updates it.
+        UniqueConstraint("subject_type", "subject_id", name="uq_feedback_subject"),
+        Index("idx_feedback_rule", "detection_rule_id"),
+        Index("idx_feedback_created", "created_at"),
     )
 
 

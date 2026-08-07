@@ -202,6 +202,8 @@ def _request_from_payload(payload: dict[str, Any], **options: Any) -> AlertBodyI
         alert_body=normalized["alert_body"],
         title=supplied.get("title") or normalized.get("title"),
         external_ref=supplied.get("external_ref") or normalized.get("external_ref"),
+        detection_rule_id=supplied.get("detection_rule_id") or normalized.get("detection_rule_id"),
+        detection_rule_name=supplied.get("detection_rule_name") or normalized.get("detection_rule_name"),
         context=supplied.get("context"),
         callback_url=supplied.get("callback_url"),
         dedupe=supplied.get("dedupe"),
@@ -333,6 +335,8 @@ async def _create_alert_run(
         indicator_count=extraction["total"],
         alert_body_hash=body_hash,
         external_ref=external_ref,
+        detection_rule_id=(request.detection_rule_id or "").strip()[:120] or None,
+        detection_rule_name=(request.detection_rule_name or "").strip()[:512] or None,
         callback_url=callback_url,
         result_json={
             "schema_version": ALERT_REPORT_SCHEMA_VERSION,

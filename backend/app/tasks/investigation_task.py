@@ -726,6 +726,19 @@ def _update_watchlist_after_conclusion(investigation_id: str, domain: str) -> No
                 f"[{investigation_id}] Watchlist history updated for {domain} "
                 f"(score={curr_inv.risk_score}, diff_computed={prev_inv is not None})"
             )
+
+            # A re-check that changed the answer means every alert report that
+            # carried the old verdict is now wrong. Tell the senders who asked.
+            if prev_inv is not None and prev_inv.classification != curr_inv.classification:
+                from app.services.reverdict_service import notify_verdict_change
+
+                notify_verdict_change(
+                    domain,
+                    previous_classification=prev_inv.classification,
+                    current_classification=curr_inv.classification,
+                    investigation_id=str(curr_inv.id),
+                    risk_score=curr_inv.risk_score,
+                )
     except Exception as exc:
         logger.warning(f"[{investigation_id}] Watchlist post-conclusion update failed: {exc}")
 

@@ -1283,6 +1283,11 @@ class AlertBodyInvestigationCreate(BaseModel):
     # echoed back in the run payload and in the callback, and the key dedupe
     # matches on first, so the same alert is never investigated twice.
     external_ref: Optional[str] = Field(default=None, max_length=255)
+    # The detection that produced the alert, as opposed to the alert itself.
+    # Read from rule.id / rule.description when a SIEM document is posted; this
+    # is what /api/detections groups by to report rule quality.
+    detection_rule_id: Optional[str] = Field(default=None, max_length=120)
+    detection_rule_name: Optional[str] = Field(default=None, max_length=512)
 
 
 class AlertBodyExtractRequest(BaseModel):
@@ -1393,6 +1398,18 @@ class ExclusionCheckItem(BaseModel):
 class ExclusionCheckRequest(BaseModel):
     """POST /api/exclusions/check — ask which of these are already excluded."""
     indicators: list[ExclusionCheckItem] = Field(default_factory=list, max_length=500)
+
+
+# ─── Analyst feedback ───
+
+
+class AnalystFeedbackCreate(BaseModel):
+    """POST /api/detections/feedback — the analyst's call on what we concluded."""
+    subject_type: str                        # investigation | alert_run
+    subject_id: str
+    verdict: str                             # true_positive | false_positive | unclear
+    note: Optional[str] = Field(default=None, max_length=2000)
+    analyst: Optional[str] = Field(default=None, max_length=255)
 
 
 # â”€â”€â”€ Client Management â”€â”€â”€
