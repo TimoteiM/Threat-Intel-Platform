@@ -98,6 +98,29 @@ class TestGenerateSignals:
         assert signal.severity == "low"
         assert "HTTP content observations" in signal.description
 
+    def test_anyrun_screenshot_sensitive_form_signal(self):
+        evidence = {
+            "hybrid_analysis": {
+                "items": [{
+                    "raw_summary": {
+                        "source": "anyrun",
+                        "sensitive_form_detection": {
+                            "detected": True,
+                            "categories": ["payment"],
+                        },
+                    },
+                }],
+            },
+        }
+
+        signals = generate_signals(evidence)
+        signal = next(s for s in signals if s.id == "sig_sensitive_data_entry_form")
+
+        assert signal.severity == "high"
+        assert signal.evidence_refs == [
+            "hybrid_analysis.items.0.raw_summary.sensitive_form_detection"
+        ]
+
 
 class TestDetectDataGaps:
 

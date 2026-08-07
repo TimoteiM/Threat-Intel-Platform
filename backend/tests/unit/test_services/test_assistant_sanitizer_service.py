@@ -196,6 +196,24 @@ def test_sanitize_entry_replaces_escaped_json_agent_computer_name() -> None:
     assert result.token_map["[HOST_1]"] == "5CG5452NBD"
 
 
+def test_sanitize_entry_extracts_hostname_from_glued_windows_security_event() -> None:
+    text = (
+        "Error unknown error "
+        "4688201331200x8020000000000000705589384"
+        "Securitymvctxshp33.onenet.be"
+        "S-1-5-21-3364303977-3542790653-1520930921-9758dbssndii"
+    )
+
+    result = sanitizer.sanitize_entry(text, {})
+
+    assert "Security[HOST_1][SID_1]-9758dbssndii" in result.sanitized_text
+    assert result.token_map["[HOST_1]"] == "mvctxshp33.onenet.be"
+    assert all(
+        not value.startswith("4688201331200x8020000000000000705589384Security")
+        for value in result.token_map.values()
+    )
+
+
 def test_sanitize_entry_does_not_tokenize_browser_version_as_ip() -> None:
     text = (
         "{agent={ip=192.168.5.12}, @src_ip=45.148.10.62, "
@@ -221,3 +239,38 @@ def test_sanitize_entry_distinguishes_json_version_from_explicit_ip_field() -> N
 
     assert '"browser_version":"120.1.2.3"' in result.sanitized_text
     assert result.token_map == {"[IP_1]": "198.51.100.7"}
+
+
+def test_field_names_are_not_redacted_as_hostnames():
+    """
+    A SIEM alert posted as a document flattens to dotted keys.
+
+    Tokenising those turned the report into nonsense — "identified by SHA256
+    data.win.eventdata.hashes" — because the model wrote its narrative in terms
+    of a token whose real value was a field name.
+    """
+    text = (
+        "rule.id: 110145\n"
+        "data.win.eventdata.hashes: MD5=4F96B0F8B5337360D11BB59BD103D061\n"
+        "data.win.system.providerName: Microsoft-Windows-Sysmon\n"
+        "Computer: EXP-D0MY264.int.expertware.net\n"
+    )
+    result = sanitizer.sanitize_entry(text)
+    hosts = [value for token, value in result.token_map.items() if token.startswith("[HOST")]
+
+    assert hosts == ["EXP-D0MY264.int.expertware.net"]
+    # The digest stays readable, so the analyst narrative can name it.
+    assert "4F96B0F8B5337360D11BB59BD103D061" in result.sanitized_text
+
+
+def test_file_names_are_not_redacted_as_hostnames():
+    result = sanitizer.sanitize_entry("Checked BOOTX64.EFI.shim.bak, options.csv and mmx64.efi on the ESP")
+    assert [v for t, v in result.token_map.items() if t.startswith("[HOST")] == []
+    assert "BOOTX64.EFI.shim.bak" in result.sanitized_text
+
+
+def test_internal_hostnames_are_still_redacted():
+    """No public suffix list knows .local or .corp — they must stay protected."""
+    result = sanitizer.sanitize_entry("Logon to srv01.corp.local from dc02.ad.internal")
+    hosts = sorted(v for t, v in result.token_map.items() if t.startswith("[HOST"))
+    assert hosts == ["dc02.ad.internal", "srv01.corp.local"]

@@ -1514,7 +1514,7 @@ def _anyrun_concrete_sandbox_reasons(result: dict[str, Any]) -> list[str]:
         )
     ]
     if suspicious_tags:
-        reasons.append(f"Malicious tags: {', '.join(suspicious_tags[:4])}.")
+        reasons.append(f"Suspicious tags: {', '.join(suspicious_tags[:4])}.")
     counts = raw.get("behavior_counts") or {}
     if isinstance(counts, dict) and _as_int(counts.get("network_threats")) > 0:
         reasons.append(f"Network threats observed: {_as_int(counts.get('network_threats'))}.")

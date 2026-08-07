@@ -669,6 +669,488 @@ Base URL: `http://localhost:8000`
 | `GET` | `/api/tools/ip-lookup/history` | IP lookup history |
 | `GET` | `/api/tools/ip-lookup/history/{id}` | Retrieve past lookup |
 | `DELETE` | `/api/tools/ip-lookup/history/{id}` | Delete past lookup |
+| `POST` | `/api/alert-investigations/extract` | Parse an alert body, return extracted indicators (no collectors) |
+| `POST` | `/api/alert-investigations` | Investigate every indicator found in a raw alert body — also the ingest endpoint for other platforms (`callback_url`, `external_ref`, `dedupe`). Holds the request and returns the report list; `?wait=false` returns as soon as it is queued |
+| `POST` | `/api/alert-investigations/raw` | Same, with the alert as a `text/plain` body and the options as query params |
+| `GET` | `/api/alert-investigations` | List alert-body runs (`?search=`, `?verdict=`) |
+| `GET` | `/api/alert-investigations/{run_id}/export` | Download the run's JSON report list (`?format=reports\|full\|ndjson`) |
+| `GET` | `/api/alert-investigations/{run_id}` | Run status + aggregated indicator reports |
+| `POST` | `/api/alert-investigations/{run_id}/cancel` | Cancel a queued/running alert-body run |
+| `DELETE` | `/api/alert-investigations/{run_id}` | Delete an alert-body run **and the investigations it spawned** |
+
+### Alert Body Investigations
+
+`POST /api/alert-investigations` accepts raw alert text (SIEM/SOAR alert, ticket
+note, forwarded warning), extracts its IOCs — URLs, domains, IPs, hashes; emails
+are kept as context and their domain is investigated — and queues one collector
+run per indicator. Defanged notation (`hxxp://`, `evil[.]com`, `1[.]2[.]3[.]4`)
+is refanged before extraction; private/reserved IPs are reported but not looked
+up. Extracted IPs additionally go through the IP Lookup tool
+(AbuseIPDB + ThreatFox), and the lookup is saved to IP Lookup history. In
+parallel the raw alert goes through the AI Assistant (`alert_analysis` mode,
+with its sanitisation), and that analysis leads the exported list.
+
+```jsonc
+// Request
+{ "alert_body": "…", "context": "optional", "requested_collectors": ["vt", "threat_feeds"],
+  "max_indicators": 30, "run_ip_lookup": true, "run_ai": true,
+  "reuse_prior_investigations": null }   // null → ALERT_REUSE_PRIOR_INVESTIGATIONS
+
+// GET /api/alert-investigations/{run_id} once status == "completed"
+{
+  "schema_version": "1.0",
+  "status": "completed",
+  "summary": { "overall_verdict": "malicious", "highest_risk_score": 95,
+               "indicators_total": 3, "ai_analysis": "completed", … },
+  "extraction": { "counts": { "url": 1, "ip": 2 }, "total": 3, "investigable_total": 2, … },
+  "reports": [                                 // ← reusable list-of-JSON contract
+    {
+      "schema_version": "1.0",
+      "report_type": "ai_assistant",           // always first when run_ai is true
+      "status": "completed",
+      "assistant_session_id": "…",             // openable in the AI Assistant workspace
+      "report_markdown": "## Event Interpretation…",
+      "incident_graph": { "nodes": [ … ], "edges": [ … ] },
+      "sanitization_summary": { "hosts": 1, "ips": 2 }
+    },
+    {
+      "schema_version": "1.0",
+      "report_type": "indicator",
+      "indicator": { "value": "45.147.230.131", "type": "ip", "observable_type": "ip", … },
+      "status": "completed",                   // completed | failed | skipped
+      "verdict": { "classification": "malicious", "risk_score": 93, "confidence": 0.9,
+                   "reasons": [ … ], "sources": ["vt", "opencti", "ip_lookup"] },
+      "findings": [                            // ← only what was actually found
+        { "source": "VirusTotal", "collector": "vt", "type": "reputation", "severity": "high",
+          "summary": "8 of 91 engines flag this as malicious",
+          "data": { "malicious": 8, "total_engines": 91, "flagged_by": [ … ],
+                    "detections": ["Trojan.Win32.Emotet"] } },
+        { "source": "OpenCTI", "collector": "opencti", "type": "threat_intel", "severity": "medium",
+          "summary": "Known observable (score 60)", "data": { … } }
+      ],
+      "sources_checked": ["vt", "threat_feeds", "opencti", "asn", "ip_lookup"],
+      "collector_runs": [ { "collector": "vt", "status": "completed", "duration_ms": 812 } ],
+      "errors": [], "started_at": "…", "completed_at": "…", "duration_ms": 4120
+    }
+  ],
+  "ai_report": { … },            // same object as reports[0]
+  "indicator_reports": [ … ]     // same objects as reports[1:]
+}
+```
+
+**Findings, not evidence dumps.** A source that found nothing contributes no
+finding — that it ran at all is recorded in `sources_checked` / `collector_runs`.
+Every `data` block is pruned of null/empty values. Finding `type` is one of
+`reputation`, `file_profile`, `sandbox_behaviour`, `infrastructure`,
+`registration`, `web`, `threat_intel`, `blocklist`, `certificate`; `severity` is
+`high | medium | low | info` and findings are ordered most severe first. Pass
+`"include_raw_evidence": true` to also get the untouched collector output under
+`evidence` / `ip_lookup`.
+
+Hash/file indicators additionally get a `file_profile` finding (names the sample
+was submitted under, type, size, Authenticode signature and signers, VT threat
+label, non-undetected sandbox verdicts, imphash, PE sections) and a
+`sandbox_behaviour` finding (processes, commands, files written, registry keys,
+DNS lookups, network traffic, ATT&CK techniques) from VT's behaviour summary.
+That behaviour lookup costs one extra VT request per hash and can be turned off
+with `VT_FETCH_FILE_BEHAVIOUR=false`.
+
+**Two extraction passes: a library for recall, our rules for precision.**
+`app/services/alert_ioc_extraction_service.py` runs its own regexes first, then
+folds in [ioc-finder](https://github.com/fhightower/ioc-finder) as a second pass.
+The library is a *candidate generator*: it knows patterns (CVEs, scheme-less
+URLs, defanging spellings we never wrote a rule for) but nothing about context,
+so every value it returns goes through the same validation as our own matches —
+public-suffix check, field-name and file-name guards, eTLD+1 collapse, digest-set
+grouping, URL-host de-duplication, private-IP classification. Measured on a real
+Wazuh document, the library alone returns `data.win`, `decoder.name` and
+`alert.category` as domains (all valid TLDs, all field names); after validation
+the run has one domain, one context-only IP and one hash. It is called with
+`parse_domain_from_url=False` so a URL's host is not investigated twice, and a
+missing library degrades to our own pass rather than failing the run.
+
+CVEs are **report-only**: extracted, listed, and marked
+`skip_reason="cve_reported_as_context"`, because no collector resolves a CVE
+today. Enrichment (NVD/CIRCL, CISA KEV) is a later step if volume justifies it.
+
+The extraction result carries both shapes — the rich indicator list the pipeline
+runs on, and a flat `by_type` view for consumers that only want values:
+
+```jsonc
+{ "indicators": [ { "type": "domain", "value": "evil-corp.com", "investigable": true,
+                    "occurrences": 2, "hostnames": ["mail.evil-corp.com"], … }, … ],
+  "by_type": { "ips": [ … ], "domains": [ … ], "urls": [ … ],
+               "hashes": { "md5": [ … ], "sha1": [], "sha256": [ … ] },
+               "emails": [ … ], "cves": ["CVE-2026-1234"] } }
+```
+
+`by_type` lists everything extracted, including values the pipeline reports but
+never investigates (private IPs, e-mail addresses, CVEs) — the rich list is where
+`investigable` and `skip_reason` say which is which, so nothing disappears
+silently.
+
+**Hostnames collapse to their registered domain.** `exprdsh002.int.expertware.net`
+is extracted as `expertware.net`, with the FQDNs that folded into it listed under
+`hostnames` (`["exprdsh002.int.expertware.net"]`). Reputation, WHOIS and
+threat-feed data live at eTLD+1, so ten hosts of one site are one investigation
+instead of ten. Multi-part suffixes are handled through the public suffix list
+(`app/utils/domain_utils.extract_registered_domain`): `mail.corp.example.co.uk` →
+`example.co.uk`. A domain already covered by an extracted URL is not investigated
+again as a bare domain.
+
+**Endpoint telemetry is understood, not just scanned for IOCs.** A Sysmon/EDR
+event carries one file hash and nothing else to look up — the evidence is the
+process story. `app/services/endpoint_event_service.py` parses these events
+field-by-field (the only reliable boundary is the next known field name, since
+values contain colons, spaces, quotes and backslashes) and scores their
+behaviour:
+
+```jsonc
+{ "report_type": "endpoint_event",
+  "event": { "type": "process_create", "utc_time": "…", "image": "…\\bash.exe",
+             "command_line": "…", "parent_image": "…", "host_user": "INT\\user",
+             "integrity_level": "Medium", "process_id": "4336",
+             "hashes": { "md5": "…", "sha256": "…", "imphash": "…" },
+             "fields": { …every parsed field… } },
+  "verdict":  { "classification": "suspicious", "risk_score": 50, … },
+  "findings": [ { "severity": "medium", "summary": "Forced process termination",
+                  "data": { "explanation": "…", "matched": "taskkill //F" } }, … ] }
+```
+
+Signals are deterministic and each carries why it matters: encoded PowerShell,
+hidden/bypass flags, download cradles, in-memory execution, shadow-copy and
+event-log tampering, Defender exclusions, credential-store access, persistence,
+forced process termination, recon bursts, lateral-movement tooling, obfuscated
+or very long command lines, execution from user-writable or cloud-sync paths,
+elevated integrity, and Office-spawning-a-shell parent/child chains. The highest
+severity sets the event's risk (high 80 · medium 50 · low 25 · info 5), and
+`_merge_event_summary()` folds those verdicts into the run summary — an alert
+whose only content is a process deleting shadow copies rolls up as malicious
+rather than "nothing found". `summary.events_total` / `events_flagged` count
+them, and a body containing only endpoint telemetry is accepted (no more 422 for
+"no investigable indicators").
+
+Process artefacts stay context: image paths and process names are reported and
+scored, never turned into indicators, because no collector takes a Windows path
+and the file hash is already the investigable identity. Sysmon `Hashes:` fields
+are read as one file — MD5 + SHA1 + SHA256 of the same binary collapse to a
+single indicator (SHA256 preferred, the rest carried as `other_digests`), and
+IMPHASH is never investigated as a file hash since no file-reputation source can
+resolve one.
+
+**Domains and URLs get a real investigation, not just inline collectors.** A few
+collectors are enough to triage an IP or a hash, but a domain deserves the full
+pipeline, so the alert-body run does what an analyst would do:
+
+```
+domain / url  →  recent concluded investigation exists?  →  reuse its verdict
+                 otherwise → create an Investigation, run the standard pipeline
+                             (every supported collector incl. VirusTotal + the
+                             AI analyst), wait for it, fold the verdict in
+ip            →  inline collectors + IP Lookup (AbuseIPDB, ThreatFox)
+hash          →  inline collectors (VirusTotal, OpenCTI, threat feeds)
+```
+
+Those investigations appear in the investigations list like any other, with
+their own report an analyst can open — the indicator report carries
+`investigation: { investigation_id, url, state, classification, risk_score,
+recommended_action, executive_summary }`, its `findings` are built from the
+investigation's evidence plus the analyst's own findings, and `verdict.reasons`
+are the report's key evidence lines. `summary.investigation_ids` lists every
+investigation an alert run started.
+
+The run waits for all of them, bounded by `ALERT_INVESTIGATION_WAIT_SECONDS`
+(default 1500s, under the task's 1740s soft limit). Anything still running at
+that point is reported as `"status": "investigating"` with its id, and
+`summary.indicators_investigating` counts them; the verdict is folded in
+automatically the next time the run is read or exported (`GET /{run_id}` and
+`/export` hydrate pending reports and persist the result), so an export taken
+later is complete without re-running anything. Note the queue interaction: the
+alert task holds one worker slot while it waits, so with the default
+`worker_concurrency=8` a burst of simultaneous alert runs can leave the spawned
+investigations queued — they still finish, and the reports still hydrate; give
+alert-body runs their own queue/worker if that becomes the norm. Set
+`"spawn_investigations": false` on the request (or `ALERT_SPAWN_INVESTIGATIONS=false`)
+to keep everything on the inline path, or narrow the scope with
+`ALERT_SPAWN_OBSERVABLE_TYPES`.
+
+**Prior investigations are checked before collectors run.** Every extracted
+indicator is looked up against the `investigations` table
+(`app/services/indicator_history_service.py`). A match is reported on the
+indicator as `prior_investigation` (investigation id, state, classification,
+risk score, `age_days`, `total_investigations`, `reusable`) — the IOC preview in
+`POST /api/alert-investigations/extract` carries it too, so the analyst sees what
+is already known before starting. When the match is **concluded** and younger
+than `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` (default 7), the run reuses its
+verdict instead of re-collecting: the report comes back with
+`"status": "reused"`, `sources_checked: ["prior_investigation"]` and empty
+`collector_runs`, and `summary.indicators_reused` counts them. Set
+`"reuse_prior_investigations": false` on the request (or
+`ALERT_REUSE_PRIOR_INVESTIGATIONS=false`) to always collect fresh.
+
+**VirusTotal is spent on hashes only.** The free tier allows 4 requests/min ·
+500/day, and one alert body can carry dozens of indicators. VT therefore runs for
+`hash`/`file` indicators, where no other source gives a multi-engine verdict;
+domains, URLs and IPs are answered by the DNS/WHOIS/ASN/intel/threat-feeds/
+URLScan/OpenCTI chain and by IP Lookup. Requesting `vt` for a domain is silently
+dropped from that indicator's collector list. Set `ALERT_VT_HASH_ONLY=false` to
+let VT run on every observable type again. (This applies to alert-body runs;
+single-observable investigations still use VT for every type.)
+
+### Receiving alerts from another platform
+
+`POST /api/alert-investigations` is the ingest endpoint: any platform can POST a
+raw alert body and get the finished report list back.
+
+**The request is held until the investigation finishes.** The response body is
+then the report list itself — byte-for-byte what `/export?format=report` returns —
+so a sender gets a finished report from a single call, with no queueing, polling
+or webhook to wire up:
+
+```jsonc
+// Request — alert_body is the only required field
+{ "alert_body": "…raw SIEM/SOAR alert text…",
+  "title": "optional", "context": "optional ticket note",
+  "external_ref": "INC-8842",                       // your id, echoed everywhere
+  "callback_url": "http://soc.internal:8080/hooks/alert",   // optional
+  "run_ai": true, "max_indicators": 30, "dedupe": true }
+
+// Response — 200, the report list
+[ { "report_type": "executive_summary", … },
+  { "report_type": "indicator", "indicator": { "value": "evil-corp.net", … }, … } ]
+```
+
+`wait_timeout` (default 300s, max 900) bounds how long the connection is held.
+On timeout the run keeps going and the caller gets `202` with the queued
+response below — the same shape `wait=false` returns immediately. The UI posts
+`?wait=false` because it navigates to the run page and polls it there.
+
+```jsonc
+// Response with ?wait=false (or 202 after wait_timeout)
+{ "run_id": "6fc927a3-…", "status": "queued", "deduplicated": false,
+  "external_ref": "INC-8842",
+  "indicators": [ … what was extracted, with prior-investigation matches … ],
+  "indicator_count": 2, "investigable_count": 1,
+  "links": { "run":    "/api/alert-investigations/6fc927a3-…",
+             "report": "/api/alert-investigations/6fc927a3-…/export?format=report",
+             "reports":"…?format=reports", "full": "…?format=full",
+             "cancel": "…/cancel", "ui": "/alert-investigations/6fc927a3-…" },
+  "callback": { "url": "http://soc.internal:8080/hooks/alert", "status": "pending" } }
+```
+
+A sender that stores `links.report` needs to know nothing else about the API.
+Waiting is what a report generator wants; `wait=false` is for a caller that will
+come back for the result — a UI, or a queue-and-forget integration with a
+`callback_url`.
+
+**Raw text ingest.** `POST /api/alert-investigations/raw` takes the alert *as the
+request body* — no JSON wrapper, no escaping. A Sysmon line or a Windows command
+line is full of `"` and `\`, and hand-escaping it into a JSON string is where
+integrations (and Postman sessions) actually break. Everything the JSON form
+takes as a field is a query parameter here:
+
+```bash
+curl -X POST "$API/api/alert-investigations/raw?title=Sysmon%20EID1&external_ref=INC-777&run_ai=true" \
+     -H "Content-Type: text/plain" --data-binary @event.txt
+```
+
+`?collectors=dns,vt` sets `requested_collectors`; `title`, `context`,
+`external_ref`, `callback_url`, `dedupe`, `run_ai`, `run_ip_lookup`,
+`spawn_investigations`, `reuse_prior_investigations`, `include_raw_evidence` and
+`max_indicators` all work the same as in the JSON body — including `wait` and
+`wait_timeout`, so this route also holds the request and answers with the report
+list by default. The body is decoded as UTF-8 with replacement, so a log
+forwarder's mangled byte costs a character rather than the whole alert.
+
+**Webhook delivery.** When `callback_url` is set, the finished run is POSTed to it
+by `tasks.deliver_alert_callback`:
+
+```
+POST <callback_url>
+X-Alert-Event: alert.completed | alert.failed
+X-Alert-Run-Id: <run id>
+X-Alert-Signature: sha256=<hmac>        ← only when ALERT_CALLBACK_SECRET is set
+
+{ "event", "run_id", "external_ref", "status", "overall_verdict",
+  "highest_risk_score", "delivered_at", "document_count",
+  "documents": [ …the format=report list… ] }
+```
+
+Delivery retries with exponential backoff (`ALERT_CALLBACK_MAX_RETRIES`, default
+5); 4xx from the receiver is treated as final since retrying changes nothing. The
+outcome is recorded on the run under `result_json.callback`
+(`status`, `attempts`, `http_status`, `error`), so a failed delivery is visible
+without reading logs. Polling stays available regardless — the webhook is an
+addition, not a replacement.
+
+**Duplicate deliveries.** Every run stores a SHA-256 of its whitespace-normalised
+alert body. An identical body arriving again within
+`ALERT_INGEST_DEDUPE_WINDOW_MINUTES` (default 60) returns the existing run with
+`"deduplicated": true` instead of investigating it a second time — at-least-once
+delivery and retries stop costing collector and AI budget. Send `"dedupe": false`
+to force a fresh run. Runs that ended `failed` or `cancelled` are never reused.
+
+**Security posture.** The endpoint is **not authenticated** — deployments are
+expected to restrict it at the network layer (firewall/VPN/reverse proxy). Two
+consequences are handled in code: the route is rate-limited to 20 requests per
+minute per IP (`app/middleware/rate_limit.py`), and `callback_url` is validated
+before anything is queued — http/https only, and loopback, link-local (including
+`169.254.169.254`), multicast and reserved addresses are refused so an
+unauthenticated caller cannot use the service as a request proxy. Private ranges
+stay allowed because the receiving platform is usually on the same LAN; set
+`ALERT_CALLBACK_ALLOW_PRIVATE=false` to refuse those too. A host that does not
+resolve is rejected at ingest with 400 rather than accepted and retried.
+
+**Exporting the report list.** `GET /api/alert-investigations/{run_id}/export`
+serves the run as a list of self-describing JSON documents, so a reporting
+platform pulls a finished alert with one request. Both list formats have the
+same shape — an array whose every element carries its own `report_type` — they
+differ only in depth:
+
+```jsonc
+// format=reports (default) — the lean integration contract
+[
+  { "report_type": "ai_assistant", "report_markdown": "…", "incident_graph": { … } },
+  { "report_type": "indicator", "indicator": { "value": "evil-corp.net", … },
+    "verdict": { … }, "findings": [ … ], "investigation": { "investigation_id": "…", "url": "…" } },
+  { "report_type": "indicator", … }
+]
+
+// format=report — report-ready: what another platform needs to rebuild our SOC report
+[
+  { "report_type": "executive_summary", … },   // as below
+
+  { "report_type": "indicator",
+    "indicator": { "value": "myspotifypremium.info", … }, "status": "completed",
+    "verdict": { "classification": "malicious", "risk_score": 80, … },
+    "investigation": { "investigation_id": "…", "url": "/investigations/…", "state": "concluded",
+                       "classification": "malicious", "risk_score": 80, "recommended_action": "block" },
+    "soc_report": {                            // ← the SOC PDF's own data model
+      "title": "SOC Investigation Report", "subtitle": "…", "generated_at": "…",
+      "classification": "MALICIOUS",
+      "verdict": { "classification", "confidence", "risk_score", "recommended_action",
+                   "risk_level", "risk_rationale" },
+      "case_metadata": [ { "label": "Case ID", "value": "…" }, … ],
+      "summary": "…",                          // 1. Executive Summary
+      "assessment_points": [ … ],              // 2. Analyst Assessment
+      "key_evidence": [ { "source", "ref", "value", "relevance" }, … ],   // 3. Evidence Matrix
+      "findings": [ { "severity", "title", "description", "arguments": [ … ] }, … ],  // 4. Findings
+      "iocs": [ { "type", "value", "context", "confidence" }, … ],        // 5. IOCs
+      "recommendations": [ … ],                // 6. Recommended SOC Actions
+      "derived_intelligence": {                // 7. + 8.
+        "confidence_engine": { "verdict", "score", "confidence", "confidence_percent",
+                               "components", "reasons" },
+        "ioc_quality": { "summary": { … }, "items": [ … 30 rows … ], "total_items": 103 } },
+      "signals": [ { "severity", "description" }, … ],       // Appendix: generated signals
+      "evidence_sections": [ { "title", "rows": [ … ], "table": { … } }, … ],  // Appendix: technical evidence
+      "collector_status": [ … ], "contradicting_evidence": [ … ], "data_gaps": [ … ],
+      "technical_narrative": "…",
+      "methodology": [ … ] } },
+  …
+]
+
+// format=full — everything, raw evidence included
+[
+  { "report_type": "executive_summary",       // ← run metadata + the AI reading, merged
+    "run_id": "…", "title": "…", "status": "completed",
+    "overall_verdict": "malicious", "highest_risk_score": 80,
+    "summary": { … }, "extraction": { … }, "alert_body": "…",
+    "prior_investigations": { … }, "spawned_investigations": { … },
+    "investigations": [ { "investigation_id": "…", "url": "…", "indicator": "evil-corp.net",
+                          "classification": "malicious", "reused": false } ],
+    "ai_analysis": { "status": "completed", "report_markdown": "…", "incident_graph": { … } } },
+
+  { "report_type": "indicator",               // ← one per indicator, investigation included
+    "indicator": { … }, "verdict": { … }, "findings": [ … ],
+    "investigation": { "investigation_id": "…", "state": "concluded",
+                       "report": { … full analyst report … },
+                       "collector_runs": [ … ],
+                       "evidence": { … full collector evidence … } } },
+  …
+]
+```
+
+```bash
+curl -OJ  "$API/api/alert-investigations/$RUN_ID/export"                    # lean list
+curl -OJ  "$API/api/alert-investigations/$RUN_ID/export?format=report"      # report-ready list
+curl -OJ  "$API/api/alert-investigations/$RUN_ID/export?format=full"        # everything
+curl -s   "$API/api/alert-investigations/$RUN_ID/export?format=report&download=false" | jq '.[1].soc_report.findings'
+curl -s   "$API/api/alert-investigations/$RUN_ID/export?format=report&ndjson=true" | while read -r doc; do …; done
+```
+
+| Query | Values | Default | Meaning |
+|---|---|---|---|
+| `format` | `reports` · `report` · `full` · `envelope` · `ndjson` | `reports` | Lean list · report-ready list · everything · run object with `reports` nested · lean list as NDJSON |
+| `ndjson` | `true` · `false` | `false` | Serialise the chosen list one document per line |
+| `evidence` | `true` · `false` | `true` | `format=full` only — include each investigation's raw collector evidence |
+| `download` | `true` · `false` | `true` | `attachment` vs `inline` Content-Disposition |
+| `pretty` | `true` · `false` | `true` | Indent the JSON (ignored when `ndjson`) |
+
+Every domain/URL indicator carries a report, whether this run investigated it or
+reused an earlier one: a freshly spawned investigation appears under
+`investigation`, a reused one under `prior_investigation` (with its `age_days`
+and `total_investigations` intact), and both get the same `soc_report` in
+`format=report` and the same `report`/`evidence` in `format=full`.
+
+**Which one to hand to a reporting platform: `format=report`.** `soc_report` is
+built by `app/services/export_service.build_soc_report_document()`, the same
+function behind our PDF export — `templates/soc_report.html` renders nothing but
+that dict, so a consumer that walks these keys produces the same document we do,
+section for section. What it leaves behind is what the report never prints:
+AnyRun process trees, HAR captures, screenshot blobs, full IOC inventories. On a
+one-domain alert run that is **64 KB / ~1.9k lines** instead of **2.3 MB / ~47k
+lines** for `format=full`. Everything the PDF *does* print is already summarised
+inside `soc_report` — `key_evidence` (evidence matrix), `evidence_sections`
+(technical appendix), `signals`, and the first 30 `ioc_quality.items`, matching
+the template's own cap, with `total_items` recording how many exist.
+
+Every response carries `X-Alert-Run-Status`, `X-Alert-Report-Count` and
+`X-Alert-Schema-Version`, so a poller can tell a finished export from a partial
+one without a second call — exporting a still-running alert returns whatever
+reports exist so far (an empty array while collectors are starting) rather than
+an error. The filename is `alert-<title-slug>-<run_id>-<shape>.<ext>`. The UI
+downloads through this same endpoint (list page → **Export**, detail page →
+**Download JSON list** = `reports`, **Download report list** = `report`,
+**Download raw evidence list** = `full`, plus **Copy export URL**), so what an
+analyst saves is byte-for-byte what the other platform receives.
+
+**Deleting a run takes its investigations with it.** `DELETE
+/api/alert-investigations/{run_id}` removes the run *and* every investigation it
+spawned, with their evidence, reports and collector results (FK cascade). Two
+things are deliberately kept: an investigation the run merely **reused** — it
+existed before the alert — and any investigation **another alert run still
+references**, since deleting that would leave the other run's reports pointing at
+nothing. The response says exactly what happened:
+
+```jsonc
+{ "run_id": "…", "deleted": true,
+  "deleted_investigations": ["82a67c1c-…"],
+  "kept_investigations":    ["fe37f697-…"] }   // still referenced elsewhere
+```
+
+Running investigations have their Celery task revoked before deletion, so a
+worker cannot write to a row that has gone. In the UI the control is on the run
+detail page (**Delete run**) and on each list row; both confirms state how many
+investigations will go with the run — the list row gets the count from
+`spawned_investigation_count`.
+
+**Previewing what will be sent.** `/alert-investigations/{run_id}/report`
+(detail page → **Preview report**) renders the `format=report` export document by
+document: the executive summary with its investigation index and the AI reading,
+then every indicator — each domain/URL expanded into the full SOC report
+(verdict, case metadata, executive summary, analyst assessment, evidence matrix,
+findings with their evidence arguments, IOCs, recommended actions, derived
+verdict, IOC quality, signals, technical evidence appendix, methodology), and
+every IP/hash with its findings, or its skip reason when it was context-only.
+The page fetches the export endpoint itself — nothing is re-derived from other
+APIs — so the preview cannot show anything the integrator will not receive. Each
+document has a **View JSON** toggle showing the raw element, and the header
+counts coverage: full SOC reports, IOC-only findings, still running, context-only.
+
+Verdict scoring is deterministic (no AI) and mirrors the thresholds in
+`app/services/decision_engine.py`, so external platforms pushing alert bodies get
+the same triage a full investigation would reach. `indicator_reports` is versioned
+by `schema_version` — additive changes only within a major version.
 
 ### Rate Limits
 
@@ -746,6 +1228,19 @@ All configuration is in `backend/app/config.py` as a Pydantic `Settings` class. 
 | `MAX_ANALYST_ITERATIONS` | `3` | Max Claude follow-up rounds |
 | `COLLECTOR_TIMEOUT` | `30` | Seconds per collector |
 | `DEFAULT_COLLECTORS` | `"dns,http,tls,whois,asn,intel,vt"` | Comma-separated collector list |
+| `ALERT_VT_HASH_ONLY` | `true` | Alert-body runs spend VirusTotal on hashes only |
+| `ALERT_REUSE_PRIOR_INVESTIGATIONS` | `true` | Reuse a recent concluded investigation of the same indicator |
+| `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` | `7` | How recent that investigation must be |
+| `ALERT_INGEST_DEDUPE` | `true` | Reuse the run an identical alert body already produced |
+| `ALERT_INGEST_DEDUPE_WINDOW_MINUTES` | `60` | How long that run stays reusable |
+| `ALERT_CALLBACK_SECRET` | `""` | HMAC key for `X-Alert-Signature` (empty = unsigned) |
+| `ALERT_CALLBACK_TIMEOUT_SECONDS` | `15` | Per-attempt webhook timeout |
+| `ALERT_CALLBACK_MAX_RETRIES` | `5` | Webhook retry budget |
+| `ALERT_CALLBACK_ALLOW_PRIVATE` | `true` | Allow callback targets on RFC1918 addresses |
+| `ALERT_SPAWN_INVESTIGATIONS` | `true` | Extracted domains/URLs get a full investigation |
+| `ALERT_SPAWN_OBSERVABLE_TYPES` | `"domain,url"` | Which indicator types spawn one |
+| `ALERT_INVESTIGATION_WAIT_SECONDS` | `1500` | How long an alert run waits for them |
+| `ALERT_INVESTIGATION_POLL_SECONDS` | `5` | Poll interval while waiting |
 | `ARTIFACT_STORAGE` | `"local"` | `local` or `s3` |
 | `ARTIFACT_LOCAL_PATH` | `"./artifacts"` | Local artifact directory |
 | `LOG_LEVEL` | `"INFO"` | Python logging level |

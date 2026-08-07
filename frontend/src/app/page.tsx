@@ -3,8 +3,15 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import InvestigationInput from "@/components/investigation/InvestigationInput";
-import { createInvestigation, deleteInvestigation, uploadFileInvestigation, listInvestigations, getDashboardStats } from "@/lib/api";
-import type { ObservableType } from "@/lib/types";
+import {
+  createAlertInvestigation,
+  createInvestigation,
+  deleteInvestigation,
+  uploadFileInvestigation,
+  listInvestigations,
+  getDashboardStats,
+} from "@/lib/api";
+import type { InvestigationInputType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
@@ -507,7 +514,7 @@ interface SubmitArgs {
   investigatedUrl?: string;
   clientUrl?: string;
   requestedCollectors?: string[];
-  observableType?: ObservableType;
+  observableType?: InvestigationInputType;
   fileToUpload?: File;
   proxyCountry?: string;
   useResidentialProxy?: boolean;
@@ -775,6 +782,17 @@ export default function HomePage() {
     try {
       let investigationId: string;
 
+      if (args.observableType === "alert_body") {
+        // Alert bodies fan out into one investigation per extracted indicator.
+        const run = await createAlertInvestigation({
+          alert_body: args.domain,
+          context: args.context,
+          requested_collectors: args.requestedCollectors,
+        });
+        router.push(`/alert-investigations/${run.run_id}`);
+        return;
+      }
+
       if (args.observableType === "file" && args.fileToUpload) {
         // File upload goes through a dedicated multipart endpoint
         const result = await uploadFileInvestigation(args.fileToUpload, args.context, {
@@ -813,7 +831,7 @@ export default function HomePage() {
       investigatedUrl?: string,
       clientUrl?: string,
       requestedCollectors?: string[],
-      observableType?: ObservableType,
+      observableType?: InvestigationInputType,
       fileToUpload?: File,
       proxyCountry?: string,
       useResidentialProxy?: boolean,
@@ -823,8 +841,9 @@ export default function HomePage() {
         requestedCollectors, observableType, fileToUpload, proxyCountry, useResidentialProxy,
       };
 
-      // Duplicate check for all observable types
-      if (!settings.duplicateCheckWarning) {
+      // Duplicate check for all observable types (an alert body is free text —
+      // its indicators are deduplicated by the extractor instead).
+      if (observableType === "alert_body" || !settings.duplicateCheckWarning) {
         await doCreate(args);
         return;
       }

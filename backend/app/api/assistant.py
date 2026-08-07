@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from app.dependencies import DBSession
@@ -84,6 +85,18 @@ async def list_sessions(
         "limit": results["limit"],
         "offset": results["offset"],
     }
+
+
+@router.get("/metrics/daily")
+async def get_daily_metrics(
+    session: DBSession,
+    selected_date: date = Query(..., alias="date"),
+    timezone_offset_minutes: int = Query(0, ge=-840, le=840),
+):
+    return await AssistantService(session).get_daily_alert_metrics(
+        day=selected_date,
+        timezone_offset_minutes=timezone_offset_minutes,
+    )
 
 
 @router.get("/sessions/{session_id}")

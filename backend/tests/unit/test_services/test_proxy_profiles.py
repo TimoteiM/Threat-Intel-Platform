@@ -34,3 +34,27 @@ def test_selected_proxy_summary_reports_unconfigured_country(monkeypatch):
     summary = proxy_profiles.selected_proxy_summary({"network_profile": {"proxy_country": "BR"}})
 
     assert summary == {"country": "BR", "label": "BR", "configured": "false"}
+
+
+def test_anyrun_wildcard_enables_every_active_residential_geo(monkeypatch):
+    class _Settings:
+        proxy_profiles = ""
+        anyrun_proxy_countries = "*"
+
+    monkeypatch.setattr(proxy_profiles, "get_settings", lambda: _Settings())
+
+    countries = proxy_profiles.configured_proxy_profiles()
+
+    assert len(countries) == 183
+    assert countries[0] == {
+        "country": "AD",
+        "label": "Andorra",
+        "configured": "true",
+        "local_proxy": "false",
+        "anyrun_residential": "true",
+    }
+    assert proxy_profiles.is_configured_network_country("ro") is True
+    assert proxy_profiles.selected_proxy_summary(
+        {"network_profile": {"proxy_country": "RO"}}
+    )["label"] == "Romania"
+    assert proxy_profiles.is_configured_network_country("XX") is False

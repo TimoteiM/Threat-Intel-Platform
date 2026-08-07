@@ -536,3 +536,24 @@ def test_lexical_contribution_applies_trusted_external_floor():
 
     assert report["risk_score"] >= 80
     assert any("Trusted external intelligence floor applied" in line for line in report["key_evidence"])
+
+
+# ── Score/label consistency ───────────────────────────────────────────────────
+
+def test_the_score_stays_inside_the_bands_of_its_own_label():
+    """
+    A blended score must not contradict the verdict it belongs to.
+
+    Blending reputation with the lexical model used to produce "suspicious, risk
+    34" — a score the platform's own thresholds read as benign.
+    """
+    from app.tasks.analysis_task import _score_within_classification_band
+
+    assert _score_within_classification_band(34, {"classification": "suspicious"}) == 35
+    assert _score_within_classification_band(64, {"classification": "malicious"}) == 70
+    assert _score_within_classification_band(40, {"classification": "benign"}) == 34
+    # Inside its band, a score is left exactly as computed.
+    assert _score_within_classification_band(52, {"classification": "suspicious"}) == 52
+    assert _score_within_classification_band(90, {"classification": "malicious"}) == 90
+    # Inconclusive carries no band.
+    assert _score_within_classification_band(41, {"classification": "inconclusive"}) == 41

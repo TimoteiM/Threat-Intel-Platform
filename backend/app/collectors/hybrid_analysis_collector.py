@@ -168,6 +168,13 @@ class HybridAnalysisCollector(BaseCollector):
         if not api_keys:
             return
 
+        screenshot_samples: list[bytes] = []
+        screenshot_count = min(len(screenshots), _MAX_ANYRUN_SCREENSHOTS)
+        screenshot_sample_indices = {
+            0,
+            screenshot_count // 2,
+            max(0, screenshot_count - 1),
+        }
         for shot_index, shot in enumerate(screenshots[:_MAX_ANYRUN_SCREENSHOTS]):
             if not isinstance(shot, dict):
                 continue
@@ -179,11 +186,24 @@ class HybridAnalysisCollector(BaseCollector):
             image_bytes, extension = self._fetch_anyrun_screenshot(source_url, api_keys)
             if not image_bytes:
                 continue
+            if shot_index in screenshot_sample_indices:
+                screenshot_samples.append(image_bytes)
 
             artifact_name = f"anyrun_screenshot_{item_index + 1:02d}_{shot_index + 1:02d}.{extension}"
             self._store_artifact(artifact_name, image_bytes)
             shot["artifact_name"] = f"{self.name}_{artifact_name}"
             shot["quality"] = "original"
+
+        if screenshot_samples:
+            try:
+                from app.services.screenshot_form_detection_service import (
+                    detect_sensitive_forms_in_screenshots,
+                )
+                raw["sensitive_form_detection"] = detect_sensitive_forms_in_screenshots(
+                    screenshot_samples
+                )
+            except Exception as exc:
+                logger.warning("ANY.RUN screenshot form detection failed: %s", exc)
 
     @staticmethod
     def _fetch_anyrun_screenshot(source_url: str, api_keys: list[str]) -> tuple[bytes | None, str]:

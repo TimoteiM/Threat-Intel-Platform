@@ -804,6 +804,40 @@ def _looks_like_ioc(value: Any) -> bool:
     return "." in text or ":" in text or len(text) >= 32
 
 
+def build_soc_report_document(
+    *,
+    evidence: dict[str, Any],
+    report: dict[str, Any],
+    detail: dict[str, Any],
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """
+    The SOC report as data: exactly what `templates/soc_report.html` renders.
+
+    The PDF export and the JSON exports both go through this function, so a
+    consumer that builds its own report from this document produces the same
+    sections as our PDF — and they cannot drift apart.
+    """
+    evidence = _sanitize_evidence_for_export(evidence or {})
+    report = _sanitize_report_for_export(report or {})
+    detail = detail or {}
+    domain = detail.get("domain", "Unknown")
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
+    return _build_soc_report_context(
+        evidence=evidence,
+        report=report,
+        detail=detail,
+        domain=domain,
+        classification=classification,
+        cls_color=_CLASSIFICATION_COLORS.get(classification, "#64748b"),
+        generated_at=generated_at or datetime.now(timezone.utc).isoformat(),
+        detailed_findings=_build_detailed_findings(report=report, evidence=evidence),
+        assessment_points=_build_assessment_points(report.get("primary_reasoning", "")),
+    )
+
+
 def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
     """Build HTML for PDF rendering using Jinja2 template."""
     evidence = _sanitize_evidence_for_export(evidence)
@@ -817,6 +851,8 @@ def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
     generated_at = datetime.now(timezone.utc).isoformat()
     detailed_findings = _build_detailed_findings(report=report, evidence=evidence)
     assessment_points = _build_assessment_points(report.get("primary_reasoning", ""))
+    # Inputs are already sanitized here, so the context is built directly rather
+    # than through build_soc_report_document() (which sanitizes first).
     soc_report = _build_soc_report_context(
         evidence=evidence,
         report=report,

@@ -1953,7 +1953,7 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         report_data["key_evidence"] = key_evidence
 
     # Apply blended score only when a numeric score exists or can be inferred.
-    report_data["risk_score"] = blended_score
+    report_data["risk_score"] = _score_within_classification_band(blended_score, report_data)
     rationale = str(report_data.get("risk_rationale") or "").strip()
     blend_note = (
         f"Final risk uses blended scoring: reputation_weight=0.75, lexical_weight=0.25, "
@@ -1962,6 +1962,30 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     if floor_reasons:
         blend_note += f" External intelligence floor enforced at {blended_score}/100."
     report_data["risk_rationale"] = (rationale + " " + blend_note).strip()
+
+
+# The bands the platform reads everywhere else: malicious ≥ 70, suspicious ≥ 35.
+CLASSIFICATION_BANDS: dict[str, tuple[int, int]] = {
+    "malicious": (70, 100),
+    "suspicious": (35, 69),
+    "benign": (0, 34),
+}
+
+
+def _score_within_classification_band(score: int, report_data: dict) -> int:
+    """
+    Keep the number and the label saying the same thing.
+
+    Blending a reputation score with the lexical model can push a verdict out of
+    its own band — the report then reads "suspicious, risk 34", a score that by
+    the platform's own thresholds is benign. The label is the judgement; the
+    score expresses it, so the score moves rather than the verdict.
+    """
+    band = CLASSIFICATION_BANDS.get(str(report_data.get("classification") or "").lower())
+    if band is None:  # inconclusive carries no band
+        return score
+    low, high = band
+    return max(low, min(high, int(score)))
 
 
 def _trusted_external_risk_floor(evidence_data: dict) -> tuple[int, list[str]]:
@@ -2492,12 +2516,12 @@ def recompute_report_for_existing_investigation(
             # and list consistent with the corrected deterministic decision.
             for field in ("key_evidence", "findings", "data_needed", "recommended_steps"):
                 report_data[field] = canonical_decision.get(field) or []
-            evidence_summary = "; ".join((report_data.get("key_evidence") or [])[:5])
-            report_data["primary_reasoning"] = (
-                f"Deterministic report recomputed after {reason} for {observable_type.upper()} - {domain}. "
-                f"Classification: {str(report_data.get('classification') or 'inconclusive').upper()} "
-                f"({report_data.get('confidence') or 'low'} confidence). Risk score: "
-                f"{report_data.get('risk_score')}/100. Key evidence: {evidence_summary or 'no high-risk indicators found.'}"
+            from app.services.investigation_case_story_service import build_recomputed_case_summary
+            report_data["primary_reasoning"] = build_recomputed_case_summary(
+                evidence=evidence_data,
+                report=report_data,
+                observable=domain,
+                reason=reason,
             )
             report_data["executive_summary"] = report_data["primary_reasoning"]
             report_data["recommendations_narrative"] = " ".join(

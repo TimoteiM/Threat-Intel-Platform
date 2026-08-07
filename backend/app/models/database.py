@@ -499,6 +499,40 @@ class EmailInvestigationRun(Base):
     )
 
 
+class AlertBodyInvestigationRun(Base):
+    """One pasted alert body, its extracted indicators, and their JSON reports."""
+    __tablename__ = "alert_body_investigation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    alert_body: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    indicator_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    overall_verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    highest_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # sha256 of the normalised alert body — lets a repeated delivery reuse the
+    # run it already produced instead of investigating the same alert twice.
+    alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Where to POST the finished report list, when the sender asked for one.
+    callback_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_alert_body_runs_created", "created_at"),
+        Index("idx_alert_body_runs_status", "status"),
+        Index("idx_alert_body_runs_hash_created", "alert_body_hash", "created_at"),
+    )
+
+
 class AssistantSession(Base):
     __tablename__ = "assistant_sessions"
 

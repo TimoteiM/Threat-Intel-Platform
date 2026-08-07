@@ -121,12 +121,47 @@ class Settings(BaseSettings):
     analyst_max_output_tokens: int = 16000
     collector_timeout: int = 20
     urlscan_analysis_timeout_seconds: int = 75
+    # Fetch VT's sandbox behaviour summary for hash/file observables.
+    # Costs one extra VT request per hash — disable on tight free-tier quotas.
+    vt_fetch_file_behaviour: bool = True
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24
     proxy_profiles: str = ""  # e.g. "US=http://user:pass@host:port,IN=http://user:pass@host:port"
-    anyrun_proxy_countries: str = ""  # e.g. "BE,US,IN" for AnyRun residential proxy geo choices
+    anyrun_proxy_countries: str = ""  # comma-separated codes, or "*" for every active AnyRun residential geo
+
+    # —— Alert-body investigations ———
+    # VirusTotal's free tier allows 4 requests/min · 500/day. One alert body can
+    # carry dozens of indicators, so VT is spent only where nothing else answers:
+    # file hashes. Domains/URLs/IPs are covered by the DNS/WHOIS/ASN/intel/
+    # threat-feed/URLScan/OpenCTI chain. Set false to let VT run on every type.
+    alert_vt_hash_only: bool = True
+    # Reuse a recent concluded investigation of the same indicator instead of
+    # re-running its collectors.
+    alert_reuse_prior_investigations: bool = True
+    alert_prior_investigation_max_age_days: int = 7
+    # Domains and URLs extracted from an alert body get a real investigation —
+    # full collector set (VT included) plus the AI analyst — instead of the
+    # inline collector run. The alert run waits for them; anything still running
+    # at the deadline is reported as "investigating" and fills in when read.
+    # —— Alert ingest (another platform POSTing us alert bodies) ———
+    # An identical alert body delivered again within this window returns the run
+    # it already produced instead of investigating it a second time.
+    alert_ingest_dedupe: bool = True
+    alert_ingest_dedupe_window_minutes: int = 60
+    # Signs the callback body: X-Alert-Signature: sha256=<hmac>. Empty = unsigned.
+    alert_callback_secret: str = ""
+    alert_callback_timeout_seconds: int = 15
+    alert_callback_max_retries: int = 5
+    # Callback targets on loopback/link-local are always refused; private ranges
+    # are allowed because the receiving platform usually lives on the same LAN.
+    alert_callback_allow_private: bool = True
+
+    alert_spawn_investigations: bool = True
+    alert_spawn_observable_types: str = "domain,url"
+    alert_investigation_wait_seconds: int = 1500  # < the task's 1740s soft limit
+    alert_investigation_poll_seconds: int = 5
 
     @model_validator(mode="after")
     def _validate_ai_provider_keys(self) -> "Settings":

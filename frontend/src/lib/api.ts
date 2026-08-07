@@ -5,7 +5,13 @@
  * so /api/* → http://localhost:8000/api/*
  */
 
-import type { APIHealthResponse } from "./types";
+import type {
+  AlertExtractedIndicator,
+  AlertExtractionResult,
+  AlertInvestigationRun,
+  AlertReportDocument,
+  APIHealthResponse,
+} from "./types";
 
 const BASE = "/api";
 const DIRECT_BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
@@ -295,6 +301,125 @@ export async function cancelEmailInvestigationRun(runId: string): Promise<any> {
   return request<any>(`/email-investigations/${runId}/cancel`, {
     method: "POST",
   });
+}
+
+// ─── Alert body investigations ───
+
+export function extractAlertIndicators(data: { alert_body: string; max_indicators?: number }) {
+  return request<AlertExtractionResult>("/alert-investigations/extract", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function createAlertInvestigation(data: {
+  alert_body: string;
+  title?: string;
+  context?: string;
+  requested_collectors?: string[];
+  max_indicators?: number;
+  run_ip_lookup?: boolean;
+  run_ai?: boolean;
+}) {
+  return request<{
+    run_id: string;
+    status: string;
+    title: string;
+    indicators: AlertExtractedIndicator[];
+    indicator_count: number;
+    investigable_count: number;
+    message: string;
+    // wait=false: the UI navigates to the run page and polls it. Senders that
+    // want a finished report in one call get the API default (wait=true).
+  }>("/alert-investigations?wait=false", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function listAlertInvestigations(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  verdict?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.verdict && params.verdict !== "all") qs.set("verdict", params.verdict);
+  const query = qs.toString();
+  return request<PaginatedResponse<AlertInvestigationRun>>(
+    `/alert-investigations${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAlertInvestigation(runId: string) {
+  return request<AlertInvestigationRun>(`/alert-investigations/${runId}`);
+}
+
+export type AlertExportFormat = "reports" | "report" | "full" | "envelope" | "ndjson";
+
+/**
+ * URL of the server-side export — the same JSON list the integration contract
+ * describes. Hand this URL to another platform and it can pull the reports with
+ * one GET; `download=false` serves them inline instead of as an attachment.
+ *
+ * `reports` and `full` are both arrays of self-describing documents; `full`
+ * leads with an executive summary and carries each investigation in full.
+ */
+export function alertInvestigationExportUrl(
+  runId: string,
+  options?: {
+    format?: AlertExportFormat;
+    download?: boolean;
+    absolute?: boolean;
+    ndjson?: boolean;
+    evidence?: boolean;
+  },
+) {
+  const qs = new URLSearchParams();
+  qs.set("format", options?.format || "reports");
+  if (options?.download === false) qs.set("download", "false");
+  if (options?.ndjson) qs.set("ndjson", "true");
+  if (options?.evidence === false) qs.set("evidence", "false");
+  const path = `${BASE}/alert-investigations/${runId}/export?${qs.toString()}`;
+  if (options?.absolute && typeof window !== "undefined") {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Fetch the report-ready export itself — the exact array the reporting platform
+ * receives. The preview page renders this, so what an analyst reviews and what
+ * an integrator consumes can never differ.
+ */
+export function getAlertInvestigationReportList(runId: string) {
+  return request<AlertReportDocument[]>(
+    `/alert-investigations/${runId}/export?format=report&download=false`,
+  );
+}
+
+export function cancelAlertInvestigation(runId: string) {
+  return request<{ run_id: string; status: string }>(`/alert-investigations/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Delete an alert run and the investigations it started.
+ *
+ * Reused investigations, and any another run still references, are kept and
+ * returned in `kept_investigations`.
+ */
+export function deleteAlertInvestigation(runId: string) {
+  return request<{
+    run_id: string;
+    deleted: boolean;
+    deleted_investigations: string[];
+    kept_investigations: string[];
+  }>(`/alert-investigations/${runId}`, { method: "DELETE" });
 }
 
 export interface PaginatedResponse<T> {
@@ -673,6 +798,16 @@ export function listAssistantSessions(params?: { limit?: number; offset?: number
   const query = qs.toString();
   return requestWithDirectFallback<PaginatedResponse<any>>(
     `/assistant/sessions${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAssistantDailyMetrics(date: string, timezoneOffsetMinutes: number) {
+  const qs = new URLSearchParams({
+    date,
+    timezone_offset_minutes: String(timezoneOffsetMinutes),
+  });
+  return requestWithDirectFallback<import("@/lib/types").AssistantDailyMetrics>(
+    `/assistant/metrics/daily?${qs.toString()}`,
   );
 }
 

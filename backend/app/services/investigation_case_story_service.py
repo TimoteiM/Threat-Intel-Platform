@@ -246,21 +246,163 @@ def _deterministic_story(prompt: str) -> CaseStory:
     return build_saved_case_story(context=context, model="AI report synthesis")
 
 
+def build_recomputed_case_summary(
+    *,
+    evidence: dict[str, Any],
+    report: dict[str, Any],
+    observable: str,
+    reason: str,
+) -> str:
+    """Create analyst-facing prose after asynchronous evidence changes."""
+    classification = str(report.get("classification") or "inconclusive").upper()
+    confidence = str(report.get("confidence") or "low").lower()
+    score = report.get("risk_score")
+    sentences: list[str] = []
+
+    if reason == "deferred_anyrun_completed":
+        sentences.append(
+            f"ANY.RUN completed after the initial analysis for {observable}, and the new sandbox evidence was evaluated."
+        )
+    elif reason == "anyrun_heuristic_reclassified":
+        sentences.append(
+            f"The ANY.RUN evidence for {observable} was reevaluated by separating the provider verdict from heuristic observations."
+        )
+    else:
+        sentences.append(
+            f"New evidence became available for {observable}, and the investigation was reevaluated."
+        )
+
+    form_detection: dict[str, Any] = {}
+    form_ref = ""
+    js_detection = (evidence.get("js_analysis") or {}).get("sensitive_form_detection") or {}
+    if isinstance(js_detection, dict) and js_detection.get("detected"):
+        form_detection = js_detection
+        form_ref = "rendered browser session"
+    if not form_detection:
+        for item in (evidence.get("hybrid_analysis") or {}).get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            candidate = (item.get("raw_summary") or {}).get("sensitive_form_detection") or {}
+            if isinstance(candidate, dict) and candidate.get("detected"):
+                form_detection = candidate
+                form_ref = "sandbox screenshots"
+                break
+
+    categories = [
+        str(value).replace("_", " ")
+        for value in form_detection.get("categories") or []
+        if value
+    ]
+    if form_detection:
+        category_text = ", ".join(categories) if categories else "user data"
+        sentences.append(
+            f"The {form_ref} showed a visible form requesting {category_text}, but the form was not submitted, "
+            "so behavior triggered after data entry remains untested."
+        )
+
+    anyrun_item: dict[str, Any] = {}
+    for item in (evidence.get("hybrid_analysis") or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("raw_summary") or {}
+        if str(raw.get("source") or "").lower() == "anyrun" and str(raw.get("mode") or "").lower() == "sandbox":
+            anyrun_item = item
+            break
+    if not anyrun_item:
+        anyrun_item = next(
+            (
+                item for item in (evidence.get("hybrid_analysis") or {}).get("items") or []
+                if isinstance(item, dict)
+                and str((item.get("raw_summary") or {}).get("source") or "").lower() == "anyrun"
+            ),
+            {},
+        )
+
+    anyrun_verdict = str(anyrun_item.get("verdict") or "").upper()
+    if anyrun_verdict:
+        if anyrun_verdict in {"CLEAN", "BENIGN", "SAFE"} and form_detection:
+            sentences.append(
+                f"ANY.RUN returned {anyrun_verdict}, but that provider verdict is treated as incomplete interaction coverage—not proof that the form is safe."
+            )
+        else:
+            sentences.append(f"ANY.RUN returned {anyrun_verdict} for the investigated observable.")
+
+    if classification == "BENIGN":
+        supporting = [
+            str(item).rstrip(".")
+            for item in report.get("key_evidence") or []
+            if item
+            and (
+                "0 malicious, 0 suspicious" in str(item).lower()
+                or str(item).lower().startswith("established domain")
+                or "treated as contextual" in str(item).lower()
+            )
+        ][:3]
+    else:
+        supporting = [
+            str(item).rstrip(".")
+            for item in report.get("key_evidence") or []
+            if item
+            and not str(item).lower().startswith("anyrun")
+            and not str(item).lower().startswith("rendered data-entry form")
+        ][:3]
+    support_text = "; ".join(supporting)
+    score_text = f" with a risk score of {score}/100" if score is not None else ""
+    conclusion_verb = "is now" if reason == "anyrun_heuristic_reclassified" else "remains"
+    conclusion = f"The case {conclusion_verb} {classification}{score_text} at {confidence} confidence"
+    if support_text:
+        conclusion += f", supported by {support_text}"
+    sentences.append(conclusion + ".")
+
+    if form_detection and confidence == "low":
+        sentences.append(
+            "Confidence remains low because the available run did not establish what happens when the form is submitted."
+        )
+    return " ".join(sentences)[:1200]
+
+
 def build_saved_case_story(*, context: dict[str, Any], model: str) -> CaseStory:
     """Build the persisted Case Story from the paid analyst report at zero extra AI cost."""
     canonical = context.get("canonical") or {}
     report = context.get("report") or {}
     intel = context.get("derived_intelligence") or {}
     findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    severity_rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+    form_finding = next(
+        (
+            item for item in findings
+            if isinstance(item, dict) and item.get("id") == "sensitive_data_entry_form"
+        ),
+        None,
+    )
+    benign_findings = [
+        item for item in findings
+        if isinstance(item, dict)
+        and (
+            item.get("id") == "anyrun_verdict"
+            and "clean" in str(item.get("title") or "").lower()
+        )
+    ]
+    decisive_findings = [
+        item for item in findings
+        if isinstance(item, dict) and item not in benign_findings
+    ]
+    decisive_findings.sort(
+        key=lambda item: severity_rank.get(str(item.get("severity") or "info").lower(), 1),
+        reverse=True,
+    )
     claims = []
-    for index, item in enumerate(findings[:5]):
+    for index, item in enumerate(decisive_findings[:5]):
         if not isinstance(item, dict):
             continue
         claims.append(EvidenceClaim(
             title=str(item.get("title") or item.get("name") or f"Finding {index + 1}")[:140],
             explanation=str(item.get("description") or item.get("reasoning") or "Reported analyst finding.")[:700],
             severity=str(item.get("severity") or "info").lower() if str(item.get("severity") or "info").lower() in {"critical","high","medium","low","info"} else "info",
-            evidence_refs=[f"report.findings[{index}]"],
+            evidence_refs=(
+                list(item.get("evidence_refs") or [])[:5]
+                or [f"report.findings[{findings.index(item)}]"]
+            ),
         ))
     summary = str(report.get("primary_reasoning") or report.get("executive_summary") or "The collected evidence requires SOC review.")[:1200]
     rescan = intel.get("rescan_diff") or {}
@@ -293,16 +435,47 @@ def build_saved_case_story(*, context: dict[str, Any], model: str) -> CaseStory:
     contradictory = [EvidenceClaim(
         title="Contradicting or benign signal", explanation=str(value)[:700], severity="info",
     ) for value in (report.get("contradicting_evidence") or [])[:4]]
+    for item in benign_findings[:max(0, 4 - len(contradictory))]:
+        contradictory.append(EvidenceClaim(
+            title=str(item.get("title") or "Benign provider signal")[:140],
+            explanation=str(item.get("description") or "The provider returned a clean result.")[:700],
+            severity="info",
+            evidence_refs=list(item.get("evidence_refs") or [])[:5],
+        ))
     visual = (context.get("evidence") or {}).get("visual_comparison") or {}
-    visual_summary = str(visual.get("summary") or visual.get("assessment") or "No screenshot-derived conclusion was available.")[:800]
+    visual_summary = str(
+        visual.get("summary")
+        or visual.get("assessment")
+        or (
+            form_finding.get("description")
+            if isinstance(form_finding, dict)
+            else "No screenshot-derived conclusion was available."
+        )
+    )[:800]
+    why_it_matters = f"The canonical investigation concluded {verdict} with risk score {score}."
+    if form_finding:
+        why_it_matters = (
+            "A visible data-entry form creates an interaction-dependent blind spot: a clean sandbox result "
+            "does not establish what the page does after submission. "
+            f"The canonical investigation therefore remains {verdict} with risk score {score}."
+        )
     story = CaseStory(
         headline=f"{verdict} assessment for {canonical.get('observable') or 'the observable'}",
-        what_happened=summary, why_it_matters=f"The canonical investigation concluded {verdict} with risk score {score}.",
+        what_happened=summary, why_it_matters=why_it_matters,
         score_explanation=str(report.get("risk_rationale") or f"The score of {score} is the canonical decision-engine result, supported by the strongest findings below.")[:1200],
         score_components=score_components, strongest_evidence=claims, contradicting_evidence=contradictory, timeline=timeline,
         changes_since_last_run=[str(rescan.get("summary"))[:500]] if rescan.get("summary") else [],
         campaign_assessment=str(campaign.get("summary") or "No reliable campaign correlation was available.")[:800],
-        recommended_actions=recommended, visual_assessment=VisualAssessment(performed=bool(visual), summary=visual_summary),
+        recommended_actions=recommended,
+        visual_assessment=VisualAssessment(
+            performed=bool(visual or form_finding),
+            summary=visual_summary,
+            evidence_refs=(
+                list(form_finding.get("evidence_refs") or [])[:5]
+                if isinstance(form_finding, dict)
+                else []
+            ),
+        ),
         data_gaps=[str(x)[:300] for x in (report.get("data_needed") or report.get("data_gaps") or [])[:6]],
         soc_handoff_markdown=f"## SOC handoff\n- Observable: {canonical.get('observable')}\n- Verdict: {verdict}\n- Risk score: {score}\n\n{summary}",
     )

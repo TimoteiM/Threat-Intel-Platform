@@ -7,6 +7,8 @@ from collections import defaultdict
 from app.services.ip_context import is_ipv4_indicator_match
 
 
+from app.utils.log_text import has_file_suffix, is_field_name
+
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 SID_RE = re.compile(r"\bS-\d-(?:\d+-){1,14}\d+\b", re.IGNORECASE)
@@ -42,6 +44,16 @@ SYSLOG_HOST_RE = re.compile(
 # Windows user-profile path: C:\Users\<username>\ or C:/Users/<username>/
 WIN_PATH_USER_RE = re.compile(
     r"(?P<prefix>[A-Za-z]:[/\\]+Users[/\\]+)(?P<value>[A-Za-z0-9][A-Za-z0-9._-]{0,252})(?=[/\\])",
+    re.IGNORECASE,
+)
+# Some Windows Event 4688 exports flatten adjacent fields without delimiters:
+# "...Security<hostname>S-1-5-...". Extract the hostname before the generic
+# bare-FQDN pass can absorb the surrounding event metadata into the token.
+GLUED_WINDOWS_SECURITY_HOST_RE = re.compile(
+    r"(?P<prefix>Security)"
+    r"(?P<value>[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?){2,}?)"
+    r"(?=S-\d-)",
     re.IGNORECASE,
 )
 # Bare FQDNs not preceded by a keyword (e.g. "onvmbp01.onenet.be" appearing inline).
@@ -119,6 +131,16 @@ def sanitize_entries(
             sanitized_text = _replace_keyed_account_pattern(
                 sanitized_text,
                 WIN_PATH_USER_RE,
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                GLUED_WINDOWS_SECURITY_HOST_RE,
+                "HOST",
                 shared_token_map,
                 reverse_token_map,
                 token_counters,
@@ -210,7 +232,7 @@ def _replace_pattern(
         original = match.group(0)
         if token_prefix == "IP" and not is_ipv4_indicator_match(text, match):
             return original
-        if token_prefix == "HOST" and not _looks_like_host(original):
+        if token_prefix == "HOST" and not _is_redactable_host(text, match):
             return original
         token = reverse_token_map.get(original)
         if token is None:
@@ -287,6 +309,31 @@ def _replace_keyed_account_pattern(
         return f"{match.group('prefix')}{token}"
 
     return pattern.sub(repl, text)
+
+
+def _is_redactable_host(text: str, match: re.Match[str]) -> bool:
+    """
+    Whether this match is a hostname worth replacing with a token.
+
+    Redacting too much is not harmless: the token map is shown to the analyst as
+    "values redacted before AI analysis", and the model writes its narrative in
+    terms of those tokens. When `data.win.eventdata.hashes` becomes [HOST_6], the
+    report ends up saying a process is "identified by SHA256
+    data.win.eventdata.hashes". Two things are never hosts:
+
+      * a field name — it starts a line and is followed by a colon
+      * a file name — `BOOTX64.EFI.shim.bak`, `options.csv`
+
+    Everything else keeps today's behaviour, including internal suffixes such as
+    `.local` or `.corp`, which must stay redacted even though no public suffix
+    list knows them.
+    """
+    original = match.group(0)
+    if is_field_name(text, match):
+        return False
+    if has_file_suffix(original):
+        return False
+    return _looks_like_host(original)
 
 
 def _looks_like_host(value: str) -> bool:

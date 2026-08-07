@@ -1,6 +1,6 @@
 import sys
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -122,6 +122,32 @@ async def test_create_session_defaults_title_when_missing() -> None:
 
     assert created.title == "Alert Analysis"
     assert added[0].title == "Alert Analysis"
+
+
+@pytest.mark.asyncio
+async def test_daily_alert_metrics_groups_completed_sessions_in_local_time() -> None:
+    timestamps = [
+        datetime(2026, 7, 23, 22, 30, tzinfo=timezone.utc),  # 00:30 local (+02:00)
+        datetime(2026, 7, 24, 8, 15, tzinfo=timezone.utc),   # 10:15 local
+        datetime(2026, 7, 24, 8, 45, tzinfo=timezone.utc),   # 10:45 local
+        datetime(2026, 7, 22, 23, 0, tzinfo=timezone.utc),   # previous local day
+    ]
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(return_value=_ExecuteResult(timestamps)),
+    )
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    metrics = await service.get_daily_alert_metrics(
+        day=date(2026, 7, 24),
+        timezone_offset_minutes=-120,
+    )
+
+    assert metrics["total"] == 3
+    assert metrics["previous_total"] == 1
+    assert metrics["change_percent"] == 200
+    assert metrics["peak_hour"] == "10:00-11:00"
+    assert metrics["hourly"][0] == {"hour": "00:00", "count": 1}
+    assert metrics["hourly"][10] == {"hour": "10:00", "count": 2}
 
 
 @pytest.mark.asyncio

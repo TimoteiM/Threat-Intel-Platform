@@ -91,6 +91,13 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
   const contentMl = evidence?.content_ml || ({} as any);
   const attachmentAnalysis = evidence?.attachment_analysis || ({} as any);
   const hybridAnalysis = evidence?.hybrid_analysis || ({} as any);
+  const anyRunSensitiveFormDetection = arr(hybridAnalysis?.items)
+    .map((item: any) => item?.raw_summary?.sensitive_form_detection)
+    .find((detection: any) => detection?.detected);
+  const sensitiveFormDetection =
+    evidence?.js_analysis?.sensitive_form_detection?.detected
+      ? evidence.js_analysis.sensitive_form_detection
+      : anyRunSensitiveFormDetection;
   const openCti = evidence?.opencti || null;
   const finalRisk = evidence?.final_risk || ({} as any);
   const redirectDestinationIntel =
@@ -985,11 +992,58 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           {(() => {
             const ja = evidence.js_analysis!;
             const credPosts = arr(ja.post_endpoints).filter((p: any) => p.is_credential_form);
+            const sensitiveForm = ja.sensitive_form_detection;
 
             return (
               <>
                 {ja.error && (
                   <EmptyNote>JavaScript analysis failed: {ja.error}</EmptyNote>
+                )}
+                {sensitiveForm?.detected && (
+                  <div style={{
+                    marginBottom: 16,
+                    padding: "12px 14px",
+                    borderRadius: "var(--radius)",
+                    border: "1px solid rgba(245, 158, 11, 0.35)",
+                    borderLeft: "3px solid var(--yellow)",
+                    background: "rgba(245, 158, 11, 0.08)",
+                  }}>
+                    <div style={{ color: "var(--yellow)", fontWeight: 700, fontSize: 12 }}>
+                      Sensitive/data-entry form detected
+                    </div>
+                    <div style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.55, marginTop: 4 }}>
+                      {sensitiveForm.visible_control_count} visible field(s) across {sensitiveForm.form_count} form(s).
+                      {" "}Categories: {arr(sensitiveForm.categories).join(", ").replace(/_/g, " ") || "generic data entry"}.
+                      {" "}Detection sources: {arr(sensitiveForm.sources).join(" + ")}. No field values were retained.
+                    </div>
+                    {arr(sensitiveForm.controls).length > 0 && (
+                      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {arr(sensitiveForm.controls).map((control: any, index: number) => (
+                          <span key={`${control.form_index}-${index}`} style={{
+                            padding: "4px 7px",
+                            borderRadius: 4,
+                            background: "rgba(15,23,42,0.65)",
+                            border: "1px solid var(--border)",
+                            color: "var(--text-secondary)",
+                            fontSize: 10,
+                          }}>
+                            {control.label || control.placeholder || control.name || control.type}
+                            {" · "}{String(control.category || "data entry").replace(/_/g, " ")}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {sensitiveForm.screenshot_artifact_id && (
+                      <a
+                        href={getArtifactUrl(sensitiveForm.screenshot_artifact_id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ display: "inline-block", marginTop: 8, color: "var(--accent)", fontSize: 11 }}
+                      >
+                        Open rendered form screenshot
+                      </a>
+                    )}
+                  </div>
                 )}
                 {/* Summary stat boxes — clickable to expand details */}
                 <div style={{
@@ -1958,6 +2012,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           hybridAnalysis={hybridAnalysis}
           investigationId={investigationId}
           onRefresh={onRefresh}
+          sensitiveFormDetection={sensitiveFormDetection}
         />
       </Section>
 

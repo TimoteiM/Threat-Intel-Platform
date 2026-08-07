@@ -367,7 +367,7 @@ class OpenCTICollector(BaseCollector):
                 variables={"search": term, "first": 10},
             )
             self._store_artifact(f"raw_search_{_safe_name(term)}", json.dumps(raw, default=str))
-            edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+            edges = _gql_edges(raw, "stixCyberObservables")
             logger.info("[opencti] search='%s' → %d edge(s)", term, len(edges))
             node = _best_node(
                 raw,
@@ -394,7 +394,7 @@ class OpenCTICollector(BaseCollector):
                         "filters": _v6_filter_group(term, operator="eq", key=key),
                     },
                 )
-                edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+                edges = _gql_edges(raw, "stixCyberObservables")
                 logger.info("[opencti] typed v6 exact key=%s term='%s' -> %d edge(s)", key, term, len(edges))
                 node = _best_node(
                     raw,
@@ -444,7 +444,7 @@ class OpenCTICollector(BaseCollector):
                         "filters": _v6_filter_group(term, operator="contains", key=key),
                     },
                 )
-                edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+                edges = _gql_edges(raw, "stixCyberObservables")
                 logger.info("[opencti] v6 filter key=%s term='%s' -> %d edge(s)", key, term, len(edges))
                 node = _best_node(
                     raw,
@@ -476,7 +476,7 @@ class OpenCTICollector(BaseCollector):
                     },
                 },
             )
-            edges = raw.get("data", {}).get("stixCyberObservables", {}).get("edges", [])
+            edges = _gql_edges(raw, "stixCyberObservables")
             logger.info("[opencti] v6 filter='%s' → %d edge(s)", term, len(edges))
             node = _best_node(
                 raw,
@@ -557,7 +557,7 @@ class OpenCTICollector(BaseCollector):
         return ev
 
     def _parse_observable_metadata(self, ev: OpenCTIEvidence, raw: dict) -> None:
-        node = raw.get("data", {}).get("stixCyberObservable") or {}
+        node = _gql_path(raw, "data", "stixCyberObservable") or {}
         if not node:
             return
 
@@ -579,12 +579,7 @@ class OpenCTICollector(BaseCollector):
             ev.notes.append(f"Labels: {', '.join(ev.labels)}")
 
     def _parse_indicators(self, ev: OpenCTIEvidence, raw: dict) -> None:
-        nodes = (
-            raw.get("data", {})
-               .get("stixCyberObservable", {})
-               .get("indicators", {})
-               .get("edges", [])
-        )
+        nodes = _gql_edges(raw, "stixCyberObservable", "indicators")
         for edge in nodes:
             ind = edge.get("node") or {}
             if not ind:
@@ -600,12 +595,7 @@ class OpenCTICollector(BaseCollector):
             ))
 
     def _parse_reports(self, ev: OpenCTIEvidence, raw: dict) -> None:
-        nodes = (
-            raw.get("data", {})
-               .get("stixCyberObservable", {})
-               .get("reports", {})
-               .get("edges", [])
-        )
+        nodes = _gql_edges(raw, "stixCyberObservable", "reports")
         for edge in nodes:
             rep = edge.get("node") or {}
             if not rep:
@@ -624,11 +614,7 @@ class OpenCTICollector(BaseCollector):
             ))
 
     def _parse_relationships(self, ev: OpenCTIEvidence, raw: dict) -> None:
-        rel_edges = (
-            raw.get("data", {})
-               .get("stixCoreRelationships", {})
-               .get("edges", [])
-        )
+        rel_edges = _gql_edges(raw, "stixCoreRelationships")
         for rel_node in _iter_edges_list(rel_edges):
             to    = rel_node.get("to") or {}
             etype = str(to.get("entity_type") or "").lower().replace("-", "")
@@ -722,6 +708,28 @@ def _v6_filter_group(term: str, *, operator: str, key: str = "value") -> dict[st
     }
 
 
+def _gql_path(raw: Any, *keys: str) -> Any:
+    """
+    Walk a GraphQL response safely.
+
+    OpenCTI returns `null` (not an empty object) for a field whose resolver
+    errored — e.g. an unsupported filter key — so `.get(k, {})` still yields
+    None and crashes the next hop. Every response traversal goes through here.
+    """
+    current: Any = raw
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _gql_edges(raw: Any, *keys: str) -> list[dict]:
+    """Return the `edges` list at data.<keys>, or [] when absent/nulled."""
+    edges = _gql_path(raw, "data", *keys, "edges")
+    return [edge for edge in edges if isinstance(edge, dict)] if isinstance(edges, list) else []
+
+
 def _best_node(
     raw: dict,
     query_field: str,
@@ -730,7 +738,7 @@ def _best_node(
     allowed_types: list[str] | None = None,
 ) -> dict | None:
     """Return the node whose observable_value actually matches the searched term."""
-    edges = raw.get("data", {}).get(query_field, {}).get("edges", [])
+    edges = _gql_edges(raw, query_field)
     if not edges:
         return None
     sv = term.strip().lower()

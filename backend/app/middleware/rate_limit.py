@@ -5,7 +5,8 @@ Tracks request counts per (IP, endpoint) pair using a sliding time window.
 No external dependencies — uses a simple list-of-timestamps approach.
 
 Limits (POST only — read operations are uncapped):
-  POST /api/investigations  → 10 per minute
+  POST /api/investigations       → 10 per minute
+  POST /api/alert-investigations → 20 per minute (unauthenticated ingest)
   POST /api/tools/ip-lookup → 20 per minute
   POST /api/batches         → 3 per minute
   POST /api/watchlist       → 15 per minute
@@ -23,6 +24,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # (limit, window_seconds)
 _LIMITS: dict[str, tuple[int, int]] = {
     "POST:/api/investigations":  (10, 60),
+    # Ingest from other platforms — each accepted alert can spawn several full
+    # investigations, and the route is unauthenticated by design.
+    "POST:/api/alert-investigations": (20, 60),
     "POST:/api/tools/ip-lookup": (20, 60),
     "POST:/api/batches":         (3,  60),
     "POST:/api/watchlist":       (15, 60),

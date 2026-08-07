@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import PureWindowsPath
 from uuid import UUID
 
@@ -130,6 +130,67 @@ class AssistantService:
             "total": int(total_result.scalar_one()),
             "limit": limit,
             "offset": offset,
+        }
+
+    async def get_daily_alert_metrics(
+        self,
+        *,
+        day: date,
+        timezone_offset_minutes: int = 0,
+    ) -> dict[str, object]:
+        """Return completed alert-analysis volume for one analyst-local day."""
+        local_tz = timezone(timedelta(minutes=-timezone_offset_minutes))
+        start_local = datetime.combine(day, time.min, tzinfo=local_tz)
+        end_local = start_local + timedelta(days=1)
+        previous_start_local = start_local - timedelta(days=1)
+        start_utc = previous_start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+
+        result = await self.session.execute(
+            select(AssistantSession.completed_at).where(
+                AssistantSession.mode == "alert_analysis",
+                AssistantSession.status == "completed",
+                AssistantSession.completed_at.is_not(None),
+                AssistantSession.completed_at >= start_utc,
+                AssistantSession.completed_at < end_utc,
+            )
+        )
+
+        hourly_counts = [0] * 24
+        previous_total = 0
+        for completed_at in result.scalars().all():
+            if completed_at is None:
+                continue
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=timezone.utc)
+            completed_local = completed_at.astimezone(local_tz)
+            if completed_local.date() == day:
+                hourly_counts[completed_local.hour] += 1
+            elif completed_local.date() == day - timedelta(days=1):
+                previous_total += 1
+
+        total = sum(hourly_counts)
+        peak_hour_index = max(range(24), key=hourly_counts.__getitem__) if total else None
+        change_percent = (
+            round(((total - previous_total) / previous_total) * 100)
+            if previous_total
+            else None
+        )
+        return {
+            "date": day.isoformat(),
+            "timezone_offset_minutes": timezone_offset_minutes,
+            "total": total,
+            "previous_total": previous_total,
+            "change_percent": change_percent,
+            "peak_hour": (
+                f"{peak_hour_index:02d}:00-{(peak_hour_index + 1) % 24:02d}:00"
+                if peak_hour_index is not None
+                else None
+            ),
+            "hourly": [
+                {"hour": f"{hour:02d}:00", "count": count}
+                for hour, count in enumerate(hourly_counts)
+            ],
         }
 
     async def get_session(self, session_id: UUID) -> AssistantSession | None:

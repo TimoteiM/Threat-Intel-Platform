@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { getProxyCountries, uploadReferenceImage } from "@/lib/api";
-import type { ObservableType } from "@/lib/types";
+import { extractAlertIndicators, getProxyCountries, uploadReferenceImage } from "@/lib/api";
+import type { AlertExtractionResult, InvestigationInputType } from "@/lib/types";
 
 interface Props {
   onSubmit: (
@@ -13,7 +13,7 @@ interface Props {
     investigatedUrl?: string,
     clientUrl?: string,
     requestedCollectors?: string[],
-    observableType?: ObservableType,
+    observableType?: InvestigationInputType,
     fileToUpload?: File,
     proxyCountry?: string,
     useResidentialProxy?: boolean,
@@ -21,12 +21,24 @@ interface Props {
   loading: boolean;
 }
 
-const OBSERVABLE_TYPES: { id: ObservableType; label: string; placeholder: string }[] = [
-  { id: "domain", label: "Domain",  placeholder: "suspicious-site.com" },
-  { id: "url",    label: "URL",     placeholder: "https://phishing.com/login" },
-  { id: "hash",   label: "Hash",    placeholder: "sha256:abc123... or md5:..." },
-  { id: "file",   label: "File",    placeholder: "Upload a file sample" },
+const OBSERVABLE_TYPES: { id: InvestigationInputType; label: string; placeholder: string }[] = [
+  { id: "domain",     label: "Domain",     placeholder: "suspicious-site.com" },
+  { id: "url",        label: "URL",        placeholder: "https://phishing.com/login" },
+  { id: "hash",       label: "Hash",       placeholder: "sha256:abc123... or md5:..." },
+  { id: "file",       label: "File",       placeholder: "Upload a file sample" },
+  { id: "alert_body", label: "Alert Body", placeholder: "Paste the raw alert text" },
 ];
+
+const ALERT_BODY_PLACEHOLDER = `Paste the raw alert body here — indicators are extracted automatically.
+
+[ALERT] Suspicious outbound connection
+Source host: WKS-4471 (10.12.4.55)
+Destination: 45.147.230.131:443
+User clicked hxxps://secure-login[.]evil-corp[.]com/session
+SHA256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+Sender: billing@evil-corp.com`;
+
+const MAX_ALERT_INDICATORS = 30;
 
 const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "dns",              label: "DNS",              desc: "Records, nameservers, MX" },
@@ -44,17 +56,37 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
 ];
 
 // Which collectors support each observable type
-const COLLECTORS_PER_TYPE: Record<ObservableType, string[]> = {
+const COLLECTORS_PER_TYPE: Record<InvestigationInputType, string[]> = {
   domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
   ip:     ["asn", "vt", "threat_feeds", "urlscan", "opencti"],
   url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
   hash:   ["vt", "threat_feeds", "hybrid_analysis", "opencti"],
   file:   ["vt", "hybrid_analysis", "opencti"],
+  // An alert body yields mixed indicator types; each extracted indicator only
+  // runs the collectors that support it.
+  alert_body: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "opencti"],
+};
+
+// Sensible defaults per type — alert bodies fan out across many indicators, so
+// only the reputation collectors are pre-selected.
+const DEFAULT_COLLECTORS_PER_TYPE: Record<InvestigationInputType, string[]> = {
+  ...COLLECTORS_PER_TYPE,
+  alert_body: ["dns", "whois", "asn", "vt", "threat_feeds", "opencti"],
+};
+
+// VirusTotal's free tier is 4 requests/min · 500/day. An alert body carries many
+// indicators, so the backend spends VT on file hashes only — domains, URLs and
+// IPs go through the DNS/WHOIS/ASN/intel/threat-feed/URLScan/OpenCTI chain.
+const ALERT_BODY_COLLECTOR_NOTES: Record<string, string> = {
+  vt: "File hashes only — VT quota is 4/min · 500/day",
 };
 
 export default function InvestigationInput({ onSubmit, loading }: Props) {
-  const [observableType, setObservableType] = useState<ObservableType>("domain");
+  const [observableType, setObservableType] = useState<InvestigationInputType>("domain");
   const [domain, setDomain] = useState("");
+  const [alertBody, setAlertBody] = useState("");
+  const [alertPreview, setAlertPreview] = useState<AlertExtractionResult | null>(null);
+  const [alertPreviewError, setAlertPreviewError] = useState<string | null>(null);
   const [fileToUpload, setFileToUpload] = useState<File | null>(null);
   const [context, setContext] = useState("");
   const [clientDomain, setClientDomain] = useState("");
@@ -68,14 +100,21 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   const [uploadingRef, setUploadingRef] = useState(false);
   const [proxyCountries, setProxyCountries] = useState<Array<{ country: string; label: string }>>([]);
   const [proxyCountry, setProxyCountry] = useState("");
+  const [proxyCountrySearch, setProxyCountrySearch] = useState("");
   const [showProxyPrompt, setShowProxyPrompt] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sampleFileRef = useRef<HTMLInputElement>(null);
 
+  const isAlertBody = observableType === "alert_body";
   const supportedCollectors = COLLECTORS_PER_TYPE[observableType];
-  const canSubmit = (observableType === "file" ? !!fileToUpload : domain.trim().length > 0) && !loading;
+  const canSubmit =
+    (observableType === "file"
+      ? !!fileToUpload
+      : isAlertBody
+        ? alertBody.trim().length > 0
+        : domain.trim().length > 0) && !loading;
   const canUseAnyRunProxy =
     proxyCountries.length > 0 &&
     selectedCollectors.includes("hybrid_analysis") &&
@@ -115,10 +154,40 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     };
   }, []);
 
-  const handleTypeChange = (type: ObservableType) => {
+  // Live IOC preview so the analyst sees what will be investigated before starting.
+  useEffect(() => {
+    if (!isAlertBody || !alertBody.trim()) {
+      setAlertPreview(null);
+      setAlertPreviewError(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      extractAlertIndicators({ alert_body: alertBody, max_indicators: MAX_ALERT_INDICATORS })
+        .then((data) => {
+          if (cancelled) return;
+          setAlertPreview(data);
+          setAlertPreviewError(null);
+        })
+        .catch((e: any) => {
+          if (cancelled) return;
+          setAlertPreview(null);
+          setAlertPreviewError(e?.message || "Could not parse the alert body");
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [alertBody, isAlertBody]);
+
+  const handleTypeChange = (type: InvestigationInputType) => {
     setObservableType(type);
-    setSelectedCollectors(COLLECTORS_PER_TYPE[type]); // auto-select all applicable
+    setSelectedCollectors(DEFAULT_COLLECTORS_PER_TYPE[type]); // auto-select applicable defaults
     setDomain("");
+    setAlertBody("");
+    setAlertPreview(null);
+    setAlertPreviewError(null);
     setFileToUpload(null);
   };
 
@@ -141,7 +210,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
     }
 
     onSubmit(
-      domain.trim(),
+      isAlertBody ? alertBody.trim() : domain.trim(),
       undefined,
       clientDomain.trim() || undefined,
       undefined,
@@ -190,6 +259,16 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
   };
 
   const placeholder = OBSERVABLE_TYPES.find((t) => t.id === observableType)?.placeholder ?? "";
+  const typeLabel = OBSERVABLE_TYPES.find((t) => t.id === observableType)?.label.toLowerCase() ?? observableType;
+
+  const normalizedProxySearch = proxyCountrySearch.trim().toLowerCase();
+  const filteredProxyCountries = normalizedProxySearch
+    ? proxyCountries.filter(
+        (item) =>
+          item.country.toLowerCase().includes(normalizedProxySearch) ||
+          item.label.toLowerCase().includes(normalizedProxySearch),
+      )
+    : proxyCountries;
 
   const proxyPrompt = showProxyPrompt ? (
     <div
@@ -267,6 +346,27 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           </button>
         </div>
 
+        <div style={{ marginTop: 18 }}>
+          <input
+            type="search"
+            value={proxyCountrySearch}
+            onChange={(event) => setProxyCountrySearch(event.target.value)}
+            placeholder={`Search ${proxyCountries.length} proxy countries`}
+            aria-label="Search AnyRun proxy countries"
+            style={{
+              width: "100%",
+              minHeight: 40,
+              padding: "9px 12px",
+              color: "var(--text)",
+              background: "rgba(15, 23, 42, 0.72)",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 8,
+              outline: "none",
+              fontSize: 13,
+            }}
+          />
+        </div>
+
         <div
           style={{
             display: "grid",
@@ -286,7 +386,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
               <span style={proxyChoiceSubStyle}>No proxy</span>
             </span>
           </button>
-          {proxyCountries.map((item) => {
+          {filteredProxyCountries.map((item) => {
             const active = proxyCountry === item.country;
             return (
               <button
@@ -314,6 +414,11 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
               </button>
             );
           })}
+          {filteredProxyCountries.length === 0 && (
+            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: "12px 4px" }}>
+              No proxy countries match “{proxyCountrySearch}”.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -378,9 +483,25 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
       </div>
 
       {/* ── Main input or file drop ── */}
-      <div style={{ display: "flex", gap: 12 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: isAlertBody ? "flex-start" : "center" }}>
         <div style={{ flex: 1 }}>
-          {observableType === "file" ? (
+          {isAlertBody ? (
+            <textarea
+              placeholder={ALERT_BODY_PLACEHOLDER}
+              value={alertBody}
+              onChange={(e) => setAlertBody(e.target.value)}
+              spellCheck={false}
+              style={{
+                ...inputBase,
+                minHeight: 190,
+                resize: "vertical" as const,
+                lineHeight: 1.55,
+                fontSize: 12.5,
+              }}
+              onFocus={(e) => (e.target.style.borderColor = "var(--accent)")}
+              onBlur={(e) => (e.target.style.borderColor = "var(--border)")}
+            />
+          ) : observableType === "file" ? (
             <div
               onClick={() => sampleFileRef.current?.click()}
               style={{
@@ -443,10 +564,169 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
             whiteSpace: "nowrap",
           }}
         >
-          {uploadingRef ? "Uploading..." : loading ? "Investigating..." : "Investigate"}
+          {uploadingRef
+            ? "Uploading..."
+            : loading
+              ? "Investigating..."
+              : isAlertBody
+                ? "Start Investigation"
+                : "Investigate"}
         </button>
       </div>
 
+
+      {/* ── Extracted indicator preview (alert body) ── */}
+      {isAlertBody && (alertPreview || alertPreviewError) && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+          }}
+        >
+          {alertPreviewError ? (
+            <div style={{ fontSize: 11, color: "#fbbf24", fontFamily: "var(--font-sans)" }}>
+              {alertPreviewError}
+            </div>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: alertPreview!.indicators.length ? 10 : 0,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "var(--text-dim)",
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase" as const,
+                    fontFamily: "var(--font-sans)",
+                  }}
+                >
+                  {alertPreview!.investigable_total} indicator
+                  {alertPreview!.investigable_total === 1 ? "" : "s"} will be investigated
+                  {alertPreview!.total > alertPreview!.investigable_total &&
+                    ` · ${alertPreview!.total - alertPreview!.investigable_total} context-only`}
+                </span>
+                {alertPreview!.truncated && (
+                  <span style={{ fontSize: 10, color: "#fbbf24", fontFamily: "var(--font-sans)" }}>
+                    {alertPreview!.dropped} beyond the {MAX_ALERT_INDICATORS}-indicator limit were dropped
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {alertPreview!.indicators.map((indicator) => {
+                  const prior = indicator.prior_investigation;
+                  const priorAge =
+                    prior?.age_days != null
+                      ? prior.age_days < 1
+                        ? "today"
+                        : `${Math.round(prior.age_days)}d ago`
+                      : "previously";
+                  return (
+                  <span
+                    key={`${indicator.type}:${indicator.value}`}
+                    title={[
+                      indicator.investigable
+                        ? `${indicator.type} — ${indicator.occurrences} occurrence(s)`
+                        : `${indicator.type} — not investigated (${indicator.skip_reason || "unsupported"})`,
+                      indicator.hostnames?.length
+                        ? `Registered domain of ${indicator.hostnames.join(", ")}`
+                        : "",
+                      prior
+                        ? `Investigated ${priorAge} — ${prior.classification || prior.state}` +
+                          (prior.reusable ? " (that verdict will be reused)" : " (will be re-checked)")
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      maxWidth: "100%",
+                      padding: "3px 9px",
+                      borderRadius: 20,
+                      fontSize: 10.5,
+                      fontFamily: "var(--font-mono)",
+                      background: indicator.investigable ? "rgba(96,165,250,0.10)" : "var(--bg-input)",
+                      border: `1px solid ${indicator.investigable ? "rgba(96,165,250,0.28)" : "var(--border)"}`,
+                      color: indicator.investigable ? "var(--text)" : "var(--text-muted)",
+                      opacity: indicator.investigable ? 1 : 0.7,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: "0.05em",
+                        color: indicator.investigable ? "var(--accent)" : "var(--text-muted)",
+                        textTransform: "uppercase" as const,
+                      }}
+                    >
+                      {indicator.type}
+                    </span>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        maxWidth: 340,
+                      }}
+                    >
+                      {indicator.value}
+                    </span>
+                    {indicator.defanged_in_source && (
+                      <span style={{ fontSize: 9, color: "var(--text-muted)" }} title="Refanged from the alert text">
+                        refanged
+                      </span>
+                    )}
+                    {!!indicator.hostnames?.length && (
+                      <span style={{ fontSize: 9, color: "var(--text-muted)" }}>
+                        ← {indicator.hostnames[0]}
+                        {indicator.hostnames.length > 1 ? ` +${indicator.hostnames.length - 1}` : ""}
+                      </span>
+                    )}
+                    {prior && (
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase" as const,
+                          padding: "1px 6px",
+                          borderRadius: 20,
+                          background: prior.reusable ? "rgba(52,211,153,0.14)" : "rgba(251,191,36,0.12)",
+                          color: prior.reusable ? "#34d399" : "#fbbf24",
+                          fontFamily: "var(--font-sans)",
+                        }}
+                      >
+                        {prior.reusable ? `known · ${priorAge}` : `seen ${priorAge}`}
+                      </span>
+                    )}
+                  </span>
+                  );
+                })}
+              </div>
+
+              {alertPreview!.indicators.length === 0 && (
+                <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)" }}>
+                  No URLs, domains, IPs or hashes found yet — paste more of the alert.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── URL input (domain + url types only) ── */}
       {false && observableType === "domain" && (
@@ -517,6 +797,19 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           }}>
             Analyzers — uncheck to skip specific collectors
           </div>
+          {isAlertBody && (
+            <div style={{
+              fontSize: 10.5,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-sans)",
+              marginTop: -6,
+              marginBottom: 10,
+              lineHeight: 1.5,
+            }}>
+              Extracted domains and URLs get a full investigation of their own — every analyzer plus the AI
+              analyst — or reuse a recent one. These checkboxes apply to the IP and hash indicators.
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
             {COLLECTOR_DESCRIPTORS.map((c) => {
               const applicable = supportedCollectors.includes(c.id);
@@ -524,7 +817,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
               return (
                 <label
                   key={c.id}
-                  title={!applicable ? `Not applicable for ${observableType}` : undefined}
+                  title={!applicable ? `Not applicable for ${typeLabel}` : undefined}
                   style={{
                     display: "flex",
                     alignItems: "flex-start",
@@ -564,7 +857,9 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                       {c.label}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>
-                      {applicable ? c.desc : `N/A for ${observableType}`}
+                      {applicable
+                        ? (isAlertBody && ALERT_BODY_COLLECTOR_NOTES[c.id]) || c.desc
+                        : `N/A for ${typeLabel}`}
                     </div>
                   </div>
                 </label>
@@ -573,10 +868,10 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           </div>
           {selectedCollectors.length > 0 && (
             <button
-              onClick={() => setSelectedCollectors(COLLECTORS_PER_TYPE[observableType])}
+              onClick={() => setSelectedCollectors(DEFAULT_COLLECTORS_PER_TYPE[observableType])}
               style={{ ...toggleStyle, marginTop: 8, fontSize: 10, color: "var(--text-muted)" }}
             >
-              Reset to all applicable
+              Reset to defaults
             </button>
           )}
         </div>

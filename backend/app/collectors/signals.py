@@ -374,6 +374,41 @@ def generate_signals(evidence: dict) -> list[Signal]:
     # extremely common on legitimate sites. Only credential harvesting with
     # external POSTs is a strong malicious indicator.
     js = evidence.get("js_analysis")
+    form_detection = (js or {}).get("sensitive_form_detection") or {}
+    form_evidence_ref = "js_analysis.sensitive_form_detection"
+    if not form_detection.get("detected"):
+        hybrid_items = (evidence.get("hybrid_analysis") or {}).get("items") or []
+        for item_index, item in enumerate(hybrid_items):
+            candidate = ((item or {}).get("raw_summary") or {}).get("sensitive_form_detection") or {}
+            if candidate.get("detected"):
+                form_detection = candidate
+                form_evidence_ref = (
+                    f"hybrid_analysis.items.{item_index}.raw_summary.sensitive_form_detection"
+                )
+                break
+
+    if form_detection.get("detected"):
+        categories = [
+            str(value).replace("_", " ")
+            for value in form_detection.get("categories", [])
+            if value
+        ]
+        signals.append(Signal(
+            id="sig_sensitive_data_entry_form",
+            category="content",
+            description=(
+                "Browser-rendered data-entry form observed"
+                + (f" ({', '.join(categories)})" if categories else "")
+                + "; form submission was not exercised by this detector"
+            ),
+            severity=(
+                "high"
+                if any(value in {"credential", "payment"} for value in form_detection.get("categories", []))
+                else "medium"
+            ),
+            evidence_refs=[form_evidence_ref],
+        ))
+
     if js:
         # Credential harvesting (external POST to auth endpoints) — this IS significant
         cred_posts = [p for p in js.get("post_endpoints", []) if p.get("is_credential_form")]

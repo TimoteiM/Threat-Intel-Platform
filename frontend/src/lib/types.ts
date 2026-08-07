@@ -17,6 +17,13 @@ export type InvestigationState =
 
 export type ObservableType = "domain" | "ip" | "url" | "hash" | "file";
 
+/**
+ * Input modes offered on the New Investigation form. "alert_body" is not a
+ * backend observable type — a pasted alert is parsed into many indicators and
+ * runs through /api/alert-investigations instead.
+ */
+export type InvestigationInputType = ObservableType | "alert_body";
+
 export type Classification = "benign" | "suspicious" | "malicious" | "inconclusive";
 export type Confidence = "low" | "medium" | "high";
 export type SOCAction = "monitor" | "investigate" | "block" | "hunt";
@@ -349,6 +356,33 @@ export interface SuspiciousScript {
   reason: string;
 }
 
+export interface SensitiveFormControl {
+  form_index: number;
+  tag: string;
+  type: string;
+  category: string;
+  label?: string;
+  placeholder?: string;
+  autocomplete?: string;
+  name?: string;
+  required?: boolean;
+  has_submit_control?: boolean;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+export interface SensitiveFormDetection {
+  detected: boolean;
+  confidence: "none" | "medium" | "high" | string;
+  interaction_required: boolean;
+  form_count: number;
+  visible_control_count: number;
+  categories: string[];
+  indicators: string[];
+  controls: SensitiveFormControl[];
+  sources: string[];
+  screenshot_artifact_id?: string;
+}
+
 export interface JSAnalysisEvidence {
   total_requests: number;
   external_requests: number;
@@ -363,6 +397,7 @@ export interface JSAnalysisEvidence {
   console_errors: string[];
   error?: string;
   har_artifact_id?: string;
+  sensitive_form_detection?: SensitiveFormDetection;
 }
 
 // --- Signals & Gaps ---
@@ -1354,3 +1389,455 @@ export interface AssistantSessionDetail extends AssistantSessionListItem {
   entries: AssistantEntry[];
 }
 
+export interface AssistantDailyMetrics {
+  date: string;
+  timezone_offset_minutes: number;
+  total: number;
+  previous_total: number;
+  change_percent: number | null;
+  peak_hour: string | null;
+  hourly: Array<{
+    hour: string;
+    count: number;
+  }>;
+}
+
+// ─── Alert body investigations ───────────────────────────────────────────────
+
+export type AlertIndicatorType = "url" | "domain" | "ip" | "hash" | "email" | "cve";
+
+export type AlertRunStatus = "queued" | "processing" | "completed" | "failed" | "cancelled";
+
+/** An earlier investigation of the exact same indicator value. */
+export interface AlertPriorInvestigation {
+  investigation_id: string;
+  value?: string;
+  observable_type?: string;
+  state?: string;
+  classification?: string | null;
+  confidence?: string | null;
+  risk_score?: number | null;
+  recommended_action?: string | null;
+  created_at?: string | null;
+  concluded_at?: string | null;
+  age_days?: number | null;
+  /** How many investigations exist for this value, newest described above. */
+  total_investigations?: number;
+  /** Recent + concluded → the alert run reuses it instead of re-collecting. */
+  reusable?: boolean;
+}
+
+/** A full investigation started for an indicator extracted from an alert body. */
+export interface AlertSpawnedInvestigation {
+  investigation_id: string;
+  /** Ready-to-link path to the investigation detail page. */
+  url: string;
+  state: string;
+  value?: string | null;
+  classification?: string | null;
+  confidence?: string | null;
+  risk_score?: number | null;
+  recommended_action?: string | null;
+  created_at?: string | null;
+  concluded_at?: string | null;
+  executive_summary?: string | null;
+  spawned_by_alert?: boolean;
+}
+
+export interface AlertExtractedIndicator {
+  type: AlertIndicatorType;
+  value: string;
+  matched_text?: string;
+  occurrences: number;
+  investigable: boolean;
+  skip_reason?: string | null;
+  defanged_in_source?: boolean;
+  host?: string;
+  /** FQDNs that collapsed into this registered domain (domain indicators only). */
+  hostnames?: string[];
+  hash_type?: string;
+  /** Other digests of the same file (md5/sha1/imphash) — not separate lookups. */
+  other_digests?: Record<string, string>;
+  ip_version?: number;
+  derived_from?: string;
+  prior_investigation?: AlertPriorInvestigation;
+}
+
+/** The same indicators as a flat map of values, for consumers that want only those. */
+export interface AlertIndicatorsByType {
+  ips: string[];
+  domains: string[];
+  urls: string[];
+  hashes: { md5: string[]; sha1: string[]; sha256: string[] };
+  emails: string[];
+  cves: string[];
+}
+
+export interface AlertExtractionResult {
+  schema_version?: string;
+  indicators: AlertExtractedIndicator[];
+  by_type?: AlertIndicatorsByType;
+  counts: Partial<Record<AlertIndicatorType, number>>;
+  total: number;
+  investigable_total: number;
+  truncated: boolean;
+  dropped: number;
+  characters: number;
+  max_indicators?: number;
+}
+
+export interface AlertIndicatorVerdict {
+  classification: "malicious" | "suspicious" | "benign" | "inconclusive" | "not_investigated";
+  risk_score: number;
+  confidence: number;
+  reasons: string[];
+  sources: string[];
+}
+
+/** One thing a source actually found for an indicator. */
+export interface AlertFinding {
+  source: string;
+  collector: string;
+  type:
+    | "reputation"
+    | "file_profile"
+    | "sandbox_behaviour"
+    | "infrastructure"
+    | "registration"
+    | "web"
+    | "threat_intel"
+    | "blocklist"
+    | "certificate";
+  severity: "high" | "medium" | "low" | "info";
+  summary: string;
+  data: Record<string, any>;
+}
+
+/** One JSON report per analysed indicator — the reusable integration payload. */
+export interface AlertIndicatorReport {
+  schema_version: string;
+  report_type?: "indicator";
+  indicator: {
+    value: string;
+    type: AlertIndicatorType;
+    observable_type?: string | null;
+    occurrences: number;
+    defanged_in_source?: boolean;
+    matched_text?: string;
+    host?: string;
+    hostnames?: string[];
+    hash_type?: string;
+    ip_version?: number;
+    derived_from?: string;
+    prior_investigation?: AlertPriorInvestigation;
+  };
+  /**
+   * "reused"        — answered from an earlier investigation, no collector was run
+   * "investigating" — a full investigation was started and is still running; the
+   *                   verdict fills in the next time the run is read or exported
+   */
+  status: "completed" | "failed" | "skipped" | "reused" | "investigating";
+  skip_reason?: string;
+  prior_investigation?: AlertPriorInvestigation;
+  /** The full investigation this indicator was answered by (domains and URLs). */
+  investigation?: AlertSpawnedInvestigation;
+  verdict: AlertIndicatorVerdict;
+  findings: AlertFinding[];
+  sources_checked: string[];
+  collector_runs: Array<{
+    collector: string;
+    status: string;
+    duration_ms?: number;
+    error?: string | null;
+  }>;
+  /** Only present when the run was created with include_raw_evidence. */
+  evidence?: Record<string, any>;
+  ip_lookup?: Record<string, any> | null;
+  errors: string[];
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+}
+
+/** The AI assistant's reading of the whole alert body — first entry in `reports`. */
+export interface AlertAIReport {
+  schema_version?: string;
+  report_type: "ai_assistant";
+  status: "completed" | "failed" | "skipped";
+  error?: string | null;
+  assistant_session_id?: string;
+  assistant_session_url?: string;
+  mode?: string;
+  title?: string;
+  generated_at?: string | null;
+  report_markdown?: string;
+  incident_graph?: Record<string, any>;
+  sanitization_summary?: Record<string, number>;
+  started_at?: string;
+  completed_at?: string;
+  duration_ms?: number;
+}
+
+/** What the collectors actually found, one line per indicator. */
+export interface AlertIndicatorSummaryEntry {
+  value: string;
+  type: string;
+  classification?: string;
+  risk_score?: number | null;
+  status?: string;
+  line: string;
+  vt_malicious?: number;
+  vt_total?: number;
+  vt_detections?: string[] | null;
+  vt_flagged_by?: string[] | null;
+  file_name?: string | null;
+  other_names?: string[] | null;
+  file_type?: string | null;
+  size_bytes?: number | null;
+  signed?: boolean;
+  signature?: Record<string, any> | null;
+  threat_label?: string | null;
+  imphash?: string | null;
+  times_submitted?: number | null;
+  sandbox?: string | null;
+  feeds?: string[] | null;
+  investigation_id?: string;
+}
+
+export interface AlertIndicatorSummary {
+  headline: string;
+  highlights: string[];
+  indicators: AlertIndicatorSummaryEntry[];
+}
+
+/** A Sysmon/EDR event parsed out of the alert body, scored on its behaviour. */
+export interface AlertEndpointEventReport {
+  schema_version?: string;
+  report_type: "endpoint_event";
+  event: {
+    type?: string;
+    header?: string;
+    utc_time?: string;
+    host_user?: string;
+    image?: string;
+    command_line?: string;
+    parent_image?: string;
+    parent_command_line?: string;
+    current_directory?: string;
+    integrity_level?: string;
+    process_id?: string;
+    parent_process_id?: string;
+    process_guid?: string;
+    logon_id?: string;
+    hashes?: Record<string, string>;
+    fields?: Record<string, string>;
+  };
+  verdict: AlertIndicatorVerdict;
+  findings: AlertFinding[];
+  sources_checked?: string[];
+  errors?: string[];
+  started_at?: string;
+  completed_at?: string;
+}
+
+export type AlertReport = AlertAIReport | AlertIndicatorReport | AlertEndpointEventReport;
+
+/* ── The `format=report` export: what a reporting platform receives ────────── */
+
+export interface SocReportKeyValue {
+  label: string;
+  value: string | number | boolean | null;
+  mono?: boolean;
+}
+
+export interface SocReportTable {
+  headers: string[];
+  rows: (string | number | null)[][];
+}
+
+export interface SocReportSection {
+  title: string;
+  rows?: SocReportKeyValue[];
+  table?: SocReportTable | null;
+}
+
+export interface SocReportFinding {
+  id?: string;
+  title: string;
+  severity: string;
+  description?: string;
+  evidence_refs?: string[];
+  evidence_arguments?: Array<{
+    ref: string;
+    argument: string;
+    supports_classification?: boolean;
+    contradicts_classification?: boolean;
+  }>;
+  ttp?: string | null;
+  ttp_name?: string | null;
+}
+
+/** The SOC report as data — the same dict our PDF template renders. */
+export interface SocReport {
+  title: string;
+  subtitle?: string;
+  generated_at?: string;
+  classification: string;
+  classification_color?: string;
+  verdict: {
+    classification: string;
+    confidence?: string;
+    risk_score?: number | null;
+    recommended_action?: string;
+    risk_level?: string;
+    risk_rationale?: string;
+  };
+  case_metadata: SocReportKeyValue[];
+  summary?: string;
+  assessment_points?: string[];
+  key_evidence?: Array<{ source: string; ref: string; value: string; relevance?: string }>;
+  findings?: SocReportFinding[];
+  iocs?: Array<{ type: string; value: string; context?: string; confidence?: string }>;
+  recommendations?: string[];
+  derived_intelligence?: {
+    confidence_engine?: {
+      verdict?: string;
+      score?: number;
+      confidence?: string;
+      confidence_percent?: number;
+      components?: unknown[];
+      reasons?: string[];
+    };
+    ioc_quality?: {
+      summary?: Record<string, number>;
+      items?: Array<{
+        type: string;
+        value: string;
+        quality_score?: number;
+        labels?: string[];
+        recommended_action?: string;
+      }>;
+      total_items?: number;
+    };
+  };
+  signals?: Array<{ severity: string; description: string }>;
+  evidence_sections?: SocReportSection[];
+  collector_status?: SocReportKeyValue[];
+  contradicting_evidence?: unknown[];
+  data_gaps?: unknown[];
+  technical_narrative?: string;
+  methodology?: string[];
+}
+
+/** Element 0 of the report export. */
+export interface AlertExecutiveSummaryDocument {
+  report_type: "executive_summary";
+  schema_version?: string;
+  run_id?: string;
+  title?: string;
+  status?: string;
+  overall_verdict?: string;
+  highest_risk_score?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  summary?: AlertInvestigationSummary;
+  extraction?: Record<string, any>;
+  prior_investigations?: Record<string, any>;
+  spawned_investigations?: Record<string, any>;
+  investigations?: Array<{
+    investigation_id: string;
+    url: string;
+    indicator?: string;
+    observable_type?: string;
+    state?: string;
+    classification?: string | null;
+    risk_score?: number | null;
+    reused?: boolean;
+  }>;
+  alert_body?: string;
+  context?: string | null;
+  error?: string | null;
+  indicator_summary?: AlertIndicatorSummary;
+  ai_analysis?: {
+    status?: string;
+    report_markdown?: string;
+    incident_graph?: Record<string, any>;
+    assistant_session_id?: string;
+    error?: string | null;
+  };
+}
+
+/** Every other element: one indicator, with its SOC report when it has one. */
+export interface AlertReportIndicatorDocument {
+  report_type: "indicator";
+  schema_version?: string;
+  indicator: AlertIndicatorReport["indicator"];
+  status: AlertIndicatorReport["status"];
+  skip_reason?: string;
+  verdict: AlertIndicatorVerdict;
+  investigation?: AlertSpawnedInvestigation;
+  prior_investigation?: AlertPriorInvestigation & { url?: string };
+  soc_report?: SocReport;
+  findings?: AlertFinding[];
+  sources_checked?: string[];
+  errors?: string[];
+  started_at?: string;
+  completed_at?: string;
+}
+
+export type AlertReportDocument =
+  | AlertExecutiveSummaryDocument
+  | AlertReportIndicatorDocument
+  | AlertEndpointEventReport;
+
+export interface AlertInvestigationSummary {
+  indicators_total: number;
+  indicators_investigated: number;
+  indicators_skipped: number;
+  indicators_failed: number;
+  /** Answered from an earlier investigation instead of fresh collector runs. */
+  indicators_reused?: number;
+  /** Full investigations still running when the alert run finished. */
+  indicators_investigating?: number;
+  /** Endpoint events parsed from the alert body, and how many were flagged. */
+  events_total?: number;
+  events_flagged?: number;
+  /** Investigations this alert run started, in report order. */
+  investigation_ids?: string[];
+  classification_counts: Record<string, number>;
+  highest_risk_score: number;
+  overall_verdict: string;
+  malicious_indicators: string[];
+  suspicious_indicators: string[];
+  ai_analysis?: string;
+}
+
+export interface AlertInvestigationRun {
+  run_id: string;
+  id: string;
+  title: string;
+  status: AlertRunStatus;
+  indicator_count: number;
+  overall_verdict?: string | null;
+  highest_risk_score?: number | null;
+  created_at: string | null;
+  completed_at: string | null;
+  error?: string | null;
+  /** Investigations this run started — deleting the run deletes them too. */
+  spawned_investigation_count?: number;
+  alert_body?: string;
+  context?: string | null;
+  schema_version?: string;
+  source?: string;
+  extraction?: AlertExtractionResult;
+  summary?: AlertInvestigationSummary;
+  ai_report?: AlertAIReport | null;
+  /** Endpoint events found in the alert body, scored on behaviour. */
+  event_reports?: AlertEndpointEventReport[];
+  /** Factual roll-up of what each source found — see IndicatorSummaryCard. */
+  indicator_summary?: AlertIndicatorSummary;
+  indicator_reports?: AlertIndicatorReport[];
+  /** Exported contract: [AI report, ...indicator reports]. */
+  reports?: AlertReport[];
+  duration_ms?: number;
+}

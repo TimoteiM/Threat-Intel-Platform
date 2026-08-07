@@ -181,6 +181,95 @@ class VTVendorResult(BaseModel):
     result: str
     method: str = ""
 
+
+class VTFileSignature(BaseModel):
+    """Authenticode / code-signing details reported by VirusTotal."""
+    verified: Optional[str] = None          # "Signed", "Invalid signature", ...
+    signed: Optional[bool] = None
+    signers: list[str] = []
+    product: Optional[str] = None
+    description: Optional[str] = None
+    copyright: Optional[str] = None
+    original_name: Optional[str] = None
+    internal_name: Optional[str] = None
+    file_version: Optional[str] = None
+    signing_date: Optional[str] = None
+    counter_signers: list[str] = []
+
+
+class VTSandboxVerdict(BaseModel):
+    sandbox: str
+    category: Optional[str] = None          # malicious | suspicious | harmless | undetected
+    confidence: Optional[int] = None
+    malware_names: list[str] = []
+    malware_classification: list[str] = []
+
+
+class VTCrowdsourcedRule(BaseModel):
+    kind: str                                # yara | sigma | ids
+    name: str
+    severity: Optional[str] = None
+    author: Optional[str] = None
+    source: Optional[str] = None
+    description: Optional[str] = None
+
+
+class VTFileDetails(BaseModel):
+    """Rich file metadata — populated for hash/file observables."""
+    sha256: Optional[str] = None
+    sha1: Optional[str] = None
+    md5: Optional[str] = None
+    ssdeep: Optional[str] = None
+    vhash: Optional[str] = None
+    imphash: Optional[str] = None
+    size_bytes: Optional[int] = None
+    file_type: Optional[str] = None          # type_description, e.g. "Win32 EXE"
+    type_tag: Optional[str] = None
+    type_extension: Optional[str] = None
+    magic: Optional[str] = None
+    meaningful_name: Optional[str] = None
+    names: list[str] = []
+    times_submitted: Optional[int] = None
+    unique_sources: Optional[int] = None
+    first_submission_date: Optional[str] = None
+    last_submission_date: Optional[str] = None
+    last_analysis_date: Optional[str] = None
+    reputation: Optional[int] = None
+    harmless_votes: Optional[int] = None
+    malicious_votes: Optional[int] = None
+    threat_label: Optional[str] = None       # popular_threat_classification suggestion
+    threat_categories: list[str] = []
+    threat_names: list[str] = []
+    capabilities_tags: list[str] = []
+    tags: list[str] = []
+    signature: Optional[VTFileSignature] = None
+    sandbox_verdicts: list[VTSandboxVerdict] = []
+    crowdsourced_rules: list[VTCrowdsourcedRule] = []
+    pe_sections: list[str] = []
+    pe_imports: list[str] = []
+    notes: list[str] = []
+
+
+class VTBehaviourSummary(BaseModel):
+    """Aggregated sandbox behaviour from VT's /files/{id}/behaviour_summary."""
+    checked: bool = False
+    sandboxes: list[str] = []
+    processes_created: list[str] = []
+    command_executions: list[str] = []
+    files_written: list[str] = []
+    files_dropped: list[str] = []
+    registry_keys_set: list[str] = []
+    mutexes_created: list[str] = []
+    services_created: list[str] = []
+    dns_lookups: list[str] = []
+    ip_traffic: list[str] = []
+    http_conversations: list[str] = []
+    attack_techniques: list[str] = []
+    tags: list[str] = []
+    verdicts: list[str] = []
+    error: Optional[str] = None
+
+
 class VTEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="vt"))
     found: bool = False
@@ -215,9 +304,19 @@ class VTEvidence(BaseModel):
     # Tags
     tags: list[str] = []
     notes: list[str] = []
+    # What the detection stats above actually describe. For a URL observable this
+    # is "url" when VT knows that exact URL, and "domain" when the reputation had
+    # to come from the URL's host instead.
+    scope: str = ""
+    scope_value: str = ""
+    # A fresh URL submission VT had not finished analysing when we gave up — the
+    # id lets a later run collect the result instead of paying for it again.
+    pending_analysis_id: Optional[str] = None
     # File-specific (hash/file investigations)
     file_name: Optional[str] = None
     file_names: list[str] = []
+    file_details: Optional[VTFileDetails] = None
+    behaviour: Optional[VTBehaviourSummary] = None
 
 
 
@@ -639,6 +738,7 @@ class JSAnalysisEvidence(BaseModel):
     console_errors: list[str] = []
     error: Optional[str] = None
     har_artifact_id: Optional[str] = None
+    sensitive_form_detection: dict[str, Any] = {}
 
 
 # â”€â”€â”€ URLScan Evidence â”€â”€â”€
@@ -1154,6 +1254,40 @@ class InvestigationCreate(BaseModel):
     network_profile: Optional[NetworkProfile] = None
     requested_collectors: Optional[list[str]] = None
     ai_model: Optional[str] = None           # Override AI model: e.g. "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o-mini"
+
+
+class AlertBodyInvestigationCreate(BaseModel):
+    """POST /alert-investigations request body — raw alert text pasted by an analyst
+    or pushed by another platform."""
+    alert_body: str
+    title: Optional[str] = None
+    context: Optional[str] = None
+    requested_collectors: Optional[list[str]] = None
+    max_indicators: int = Field(default=30, ge=1, le=100)
+    run_ip_lookup: bool = True
+    run_ai: bool = True          # send the raw alert through the AI assistant
+    include_raw_evidence: bool = False   # attach full collector dumps next to the findings
+    # Reuse a recent concluded investigation of the same indicator instead of
+    # re-running its collectors. None → the ALERT_REUSE_PRIOR_INVESTIGATIONS default.
+    reuse_prior_investigations: Optional[bool] = None
+    # Give extracted domains/URLs a full investigation (all collectors + AI
+    # analyst) instead of the inline collector run. None → ALERT_SPAWN_INVESTIGATIONS.
+    spawn_investigations: Optional[bool] = None
+    # ── Machine-to-machine ingest ──
+    # Where to POST the finished report list (format=report). http(s) only.
+    callback_url: Optional[str] = Field(default=None, max_length=1024)
+    # Reuse the run an identical alert body already produced, instead of
+    # investigating it again. None → ALERT_INGEST_DEDUPE.
+    dedupe: Optional[bool] = None
+    # Free-form reference from the sending platform (ticket id, alert id) —
+    # echoed back in the run payload and in the callback.
+    external_ref: Optional[str] = Field(default=None, max_length=255)
+
+
+class AlertBodyExtractRequest(BaseModel):
+    """POST /alert-investigations/extract request body — parse only, no collectors."""
+    alert_body: str
+    max_indicators: int = Field(default=30, ge=1, le=100)
 
 
 class InvestigationResponse(BaseModel):

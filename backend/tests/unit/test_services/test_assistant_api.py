@@ -11,6 +11,7 @@ def test_assistant_router_exposes_expected_paths() -> None:
 
     assert ("/api/assistant/sessions", ("POST",)) in routes
     assert ("/api/assistant/sessions", ("GET",)) in routes
+    assert ("/api/assistant/metrics/daily", ("GET",)) in routes
     assert ("/api/assistant/sessions/{session_id}", ("GET",)) in routes
     assert ("/api/assistant/sessions/{session_id}/entries", ("POST",)) in routes
     assert ("/api/assistant/sessions/{session_id}/run", ("POST",)) in routes

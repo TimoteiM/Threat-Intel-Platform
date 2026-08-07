@@ -7,6 +7,7 @@ import type { AssistantEntry, AssistantMode, AssistantSessionDetail, AssistantSe
 import AssistantSessionList from "./AssistantSessionList";
 import AssistantEditor from "./AssistantEditor";
 import AssistantResult from "./AssistantResult";
+import AssistantDailyActivity from "./AssistantDailyActivity";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import MetadataGrid from "@/components/ui/MetadataGrid";
 import PageHero from "@/components/ui/PageHero";
@@ -44,6 +45,7 @@ export default function AssistantWorkspace() {
   const [title, setTitle] = useState("");
   const [entries, setEntries] = useState<AssistantEntry[]>([newEntry(0)]);
   const [loading, setLoading] = useState(false);
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -140,6 +142,7 @@ export default function AssistantWorkspace() {
       }
       const completed = await api.runAssistantSession(session.id);
       setActiveSession(completed);
+      setActivityRefreshKey((value) => value + 1);
       setSessionSearch("");
       setAppliedSessionSearch("");
       setSessionOffset(0);
@@ -211,6 +214,8 @@ export default function AssistantWorkspace() {
         badges={heroBadges}
         stats={heroStats}
       />
+
+      <AssistantDailyActivity refreshKey={activityRefreshKey} />
 
       <div style={railLayoutStyle}>
         <ConsoleModule

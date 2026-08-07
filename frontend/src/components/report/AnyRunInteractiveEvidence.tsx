@@ -25,6 +25,7 @@ type Props = {
   hybridAnalysis: any;
   investigationId?: string;
   onRefresh?: () => void;
+  sensitiveFormDetection?: any;
 };
 
 type GridCol = {
@@ -72,8 +73,17 @@ function providerVerdict(item: any): string {
   return String(item?.provider_verdict || verdictContext(item)?.provider_verdict || item?.verdict || "unknown").toUpperCase();
 }
 
-function analystAssessment(item: any): string {
-  return String(verdictContext(item)?.final_verdict || item?.verdict || "unknown").toUpperCase();
+function analystAssessment(item: any, sensitiveFormDetection?: any): string {
+  const assessment = String(verdictContext(item)?.final_verdict || item?.verdict || "unknown").toUpperCase();
+  const mode = String(item?.raw_summary?.mode || "").toLowerCase();
+  if (
+    sensitiveFormDetection?.detected &&
+    mode === "sandbox" &&
+    ["CLEAN", "BENIGN", "SAFE"].includes(assessment)
+  ) {
+    return "SUSPICIOUS";
+  }
+  return assessment;
 }
 
 function anyrunNetworkLabel(item: any): string {
@@ -3243,7 +3253,12 @@ function DataGrid({
   );
 }
 
-export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigationId, onRefresh }: Props) {
+export default function AnyRunInteractiveEvidence({
+  hybridAnalysis,
+  investigationId,
+  onRefresh,
+  sensitiveFormDetection,
+}: Props) {
   const [rerunConfirm, setRerunConfirm] = React.useState(false);
   const [rerunning, setRerunning] = React.useState(false);
   const [rerunError, setRerunError] = React.useState<string | null>(null);
@@ -3332,8 +3347,8 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
           interaction: anyrunInteractionLabel(item),
           network: anyrunNetworkLabel(item),
           provider_verdict: providerVerdict(item),
-          verdict: analystAssessment(item),
-          confidence: verdictContext(item)?.confidence || "—",
+          verdict: analystAssessment(item, sensitiveFormDetection),
+          confidence: verdictContext(item)?.confidence || (sensitiveFormDetection?.detected ? "low" : "—"),
           threat_score: item?.threat_score ?? "—",
           analysis_id: item?.analysis_id || "—",
           error: item?.error || "—",
@@ -3355,6 +3370,27 @@ export default function AnyRunInteractiveEvidence({ hybridAnalysis, investigatio
         ]}
         showHeader
       />
+      {sensitiveFormDetection?.detected && (
+        <div style={{
+          marginTop: 10,
+          padding: "10px 12px",
+          border: "1px solid rgba(245, 158, 11, 0.35)",
+          borderLeft: "3px solid var(--yellow)",
+          borderRadius: 6,
+          background: "rgba(245, 158, 11, 0.08)",
+          color: "var(--text-secondary)",
+          fontSize: 12,
+          lineHeight: 1.55,
+        }}>
+          <strong style={{ color: "var(--yellow)" }}>Interaction coverage warning:</strong>{" "}
+          A browser-visible data-entry form was detected
+          {arr(sensitiveFormDetection.categories).length
+            ? ` (${arr(sensitiveFormDetection.categories).join(", ").replace(/_/g, " ")})`
+            : ""}
+          , but this detector did not submit it. A clean AnyRun provider verdict is therefore shown as
+          suspicious in the App Assessment column until the interaction is exercised.
+        </div>
+      )}
 
       {/* Re-run button — shown when the result is cached and a fresh sandbox is possible */}
       {investigationId && items.some((i: any) => i?.cache_hit) && (
