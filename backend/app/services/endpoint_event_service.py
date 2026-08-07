@@ -418,7 +418,9 @@ def build_event_report(
                 "type": "sandbox_behaviour",
                 "severity": signal["severity"],
                 "summary": signal["title"],
-                "data": {"explanation": signal["explanation"], **signal["evidence"]},
+                # signal_id is what ATT&CK assessment maps to a technique — it
+                # ties the claim back to the rule that matched a literal command.
+                "data": {"signal_id": signal["id"], "explanation": signal["explanation"], **signal["evidence"]},
             }
             for signal in signals
         ],

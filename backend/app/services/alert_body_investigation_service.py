@@ -51,6 +51,7 @@ from app.services.alert_investigation_spawn_service import (
     spawn_types,
     wait_for_investigation,
 )
+from app.services.attack_assessment_service import assess_attack
 from app.services.exclusion_service import (
     apply_to_indicators as apply_exclusions,
     load_matcher_sync as load_exclusion_matcher_sync,
@@ -194,6 +195,15 @@ def run_alert_body_investigation(
         )
         for event in parse_endpoint_events(alert_body)
     ]
+
+    # The detection arrived with its own ATT&CK mapping — the rule author's
+    # hypothesis, decided before anything was investigated. Now that the
+    # behaviour has been scored, say which parts of it the evidence supports.
+    try:
+        attack_assessment = assess_attack(alert_body, event_reports)
+    except Exception as exc:  # an assessment is commentary, never the run
+        logger.warning("ATT&CK assessment failed: %s", exc)
+        attack_assessment = None
 
     # Has the platform already investigated these exact indicators? A recent
     # concluded investigation answers the question without touching a collector.
@@ -344,6 +354,11 @@ def run_alert_body_investigation(
         },
         "ai_report": ai_report,
         "indicator_summary": indicator_summary,
+        # What the detection claimed under ATT&CK, checked against what the
+        # behaviour signals actually showed. None when the alert claimed nothing
+        # and the evidence supports nothing — an absent section rather than an
+        # empty one implying an assessment was made.
+        "attack_assessment": attack_assessment,
         "event_reports": event_reports,
         "indicator_reports": reports,
         # The exported contract: AI analysis of the whole alert first, then the

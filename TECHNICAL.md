@@ -843,6 +843,74 @@ single indicator (SHA256 preferred, the rest carried as `other_digests`), and
 IMPHASH is never investigated as a file hash since no file-reputation source can
 resolve one.
 
+### Checking the detection's ATT&CK mapping
+
+A SIEM rule carries its `rule.mitre.id` from the moment it is written: it is the
+rule author's hypothesis about what a matching event would mean, decided before
+this alert existed and before anything was investigated. Once the platform has
+collected evidence it can say something the rule could not, and
+`app/services/attack_assessment_service.py` says exactly that much:
+
+| Status | Meaning |
+|---|---|
+| `confirmed` | evidence gathered here independently supports the claimed technique |
+| `not_corroborated` | nothing found either way — **not** a contradiction. A domain alert carries no evidence about a registry persistence technique, and saying so is the honest answer |
+| `refuted` | evidence actively contradicts the claim. Deliberately rare |
+| `additional` | a technique the evidence supports that the rule did not claim |
+
+**Nothing here consults a model, and no technique is emitted without a citation.**
+The verdicts come from the deterministic behaviour signals above: the event
+parser has already matched a literal command line, so "this command is T1490
+Inhibit System Recovery" is a statement about what the command *is*, not an
+opinion. `ATTACK_BY_SIGNAL` in `app/analyst/attack_mapping.py` is the whole
+mapping, and every reported technique carries the signal id and the matched text
+that produced it.
+
+Three guardrails make invention structurally impossible rather than discouraged:
+
+* **A whitelist.** `TECHNIQUE_DB` is deliberately not the full ATT&CK matrix — it
+  holds only techniques this platform can produce evidence for. A technique
+  nobody here can evidence is a technique nobody can hallucinate into a report.
+* **Context-bound extraction.** The rule's mapping is read from lines mentioning
+  MITRE/ATT&CK only, so a ticket number or a Windows message that happens to
+  contain `T1234` is never mistaken for a claim.
+* **Silence is a valid output.** With no claim and no evidence the section is
+  absent entirely, rather than an empty one implying an assessment was made.
+
+Ambiguity is handled rather than papered over. A persistence signal cannot tell a
+Run key from a scheduled task from a service, so when the rule names one of that
+group the evidence corroborates *that* one instead of arbitrarily picking a
+sibling (`AMBIGUOUS_SIGNAL_GROUPS`). A claim on a parent technique is confirmed
+by evidence for its sub-technique and vice versa — the same behaviour at a
+different resolution — and the report says so via `confirmed_via`. A technique
+the rule claimed that we hold no definition for is still reported, marked
+`known: false`: hiding it would misrepresent the detection.
+
+The assessment lands on the run payload and on the executive summary as
+`attack_assessment`:
+
+```jsonc
+{ "detection_claimed": ["T1489", "T1552.002", "T1547.001"],
+  "note": "Against the detection's mapping, the analysis confirmed T1489; found nothing
+           bearing on T1552.002, T1547.001; observed T1490 which the rule did not claim.",
+  "techniques": [
+    { "id": "T1489", "name": "Service Stop", "tactic": "Impact",
+      "status": "confirmed", "confidence": "medium",
+      "evidence": [ { "signal_id": "process_termination", "matched": "taskkill /F",
+                      "command_line": "taskkill /F /IM MsMpEng.exe" } ] },
+    { "id": "T1552.002", "status": "not_corroborated", "evidence": [] } ],
+  "additional_techniques": [
+    { "id": "T1490", "name": "Inhibit System Recovery", "status": "additional",
+      "evidence": [ { "signal_id": "shadow_copy_tampering",
+                      "matched": "vssadmin delete shadows" } ] } ],
+  "method": "deterministic_behaviour_signals" }
+```
+
+Expect `not_corroborated` to be the most common verdict, especially for
+domain/URL alerts where there is no endpoint telemetry at all — in that case the
+note says the mapping could not be checked either way, which is the truthful
+answer rather than a broken feature.
+
 **Domains and URLs get a real investigation, not just inline collectors.** A few
 collectors are enough to triage an IP or a hash, but a domain deserves the full
 pipeline, so the alert-body run does what an analyst would do:

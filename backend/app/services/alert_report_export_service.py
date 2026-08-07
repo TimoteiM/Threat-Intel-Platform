@@ -105,6 +105,9 @@ def executive_summary_document(payload: dict[str, Any]) -> dict[str, Any]:
         # What the sources found, stated rather than implied: the AI narrative is
         # written from the alert text alone and cannot report a detection count.
         "indicator_summary": build_indicator_summary(payload.get("indicator_reports") or []),
+        # The detection's own ATT&CK mapping, checked against the evidence.
+        # Absent when the alert claimed nothing and nothing was evidenced.
+        "attack_assessment": payload.get("attack_assessment"),
         "endpoint_events": len(payload.get("event_reports") or []),
         "alert_body": payload.get("alert_body"),
         "context": payload.get("context"),
