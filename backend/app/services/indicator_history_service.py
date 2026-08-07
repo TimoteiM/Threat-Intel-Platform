@@ -36,6 +36,31 @@ REUSABLE_STATES = frozenset({"concluded"})
 # reputation, hosting and registration data all drift.
 DEFAULT_MAX_AGE_DAYS = 7
 
+# How long a verdict stays reusable depends on what it said, because the two
+# directions of drift are not equally dangerous:
+#
+#   benign → malicious   is the one that hurts. A domain parked and clean today
+#                        and weaponised on Friday is how staged phishing works,
+#                        so a benign verdict gets half the base window.
+#   malicious → benign   only ever costs an unnecessary look at something we
+#                        already called bad, and re-collecting known-bad burns
+#                        the quota this whole path exists to save.
+#   inconclusive         is not a verdict. Reusing one saves a lookup and
+#                        answers nothing; the collector that was rate-limited
+#                        last time may well succeed now.
+#
+# Multipliers on ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS, so one setting still
+# governs how much staleness the deployment tolerates overall.
+REUSE_AGE_MULTIPLIER = {
+    "malicious": 4.0,
+    "suspicious": 0.5,
+    "benign": 0.5,
+    "inconclusive": 0.0,
+}
+
+# A verdict the engine itself was unsure of should not outlive a confident one.
+LOW_CONFIDENCE_MULTIPLIER = 0.25
+
 # Guard against a pathological IN-list on a huge indicator set.
 MAX_ROWS = 500
 
@@ -102,11 +127,23 @@ def annotate_indicators(
         prior = history.get(history_key(str(indicator.get("type") or ""), str(indicator.get("value") or "")))
         if not prior:
             continue
-        indicator["prior_investigation"] = {**prior, "reusable": is_reusable(prior, max_age_days=max_age_days)}
+        indicator["prior_investigation"] = {
+            **prior,
+            "reusable": is_reusable(prior, max_age_days=max_age_days),
+            # Says *why* a prior verdict was or was not reused, so a re-collection
+            # of something investigated yesterday is explainable rather than odd.
+            "reuse_max_age_days": round(reuse_ceiling_days(prior, max_age_days=max_age_days), 2),
+        }
 
 
 def is_reusable(prior: dict[str, Any] | None, *, max_age_days: int = DEFAULT_MAX_AGE_DAYS) -> bool:
-    """A prior investigation stands in for a fresh one only if concluded and recent."""
+    """
+    A prior investigation stands in for a fresh one only if concluded and recent.
+
+    "Recent" is graded by the verdict — see REUSE_AGE_MULTIPLIER — so a benign
+    answer expires well before a malicious one and an inconclusive one is never
+    reused at all.
+    """
     if not prior:
         return False
     if str(prior.get("state") or "") not in REUSABLE_STATES:
@@ -116,7 +153,20 @@ def is_reusable(prior: dict[str, Any] | None, *, max_age_days: int = DEFAULT_MAX
     age = prior.get("age_days")
     if age is None:
         return False
-    return float(age) <= float(max_age_days)
+    return float(age) <= reuse_ceiling_days(prior, max_age_days=max_age_days)
+
+
+def reuse_ceiling_days(
+    prior: dict[str, Any],
+    *,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> float:
+    """How old this particular verdict may be and still be reused, in days."""
+    classification = str(prior.get("classification") or "").strip().lower()
+    ceiling = float(max_age_days) * REUSE_AGE_MULTIPLIER.get(classification, 1.0)
+    if str(prior.get("confidence") or "").strip().lower() == "low":
+        ceiling *= LOW_CONFIDENCE_MULTIPLIER
+    return ceiling
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────

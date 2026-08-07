@@ -11,6 +11,7 @@ import type {
   AlertInvestigationRun,
   AlertReportDocument,
   APIHealthResponse,
+  Exclusion,
 } from "./types";
 
 const BASE = "/api";
@@ -507,15 +508,6 @@ export function clearCaseStoryChat(id: string) {
   return request<void>(`/investigations/${id}/case-story/chat`, { method: "DELETE" });
 }
 
-export function getSOCIndicatorGraph(params?: { search?: string; severity?: string; limit?: number }) {
-  const qs = new URLSearchParams();
-  if (params?.search) qs.set("search", params.search);
-  if (params?.severity && params.severity !== "all") qs.set("severity", params.severity);
-  if (params?.limit) qs.set("limit", String(params.limit));
-  const query = qs.toString();
-  return request<any>(`/soc-indicators/graph${query ? `?${query}` : ""}`);
-}
-
 export function enrichInvestigation(id: string, data: any) {
   return request<any>(`/investigations/${id}/enrich`, {
     method: "POST",
@@ -662,6 +654,74 @@ export function investigateWatchlistDomain(id: string) {
 
 export function getWatchlistAlerts(id: string) {
   return request<any[]>(`/watchlist/${id}/alerts`);
+}
+
+// ─── Exclusions ───
+
+export function listExclusions(params?: {
+  limit?: number;
+  offset?: number;
+  indicator_type?: string;
+  search?: string;
+  active?: boolean;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.indicator_type) qs.set("indicator_type", params.indicator_type);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.active !== undefined) qs.set("active", String(params.active));
+  const query = qs.toString();
+  return request<PaginatedResponse<Exclusion>>(`/exclusions${query ? `?${query}` : ""}`);
+}
+
+export function createExclusion(data: {
+  indicator_type: string;
+  value: string;
+  reason: string;
+  added_by?: string;
+  match_subdomains?: boolean;
+  expires_at?: string | null;
+}) {
+  return request<Exclusion & { already_listed: boolean }>("/exclusions", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateExclusion(
+  id: string,
+  data: {
+    reason?: string;
+    active?: boolean;
+    match_subdomains?: boolean;
+    expires_at?: string | null;
+    clear_expiry?: boolean;
+  },
+) {
+  return request<Exclusion>(`/exclusions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteExclusion(id: string) {
+  return request<{ deleted: boolean; id: string }>(`/exclusions/${id}`, { method: "DELETE" });
+}
+
+export function checkExclusions(indicators: Array<{ indicator_type: string; value: string }>) {
+  return request<{
+    results: Array<{
+      indicator_type: string;
+      value: string;
+      excluded: boolean;
+      exclusion: Record<string, unknown> | null;
+    }>;
+    excluded_count: number;
+  }>("/exclusions/check", {
+    method: "POST",
+    body: JSON.stringify({ indicators }),
+  });
 }
 
 // ─── WHOIS History ───

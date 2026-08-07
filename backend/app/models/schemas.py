@@ -1276,11 +1276,12 @@ class AlertBodyInvestigationCreate(BaseModel):
     # ── Machine-to-machine ingest ──
     # Where to POST the finished report list (format=report). http(s) only.
     callback_url: Optional[str] = Field(default=None, max_length=1024)
-    # Reuse the run an identical alert body already produced, instead of
-    # investigating it again. None → ALERT_INGEST_DEDUPE.
+    # Reuse the run this alert already produced — matched on external_ref, or on
+    # an identical body — instead of investigating it again. None → ALERT_INGEST_DEDUPE.
     dedupe: Optional[bool] = None
     # Free-form reference from the sending platform (ticket id, alert id) —
-    # echoed back in the run payload and in the callback.
+    # echoed back in the run payload and in the callback, and the key dedupe
+    # matches on first, so the same alert is never investigated twice.
     external_ref: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -1355,6 +1356,43 @@ class WatchlistUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     schedule_interval: Optional[str] = None  # weekly, biweekly, monthly, or "none" to disable
+
+
+# ─── Exclusions ───
+
+
+class ExclusionCreate(BaseModel):
+    """POST /api/exclusions request body."""
+    indicator_type: str                      # domain | ip | url | hash
+    value: str = Field(min_length=1, max_length=512)
+    # Mandatory on purpose: an exclusion with no stated reason is a detection
+    # silently switched off, and nobody later knows whether it can be removed.
+    reason: str = Field(min_length=3, max_length=2000)
+    added_by: Optional[str] = Field(default=None, max_length=255)
+    # A domain entry covers its subdomains; turn off for an exact-host match.
+    match_subdomains: bool = True
+    # When set, the entry stops applying by itself — for exclusions added during
+    # an incident that should not outlive it.
+    expires_at: Optional[datetime] = None
+
+
+class ExclusionUpdate(BaseModel):
+    """PATCH /api/exclusions/{id} request body. The indicator itself is immutable."""
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    active: Optional[bool] = None
+    match_subdomains: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+    clear_expiry: bool = False
+
+
+class ExclusionCheckItem(BaseModel):
+    indicator_type: str
+    value: str
+
+
+class ExclusionCheckRequest(BaseModel):
+    """POST /api/exclusions/check — ask which of these are already excluded."""
+    indicators: list[ExclusionCheckItem] = Field(default_factory=list, max_length=500)
 
 
 # â”€â”€â”€ Client Management â”€â”€â”€

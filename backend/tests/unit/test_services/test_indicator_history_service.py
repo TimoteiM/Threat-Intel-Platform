@@ -49,6 +49,37 @@ def test_only_recent_concluded_investigations_are_reusable():
     assert svc.is_reusable(None) is False
 
 
+def test_a_benign_verdict_goes_stale_long_before_a_malicious_one():
+    """The direction that hurts is benign → malicious, so benign expires first."""
+    def prior(classification, age, confidence="high"):
+        return {
+            "state": "concluded",
+            "classification": classification,
+            "confidence": confidence,
+            "age_days": age,
+        }
+
+    # Five days on: the malicious verdict still stands in, the benign one does not.
+    assert svc.is_reusable(prior("malicious", 5.0), max_age_days=7) is True
+    assert svc.is_reusable(prior("benign", 5.0), max_age_days=7) is False
+    assert svc.is_reusable(prior("suspicious", 5.0), max_age_days=7) is False
+
+    # Within its own window a benign verdict is still reused — this is what keeps
+    # the corporate domains in every alert off the collectors.
+    assert svc.is_reusable(prior("benign", 2.0), max_age_days=7) is True
+
+    # A verdict the engine was unsure of expires far sooner than a confident one.
+    assert svc.is_reusable(prior("benign", 2.0, confidence="low"), max_age_days=7) is False
+    assert svc.is_reusable(prior("benign", 0.5, confidence="low"), max_age_days=7) is True
+
+
+def test_an_inconclusive_verdict_is_never_reused():
+    """Reusing "we could not tell" saves a lookup and answers nothing."""
+    prior = {"state": "concluded", "classification": "inconclusive", "age_days": 0.1}
+    assert svc.is_reusable(prior, max_age_days=7) is False
+    assert svc.reuse_ceiling_days(prior, max_age_days=7) == 0.0
+
+
 def test_annotate_tags_matching_indicators_only():
     indicators = [
         {"type": "domain", "value": "evil-corp.net", "investigable": True},

@@ -1480,10 +1480,33 @@ export interface AlertExtractionResult {
   counts: Partial<Record<AlertIndicatorType, number>>;
   total: number;
   investigable_total: number;
+  /** Indicators answered by the exclusion list instead of by collectors. */
+  excluded_total?: number;
   truncated: boolean;
   dropped: number;
   characters: number;
   max_indicators?: number;
+}
+
+/** An indicator the platform treats as benign without collecting — see /exclusions. */
+export interface Exclusion {
+  id: string;
+  indicator_type: "domain" | "ip" | "url" | "hash";
+  value: string;
+  normalized_value: string;
+  reason: string;
+  added_by: string | null;
+  /** Domain entries cover subdomains unless this is off. */
+  match_subdomains: boolean;
+  active: boolean;
+  /** True once expires_at has passed — the row stops matching but is kept. */
+  expired: boolean;
+  expires_at: string | null;
+  /** How many indicators this entry has kept out of the collectors. */
+  hit_count: number;
+  last_hit_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface AlertIndicatorVerdict {

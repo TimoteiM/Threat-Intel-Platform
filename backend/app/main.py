@@ -52,31 +52,6 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS risk_score_history JSONB",
             "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS evidence_diff_json JSONB",
             "CREATE INDEX IF NOT EXISTS idx_watchlist_next_check ON watchlist(next_check_at)",
-            """
-            CREATE TABLE IF NOT EXISTS soc_indicators (
-                id UUID PRIMARY KEY,
-                indicator_type VARCHAR(30) NOT NULL,
-                value VARCHAR(1024) NOT NULL,
-                normalized_value VARCHAR(1024) NOT NULL,
-                token VARCHAR(80),
-                source VARCHAR(50) NOT NULL DEFAULT 'assistant',
-                context TEXT,
-                severity VARCHAR(20) NOT NULL DEFAULT 'medium',
-                confidence VARCHAR(20) NOT NULL DEFAULT 'medium',
-                occurrence_count INTEGER NOT NULL DEFAULT 1,
-                metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-                investigation_id UUID REFERENCES investigations(id) ON DELETE CASCADE,
-                assistant_session_id UUID REFERENCES assistant_sessions(id) ON DELETE CASCADE,
-                assistant_entry_id UUID REFERENCES assistant_entries(id) ON DELETE CASCADE,
-                first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_soc_indicators_normalized ON soc_indicators(indicator_type, normalized_value)",
-            "CREATE INDEX IF NOT EXISTS idx_soc_indicators_session ON soc_indicators(assistant_session_id)",
-            "CREATE INDEX IF NOT EXISTS idx_soc_indicators_entry ON soc_indicators(assistant_entry_id)",
-            "CREATE INDEX IF NOT EXISTS idx_soc_indicators_investigation ON soc_indicators(investigation_id)",
-            "CREATE INDEX IF NOT EXISTS idx_soc_indicators_seen ON soc_indicators(last_seen_at)",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))

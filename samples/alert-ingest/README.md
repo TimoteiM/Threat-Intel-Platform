@@ -24,6 +24,10 @@ curl -s -X POST "$API/api/alert-investigations?dedupe=false" \
      --data-binary @01-lateral-movement-powershell.json | jq
 ```
 
+`dedupe=false` is what makes a sample re-runnable: each file carries a fixed
+`_id`, and ingest returns the run that id already produced rather than
+investigating it twice. Drop the parameter to see that behaviour instead.
+
 In Postman: **POST**, Body → *raw* → *JSON*, paste the file contents. No
 escaping — the document goes in exactly as your SIEM emits it.
 

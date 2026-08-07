@@ -51,6 +51,11 @@ from app.services.alert_investigation_spawn_service import (
     spawn_types,
     wait_for_investigation,
 )
+from app.services.exclusion_service import (
+    apply_to_indicators as apply_exclusions,
+    load_matcher_sync as load_exclusion_matcher_sync,
+    record_hits_sync as record_exclusion_hits_sync,
+)
 from app.services.indicator_history_service import (
     annotate_indicators,
     find_prior_investigations_sync,
@@ -165,6 +170,19 @@ def run_alert_body_investigation(
     extraction = extract_alert_indicators(alert_body, max_indicators=max_indicators)
     indicators = extraction["indicators"]
 
+    # The exclusion list answers before anything else does. The API applied it
+    # too, but the worker re-extracts from the stored body, so without this pass
+    # an excluded indicator would be collected anyway — and the list may have
+    # grown between the alert arriving and the run starting.
+    exclusion_matcher = load_exclusion_matcher_sync()
+    excluded_total = apply_exclusions(indicators, exclusion_matcher)
+    if excluded_total:
+        extraction["investigable_total"] = sum(1 for item in indicators if item.get("investigable"))
+        record_exclusion_hits_sync(
+            item["exclusion"]["id"] for item in indicators if item.get("exclusion")
+        )
+    extraction["excluded_total"] = excluded_total
+
     # Endpoint telemetry (Sysmon/EDR) carries almost nothing to look up, but the
     # process story itself is the evidence — parse it and score its behaviour.
     event_reports = [
@@ -200,6 +218,9 @@ def run_alert_body_investigation(
 
     for index, indicator in enumerate(indicators):
         observable_type = OBSERVABLE_TYPE_BY_INDICATOR.get(str(indicator.get("type")))
+        if indicator.get("exclusion"):
+            reports[index] = _excluded_report(indicator, observable_type or str(indicator.get("type")))
+            continue
         if not indicator.get("investigable") or not observable_type:
             reports[index] = _skipped_report(
                 indicator,
@@ -251,7 +272,16 @@ def run_alert_body_investigation(
     # say whether anything flagged it. The run takes longer for a better read.
     indicator_summary = build_indicator_summary(reports)
     ai_report: dict[str, Any] | None = None
-    if run_ai:
+    # An alert whose every indicator was whitelisted has nothing for the analyst
+    # to read: no collector output, no event behaviour, and a verdict the
+    # exclusion list already decided. Spending tokens to narrate that would undo
+    # the saving the list exists for.
+    nothing_to_analyse = bool(excluded_total) and not event_reports and not any(
+        str(report.get("status")) not in ("excluded", "skipped") for report in reports
+    )
+    if nothing_to_analyse:
+        logger.info("Skipping AI analysis: every indicator was answered by the exclusion list")
+    if run_ai and not nothing_to_analyse:
         try:
             ai_report = run_alert_body_ai_analysis(
                 alert_body=alert_body,
@@ -287,10 +317,15 @@ def run_alert_body_investigation(
             "counts": extraction["counts"],
             "total": extraction["total"],
             "investigable_total": extraction["investigable_total"],
+            "excluded_total": excluded_total,
             "truncated": extraction["truncated"],
             "dropped": extraction["dropped"],
             "characters": extraction["characters"],
             "max_indicators": max_indicators,
+        },
+        "exclusions": {
+            "applied": excluded_total,
+            "list_size": len(exclusion_matcher),
         },
         "prior_investigations": {
             "checked": bool(indicators),
@@ -383,6 +418,7 @@ def summarize_indicator_reports(reports: list[dict[str, Any]]) -> dict[str, Any]
     """Roll per-indicator verdicts up into the run-level summary."""
     counts = {"malicious": 0, "suspicious": 0, "benign": 0, "inconclusive": 0}
     investigated = 0
+    excluded = 0
     skipped = 0
     failed = 0
     reused = 0
@@ -398,6 +434,12 @@ def summarize_indicator_reports(reports: list[dict[str, Any]]) -> dict[str, Any]
         status = str(report.get("status") or "")
         if status == "skipped":
             skipped += 1
+            continue
+        if status == "excluded":
+            # Benign by policy, so it counts towards the verdict — but nothing
+            # was investigated, and saying otherwise would overstate the run.
+            excluded += 1
+            counts["benign"] += 1
             continue
         if status == "failed":
             failed += 1
@@ -433,6 +475,7 @@ def summarize_indicator_reports(reports: list[dict[str, Any]]) -> dict[str, Any]
     return {
         "indicators_total": len(reports),
         "indicators_investigated": investigated,
+        "indicators_excluded": excluded,
         "indicators_skipped": skipped,
         "indicators_failed": failed,
         "indicators_reused": reused,
@@ -694,6 +737,47 @@ def _reused_report(
             }
         ],
         "sources_checked": ["prior_investigation"],
+        "collector_runs": [],
+        "errors": [],
+        "started_at": now,
+        "completed_at": now,
+        "duration_ms": 0,
+    }
+
+
+def _excluded_report(indicator: dict[str, Any], observable_type: str) -> dict[str, Any]:
+    """
+    Report for an indicator the exclusion list answered.
+
+    Benign, because that is what the exclusion asserts — but never silent: the
+    entry that decided it, and who added it, are on the report, so a wrong
+    verdict leads straight back to the row that caused it.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    exclusion = indicator.get("exclusion") or {}
+    matched = exclusion.get("matched") or indicator.get("value")
+    note = str(exclusion.get("reason") or "").strip()
+    reason = f"On the exclusion list as {matched} — treated as benign without collection"
+    if note:
+        reason = f"{reason}: {note}"
+    return {
+        "schema_version": ALERT_REPORT_SCHEMA_VERSION,
+        "report_type": "indicator",
+        "indicator": _indicator_descriptor(indicator, observable_type),
+        "status": "excluded",
+        "exclusion": exclusion,
+        "verdict": _verdict("benign", 0, 1.0, [reason], sources=["exclusion"]),
+        "findings": [
+            {
+                "source": "Exclusion list",
+                "collector": "exclusion",
+                "type": "policy",
+                "severity": "info",
+                "summary": reason,
+                "data": exclusion,
+            }
+        ],
+        "sources_checked": ["exclusion"],
         "collector_runs": [],
         "errors": [],
         "started_at": now,

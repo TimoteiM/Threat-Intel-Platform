@@ -444,8 +444,6 @@ function DetailsPanel({
       </div>
       <div className="assistant-graph-actions">
         <button type="button" onClick={() => onExpand(selected.id)}>Expand relationships</button>
-        <button type="button" onClick={() => window.open(`/soc-indicators?search=${encodeURIComponent(selected.value)}`, "_blank")}>Search in logs</button>
-        <button type="button" onClick={() => window.open(`/soc-indicators?opencti=${encodeURIComponent(selected.value)}`, "_blank")}>Pivot to OpenCTI</button>
       </div>
       {selected.evidence.length || selected.rawRefs.length ? (
         <div className="assistant-graph-evidence">

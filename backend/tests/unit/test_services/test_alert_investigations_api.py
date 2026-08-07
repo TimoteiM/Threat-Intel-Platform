@@ -11,6 +11,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from app.api import alert_investigations as api
 from app.services import alert_report_export_service as export_service
+from app.services.exclusion_service import ExclusionMatcher
 
 
 AI_REPORT = {"report_type": "ai_assistant", "status": "completed", "report_markdown": "## Triage"}
@@ -83,6 +84,9 @@ class _IngestDB(_FakeDBBase := object):
     async def rollback(self):
         return None
 
+    def expire_all(self):
+        pass
+
 
 def _ingest(db, **fields):
     """POST our own schema — a JSON object with alert_body, not waiting for it."""
@@ -96,6 +100,8 @@ def ingest_env(monkeypatch):
 
     monkeypatch.setattr(api, "_attach_prior_investigations", _noop_async)
     monkeypatch.setattr(api, "find_duplicate_run", _no_duplicate)
+    monkeypatch.setattr(api, "find_run_by_external_ref", _no_duplicate)
+    monkeypatch.setattr(api, "load_matcher", _no_exclusions)
     monkeypatch.setattr(
         api.run_alert_body_investigation_task,
         "delay",
@@ -110,6 +116,10 @@ async def _noop_async(*args, **kwargs):
 
 async def _no_duplicate(*args, **kwargs):
     return None
+
+
+async def _no_exclusions(*args, **kwargs):
+    return ExclusionMatcher([])
 
 
 def test_ingest_returns_the_links_a_sender_needs(ingest_env):
@@ -131,8 +141,9 @@ def test_ingest_returns_the_links_a_sender_needs(ingest_env):
         "ui": f"/alert-investigations/{run_id}",
     }
     assert response["callback"] is None
-    # The body hash is stored so a repeat delivery can find this run.
+    # Both dedupe keys are stored so a repeat delivery can find this run.
     assert db.added[0].alert_body_hash == api.alert_body_hash(body)
+    assert db.added[0].external_ref == "INC-4471"
     assert len(ingest_env) == 1                      # queued exactly once
 
 
@@ -185,15 +196,182 @@ def test_repeated_delivery_of_the_same_alert_returns_the_first_run(monkeypatch, 
     assert ingest_env == []                          # no second pipeline
 
 
+def test_the_same_alert_id_is_never_investigated_twice(monkeypatch, ingest_env):
+    existing = _run(
+        status="completed",
+        callback_url=None,
+        result_json={"extraction": {"investigable_total": 2}, "external_ref": "N6oRTp0BfK3wjRjJ8ksL"},
+    )
+
+    async def by_external_ref(_db, external_ref, **kwargs):
+        assert external_ref == "N6oRTp0BfK3wjRjJ8ksL"
+        return existing
+
+    async def by_body(*args, **kwargs):
+        raise AssertionError("the alert id matched — the body hash must not be consulted")
+
+    monkeypatch.setattr(api, "find_run_by_external_ref", by_external_ref)
+    monkeypatch.setattr(api, "find_duplicate_run", by_body)
+    db = _IngestDB()
+
+    # A second delivery of the same Wazuh document, re-formatted on the way.
+    response = _ingest(
+        db,
+        alert_body="Beacon to evil-corp.net   (re-sent)",
+        external_ref="N6oRTp0BfK3wjRjJ8ksL",
+    )
+
+    assert response["deduplicated"] is True
+    assert response["deduplicated_by"] == "external_ref"
+    assert response["run_id"] == str(existing.id)
+    assert "Duplicate alert: id N6oRTp0BfK3wjRjJ8ksL" in response["message"]
+    assert "already investigated" in response["message"]
+    assert db.added == []                            # no second run
+    assert ingest_env == []                          # no second pipeline
+
+
+def test_a_duplicate_returns_the_report_the_first_delivery_produced(monkeypatch, stub_run, ingest_env):
+    """Waiting on a duplicate answers with the report itself, not a pointer to it."""
+    existing = stub_run(_run(status="completed", callback_url=None))
+    existing.result_json = {**existing.result_json, "external_ref": "ALERT-9"}
+
+    async def by_external_ref(*args, **kwargs):
+        return existing
+
+    monkeypatch.setattr(api, "find_run_by_external_ref", by_external_ref)
+    monkeypatch.setattr(api, "_hydrated_run_payload", _payload_of(existing))
+    monkeypatch.setattr(api, "load_outcomes", _no_outcomes)
+
+    response = asyncio.run(
+        api.create_alert_investigation(
+            _IngestDB(), {"alert_body": "Beacon to evil-corp.net", "external_ref": "ALERT-9"}, wait=True
+        )
+    )
+
+    documents = json.loads(response.body)
+    assert [doc["report_type"] for doc in documents] == ["executive_summary", "indicator"]
+    # The duplicate is declared on the summary and in the headers, not by
+    # replacing the report with an envelope.
+    assert documents[0]["ingest"]["deduplicated"] is True
+    assert documents[0]["ingest"]["deduplicated_by"] == "external_ref"
+    assert "alert id ALERT-9 was already investigated" in documents[0]["ingest"]["message"]
+    assert "this is that run's report" in documents[0]["ingest"]["message"]
+    assert response.headers["X-Alert-Deduplicated"] == "true"
+    assert response.headers["X-Alert-Run-Id"] == str(existing.id)
+    assert ingest_env == []                          # nothing re-investigated
+
+
+def test_a_first_delivery_reports_itself_as_not_deduplicated(monkeypatch, stub_run, ingest_env):
+    run = stub_run(_run(status="completed", callback_url=None))
+    monkeypatch.setattr(api, "_hydrated_run_payload", _payload_of(run))
+    monkeypatch.setattr(api, "load_outcomes", _no_outcomes)
+
+    response = asyncio.run(
+        api.create_alert_investigation(_IngestDB(), {"alert_body": "Beacon to evil-corp.net"}, wait=True)
+    )
+
+    documents = json.loads(response.body)
+    assert "ingest" not in documents[0]
+    assert response.headers["X-Alert-Deduplicated"] == "false"
+
+
+def _payload_of(run):
+    async def _hydrated(_db, _run):
+        return run.result_json
+
+    return _hydrated
+
+
+async def _no_outcomes(*args, **kwargs):
+    return {}
+
+
+def test_excluded_indicators_never_reach_the_pipeline(monkeypatch, ingest_env):
+    """The saving is real only if the value is dropped before the run is queued."""
+    matcher = ExclusionMatcher(
+        [
+            {
+                "id": "excl-1",
+                "indicator_type": "domain",
+                "value": "expertware.net",
+                "normalized_value": "expertware.net",
+                "reason": "our own estate",
+                "match_subdomains": True,
+            }
+        ]
+    )
+
+    async def loader(*args, **kwargs):
+        return matcher
+
+    monkeypatch.setattr(api, "load_matcher", loader)
+    db = _IngestDB()
+
+    response = _ingest(
+        db,
+        alert_body="User at exprdsh002.int.expertware.net browsed to evil-corp.net",
+        run_ai=False,
+    )
+
+    excluded = [item for item in response["indicators"] if item.get("exclusion")]
+    # The extractor collapses the host to its registrable domain before we see it.
+    assert [item["value"] for item in excluded] == ["expertware.net"]
+    assert excluded[0]["investigable"] is False
+    assert excluded[0]["skip_reason"] == "excluded"
+    assert excluded[0]["exclusion"]["reason"] == "our own estate"
+
+    # The alert is still investigated — for the indicator that is not excluded.
+    assert response["excluded_count"] == 1
+    assert response["investigable_count"] == 1
+    assert "1 indicator(s) skipped by the exclusion list" in response["message"]
+    assert db.added[0].result_json["extraction"]["excluded_total"] == 1
+
+
+def test_an_alert_of_nothing_but_excluded_indicators_is_still_a_run(monkeypatch, ingest_env):
+    """It answers "all whitelisted" rather than failing as "nothing to investigate"."""
+    matcher = ExclusionMatcher(
+        [
+            {
+                "id": "excl-1",
+                "indicator_type": "domain",
+                "value": "expertware.net",
+                "normalized_value": "expertware.net",
+                "reason": "our own estate",
+                "match_subdomains": True,
+            }
+        ]
+    )
+
+    async def loader(*args, **kwargs):
+        return matcher
+
+    monkeypatch.setattr(api, "load_matcher", loader)
+    db = _IngestDB()
+
+    response = _ingest(db, alert_body="Connection to mail.expertware.net", run_ai=False)
+
+    assert response["excluded_count"] == 1
+    assert response["investigable_count"] == 0
+    assert db.added                                   # a run exists to report it
+
+
 def test_dedupe_can_be_switched_off_per_delivery(monkeypatch, ingest_env):
     async def duplicate(*args, **kwargs):
         raise AssertionError("dedupe=False must not look for a duplicate")
 
     monkeypatch.setattr(api, "find_duplicate_run", duplicate)
+    monkeypatch.setattr(api, "find_run_by_external_ref", duplicate)
     db = _IngestDB()
 
-    response = _ingest(db, alert_body="Beacon to evil-corp.net", dedupe=False, run_ai=False)
+    response = _ingest(
+        db,
+        alert_body="Beacon to evil-corp.net",
+        external_ref="N6oRTp0BfK3wjRjJ8ksL",
+        dedupe=False,
+        run_ai=False,
+    )
     assert response["deduplicated"] is False
+    assert response["deduplicated_by"] is None
 
 
 class _DeleteDB:
@@ -981,8 +1159,9 @@ def _sync_ingest(monkeypatch, statuses, **fields):
 
 def test_a_synchronous_ingest_returns_the_report_list(ingest_env, monkeypatch):
     """One call in, the finished report out — no queueing and polling."""
-    documents, db = _sync_ingest(monkeypatch, ["processing", "processing", "completed"])
+    response, db = _sync_ingest(monkeypatch, ["processing", "processing", "completed"])
 
+    documents = json.loads(response.body)
     assert isinstance(documents, list)
     assert [doc["report_type"] for doc in documents] == ["executive_summary", "indicator"]
     assert db.polls >= 3  # it really waited rather than answering on the first look

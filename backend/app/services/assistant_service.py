@@ -22,7 +22,6 @@ from app.services.assistant_prompt_service import (
 )
 from app.services.assistant_sanitizer_service import sanitize_entries
 from app.services.assistant_incident_graph_service import build_assistant_incident_graph
-from app.services.soc_indicator_service import SOCIndicatorService
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +211,6 @@ class AssistantService:
                 entry.token_map_json = sanitized.token_map
 
             assistant_session.sanitization_summary_json = sanitization.summary
-            await SOCIndicatorService(self.session).sync_assistant_session_indicators(assistant_session)
 
             merged_token_map: dict[str, str] = {}
             for entry in assistant_session.entries:

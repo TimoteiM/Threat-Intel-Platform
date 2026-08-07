@@ -5,7 +5,8 @@ Another platform POSTs a raw alert body to /api/alert-investigations and either
 polls the run or gets the finished report list delivered to a callback URL. This
 module holds the pieces that only that path needs:
 
-    body hashing + dedupe   — the same alert delivered twice reuses one run
+    alert id dedupe         — the same `_id` delivered twice reuses one run
+    body hashing + dedupe   — the same alert text delivered twice reuses one run
     callback URL validation — we POST to a caller-supplied address, so the target
                               is checked before anything is queued
     signature               — HMAC-SHA256 over the delivered body when a secret
@@ -87,6 +88,38 @@ async def find_duplicate_run(
         return result.scalars().first()
     except Exception as exc:  # a dedupe miss is better than a failed ingest
         logger.warning("Alert dedupe lookup failed: %s", exc)
+        return None
+
+
+async def find_run_by_external_ref(
+    db: AsyncSession,
+    external_ref: str | None,
+) -> AlertBodyInvestigationRun | None:
+    """
+    The run already produced for this alert id, if there is one.
+
+    The sender's `_id` identifies the alert document itself, so unlike the body
+    hash this match is not time-windowed: the same `_id` arriving a week later is
+    still the same alert, and investigating it again would only spend quota. Runs
+    that failed or were cancelled are skipped so a re-delivery retries them.
+    """
+    reference = str(external_ref or "").strip()
+    if not reference:
+        return None
+
+    try:
+        result = await db.execute(
+            select(AlertBodyInvestigationRun)
+            .where(
+                AlertBodyInvestigationRun.external_ref == reference,
+                AlertBodyInvestigationRun.status.not_in(tuple(NON_REUSABLE_STATUSES)),
+            )
+            .order_by(AlertBodyInvestigationRun.created_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+    except Exception as exc:  # a dedupe miss is better than a failed ingest
+        logger.warning("Alert id dedupe lookup failed: %s", exc)
         return None
 
 

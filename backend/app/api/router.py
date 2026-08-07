@@ -16,6 +16,7 @@ from app.api.attack import router as attack_router
 from app.api.dashboard import router as dashboard_router
 from app.api.iocs import router as iocs_router
 from app.api.watchlist import router as watchlist_router
+from app.api.exclusions import router as exclusions_router
 from app.api.whois_history import router as whois_history_router
 from app.api.geo import router as geo_router
 from app.api.ip_lookup import router as ip_lookup_router
@@ -23,7 +24,6 @@ from app.api.clients import router as clients_router, alerts_router as client_al
 from app.api.email_investigations import router as email_investigations_router
 from app.api.alert_investigations import router as alert_investigations_router
 from app.api.assistant import router as assistant_router
-from app.api.soc_indicators import router as soc_indicators_router
 from app.api.admin import router as admin_router
 
 api_router = APIRouter()
@@ -40,6 +40,7 @@ api_router.include_router(attack_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(iocs_router)
 api_router.include_router(watchlist_router)
+api_router.include_router(exclusions_router)
 api_router.include_router(whois_history_router)
 api_router.include_router(geo_router)
 api_router.include_router(ip_lookup_router)
@@ -48,5 +49,4 @@ api_router.include_router(client_alerts_router)
 api_router.include_router(email_investigations_router)
 api_router.include_router(alert_investigations_router)
 api_router.include_router(assistant_router)
-api_router.include_router(soc_indicators_router)
 api_router.include_router(admin_router)

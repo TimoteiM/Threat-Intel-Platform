@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
@@ -53,8 +54,10 @@ from app.services.alert_ingest_service import (
     CallbackUrlError,
     alert_body_hash,
     find_duplicate_run,
+    find_run_by_external_ref,
     validate_callback_url,
 )
+from app.services.exclusion_service import apply_to_indicators, load_matcher
 from app.services.alert_ioc_extraction_service import extract_alert_indicators
 from app.services.alert_payload_service import looks_like_siem_alert, normalize_alert_payload
 from app.services.alert_report_export_service import build_documents, investigation_ids_in
@@ -98,11 +101,13 @@ async def extract_indicators(
     request = _request_from_payload(payload, max_indicators=max_indicators)
     alert_body = _validated_alert_body(request.alert_body)
     extraction = extract_alert_indicators(alert_body, max_indicators=request.max_indicators)
+    excluded = await _apply_exclusions(db, extraction)
     await _attach_prior_investigations(db, extraction["indicators"])
     return {
         "schema_version": ALERT_REPORT_SCHEMA_VERSION,
         "title": request.title,
         "external_ref": request.external_ref,
+        "excluded_total": excluded,
         **extraction,
     }
 
@@ -140,6 +145,12 @@ async def create_alert_investigation(
     queued instead (what the UI does, since it navigates to the run page), and
     `wait_timeout` bounds how long the connection is held before falling back to
     that queued response with 202.
+
+    An alert already seen returns the report the first delivery produced, rather
+    than investigating it again — so a re-send costs nothing and still answers
+    with a report. That it was a duplicate travels on the executive summary as
+    `ingest` and in the `X-Alert-Deduplicated` header. With `wait=false` the
+    queued-shaped response carries `deduplicated` and a message instead.
     """
     queued = await _create_alert_run(
         _request_from_payload(
@@ -268,8 +279,13 @@ async def _create_alert_run(
 
     This is also the ingest endpoint for other platforms: POST the raw alert text
     and either poll the returned `links`, or pass `callback_url` and receive the
-    finished report list. An identical body delivered again inside the dedupe
-    window returns the run it already produced.
+    finished report list.
+
+    Nothing is investigated twice. An alert carrying an id we have already run
+    (`_id`/`id`/`alert_id` → `external_ref`) comes straight back as that run, at
+    any age; an identical alert *body* does too, within the dedupe window. Both
+    answer with `deduplicated: true` and a message saying which matched. Only
+    failed and cancelled runs are re-run, and `dedupe=false` forces a fresh one.
     """
     settings = get_settings()
     alert_body = _validated_alert_body(request.alert_body)
@@ -280,19 +296,27 @@ async def _create_alert_run(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     body_hash = alert_body_hash(alert_body)
+    external_ref = (request.external_ref or "").strip() or None
     dedupe = settings.alert_ingest_dedupe if request.dedupe is None else bool(request.dedupe)
     if dedupe:
+        # The sender's own alert id first: it survives re-formatting and added
+        # enrichment, which the body hash does not.
+        existing = await find_run_by_external_ref(db, external_ref)
+        if existing is not None:
+            logger.info("Alert ingest deduplicated onto run %s by alert id %s", existing.id, external_ref)
+            return _ingest_response(existing, deduplicated=True, deduplicated_by="external_ref")
         existing = await find_duplicate_run(db, body_hash)
         if existing is not None:
             logger.info("Alert ingest deduplicated onto run %s", existing.id)
-            return _ingest_response(existing, deduplicated=True)
+            return _ingest_response(existing, deduplicated=True, deduplicated_by="alert_body")
 
     extraction = extract_alert_indicators(alert_body, max_indicators=request.max_indicators)
+    excluded_total = await _apply_exclusions(db, extraction)
     await _attach_prior_investigations(db, extraction["indicators"])
     # Endpoint telemetry (Sysmon/EDR) is worth a run on its own: the process
     # behaviour is the evidence even when there is nothing to look up.
     endpoint_events = parse_endpoint_events(alert_body)
-    if extraction["investigable_total"] == 0 and not endpoint_events:
+    if extraction["investigable_total"] == 0 and not endpoint_events and not excluded_total:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -308,16 +332,18 @@ async def _create_alert_run(
         status="queued",
         indicator_count=extraction["total"],
         alert_body_hash=body_hash,
+        external_ref=external_ref,
         callback_url=callback_url,
         result_json={
             "schema_version": ALERT_REPORT_SCHEMA_VERSION,
             "source": "alert_body",
             "status": "queued",
-            "external_ref": (request.external_ref or "").strip() or None,
+            "external_ref": external_ref,
             "extraction": {
                 "counts": extraction["counts"],
                 "total": extraction["total"],
                 "investigable_total": extraction["investigable_total"],
+                "excluded_total": excluded_total,
                 "truncated": extraction["truncated"],
                 "dropped": extraction["dropped"],
                 "characters": extraction["characters"],
@@ -582,6 +608,11 @@ async def _wait_for_report(
     sender and a polling one consume the same documents. If the run outlasts the
     caller's patience the queued response comes back with 202 instead — the work
     continues, and `links.report` still leads to it.
+
+    A deduplicated delivery waits on (and returns) the run it matched. Usually
+    that run is already finished, so the report comes back immediately; if the
+    first delivery is still being investigated, the second waits for the same
+    answer rather than starting a second copy of the work.
     """
     run_id = str(queued.get("run_id") or "")
     budget = max(MIN_WAIT_TIMEOUT_SECONDS, min(MAX_WAIT_TIMEOUT_SECONDS, int(timeout)))
@@ -594,23 +625,72 @@ async def _wait_for_report(
             break
         if time.monotonic() >= deadline:
             logger.info("Synchronous alert ingest timed out after %ss for run %s", budget, run_id)
+            duplicate_note = (
+                "This alert was already being investigated when you re-sent it. "
+                if queued.get("deduplicated")
+                else ""
+            )
             return JSONResponse(
                 status_code=202,
                 content={
                     **queued,
                     "status": run.status,
                     "message": (
-                        f"Still running after {budget}s — the investigation continues. "
-                        f"Fetch links.report when it finishes, or pass a larger wait_timeout."
+                        f"{duplicate_note}Still running after {budget}s — the investigation "
+                        f"continues. Fetch links.report when it finishes, or pass a larger "
+                        f"wait_timeout."
                     ),
                 },
+                headers=_ingest_headers(queued),
             )
         await asyncio.sleep(WAIT_POLL_SECONDS)
 
     payload = await _hydrated_run_payload(db, run)
     investigation_ids = investigation_ids_in(payload)
     outcomes = await load_outcomes(db, investigation_ids) if investigation_ids else {}
-    return build_documents(payload, outcomes, shape="report")
+    documents = build_documents(payload, outcomes, shape="report")
+
+    # A duplicate gets the report the first delivery produced — that is what the
+    # sender asked for by waiting. The fact that it is a re-delivery travels on
+    # the executive summary and in the headers, so it is still visible without
+    # changing the shape of the list.
+    if queued.get("deduplicated") and documents:
+        matched = (
+            f"alert id {queued.get('external_ref')}"
+            if queued.get("deduplicated_by") == "external_ref" and queued.get("external_ref")
+            else "an identical alert body"
+        )
+        documents[0] = {
+            **documents[0],
+            "ingest": {
+                "deduplicated": True,
+                "deduplicated_by": queued.get("deduplicated_by"),
+                "run_id": run_id,
+                "external_ref": queued.get("external_ref"),
+                "message": (
+                    f"Duplicate delivery — {matched} was already investigated as run "
+                    f"{run_id}. Nothing was re-investigated; this is that run's report."
+                ),
+            },
+        }
+    return JSONResponse(content=jsonable_encoder(documents), headers=_ingest_headers(queued))
+
+
+def _ingest_headers(queued: dict[str, Any]) -> dict[str, str]:
+    """
+    Ingest metadata a sender can read without parsing the body.
+
+    The synchronous response body is the report list itself, so there is no
+    envelope to put this in — a SOAR that only wants to know "did you actually
+    run anything?" reads the header and skips the JSON.
+    """
+    headers = {
+        "X-Alert-Run-Id": str(queued.get("run_id") or ""),
+        "X-Alert-Deduplicated": "true" if queued.get("deduplicated") else "false",
+    }
+    if queued.get("deduplicated_by"):
+        headers["X-Alert-Deduplicated-By"] = str(queued["deduplicated_by"])
+    return headers
 
 
 def _spawned_investigation_ids(payload: dict[str, Any]) -> list[str]:
@@ -704,28 +784,33 @@ def _ingest_response(
     run: AlertBodyInvestigationRun,
     *,
     deduplicated: bool,
+    deduplicated_by: str | None = None,
     indicators: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     What the sending platform gets back: the run, and every way to fetch it.
 
     `links` are ready to use — a caller that only stores `links.report` needs to
-    know nothing else about our API.
+    know nothing else about our API. On a duplicate the same shape comes back for
+    the run we already have, with `deduplicated_by` saying what matched.
     """
     run_id = str(run.id)
     base = f"/api/alert-investigations/{run_id}"
     payload = run.result_json or {}
     extraction = payload.get("extraction") or {}
     callback = payload.get("callback") or {}
+    external_ref = payload.get("external_ref")
     return {
         "run_id": run_id,
         "status": run.status,
         "title": run.title,
         "deduplicated": deduplicated,
-        "external_ref": payload.get("external_ref"),
+        "deduplicated_by": deduplicated_by if deduplicated else None,
+        "external_ref": external_ref,
         "indicators": indicators if indicators is not None else (payload.get("indicators") or []),
         "indicator_count": run.indicator_count,
         "investigable_count": extraction.get("investigable_total"),
+        "excluded_count": extraction.get("excluded_total") or 0,
         "links": {
             "run": base,
             "report": f"{base}/export?format=report",
@@ -739,12 +824,39 @@ def _ingest_response(
             if run.callback_url
             else None
         ),
-        "message": (
-            f"Identical alert body already investigated — returning run {run_id}."
-            if deduplicated
-            else f"Alert investigation queued for {extraction.get('investigable_total', 0)} indicator(s)."
+        "message": _ingest_message(
+            run_id,
+            deduplicated=deduplicated,
+            deduplicated_by=deduplicated_by,
+            external_ref=external_ref,
+            status=run.status,
+            investigable=extraction.get("investigable_total", 0),
+            excluded=extraction.get("excluded_total") or 0,
         ),
     }
+
+
+def _ingest_message(
+    run_id: str,
+    *,
+    deduplicated: bool,
+    deduplicated_by: str | None,
+    external_ref: str | None,
+    status: str | None,
+    investigable: Any,
+    excluded: int = 0,
+) -> str:
+    """One sentence the sending platform can log or show as-is."""
+    if not deduplicated:
+        skipped = f" {excluded} indicator(s) skipped by the exclusion list." if excluded else ""
+        return f"Alert investigation queued for {investigable} indicator(s).{skipped}"
+    state = "still running" if str(status or "").lower() in ACTIVE_STATUSES else "already investigated"
+    if deduplicated_by == "external_ref" and external_ref:
+        return (
+            f"Duplicate alert: id {external_ref} was {state} as run {run_id} — "
+            f"nothing new was queued. Fetch links.report for its result."
+        )
+    return f"Identical alert body already investigated — returning run {run_id}."
 
 
 def _validated_alert_body(value: str) -> str:
@@ -844,6 +956,25 @@ async def _attach_prior_investigations(db: DBSession, indicators: list[dict[str,
         history,
         max_age_days=int(settings.alert_prior_investigation_max_age_days),
     )
+
+
+async def _apply_exclusions(db: DBSession, extraction: dict[str, Any]) -> int:
+    """
+    Mark whitelisted indicators as not-to-be-investigated, and re-count.
+
+    Doing this before the run is created is the whole point: an excluded value
+    never reaches a collector, so the quota is saved rather than refunded.
+    `investigable_total` is what the pipeline and the 422 check both read, so it
+    has to reflect the exclusions too.
+    """
+    indicators = extraction.get("indicators") or []
+    if not indicators:
+        return 0
+    matcher = await load_matcher(db)
+    excluded = apply_to_indicators(indicators, matcher)
+    if excluded:
+        extraction["investigable_total"] = sum(1 for item in indicators if item.get("investigable"))
+    return excluded
 
 
 def _run_title(title: str | None, alert_body: str) -> str:

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -125,9 +126,6 @@ class Investigation(Base):
     )
     assistant_sessions: Mapped[list["AssistantSession"]] = relationship(
         back_populates="investigation"
-    )
-    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
-        back_populates="investigation", cascade="all, delete-orphan"
     )
     case_chat_messages: Mapped[list["InvestigationCaseChatMessage"]] = relationship(
         back_populates="investigation", cascade="all, delete-orphan"
@@ -290,6 +288,58 @@ class IOCRecord(Base):
 
     __table_args__ = (
         Index("idx_iocs_inv", "investigation_id"),
+    )
+
+
+class Exclusion(Base):
+    """
+    An indicator the platform is told to treat as benign without looking.
+
+    The corporate estate — its own domains, its office ranges, the hashes of the
+    software it ships — turns up in alert after alert and costs a collector round
+    trip every time to conclude what the analyst already knows. An exclusion says
+    so once: the indicator is reported benign with this row as the reason, and no
+    collector, VirusTotal quota or AI token is spent on it.
+    """
+    __tablename__ = "exclusions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # domain | ip | url | hash — what `value` is, so a hash and a domain that
+    # happen to look alike never match each other.
+    indicator_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # As the analyst typed it, kept for display.
+    value: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Lower-cased, defanged, IDNA-normalised — what matching actually compares.
+    normalized_value: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Why this is safe to skip. Required: an unexplained whitelist entry is how
+    # a real detection gets silenced for a year without anyone noticing.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # A domain exclusion normally covers its subdomains; an IP one may be a CIDR.
+    match_subdomains: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Optional review date — a temporary exclusion that stops applying by itself
+    # is safer than one somebody has to remember to remove.
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # What it has actually saved, so a useless entry is visible as one.
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("indicator_type", "normalized_value", name="uq_exclusion_type_value"),
+        Index("idx_exclusions_active", "active", "indicator_type"),
     )
 
 
@@ -517,6 +567,10 @@ class AlertBodyInvestigationRun(Base):
     # sha256 of the normalised alert body — lets a repeated delivery reuse the
     # run it already produced instead of investigating the same alert twice.
     alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The sending platform's own alert id (Wazuh/OpenSearch `_id`, a ticket ref).
+    # Unlike the body hash this identifies the alert itself, so a re-delivery
+    # whose formatting or enrichment changed is still recognised as the same one.
+    external_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Where to POST the finished report list, when the sender asked for one.
     callback_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -530,6 +584,7 @@ class AlertBodyInvestigationRun(Base):
         Index("idx_alert_body_runs_created", "created_at"),
         Index("idx_alert_body_runs_status", "status"),
         Index("idx_alert_body_runs_hash_created", "alert_body_hash", "created_at"),
+        Index("idx_alert_body_runs_extref_created", "external_ref", "created_at"),
     )
 
 
@@ -565,9 +620,6 @@ class AssistantSession(Base):
     investigation: Mapped[Investigation | None] = relationship(back_populates="assistant_sessions")
     entries: Mapped[list["AssistantEntry"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
-    )
-    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
-        back_populates="assistant_session", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -631,63 +683,8 @@ class AssistantEntry(Base):
     )
 
     session: Mapped[AssistantSession] = relationship(back_populates="entries")
-    soc_indicators: Mapped[list["SOCIndicator"]] = relationship(
-        back_populates="assistant_entry", cascade="all, delete-orphan"
-    )
 
     __table_args__ = (
         Index("idx_assistant_entries_session", "session_id"),
         Index("idx_assistant_entries_session_order", "session_id", "entry_index"),
-    )
-
-
-class SOCIndicator(Base):
-    """Normalized indicators extracted from investigations and AI assistant sessions."""
-    __tablename__ = "soc_indicators"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    indicator_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-    value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
-    normalized_value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
-    token: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    source: Mapped[str] = mapped_column(String(50), nullable=False, default="assistant")
-    context: Mapped[str | None] = mapped_column(Text, nullable=True)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
-    confidence: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
-    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("investigations.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    assistant_session_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("assistant_sessions.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    assistant_entry_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("assistant_entries.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    last_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    investigation: Mapped[Investigation | None] = relationship(back_populates="soc_indicators")
-    assistant_session: Mapped[AssistantSession | None] = relationship(back_populates="soc_indicators")
-    assistant_entry: Mapped[AssistantEntry | None] = relationship(back_populates="soc_indicators")
-
-    __table_args__ = (
-        Index("idx_soc_indicators_normalized", "indicator_type", "normalized_value"),
-        Index("idx_soc_indicators_session", "assistant_session_id"),
-        Index("idx_soc_indicators_entry", "assistant_entry_id"),
-        Index("idx_soc_indicators_investigation", "investigation_id"),
-        Index("idx_soc_indicators_seen", "last_seen_at"),
     )

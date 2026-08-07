@@ -664,6 +664,11 @@ Base URL: `http://localhost:8000`
 | `POST` | `/api/watchlist` | Add domain to watchlist |
 | `GET` | `/api/watchlist` | List watchlist |
 | `DELETE` | `/api/watchlist/{id}` | Remove from watchlist |
+| `GET` | `/api/exclusions` | List the exclusion list (`?indicator_type=`, `?search=`, `?active=`) |
+| `POST` | `/api/exclusions` | Exclude a domain/IP/URL/hash — reason required |
+| `POST` | `/api/exclusions/check` | Which of these indicators are already excluded? |
+| `PATCH` | `/api/exclusions/{id}` | Edit reason / expiry / scope / active |
+| `DELETE` | `/api/exclusions/{id}` | Remove an exclusion |
 | `GET` | `/api/whois-history/{domain}` | WHOIS change history |
 | `POST` | `/api/tools/ip-lookup` | IP reputation lookup |
 | `GET` | `/api/tools/ip-lookup/history` | IP lookup history |
@@ -880,13 +885,77 @@ indicator is looked up against the `investigations` table
 indicator as `prior_investigation` (investigation id, state, classification,
 risk score, `age_days`, `total_investigations`, `reusable`) — the IOC preview in
 `POST /api/alert-investigations/extract` carries it too, so the analyst sees what
-is already known before starting. When the match is **concluded** and younger
-than `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` (default 7), the run reuses its
-verdict instead of re-collecting: the report comes back with
-`"status": "reused"`, `sources_checked: ["prior_investigation"]` and empty
-`collector_runs`, and `summary.indicators_reused` counts them. Set
+is already known before starting. When the match is **concluded** and fresh
+enough, the run reuses its verdict instead of re-collecting: the report comes
+back with `"status": "reused"`, `sources_checked: ["prior_investigation"]` and
+empty `collector_runs`, and `summary.indicators_reused` counts them. Set
 `"reuse_prior_investigations": false` on the request (or
 `ALERT_REUSE_PRIOR_INVESTIGATIONS=false`) to always collect fresh.
+
+**"Fresh enough" depends on the verdict**, because the two directions of drift
+are not equally dangerous. A domain that is clean today and weaponised on Friday
+is how staged phishing works, so a benign verdict expires quickly; a malicious
+one going stale only ever costs an unnecessary look at something already called
+bad. Multipliers on `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` (default 7):
+
+| Verdict | Multiplier | Reused for (default) |
+|---|---|---|
+| `malicious` | ×4 | 28 days |
+| `benign` | ×0.5 | 3.5 days |
+| `suspicious` | ×0.5 | 3.5 days |
+| `inconclusive` | ×0 | never — it is not a verdict, and the collector that was rate-limited last time may succeed now |
+
+A `low` confidence verdict is quartered again on top (a low-confidence benign
+lasts under a day). Each indicator's `prior_investigation` carries the
+`reuse_max_age_days` actually applied, so a re-collection of something looked at
+yesterday is explainable rather than odd. Raising
+`ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` scales all four tiers together.
+
+**The exclusion list is checked before anything else.** Indicators on it
+(`/exclusions`, `app/services/exclusion_service.py`) never reach a collector at
+all — see below.
+
+### The exclusion list
+
+The corporate estate dominates alert volume — its own domains, its egress ranges,
+the hashes of software it deploys on purpose — and each one costs a collector
+round trip to conclude what the analyst already knew. The **Exclusion** tab
+(`/exclusions`) says so once. A listed indicator is reported `benign` with the
+exclusion row as the reason, and no collector, VirusTotal call, spawned
+investigation or AI token is spent on it.
+
+Matching is narrow — an entry only ever matches what it says
+(`app/services/exclusion_service.py`):
+
+| Type | Matches |
+|---|---|
+| `domain` | exact, plus subdomains unless `match_subdomains` is off. `expertware.net` covers `mail.expertware.net` but **not** `notexpertware.net` — the suffix match is anchored on the dot |
+| `ip` | an address, or every address in a CIDR (`10.0.0.0/8`). Prefixes shorter than /8 (IPv4) or /32 (IPv6) are refused as too broad |
+| `url` | exact, after normalising scheme case and the trailing slash |
+| `hash` | exact, case-insensitive, MD5/SHA-1/SHA-256 |
+
+An excluded **domain also covers URLs pointing at it**, so whitelisting the
+domain covers its links.
+
+Two safety properties are deliberate. `reason` is **mandatory** — an unexplained
+whitelist entry is how a real detection gets silenced for a year. And
+`expires_at` lets an exclusion added during an incident lapse on its own instead
+of depending on somebody remembering to remove it. Every row carries `hit_count`
+and `last_hit_at`, so a stale entry earning nothing is visible as one.
+
+Nothing is hidden. The excluded indicator stays in the extraction and gets a full
+report with `"status": "excluded"`, `sources_checked: ["exclusion"]`, and the
+entry (with who added it and why) attached — a wrong verdict leads straight back
+to the row that caused it. `summary.indicators_excluded` counts them separately
+from `indicators_investigated`, and `extraction.excluded_total` appears on the
+run and in the ingest response as `excluded_count`.
+
+The list is applied twice: in the API before the run is created (so the work is
+never queued) and again in the worker (which re-extracts from the stored body,
+and may see a list that grew while the alert waited). Hit counts are recorded
+from the worker pass. If an alert's indicators are *all* excluded, the run still
+happens and reports them — but the AI analysis is skipped too, since there would
+be nothing for it to read.
 
 **VirusTotal is spent on hashes only.** The free tier allows 4 requests/min ·
 500/day, and one alert body can carry dozens of indicators. VT therefore runs for
@@ -983,12 +1052,53 @@ outcome is recorded on the run under `result_json.callback`
 without reading logs. Polling stays available regardless — the webhook is an
 addition, not a replacement.
 
-**Duplicate deliveries.** Every run stores a SHA-256 of its whitespace-normalised
-alert body. An identical body arriving again within
-`ALERT_INGEST_DEDUPE_WINDOW_MINUTES` (default 60) returns the existing run with
-`"deduplicated": true` instead of investigating it a second time — at-least-once
-delivery and retries stop costing collector and AI budget. Send `"dedupe": false`
-to force a fresh run. Runs that ended `failed` or `cancelled` are never reused.
+**Duplicate deliveries.** No alert is investigated twice. Two keys are matched, in
+this order:
+
+| Key | Stored as | Window |
+|---|---|---|
+| The sender's alert id — `external_ref`, taken from `_id`/`id`/`alert_id`/`event.id` | `external_ref` column | none: an id identifies the alert itself, at any age |
+| SHA-256 of the whitespace-normalised alert body | `alert_body_hash` column | `ALERT_INGEST_DEDUPE_WINDOW_MINUTES` (default 60) |
+
+The id is checked first because it survives what the hash does not: the same
+Wazuh document re-delivered with a new `@timestamp`, extra enrichment fields or
+different line wrapping hashes differently but is still the same alert. The body
+hash then catches senders that pass no id at all.
+
+**A duplicate gets the report the first delivery produced.** Under the default
+`wait=true` the response body is the same report list a first delivery returns —
+a re-send costs nothing and still answers with a report, so the sender needs no
+special case. Usually the matched run is already finished and the report comes
+back at once; if the first delivery is still being investigated, the second waits
+for the same answer rather than starting a second copy of the work.
+
+That it *was* a duplicate is reported without changing the shape of the list: on
+the executive summary as `ingest`, and in the response headers.
+
+```jsonc
+// Response headers on every synchronous ingest
+X-Alert-Run-Id: b12a43d2-…
+X-Alert-Deduplicated: true          // "false" on a first delivery
+X-Alert-Deduplicated-By: external_ref
+
+// documents[0] — the executive summary — carries the same fact in the body
+{ "report_type": "executive_summary", "overall_verdict": "malicious", …,
+  "ingest": {
+    "deduplicated": true, "deduplicated_by": "external_ref",
+    "run_id": "b12a43d2-…", "external_ref": "N6oRTp0BfK3wjRjJ8ksL",
+    "message": "Duplicate delivery — alert id N6oRTp0BfK3wjRjJ8ksL was already
+                investigated as run b12a43d2-…. Nothing was re-investigated;
+                this is that run's report." } }
+```
+
+With `?wait=false` the queued-shaped response comes back instead, carrying
+`deduplicated`, `deduplicated_by`, `message` and `links` — that is what the UI
+uses, since it navigates to the run page.
+
+Either way no collector, VirusTotal quota or AI token is spent a second time, so
+at-least-once delivery and sender retries are free. Send `"dedupe": false` to
+force a fresh run. Runs that ended `failed` or `cancelled` are never reused, so a
+re-delivery retries them.
 
 **Security posture.** The endpoint is **not authenticated** — deployments are
 expected to restrict it at the network layer (firewall/VPN/reverse proxy). Two
@@ -1230,7 +1340,7 @@ All configuration is in `backend/app/config.py` as a Pydantic `Settings` class. 
 | `DEFAULT_COLLECTORS` | `"dns,http,tls,whois,asn,intel,vt"` | Comma-separated collector list |
 | `ALERT_VT_HASH_ONLY` | `true` | Alert-body runs spend VirusTotal on hashes only |
 | `ALERT_REUSE_PRIOR_INVESTIGATIONS` | `true` | Reuse a recent concluded investigation of the same indicator |
-| `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` | `7` | How recent that investigation must be |
+| `ALERT_PRIOR_INVESTIGATION_MAX_AGE_DAYS` | `7` | Base reuse window — scaled per verdict (malicious ×4, benign/suspicious ×0.5, inconclusive never, low confidence ×0.25) |
 | `ALERT_INGEST_DEDUPE` | `true` | Reuse the run an identical alert body already produced |
 | `ALERT_INGEST_DEDUPE_WINDOW_MINUTES` | `60` | How long that run stays reusable |
 | `ALERT_CALLBACK_SECRET` | `""` | HMAC key for `X-Alert-Signature` (empty = unsigned) |
