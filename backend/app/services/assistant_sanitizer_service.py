@@ -7,7 +7,13 @@ from collections import defaultdict
 from app.services.ip_context import is_ipv4_indicator_match
 
 
-from app.utils.log_text import has_file_suffix, is_field_name
+from app.utils.domain_utils import has_public_suffix
+from app.utils.log_text import (
+    has_file_suffix,
+    has_internal_suffix,
+    is_field_name,
+    looks_like_code_identifier,
+)
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -327,11 +333,26 @@ def _is_redactable_host(text: str, match: re.Match[str]) -> bool:
     Everything else keeps today's behaviour, including internal suffixes such as
     `.local` or `.corp`, which must stay redacted even though no public suffix
     list knows them.
+
+    Two more are never hosts either, both learned from one .NET crash report
+    that redacted 35 "hostnames", all of them stack-trace namespaces:
+
+      * a code identifier — `System.Threading.Tasks.Task`
+      * a dotted token under no suffix anybody recognises, public or private
+
+    This gate applies only to the bare pass, where nothing but the token's own
+    shape says it is a host. The keyed patterns above have a field name saying
+    so, and keep the looser check — `Computer: box.weird-suffix` is a hostname
+    on the strength of the key, whatever the suffix.
     """
     original = match.group(0)
     if is_field_name(text, match):
         return False
     if has_file_suffix(original):
+        return False
+    if looks_like_code_identifier(original):
+        return False
+    if not (has_public_suffix(original) or has_internal_suffix(original)):
         return False
     return _looks_like_host(original)
 

@@ -32,7 +32,11 @@ from urllib.parse import urlparse
 
 from app.services.ip_context import is_ipv4_indicator_match
 from app.utils.domain_utils import extract_registered_domain, has_public_suffix
-from app.utils.log_text import has_file_suffix, is_field_name
+from app.utils.log_text import (
+    has_file_suffix,
+    is_field_name,
+    looks_like_code_identifier,
+)
 
 # ── Refang patterns ───────────────────────────────────────────────────────────
 
@@ -290,10 +294,13 @@ def extract_alert_indicators(
 
     # ── Bare domains (skip hosts already covered by an extracted URL) ──
     for match in DOMAIN_RE.finditer(text):
-        candidate = match.group(0).strip(".").lower()
+        # Checked as written — `_looks_like_domain` needs the original case to
+        # recognise a namespace — then lowercased for the identity comparisons.
+        matched = match.group(0).strip(".")
+        candidate = matched.lower()
         if is_field_name(text, match):
             continue
-        if not _looks_like_domain(candidate) or candidate in url_hosts:
+        if not _looks_like_domain(matched) or candidate in url_hosts:
             continue
         if extract_registered_domain(candidate) in url_hosts:
             continue
@@ -557,10 +564,33 @@ def _is_usable_hostname(text: str, candidate: str) -> bool:
     standalone = re.compile(rf"(?<![\w.@/-]){re.escape(candidate)}(?![\w.-])", re.IGNORECASE)
     matches = list(standalone.finditer(text))
     if matches:
+        # ioc-finder lowercases what it returns, so the namespace check has to be
+        # made against the text as it was written.
+        if all(looks_like_code_identifier(match.group(0)) for match in matches):
+            return False
         return any(not is_field_name(text, match) for match in matches)
     if re.search(re.escape(candidate), text, re.IGNORECASE):
         return False  # only ever a fragment of something longer
-    return True  # present in the source only in its defanged spelling
+    # Nowhere in the text as written. That used to be read as "defanged", but
+    # this text is already refanged, so the far likelier explanation is that the
+    # finder assembled the token across punctuation it ignores: a .NET assembly
+    # line yielded `7cec85d7bea7798e.system.net.security` by joining a public
+    # key token to the namespace after it, which then went to a collector as a
+    # domain. Accept it only if the labels really are there in order, separated
+    # by nothing but a defanged dot.
+    return _appears_defanged(text, candidate)
+
+
+# A dot as an alert might spell it: `.`, `[.]`, `(dot)`, ` dot `.
+_DEFANGED_DOT = r"\s*(?:[\[\(\{]\s*(?:\.|dot)\s*[\]\)\}]|\.|\sdot\s)\s*"
+
+
+def _appears_defanged(text: str, candidate: str) -> bool:
+    """True when every label of the candidate is present, in order, dot-separated."""
+    labels = [re.escape(label) for label in candidate.split(".") if label]
+    if len(labels) < 2:
+        return False
+    return bool(re.search(_DEFANGED_DOT.join(labels), text, re.IGNORECASE))
 
 
 def _with_scheme(url: str) -> str:
@@ -623,10 +653,17 @@ def _is_ip_literal(host: str) -> bool:
 
 
 def _looks_like_domain(value: str) -> bool:
-    candidate = str(value or "").strip().strip(".").lower()
+    raw = str(value or "").strip().strip(".")
+    candidate = raw.lower()
     if not candidate or len(candidate) > 253 or "." not in candidate:
         return False
     if _is_ip_literal(candidate):
+        return False
+    # A stack trace's namespaces outnumber its hostnames, and enough of them end
+    # in a real gTLD to pass every check below — `System.Net.Security` was being
+    # looked up as `net.security`. Case tells them apart, so this has to run on
+    # the value as written, before the lowercasing above is relied on.
+    if looks_like_code_identifier(raw):
         return False
     labels = candidate.split(".")
     if len(labels) < 2:

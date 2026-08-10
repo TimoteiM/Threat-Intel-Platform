@@ -6,6 +6,10 @@ Sysmon block, or a SIEM document flattened to dotted keys. Both the indicator
 extractor and the AI sanitiser have to decide whether a dotted token is a
 hostname or just the name of a field, and they were each getting it wrong in
 their own way, so the rules live here once.
+
+A dotted token in an alert is a hostname only if it survives all of these: not a
+field name, not a file, not a code identifier, and ending in a suffix that is
+either public or one of the private ones every network uses.
 """
 
 from __future__ import annotations
@@ -57,3 +61,52 @@ def has_file_suffix(value: str) -> bool:
     if "." not in candidate:
         return False
     return candidate.rsplit(".", 1)[-1] in NON_HOST_SUFFIXES
+
+
+# Suffixes no public list knows but every network uses. A host under one of
+# these is still a host, and must still be redacted before anything leaves.
+INTERNAL_HOST_SUFFIXES = frozenset(
+    {
+        "local", "localdomain", "lan", "corp", "corporate", "internal", "intranet",
+        "intra", "priv", "private", "home", "ad", "domain", "dmz", "localhost",
+    }
+)
+
+_MIXED_CASE_LABEL = re.compile(r"(?=.*[a-z])(?=.*[A-Z])")
+
+
+def has_internal_suffix(value: str) -> bool:
+    """True when the value ends in a private-network suffix (`db.corp.local`)."""
+    candidate = str(value or "").strip().strip("\"'").rstrip(".").lower()
+    if "." not in candidate:
+        return False
+    return candidate.rsplit(".", 1)[-1] in INTERNAL_HOST_SUFFIXES
+
+
+def looks_like_code_identifier(value: str) -> bool:
+    """
+    True when a dotted token is a namespace or type reference, not a host.
+
+    A .NET or Java stack trace is a wall of dotted tokens — `System.Net.Security`,
+    `StreamJsonRpc.Protocol.JsonRpcMessage` — and enough of their trailing labels
+    are real gTLDs (`.security`, `.stream`, `.dell`, `.services`) that asking the
+    public suffix list is not enough on its own: one crash report had the
+    platform look up `net.security` and `io.stream` at VirusTotal.
+
+    Case is what separates them. DNS is case-insensitive, so hosts are written
+    lowercase or shouted (`EXP-C7VD864.INT.EXPERTWARE.NET`); Title case and
+    camelCase are how code is written and effectively never how a hostname is.
+    Two independent readings of that, either sufficient:
+
+        the last label is Title/camelCase   `…​.Task`, `…​.Security`
+        two or more labels are              `System.Net.…`, `Dell.UnifiedAgent.…`
+
+    One mixed-case label alone is not enough: `Server01.corp.local` is a host an
+    admin typed with a capital, and dropping it would leak a real machine name.
+    """
+    candidate = str(value or "").strip().strip("\"'").rstrip(".")
+    if "." not in candidate:
+        return False
+    labels = candidate.split(".")
+    mixed = [label for label in labels if _MIXED_CASE_LABEL.match(label)]
+    return bool(_MIXED_CASE_LABEL.match(labels[-1])) or len(mixed) >= 2

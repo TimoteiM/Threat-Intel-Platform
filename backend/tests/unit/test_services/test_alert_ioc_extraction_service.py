@@ -213,3 +213,39 @@ def test_explicit_network_fields_win_over_the_version_guard():
     result = extract_alert_indicators("agent.ip=172.16.0.11, @src_ip=195.178.110.31, dst_ip: 8.8.8.8")
     assert sorted(_values(result, "ip")) == ["172.16.0.11", "195.178.110.31", "8.8.8.8"]
     assert _by_value(result, "172.16.0.11")["investigable"] is False   # RFC1918, context only
+
+
+def test_dotnet_namespaces_are_not_investigated_as_domains():
+    """
+    A .NET crash report had the platform look up `net.security` and `io.stream`.
+
+    Both end in real gTLDs, so the public suffix list cannot refuse them; their
+    Title case is what says they are code. Each one cost a collector round trip.
+    """
+    alert = (
+        "   at System.Net.Security.NegotiateStream.ReadAsync()\n"
+        "   at System.IO.Stream.CopyToAsync()\n"
+        "   at Dell.UnifiedAgent.RemotePlugin.Common.Start()\n"
+        "Computer: EXP-C7VD864.int.expertware.net\n"
+    )
+    assert _values(extract_alert_indicators(alert), "domain") == ["expertware.net"]
+
+
+def test_a_token_glued_across_punctuation_is_not_a_domain():
+    """
+    `PublicKeyToken=…],[System.Net.Security` became `7cec85d7bea7798e.system.net.security`.
+
+    The finder joins across punctuation it ignores; the text is already refanged
+    by this point, so a value that appears nowhere in it was assembled, not
+    defanged.
+    """
+    alert = (
+        "System.Private.CoreLib, Version=8.0.0.0, Culture=neutral, "
+        "PublicKeyToken=7cec85d7bea7798e],[System.Net.Security, Version=8.0.0.0]]\n"
+    )
+    assert _values(extract_alert_indicators(alert), "domain") == []
+
+
+def test_a_genuinely_defanged_domain_still_survives_the_glue_guard():
+    result = extract_alert_indicators("User visited evil-corp[.]com and then paypal(dot)secure-login.net")
+    assert sorted(_values(result, "domain")) == ["evil-corp.com", "secure-login.net"]

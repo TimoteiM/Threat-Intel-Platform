@@ -274,3 +274,38 @@ def test_internal_hostnames_are_still_redacted():
     result = sanitizer.sanitize_entry("Logon to srv01.corp.local from dc02.ad.internal")
     hosts = sorted(v for t, v in result.token_map.items() if t.startswith("[HOST"))
     assert hosts == ["dc02.ad.internal", "srv01.corp.local"]
+
+
+NET_STACK_TRACE = (
+    "Unhandled exception. System.AccessViolationException\n"
+    "   at System.Threading.Tasks.Task.RunContinuations(System.Object)\n"
+    "   at System.Net.Security.NegotiateStream+<ReadAsync>d__105`1[[System.IO.Stream, "
+    "System.Private.CoreLib, Version=8.0.0.0, PublicKeyToken=7cec85d7bea7798e]]\n"
+    "   at StreamJsonRpc.Protocol.JsonRpcMessage.OnJsonRpcDisconnected()\n"
+    "   at Dell.UnifiedAgent.RemotePlugin.Common.BaseDynamicPlugin.Start()\n"
+    "Computer: EXP-C7VD864.int.expertware.net\n"
+)
+
+
+def test_a_dotnet_stack_trace_is_not_a_list_of_hostnames():
+    """
+    One crash report redacted 35 "hostnames", every one of them a namespace.
+
+    `.security`, `.stream`, `.dell` and `.common` are real gTLDs or close enough
+    to pass a suffix check, so shape is what has to decide: a host is written
+    lowercase or shouted, never in Title case.
+    """
+    result = sanitizer.sanitize_entry(NET_STACK_TRACE)
+    hosts = sorted(v for t, v in result.token_map.items() if t.startswith("[HOST"))
+
+    assert hosts == ["EXP-C7VD864.int.expertware.net"]
+    # The namespaces survive intact, so the narrative can name what crashed.
+    assert "System.Net.Security.NegotiateStream" in result.sanitized_text
+    assert "Dell.UnifiedAgent.RemotePlugin.Common" in result.sanitized_text
+
+
+def test_a_keyed_hostname_under_an_unknown_suffix_is_still_redacted():
+    """The key says it is a host; the suffix gate is only for the bare pass."""
+    result = sanitizer.sanitize_entry("Computer: box01.weirdsuffix\nhostname=db7.acme.zzinternal")
+    hosts = sorted(v for t, v in result.token_map.items() if t.startswith("[HOST"))
+    assert hosts == ["box01.weirdsuffix", "db7.acme.zzinternal"]
