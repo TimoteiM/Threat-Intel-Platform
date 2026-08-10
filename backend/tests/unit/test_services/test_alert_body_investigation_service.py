@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.models.enums import CollectorStatus
 from app.models.schemas import CollectorMeta
 from app.services import alert_body_investigation_service as svc
+from app.services.exclusion_service import ExclusionMatcher
 
 
 class _FakeEvidence:
@@ -678,3 +679,50 @@ def test_the_ai_can_still_be_skipped(stub_collectors, monkeypatch):
     )
     payload = svc.run_alert_body_investigation(alert_body="Domain evil-corp.net", run_ai=False)
     assert payload["ai_report"] is None
+
+
+def test_an_alert_whose_indicators_were_all_excluded_still_gets_its_narrative(monkeypatch):
+    """
+    The exclusion list stops lookups, not analysis.
+
+    A Defender or crash alert usually extracts nothing but our own domain and an
+    RFC1918 address. Every indicator is then excluded or unsupported, no
+    collector runs — and that is exactly the alert with no evidence to read, so
+    the narrative is the only thing an analyst gets. Skipping it left those runs
+    blank.
+    """
+    matcher = ExclusionMatcher([
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "indicator_type": "domain",
+            "normalized_value": "expertware.net",
+            "value": "expertware.net",
+            "reason": "Our own corporate domain",
+            "match_subdomains": True,
+        }
+    ])
+    monkeypatch.setattr(svc, "load_exclusion_matcher_sync", lambda: matcher)
+    monkeypatch.setattr(svc, "record_exclusion_hits_sync", lambda ids: None)
+
+    captured: dict[str, Any] = {}
+
+    def fake_ai(*, findings_digest=None, **kwargs):
+        captured["digest"] = findings_digest or ""
+        return {"report_type": "ai_assistant", "status": "completed"}
+
+    monkeypatch.setattr(svc, "run_alert_body_ai_analysis", fake_ai)
+
+    payload = svc.run_alert_body_investigation(
+        alert_body=(
+            "Windows Defender: Antimalware scan was stopped before it finished\n"
+            "Computer: EXP-D07DY24.int.expertware.net\n"
+            "Agent IP: 10.10.126.56\n"
+        )
+    )
+
+    assert payload["extraction"]["excluded_total"] == 1
+    assert payload["ai_report"]["status"] == "completed"
+    assert payload["summary"]["ai_analysis"] == "completed"
+    # And the model is told why nothing was collected, so the narrative cannot
+    # describe our own domain as an indicator no source had heard of.
+    assert "on the exclusion list" in captured["digest"]

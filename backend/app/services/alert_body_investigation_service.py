@@ -277,16 +277,14 @@ def run_alert_body_investigation(
     # say whether anything flagged it. The run takes longer for a better read.
     indicator_summary = build_indicator_summary(reports)
     ai_report: dict[str, Any] | None = None
-    # An alert whose every indicator was whitelisted has nothing for the analyst
-    # to read: no collector output, no event behaviour, and a verdict the
-    # exclusion list already decided. Spending tokens to narrate that would undo
-    # the saving the list exists for.
-    nothing_to_analyse = bool(excluded_total) and not event_reports and not any(
-        str(report.get("status")) not in ("excluded", "skipped") for report in reports
-    )
-    if nothing_to_analyse:
-        logger.info("Skipping AI analysis: every indicator was answered by the exclusion list")
-    if run_ai and not nothing_to_analyse:
+    # The exclusion list decides which indicators are worth *collecting on*. It
+    # says nothing about whether the alert is worth reading: an alert whose only
+    # extracted indicators were our own domain and an RFC1918 address is still a
+    # detection that fired on an endpoint, and the analyst opening it needs the
+    # narrative most of all — there is no collector output to fall back on.
+    # This used to skip the analysis whenever nothing was collected, which is
+    # why those runs show no assistant report at all.
+    if run_ai:
         try:
             ai_report = run_alert_body_ai_analysis(
                 alert_body=alert_body,
@@ -317,7 +315,7 @@ def run_alert_body_investigation(
         alert_body,
         event_reports,
         reports,
-        run_ai=run_ai and not nothing_to_analyse,
+        run_ai=run_ai,
         ai_model=ai_model,
         findings_digest=indicator_summary,
     )

@@ -47,9 +47,22 @@ def _headline(entries: list[dict[str, Any]], flagged: list[dict[str, Any]]) -> s
     if not entries:
         return "No indicators were extracted from this alert."
     if not flagged:
-        return (
-            f"{len(entries)} indicator(s) checked — none was flagged by any source."
+        # An indicator nobody queried was not "checked", and a headline that
+        # says it was reads as a clean bill of health nothing earned.
+        checked = [e for e in entries if e.get("status") not in ("excluded", "skipped")]
+        if not checked:
+            excluded = sum(1 for e in entries if e.get("status") == "excluded")
+            detail = f"{excluded} on the exclusion list" if excluded else "none investigable"
+            return (
+                f"{len(entries)} indicator(s) extracted, none queried "
+                f"({detail}) — this alert rests on its own content."
+            )
+        scope = (
+            f"{len(checked)} indicator(s)"
+            if len(checked) == len(entries)
+            else f"{len(checked)} of {len(entries)} indicator(s)"
         )
+        return f"{scope} checked — none was flagged by any source."
     worst = flagged[0]
     others = len(flagged) - 1
     tail = f", and {others} other flagged indicator(s)" if others else ""
@@ -158,7 +171,22 @@ def _describe(report: dict[str, Any]) -> dict[str, Any] | None:
         if investigation.get("recommended_action"):
             parts.append(f"investigation recommends {investigation['recommended_action']}")
 
-    if report.get("status") == "skipped":
+    if report.get("status") == "excluded":
+        # "Nothing found" and "we deliberately did not look" are different
+        # answers, and the second one has a reason attached. Saying which is
+        # what stops a narrative describing our own corporate domain as an
+        # indicator no source had heard of.
+        exclusion = report.get("exclusion") or {}
+        note = str(exclusion.get("reason") or "").strip()
+        matched = str(exclusion.get("matched") or "").strip()
+        parts.append(
+            "on the exclusion list"
+            + (f" as {matched}" if matched and matched != value else "")
+            + " — treated as benign, no sources queried"
+            + (f" ({note})" if note else "")
+        )
+        facts["excluded"] = True
+    elif report.get("status") == "skipped":
         parts.append(f"not investigated ({str(report.get('skip_reason') or '').replace('_', ' ')})")
     elif report.get("status") == "investigating":
         parts.append("investigation still running")
