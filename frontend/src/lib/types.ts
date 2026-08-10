@@ -1528,8 +1528,15 @@ export interface DetectionQualityResponse {
 export interface AttackCoverageTechnique {
   id: string;
   name: string | null;
+  /** Primary tactic — the first of `tactics`, for wherever one label is needed. */
   tactic: string;
+  /** Every tactic ATT&CK lists the technique under; `["Unmapped"]` if it knows none. */
+  tactics: string[];
   url: string | null;
+  /** False when this platform could never corroborate the technique, only name it. */
+  evidenceable: boolean;
+  /** ATT&CK has retired the technique; a rule still claims it. */
+  deprecated: boolean;
   claimed: number;
   confirmed: number;
   uncorroborated: number;
@@ -1549,6 +1556,36 @@ export interface AttackCoverageResponse {
   /** Seen in evidence, never claimed by any detection. */
   undetected_behaviour: AttackCoverageTechnique[];
   blind_spots: Array<{ tactic: string; techniques_we_could_evidence: number }>;
+}
+
+/** One alert run that touched a tactic, with the techniques of that tactic it carried. */
+export interface TacticAlert {
+  run_id: string;
+  title: string;
+  created_at: string | null;
+  overall_verdict: string | null;
+  highest_risk_score: number | null;
+  detection_rule_id: string | null;
+  detection_rule_name: string | null;
+  techniques: Array<{
+    id: string;
+    name: string | null;
+    url: string | null;
+    /** confirmed | not_corroborated | refuted | observed | ai_suggested */
+    status: string;
+    /** False when the platform could never corroborate it — only name it. */
+    evidenceable: boolean;
+    explanation: string | null;
+  }>;
+  confirmed: number;
+}
+
+export interface TacticAlertsResponse {
+  tactic: string;
+  window_days: number;
+  total: number;
+  returned: number;
+  alerts: TacticAlert[];
 }
 
 export interface AnalystFeedback {

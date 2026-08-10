@@ -3,6 +3,7 @@ Detection quality, ATT&CK coverage and analyst feedback.
 
 GET  /api/detections/quality        -> per-rule signal-to-noise, ATT&CK confirm rate
 GET  /api/detections/attack-coverage-> what detections claim vs what evidence shows
+GET  /api/detections/attack-coverage/tactic-alerts -> the alerts behind one tactic
 POST /api/detections/feedback       -> record an analyst's true/false positive call
 GET  /api/detections/feedback       -> list feedback, newest first
 GET  /api/detections/feedback/accuracy -> how often the platform agreed with analysts
@@ -24,7 +25,7 @@ from sqlalchemy import func, select
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
-from app.services.attack_coverage_service import attack_coverage
+from app.services.attack_coverage_service import attack_coverage, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
@@ -54,6 +55,17 @@ async def get_attack_coverage(
 ) -> dict[str, Any]:
     """Which ATT&CK techniques the detections claim, and which the evidence shows."""
     return await attack_coverage(db, days=days)
+
+
+@router.get("/attack-coverage/tactic-alerts")
+async def get_tactic_alerts(
+    db: DBSession,
+    tactic: str = Query(min_length=1, max_length=120),
+    days: int = Query(default=90, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """The alerts whose assessment touched one tactic, newest first."""
+    return await tactic_alerts(db, tactic=tactic, days=days, limit=limit)
 
 
 @router.post("/feedback", status_code=201)

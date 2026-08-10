@@ -17,6 +17,7 @@ import type {
   DetectionQualityResponse,
   Exclusion,
   FeedbackAccuracy,
+  TacticAlertsResponse,
 } from "./types";
 
 const BASE = "/api";
@@ -744,6 +745,14 @@ export function getAttackCoverage(params?: { days?: number }) {
   if (params?.days) qs.set("days", String(params.days));
   const query = qs.toString();
   return request<AttackCoverageResponse>(`/detections/attack-coverage${query ? `?${query}` : ""}`);
+}
+
+/** The alerts behind one ATT&CK tactic row, newest first. */
+export function getTacticAlerts(params: { tactic: string; days?: number; limit?: number }) {
+  const qs = new URLSearchParams({ tactic: params.tactic });
+  if (params.days) qs.set("days", String(params.days));
+  if (params.limit) qs.set("limit", String(params.limit));
+  return request<TacticAlertsResponse>(`/detections/attack-coverage/tactic-alerts?${qs.toString()}`);
 }
 
 export function submitAnalystFeedback(data: {

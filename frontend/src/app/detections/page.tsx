@@ -19,6 +19,7 @@ import type {
   AttackCoverageResponse,
   DetectionQualityResponse,
   FeedbackAccuracy,
+  TacticAlert,
 } from "@/lib/types";
 import Spinner from "@/components/shared/Spinner";
 
@@ -163,7 +164,7 @@ export default function DetectionsPage() {
       ) : tab === "rules" ? (
         <RulesTab data={quality} />
       ) : tab === "attack" ? (
-        <AttackTab data={coverage} />
+        <AttackTab data={coverage} days={Math.max(days, 90)} />
       ) : (
         <AccuracyTab data={accuracy} />
       )}
@@ -275,7 +276,7 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
 
 /* ─── ATT&CK coverage ─── */
 
-function AttackTab({ data }: { data: AttackCoverageResponse | null }) {
+function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: number }) {
   if (!data || !data.runs_assessed) {
     return (
       <div style={{ ...CARD, textAlign: "center", color: "var(--text-dim)", fontSize: 12, borderStyle: "dashed" }}>
@@ -312,29 +313,18 @@ function AttackTab({ data }: { data: AttackCoverageResponse | null }) {
       {data.unvalidated_mappings.length > 0 && (
         <Section
           title="Claimed but never corroborated"
-          hint="Rules assert these; the evidence has not yet borne one out. Not proof the mapping is wrong — but nothing has validated it."
+          hint="Rules assert these; the evidence has not yet borne one out. Not proof the mapping is wrong — but nothing has validated it. Rows marked 'not evidenceable here' are ones this platform could never confirm, whatever it collected."
           rows={data.unvalidated_mappings}
         />
       )}
 
       <div style={{ ...CARD, marginTop: 12 }}>
-        <div style={{ ...LABEL, marginBottom: 10 }}>BY TACTIC</div>
+        <div style={{ ...LABEL, marginBottom: 4 }}>BY TACTIC</div>
+        <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 10 }}>
+          Select a tactic to list the alerts whose assessment touched it.
+        </div>
         {data.tactics.map((tactic) => (
-          <div
-            key={tactic.tactic}
-            style={{
-              display: "flex",
-              gap: 12,
-              padding: "6px 0",
-              borderBottom: "1px solid var(--border)",
-              fontSize: 11,
-            }}
-          >
-            <span style={{ flex: 1, color: "var(--text)" }}>{tactic.tactic}</span>
-            <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.techniques} techniques</span>
-            <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.claimed} claimed</span>
-            <span style={{ color: "#10b981", ...MONO }}>{tactic.confirmed} confirmed</span>
-          </div>
+          <TacticRow key={tactic.tactic} tactic={tactic} days={days} />
         ))}
       </div>
 
@@ -355,6 +345,195 @@ function AttackTab({ data }: { data: AttackCoverageResponse | null }) {
         </div>
       )}
     </>
+  );
+}
+
+/* ─── One tactic, and the alerts underneath it ─── */
+
+const STATUS_STYLE: Record<string, { label: string; color: string }> = {
+  confirmed: { label: "confirmed", color: "#10b981" },
+  not_corroborated: { label: "not corroborated", color: "#f59e0b" },
+  refuted: { label: "refuted", color: "#ef4444" },
+  observed: { label: "observed, unclaimed", color: "#818cf8" },
+  ai_suggested: { label: "AI-suggested", color: "#a78bfa" },
+};
+
+const VERDICT_COLOR: Record<string, string> = {
+  malicious: "#ef4444",
+  suspicious: "#f59e0b",
+  benign: "#10b981",
+  clean: "#10b981",
+};
+
+function formatWhen(iso: string | null): string {
+  if (!iso) return "—";
+  const when = new Date(iso);
+  return Number.isNaN(when.getTime()) ? "—" : when.toLocaleString();
+}
+
+/**
+ * A tactic row that opens into its alerts.
+ *
+ * Fetched on first open rather than with the coverage roll-up: most rows are
+ * never opened, and every open one costs a scan of the window's runs.
+ */
+function TacticRow({
+  tactic,
+  days,
+}: {
+  tactic: AttackCoverageResponse["tactics"][number];
+  days: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [alerts, setAlerts] = useState<TacticAlert[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The window is part of the query, so a window change invalidates what was
+  // loaded — otherwise a reopened row would show the previous window's alerts.
+  useEffect(() => {
+    setAlerts(null);
+    setError(null);
+  }, [days, tactic.tactic]);
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || alerts || loading) return;
+    setLoading(true);
+    setError(null);
+    api
+      .getTacticAlerts({ tactic: tactic.tactic, days, limit: 100 })
+      .then((response) => {
+        setAlerts(response.alerts);
+        setTotal(response.total);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load alerts"))
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          width: "100%",
+          padding: "6px 0",
+          background: "transparent",
+          border: "none",
+          fontSize: 11,
+          textAlign: "left",
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        <span style={{ color: "var(--text-muted)", width: 10, ...MONO }}>{open ? "▾" : "▸"}</span>
+        <span style={{ flex: 1, color: "var(--text)" }}>{tactic.tactic}</span>
+        <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.techniques} techniques</span>
+        <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.claimed} claimed</span>
+        <span style={{ color: "#10b981", ...MONO }}>{tactic.confirmed} confirmed</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "4px 0 12px 22px" }}>
+          {loading ? (
+            <div style={{ display: "flex", padding: 12 }}>
+              <Spinner />
+            </div>
+          ) : error ? (
+            <div style={{ fontSize: 11, color: "#ef4444" }}>{error}</div>
+          ) : !alerts || alerts.length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+              No alerts in the last {days} days carried a technique in this tactic.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8, ...MONO }}>
+                {total} ALERT{total !== 1 ? "S" : ""} · LAST {days}D
+                {alerts.length < total && ` · SHOWING FIRST ${alerts.length}`}
+              </div>
+              {alerts.map((alert) => (
+                <TacticAlertRow key={alert.run_id} alert={alert} />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TacticAlertRow({ alert }: { alert: TacticAlert }) {
+  return (
+    <div style={{ padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontSize: 11 }}>
+        <a
+          href={`/alert-investigations/${alert.run_id}`}
+          style={{ color: "#818cf8", fontWeight: 700 }}
+        >
+          {alert.title || alert.run_id.slice(0, 8)}
+        </a>
+        {alert.overall_verdict && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: VERDICT_COLOR[alert.overall_verdict] || "var(--text-muted)",
+              ...MONO,
+            }}
+          >
+            {alert.overall_verdict.toUpperCase()}
+            {alert.highest_risk_score !== null && ` · ${alert.highest_risk_score}`}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 10, ...MONO }}>
+          {formatWhen(alert.created_at)}
+        </span>
+      </div>
+
+      {alert.detection_rule_id && (
+        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, ...MONO }}>
+          {alert.detection_rule_id}
+          {alert.detection_rule_name ? ` · ${alert.detection_rule_name}` : ""}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+        {alert.techniques.map((technique) => {
+          const style = STATUS_STYLE[technique.status] || {
+            label: technique.status,
+            color: "var(--text-muted)",
+          };
+          return (
+            <span
+              key={technique.id}
+              title={technique.explanation || undefined}
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                border: `1px solid ${style.color}`,
+                borderRadius: "var(--radius-sm)",
+                color: style.color,
+                ...MONO,
+              }}
+            >
+              {technique.id}
+              {technique.name ? ` ${technique.name}` : ""} · {style.label}
+              {/* Without this, "not corroborated" reads as a failed check rather
+                  than one this platform was never able to run. */}
+              {!technique.evidenceable && (
+                <span style={{ color: "var(--text-muted)" }}> · not evidenceable here</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -393,7 +572,25 @@ function Section({
             {row.id}
           </a>
           <span style={{ color: "var(--text)" }}>{row.name || "—"}</span>
-          <span style={{ color: "var(--text-muted)", fontSize: 10 }}>{row.tactic}</span>
+          <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
+            {row.tactics.join(" · ")}
+          </span>
+          {!row.evidenceable && (
+            <span
+              title="Outside this platform's evidence whitelist — nothing collected here could confirm it either way."
+              style={{ color: "var(--text-muted)", fontSize: 10, ...MONO }}
+            >
+              not evidenceable here
+            </span>
+          )}
+          {row.deprecated && (
+            <span
+              title="ATT&CK has retired this technique; the detection's mapping predates that."
+              style={{ color: "#f59e0b", fontSize: 10, ...MONO }}
+            >
+              retired by ATT&CK
+            </span>
+          )}
           <span style={{ marginLeft: "auto", color: "var(--text-dim)", ...MONO }}>
             {row.claimed} claimed · {row.confirmed} confirmed · {row.observed} observed
             {row.ai_suggested > 0 && ` · ${row.ai_suggested} AI-suggested`}

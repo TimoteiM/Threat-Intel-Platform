@@ -33,7 +33,11 @@ import logging
 import re
 from typing import Any, Sequence
 
-from app.analyst.attack_mapping import get_technique_info, normalize_technique_id
+from app.analyst.attack_mapping import (
+    describe_technique,
+    get_technique_info,
+    normalize_technique_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,12 +163,18 @@ def _validate(
         )
         return None
 
+    # Whitelisted, so `describe_technique` always answers; it is used rather
+    # than the whitelist entry so the tactic label matches the rest of the
+    # platform's ATT&CK vocabulary.
+    described = describe_technique(technique) or info
     return {
         "id": technique,
-        "name": info["name"],
-        "tactic": info["tactic"],
-        "url": info["url"],
+        "name": described["name"],
+        "tactic": described["tactic"],
+        "tactics": described.get("tactics") or [described["tactic"]],
+        "url": described["url"],
         "known": True,
+        "evidenceable": True,
         "status": "additional",
         "confidence": AI_CONFIDENCE,
         "source": "ai_suggested",

@@ -15,11 +15,18 @@ Two halves:
     endpoint            what a Sysmon/EDR process event can show — added so that
                         the technique a SIEM rule claims can be checked against
                         the behaviour actually observed
+
+Describing a technique is a different question from asserting one, and the full
+ATT&CK catalog in `attack_reference` answers it — see `describe_technique`. A
+rule's mapping is whatever its author chose, mostly techniques nothing here can
+corroborate, and those still deserve their real name and tactic.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
+
+from app.analyst.attack_reference import TECHNIQUE_REFERENCE
 
 # Technique database — keyed by technique ID
 # Each entry: name, tactic, description, url
@@ -437,8 +444,73 @@ AMBIGUOUS_SIGNAL_GROUPS: tuple[frozenset[str], ...] = (
 
 
 def get_technique_info(technique_id: str) -> Optional[dict[str, str]]:
-    """Look up a technique by ID. Returns None if not found."""
+    """
+    Look up a technique in the whitelist. Returns None if we cannot evidence it.
+
+    Whitelist membership only — this is the gate on what may be asserted. To
+    *describe* a technique somebody else claimed, use `describe_technique`.
+    """
     return TECHNIQUE_DB.get(technique_id)
+
+
+def describe_technique(technique_id: str) -> Optional[dict[str, Any]]:
+    """
+    What a technique is: name, tactic(s), URL — whitelisted or not.
+
+    A detection claims whatever its author mapped it to, and most of those are
+    techniques this platform can never corroborate. Refusing to name them does
+    not make the claim go away; it just files it under "Unmapped", which tells
+    an analyst nothing. So the full ATT&CK catalog answers the description
+    question while `TECHNIQUE_DB` keeps answering the assertion question.
+
+    Tactic labels come from the catalog even for whitelisted techniques, so the
+    platform speaks one vocabulary: ATT&CK v19 split the old Defense Evasion
+    into Stealth and Defense Impairment, and a hand-written label left behind
+    would show up as a tactic of its own.
+
+    Falls back to the parent technique for a sub-technique ATT&CK does not list
+    (a rule inventing `.007` of a real technique still places correctly), and
+    returns None only for an id that is not ATT&CK's at all.
+    """
+    normalized = normalize_technique_id(technique_id)
+    if not normalized:
+        return None
+
+    whitelisted = TECHNIQUE_DB.get(normalized)
+    reference = TECHNIQUE_REFERENCE.get(normalized) or TECHNIQUE_REFERENCE.get(
+        parent_technique(normalized)
+    )
+    if reference is None and whitelisted is None:
+        return None
+
+    if reference is None:
+        return {
+            "name": whitelisted["name"],
+            "tactic": whitelisted["tactic"],
+            "tactics": [whitelisted["tactic"]],
+            "url": whitelisted["url"],
+            "description": whitelisted.get("description"),
+            "deprecated": False,
+            "evidenceable": True,
+        }
+
+    return {
+        "name": reference["name"],
+        "tactic": reference["tactic"],
+        "tactics": list(reference["tactics"]) or ["Unmapped"],
+        "url": reference["url"],
+        # The whitelist description is written for this platform's evidence and
+        # is more use than ATT&CK's prose, so it wins where we have one.
+        "description": (whitelisted or {}).get("description"),
+        "deprecated": bool(reference.get("deprecated")),
+        "evidenceable": whitelisted is not None,
+    }
+
+
+def technique_tactics(technique_id: str) -> list[str]:
+    """Every tactic a technique belongs to; `['Unmapped']` when ATT&CK has none."""
+    info = describe_technique(technique_id)
+    return list(info["tactics"]) if info and info["tactics"] else ["Unmapped"]
 
 
 def is_known_technique(technique_id: str) -> bool:

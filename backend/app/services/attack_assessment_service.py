@@ -37,7 +37,7 @@ from typing import Any, Iterable, Sequence
 from app.analyst.attack_mapping import (
     AMBIGUOUS_SIGNAL_GROUPS,
     COLLECTOR_ATTACK_RULES,
-    get_technique_info,
+    describe_technique,
     normalize_technique_id,
     parent_technique,
     techniques_for_signal,
@@ -377,15 +377,20 @@ def _describe(technique: str, entry: dict[str, Any], *, status: str) -> dict[str
 
 
 def _technique_fields(technique: str) -> dict[str, Any]:
-    info = get_technique_info(technique) or {}
+    info = describe_technique(technique) or {}
     return {
         "name": info.get("name"),
         "tactic": info.get("tactic"),
+        "tactics": info.get("tactics") or [],
         "url": info.get("url"),
         # A technique the detection claimed that we hold no definition for is
         # reported as-is rather than dropped: the rule said it, and hiding that
         # would misrepresent the detection.
         "known": bool(info),
+        # Named from the ATT&CK catalog is not the same as corroborable here —
+        # a claim outside the evidence whitelist is one this platform can never
+        # confirm, which is a different thing from one it failed to confirm.
+        "evidenceable": bool(info.get("evidenceable")),
     }
 
 
