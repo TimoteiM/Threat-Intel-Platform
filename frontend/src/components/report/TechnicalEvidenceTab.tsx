@@ -2006,14 +2006,17 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         </Section>
       )}
 
+      {/* Verdicts, detections and the AI summary answer "is this bad?", which is
+          why anyone opens this section. The behavioural tables answer "how?" and
+          follow. */}
       <Section title="AnyRun Analysis">
-        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} screenshot={evidence?.screenshot} />
         <AnyRunInteractiveEvidence
           hybridAnalysis={hybridAnalysis}
           investigationId={investigationId}
           onRefresh={onRefresh}
           sensitiveFormDetection={sensitiveFormDetection}
         />
+        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} screenshot={evidence?.screenshot} />
       </Section>
 
       <Section title="Final Risk Aggregation">

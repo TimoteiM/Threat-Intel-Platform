@@ -140,109 +140,8 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
         </div>
       )}
 
-      <EvidenceTable
-        title="Process Tree Summary"
-        data={[
-          ...arr(primaryTree?.root_processes).slice(0, 6).map((row: any) => ({
-            type: "Root",
-            process: text(row?.name),
-            pid: text(row?.pid),
-            score: text(row?.threat_score),
-            activity: `${Number(row?.network_events || 0)} net / ${Number(row?.file_events || 0)} file`,
-            command: text(row?.command_line),
-          })),
-          ...arr(primaryTree?.high_risk_processes).slice(0, 8).map((row: any) => ({
-            type: "High signal",
-            process: text(row?.name),
-            pid: text(row?.pid),
-            score: text(row?.threat_score),
-            activity: `${Number(row?.network_events || 0)} net / ${Number(row?.file_events || 0)} file`,
-            command: text(row?.command_line),
-          })),
-        ]}
-        columns={[
-          { key: "type", label: "Type" },
-          { key: "process", label: "Process", wrap: true },
-          { key: "pid", label: "PID" },
-          { key: "score", label: "Score" },
-          { key: "activity", label: "Activity" },
-          { key: "command", label: "Command", wrap: true },
-        ]}
-        showHeader
-      />
-
-      <EvidenceTable
-        title="Contacted Hosts"
-        data={hosts.slice(0, 20).map((row) => ({
-          host: text(row?.host),
-          source: text(row?.source),
-          process: text(row?.process),
-          threat: text(row?.threat_level),
-          name: text(row?.threat_name),
-        }))}
-        columns={[
-          { key: "host", label: "Host", wrap: true },
-          { key: "source", label: "Source" },
-          { key: "process", label: "Process", wrap: true },
-          { key: "threat", label: "Threat" },
-          { key: "name", label: "Name", wrap: true },
-        ]}
-        showHeader
-      />
-
-      <EvidenceTable
-        title="Contacted IPs"
-        data={ips.slice(0, 20).map((row) => ({
-          ip: text(row?.ip),
-          port: text(row?.port),
-          protocol: text(row?.protocol),
-          process: text(row?.process),
-          threat: text(row?.threat_level),
-        }))}
-        columns={[
-          { key: "ip", label: "IP" },
-          { key: "port", label: "Port" },
-          { key: "protocol", label: "Proto" },
-          { key: "process", label: "Process", wrap: true },
-          { key: "threat", label: "Threat" },
-        ]}
-        showHeader
-      />
-
-      <EvidenceTable
-        title="Dropped / Created Files"
-        data={files.slice(0, 20).map((row) => ({
-          file: text(row?.path || row?.name),
-          process: text(row?.process),
-          action: text(row?.action || row?.source),
-          hash: text(row?.sha256 || row?.sha1 || row?.md5),
-        }))}
-        columns={[
-          { key: "file", label: "File", wrap: true },
-          { key: "process", label: "Process", wrap: true },
-          { key: "action", label: "Action" },
-          { key: "hash", label: "Hash", wrap: true },
-        ]}
-        showHeader
-      />
-
-      <EvidenceTable
-        title="Suspicious Commands"
-        data={commands.slice(0, 20).map((row) => ({
-          process: text(row?.process),
-          pid: text(row?.pid),
-          reason: text(row?.reason),
-          command: text(row?.command_line),
-        }))}
-        columns={[
-          { key: "process", label: "Process", wrap: true },
-          { key: "pid", label: "PID" },
-          { key: "reason", label: "Reason", wrap: true },
-          { key: "command", label: "Command", wrap: true },
-        ]}
-        showHeader
-      />
-
+      {/* What the sandbox saw comes before the tables describing it: a capture
+          of the page is read at a glance, a process table is not. */}
       {localScreenshotUrl && (
         <div style={{ marginBottom: 16 }}>
           <div style={tableTitleStyle}>High-Resolution Local Capture</div>
@@ -294,6 +193,75 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
       )}
 
       <EvidenceTable
+        title="Process Tree Summary"
+        data={[
+          ...arr(primaryTree?.root_processes).slice(0, 6).map((row: any) => ({
+            type: "Root",
+            process: text(row?.name),
+            pid: text(row?.pid),
+            score: text(row?.threat_score),
+            activity: `${Number(row?.network_events || 0)} net / ${Number(row?.file_events || 0)} file`,
+            command: text(row?.command_line),
+          })),
+          ...arr(primaryTree?.high_risk_processes).slice(0, 8).map((row: any) => ({
+            type: "High signal",
+            process: text(row?.name),
+            pid: text(row?.pid),
+            score: text(row?.threat_score),
+            activity: `${Number(row?.network_events || 0)} net / ${Number(row?.file_events || 0)} file`,
+            command: text(row?.command_line),
+          })),
+        ]}
+        columns={[
+          { key: "type", label: "Type" },
+          { key: "process", label: "Process", wrap: true },
+          { key: "pid", label: "PID" },
+          { key: "score", label: "Score" },
+          { key: "activity", label: "Activity" },
+          { key: "command", label: "Command", wrap: true },
+        ]}
+        showHeader
+      />
+
+      <EvidenceTable
+        title="Contacted IPs"
+        data={ips.slice(0, 20).map((row) => ({
+          ip: text(row?.ip),
+          port: text(row?.port),
+          protocol: text(row?.protocol),
+          process: text(row?.process),
+          threat: text(row?.threat_level),
+        }))}
+        columns={[
+          { key: "ip", label: "IP" },
+          { key: "port", label: "Port" },
+          { key: "protocol", label: "Proto" },
+          { key: "process", label: "Process", wrap: true },
+          { key: "threat", label: "Threat" },
+        ]}
+        showHeader
+      />
+
+      <EvidenceTable
+        title="Contacted Hosts"
+        data={hosts.slice(0, 20).map((row) => ({
+          host: text(row?.host),
+          source: text(row?.source),
+          process: text(row?.process),
+          threat: text(row?.threat_level),
+          name: text(row?.threat_name),
+        }))}
+        columns={[
+          { key: "host", label: "Host", wrap: true },
+          { key: "source", label: "Source" },
+          { key: "process", label: "Process", wrap: true },
+          { key: "threat", label: "Threat" },
+          { key: "name", label: "Name", wrap: true },
+        ]}
+        showHeader
+      />
+
+      <EvidenceTable
         title="Extracted IOCs"
         data={iocs.slice(0, 40).map((row) => ({
           type: text(row?.type).toUpperCase(),
@@ -309,6 +277,43 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
         ]}
         showHeader
       />
+
+      {/* Kept after the named sections: useful once the verdict is understood,
+          noise before it. */}
+      <EvidenceTable
+        title="Dropped / Created Files"
+        data={files.slice(0, 20).map((row) => ({
+          file: text(row?.path || row?.name),
+          process: text(row?.process),
+          action: text(row?.action || row?.source),
+          hash: text(row?.sha256 || row?.sha1 || row?.md5),
+        }))}
+        columns={[
+          { key: "file", label: "File", wrap: true },
+          { key: "process", label: "Process", wrap: true },
+          { key: "action", label: "Action" },
+          { key: "hash", label: "Hash", wrap: true },
+        ]}
+        showHeader
+      />
+
+      <EvidenceTable
+        title="Suspicious Commands"
+        data={commands.slice(0, 20).map((row) => ({
+          process: text(row?.process),
+          pid: text(row?.pid),
+          reason: text(row?.reason),
+          command: text(row?.command_line),
+        }))}
+        columns={[
+          { key: "process", label: "Process", wrap: true },
+          { key: "pid", label: "PID" },
+          { key: "reason", label: "Reason", wrap: true },
+          { key: "command", label: "Command", wrap: true },
+        ]}
+        showHeader
+      />
+
     </div>
   );
 }

@@ -3568,6 +3568,15 @@ export default function AnyRunInteractiveEvidence({
               </div>
             )}
             <AnyRunProviderFindings item={item} />
+            {/* Reads the detections above it, so it belongs with them rather than
+                below the evidence tables an analyst scrolls past to reach it. */}
+            {anyrunAiSummary && (
+              <EvidenceTable
+                title="Any.Run AI Summary"
+                data={[{ summary: anyrunAiSummary }]}
+                columns={[{ key: "summary", wrap: true }]}
+              />
+            )}
             {(() => {
               const tiThreatNames = normalizedAnyrunLabels(raw?.threatName || item?.threat_names);
               const tiTags = normalizedAnyrunLabels(raw?.tags);
@@ -3730,14 +3739,6 @@ export default function AnyRunInteractiveEvidence({
                 </div>
               );
             })()}
-
-            {anyrunAiSummary && (
-              <EvidenceTable
-                title="Any.Run AI Summary"
-                data={[{ summary: anyrunAiSummary }]}
-                columns={[{ key: "summary", wrap: true }]}
-              />
-            )}
 
             {/* Domain-level TI intelligence (shown alongside URL result when available) */}
             {(() => {
