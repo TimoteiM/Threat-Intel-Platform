@@ -33,20 +33,20 @@ export default function StatusPill({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 7,
-        borderRadius: 999,
-        padding: compact ? "4px 9px" : "6px 11px",
+        gap: 6,
+        // A drop shadow on a 20px pill is noise at any density, and there are
+        // often four of them in a row.
+        borderRadius: "var(--shell-radius-xs)",
+        padding: compact ? "2px 7px" : "3px 8px",
         border: `1px solid ${outline ? colors.border : colors.borderStrong}`,
         background: outline ? "transparent" : colors.background,
         color: colors.foreground,
-        fontSize: compact ? 10 : 11,
+        fontSize: compact ? 10 : "var(--font-micro)",
         fontWeight: 700,
-        letterSpacing: "0.08em",
-        textTransform: "uppercase",
-        lineHeight: 1,
+        letterSpacing: "0.04em",
+        lineHeight: 1.5,
         whiteSpace: "nowrap",
         fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)",
-        boxShadow: outline ? "none" : "0 10px 24px rgba(3, 8, 20, 0.18)",
         ...style,
       }}
     >

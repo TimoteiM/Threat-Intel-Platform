@@ -1,8 +1,24 @@
 "use client";
 
+/**
+ * Open client alerts, worst first.
+ *
+ * The page exists to answer one question — what needs acknowledging or
+ * resolving — so severity filtering and the two actions are the whole surface.
+ * Everything else about an alert lives on the investigation it came from.
+ */
+
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { listAllAlerts, acknowledgeAlert, resolveAlert, listClients } from "@/lib/api";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  Page,
+  PageHeader,
+} from "@/components/ui/Primitives";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -18,10 +34,10 @@ function timeAgo(dateStr?: string): string {
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#f87171",
-  high:     "#fb923c",
-  medium:   "#fbbf24",
-  low:      "#60a5fa",
+  critical: "var(--status-critical)",
+  high:     "var(--orange)",
+  medium:   "var(--status-warning)",
+  low:      "var(--status-info)",
 };
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"];
@@ -82,234 +98,197 @@ export default function AlertsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const handleAcknowledge = async (alertId: string) => {
+    setActionError(null);
     try {
       await acknowledgeAlert(alertId);
       load();
     } catch (e: any) {
-      alert(`Failed: ${e.message}`);
+      // A browser alert() interrupts triage and loses the message. The failure
+      // belongs on the page, next to the list it failed on.
+      setActionError(`Could not acknowledge that alert: ${e?.message || "unknown error"}`);
     }
   };
 
   const handleResolve = async (alertId: string) => {
+    setActionError(null);
     try {
       await resolveAlert(alertId);
       load();
     } catch (e: any) {
-      alert(`Failed: ${e.message}`);
+      setActionError(`Could not resolve that alert: ${e?.message || "unknown error"}`);
     }
-  };
-
-  const card: React.CSSProperties = {
-    background: "var(--bg-card)",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--radius-lg)",
-    overflow: "hidden",
   };
 
   const totalPages = Math.ceil(total / PAGE_LIMIT);
 
-  // Severity summary counts
-  const counts = SEVERITY_ORDER.reduce((acc, s) => {
-    acc[s] = alerts.filter((a) => a.severity === s).length;
-    return acc;
-  }, {} as Record<string, number>);
-
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px", paddingBottom: 60 }}>
-
-      {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-sans)", color: "var(--text)", margin: 0 }}>
-          Alert Feed
-        </h1>
-        <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-sans)", marginTop: 3 }}>
-          Client threat alerts — triggered by concluded investigations
-        </div>
-      </div>
-
-      {/* Severity summary pills */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-        {SEVERITY_ORDER.map((s) => (
-          <div
-            key={s}
-            onClick={() => { setSeverityFilter(severityFilter === s ? "" : s); setPage(0); }}
-            style={{
-              padding: "8px 16px",
-              background: severityFilter === s ? `${SEVERITY_COLORS[s]}22` : "var(--bg-card)",
-              border: `1px solid ${severityFilter === s ? SEVERITY_COLORS[s] : "var(--border)"}`,
-              borderRadius: "var(--radius)",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: SEVERITY_COLORS[s], display: "inline-block", flexShrink: 0 }} />
-            <span style={{ fontSize: 12, fontWeight: 600, color: severityFilter === s ? SEVERITY_COLORS[s] : "var(--text-dim)", fontFamily: "var(--font-sans)", textTransform: "capitalize" }}>
-              {s}
-            </span>
+    <Page>
+      <PageHeader
+        title="Alerts"
+        subtitle="Client threat alerts raised by concluded investigations."
+        meta={
+          <span>
+            {total} {statusFilter === "all" ? "total" : statusFilter}
+            {severityFilter ? ` · ${severityFilter} only` : ""}
+          </span>
+        }
+        actions={
+          <div className="ds-toolbar" role="group" aria-label="Filter alerts">
+            {(["open", "resolved", "all"] as const).map((f) => (
+              <Button
+                key={f}
+                variant={statusFilter === f ? "primary" : "secondary"}
+                aria-pressed={statusFilter === f}
+                onClick={() => { setStatusFilter(f); setPage(0); }}
+                style={{ textTransform: "capitalize" }}
+              >
+                {f}
+              </Button>
+            ))}
           </div>
-        ))}
-      </div>
+        }
+      />
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {(["open", "resolved", "all"] as const).map((f) => (
+      <div className="ds-toolbar" role="group" aria-label="Filter by severity">
+        {SEVERITY_ORDER.map((s) => (
           <button
-            key={f}
-            onClick={() => { setStatusFilter(f); setPage(0); }}
+            key={s}
+            type="button"
+            aria-pressed={severityFilter === s}
+            onClick={() => { setSeverityFilter(severityFilter === s ? "" : s); setPage(0); }}
+            className="ds-btn"
             style={{
-              padding: "7px 16px",
-              background: statusFilter === f ? "var(--accent)" : "var(--bg-elevated)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              color: statusFilter === f ? "#fff" : "var(--text-dim)",
-              fontSize: 12,
-              fontFamily: "var(--font-sans)",
-              fontWeight: 600,
-              cursor: "pointer",
               textTransform: "capitalize",
+              color: severityFilter === s ? SEVERITY_COLORS[s] : "var(--text-dim)",
+              borderColor: severityFilter === s ? SEVERITY_COLORS[s] : "var(--panel-divider-strong)",
             }}
           >
-            {f}
+            <span
+              aria-hidden="true"
+              style={{ width: 6, height: 6, borderRadius: 999, background: SEVERITY_COLORS[s], display: "inline-block" }}
+            />
+            {s}
           </button>
         ))}
-        <div style={{ flex: 1 }} />
         {severityFilter && (
-          <button
-            onClick={() => { setSeverityFilter(""); setPage(0); }}
-            style={{
-              padding: "7px 14px",
-              background: "none",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              color: "var(--text-muted)",
-              fontSize: 11,
-              fontFamily: "var(--font-sans)",
-              cursor: "pointer",
-            }}
-          >
-            Clear filter ×
-          </button>
+          <Button variant="quiet" onClick={() => { setSeverityFilter(""); setPage(0); }}>
+            Clear severity filter
+          </Button>
         )}
       </div>
 
-      {/* Alert list */}
-      <div style={card}>
+      {actionError && <ErrorState title="Action failed" detail={actionError} />}
+
+      <div>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 48, color: "var(--text-muted)", fontSize: 13, fontFamily: "var(--font-sans)" }}>
-            Loading...
-          </div>
+          <LoadingState label="Loading alerts…" />
         ) : alerts.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 36, marginBottom: 14 }}>✓</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#34d399", fontFamily: "var(--font-sans)" }}>
-              No alerts
-            </div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-sans)", marginTop: 6 }}>
-              {statusFilter === "open" ? "All clear — no open alerts for registered clients" : "No alerts match the current filter"}
-            </div>
-          </div>
+          <EmptyState
+            title={statusFilter === "open" ? "No open alerts" : "No alerts match this filter"}
+            hint={
+              statusFilter === "open"
+                ? "Nothing is waiting on an analyst for the registered clients."
+                : "Try a different status or severity."
+            }
+          />
         ) : (
           alerts.map((a, idx) => {
             const clientName = clientMap[a.client_id];
             return (
               <div
                 key={a.id}
+                className="row-hover"
                 style={{
                   display: "flex",
                   alignItems: "flex-start",
-                  gap: 14,
-                  padding: "16px 20px",
-                  borderBottom: idx < alerts.length - 1 ? "1px solid var(--border)" : "none",
-                  background: a.resolved ? "rgba(52,211,153,0.03)" : "transparent",
-                  transition: "background 0.15s",
+                  gap: "var(--space-3)",
+                  padding: "var(--space-3) 0",
+                  borderBottom: idx < alerts.length - 1 ? "1px solid var(--panel-divider-soft)" : "none",
+                  opacity: a.resolved ? 0.62 : 1,
                 }}
-                onMouseEnter={(e) => { if (!a.resolved) e.currentTarget.style.background = "var(--bg-elevated)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = a.resolved ? "rgba(52,211,153,0.03)" : "transparent"; }}
               >
-                {/* Severity bar */}
+                {/* Severity as a rule down the row — the one place colour alone
+                    is used, and the word is repeated below it. */}
                 <div style={{
                   width: 3,
                   alignSelf: "stretch",
                   borderRadius: 2,
-                  background: SEVERITY_COLORS[a.severity] || "#94a3b8",
+                  background: SEVERITY_COLORS[a.severity] || "var(--status-neutral)",
                   flexShrink: 0,
-                }} />
+                }} aria-hidden="true" />
 
                 {/* Content */}
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: 2 }}>
                     <span style={{
-                      fontSize: 13, fontWeight: 600,
+                      fontSize: "var(--font-body)", fontWeight: 600,
                       color: a.resolved ? "var(--text-muted)" : "var(--text)",
                       fontFamily: "var(--font-sans)",
                     }}>
                       {a.title}
                     </span>
 
-                    {/* Severity chip */}
+                    {/* Severity carries the row's colour already; the chip says
+                        it in words for anyone who cannot use the colour. */}
                     <span style={{
-                      fontSize: 9, fontWeight: 700,
-                      padding: "2px 7px", borderRadius: 999,
-                      background: `${SEVERITY_COLORS[a.severity]}22`,
-                      color: SEVERITY_COLORS[a.severity] || "#94a3b8",
-                      fontFamily: "var(--font-sans)",
+                      fontSize: "var(--font-micro)", fontWeight: 700,
+                      color: SEVERITY_COLORS[a.severity] || "var(--text-muted)",
+                      textTransform: "capitalize",
                     }}>
-                      {a.severity.toUpperCase()}
+                      {a.severity}
                     </span>
 
-                    {/* Alert type chip */}
-                    <span style={{
-                      fontSize: 9, padding: "2px 7px", borderRadius: 999,
-                      background: "var(--bg-elevated)",
-                      color: "var(--text-muted)",
-                      fontFamily: "var(--font-sans)",
-                    }}>
+                    <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
                       {ALERT_TYPE_LABELS[a.alert_type] || a.alert_type}
                     </span>
 
                     {a.resolved && (
-                      <span style={{ fontSize: 9, color: "#34d399", fontFamily: "var(--font-sans)" }}>✓ Resolved</span>
+                      <span style={{ fontSize: "var(--font-micro)", color: "var(--status-success)" }}>Resolved</span>
                     )}
                     {!a.resolved && a.acknowledged && (
-                      <span style={{ fontSize: 9, color: "#94a3b8", fontFamily: "var(--font-sans)" }}>Acked</span>
+                      <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>Acknowledged</span>
                     )}
                   </div>
 
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)", display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
                     <span>{timeAgo(a.created_at)}</span>
                     {clientName && (
-                      <span
-                        style={{ color: "var(--accent)", cursor: "pointer" }}
+                      <button
+                        type="button"
+                        className="ds-btn ds-btn--quiet"
+                        style={{ padding: 0, color: "var(--accent)", fontSize: "var(--font-micro)" }}
                         onClick={() => router.push(`/clients/${a.client_id}?tab=alerts`)}
                       >
-                        Client: {clientName}
-                      </span>
+                        {clientName}
+                      </button>
                     )}
                     {a.investigation_id && (
-                      <span
-                        style={{ color: "var(--accent)", cursor: "pointer" }}
+                      <button
+                        type="button"
+                        className="ds-btn ds-btn--quiet"
+                        style={{ padding: 0, color: "var(--accent)", fontSize: "var(--font-micro)" }}
                         onClick={() => router.push(`/investigations/${a.investigation_id}`)}
                       >
-                        View investigation →
-                      </span>
+                        View investigation
+                      </button>
                     )}
                   </div>
                 </div>
 
-                {/* Actions */}
+                {/* Resolve is the action that finishes the job, so it leads. */}
                 {!a.resolved && (
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div className="ds-toolbar" style={{ flexShrink: 0 }}>
                     {!a.acknowledged && (
-                      <button onClick={() => handleAcknowledge(a.id)} style={actionBtn("#94a3b8")}>
-                        Ack
-                      </button>
+                      <Button variant="quiet" onClick={() => handleAcknowledge(a.id)}>
+                        Acknowledge
+                      </Button>
                     )}
-                    <button onClick={() => handleResolve(a.id)} style={actionBtn("#34d399")}>
+                    <Button variant="secondary" onClick={() => handleResolve(a.id)}>
                       Resolve
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -318,47 +297,24 @@ export default function AlertsPage() {
         )}
       </div>
 
-      {/* Pagination */}
+      {/* Paging by prev/next: one button per page becomes a wall at 40 pages. */}
       {totalPages > 1 && (
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 20 }}>
-          {Array.from({ length: totalPages }, (_, i) => (
-            <button
-              key={i}
-              onClick={() => setPage(i)}
-              style={{
-                padding: "6px 14px",
-                background: i === page ? "var(--accent)" : "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: i === page ? "#fff" : "var(--text-dim)",
-                fontSize: 12,
-                fontFamily: "var(--font-sans)",
-                cursor: "pointer",
-              }}
-            >
-              {i + 1}
-            </button>
-          ))}
+        <div className="ds-toolbar" style={{ justifyContent: "center" }}>
+          <Button variant="secondary" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}>
+            Previous
+          </Button>
+          <span style={{ fontSize: "var(--font-meta)", color: "var(--text-muted)" }}>
+            Page {page + 1} of {totalPages}
+          </span>
+          <Button
+            variant="secondary"
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+          >
+            Next
+          </Button>
         </div>
       )}
-
-      <div style={{ textAlign: "right", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)", marginTop: 10 }}>
-        {total} alert{total !== 1 ? "s" : ""} total
-      </div>
-    </div>
+    </Page>
   );
-}
-
-function actionBtn(color: string): React.CSSProperties {
-  return {
-    padding: "5px 12px",
-    background: "transparent",
-    border: `1px solid ${color}44`,
-    borderRadius: "var(--radius-sm)",
-    color,
-    fontSize: 11,
-    fontFamily: "var(--font-sans)",
-    fontWeight: 600,
-    cursor: "pointer",
-  };
 }

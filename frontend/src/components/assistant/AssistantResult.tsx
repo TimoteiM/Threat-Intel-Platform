@@ -67,7 +67,6 @@ export default function AssistantResult({
       ) : null}
 
       <ConsoleModule
-        eyebrow="Analyst output"
         title="Assistant output"
         description="Export the markdown report or review the generated content directly in the workspace."
         tone="neutral"
@@ -128,7 +127,7 @@ function stripResolvedSection(markdown: string): string {
 
 function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <ConsoleModule eyebrow="Assistant Output" title={title} description={description} tone="neutral" compact>
+    <ConsoleModule title={title} description={description} tone="neutral" compact>
       <div style={{ color: "var(--text-dim)", fontSize: 13, lineHeight: 1.7 }}>
         Session output will appear here after you create or select a session.
       </div>

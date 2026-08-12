@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import * as api from "@/lib/api";
+import { EmptyState, ErrorState, Page, PageHeader } from "@/components/ui/Primitives";
 
 // ─── Score helpers ───
 function scoreColor(score: number | null | undefined): string {
@@ -98,24 +99,19 @@ export default function IPLookupPage() {
   }
 
   return (
-    <div style={{ paddingTop: 32, paddingBottom: 64 }}>
-
-      {/* Page title */}
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{
-          fontSize: 22, fontWeight: 700, color: "var(--text)",
-          fontFamily: "var(--font-sans)", margin: 0, letterSpacing: "-0.01em",
-        }}>
-          IP Reputation Lookup
-        </h1>
-        <p style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 5, fontFamily: "var(--font-sans)" }}>
-          Check any IP against AbuseIPDB (verbose) and ThreatFox. Results are saved to history.
-        </p>
-      </div>
+    <Page>
+      <PageHeader
+        title="IP reputation"
+        subtitle="Check an IP against AbuseIPDB and ThreatFox. Every lookup is kept in history."
+      />
 
       {/* Search bar */}
-      <form onSubmit={handleLookup} style={{ display: "flex", gap: 10, marginBottom: 28 }}>
+      <form onSubmit={handleLookup} style={{ display: "flex", gap: "var(--space-2)" }}>
+        <label htmlFor="ip-lookup-input" className="ds-sr-only">
+          IPv4 or IPv6 address
+        </label>
         <input
+          id="ip-lookup-input"
           ref={inputRef}
           value={ip}
           onChange={(e) => setIp(e.target.value)}
@@ -124,7 +120,7 @@ export default function IPLookupPage() {
           style={{
             flex: 1, padding: "10px 16px", fontSize: 14,
             background: "var(--bg-input)", color: "var(--text)",
-            border: "1px solid var(--border)", borderRadius: "var(--radius)",
+            border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)",
             outline: "none", fontFamily: "var(--font-mono)",
           }}
           onFocus={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
@@ -147,16 +143,7 @@ export default function IPLookupPage() {
         </button>
       </form>
 
-      {/* Error */}
-      {error && (
-        <div style={{
-          padding: "10px 16px", background: "rgba(239,68,68,0.07)",
-          border: "1px solid rgba(239,68,68,0.25)", borderRadius: "var(--radius)",
-          fontSize: 12, color: "var(--red)", marginBottom: 20,
-        }}>
-          {error}
-        </div>
-      )}
+      {error && <ErrorState title="Lookup failed" detail={error} />}
 
       {/* Two-column layout */}
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
@@ -269,21 +256,15 @@ export default function IPLookupPage() {
         {/* ── Main results ── */}
         <div>
           {!result && !loading && (
-            <div style={{
-              padding: "48px 32px", textAlign: "center",
-              background: "var(--bg-surface)", border: "1px solid var(--border)",
-              borderRadius: "var(--radius)",
-            }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
-              <div style={{ fontSize: 13, color: "var(--text-dim)", fontFamily: "var(--font-sans)" }}>
-                Enter an IP address or click a history item
-              </div>
-            </div>
+            <EmptyState
+              title="No lookup yet"
+              hint="Enter an IP address above, or pick one from history."
+            />
           )}
           {result && <IPLookupResult result={result} />}
         </div>
       </div>
-    </div>
+    </Page>
   );
 }
 
@@ -548,9 +529,9 @@ function ScoreGauge({ score }: { score: number }) {
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
-      padding: "18px 22px",
-      background: "var(--bg-surface)", border: "1px solid var(--border)",
-      borderRadius: "var(--radius)",
+      padding: "var(--space-4)",
+      border: "1px solid var(--panel-divider-strong)",
+      borderRadius: "var(--shell-radius-lg)",
     }}>
       {children}
     </div>
@@ -559,11 +540,7 @@ function Card({ children }: { children: React.ReactNode }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{
-      padding: "16px 22px",
-      background: "var(--bg-surface)", border: "1px solid var(--border)",
-      borderRadius: "var(--radius)",
-    }}>
+    <div style={{ paddingBlock: "var(--space-3)" }}>
       <div style={{
         fontSize: 11, fontWeight: 700, color: "var(--accent)",
         letterSpacing: "0.06em", marginBottom: 12,

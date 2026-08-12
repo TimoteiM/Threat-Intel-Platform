@@ -134,7 +134,6 @@ export default function AlertReportPreviewPage() {
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
       <PageHero
-        eyebrow="Report Export Preview"
         // Alert titles are the raw alert body — keep the hero to one line.
         title={shortTitle(summaryDoc?.title) || "Alert report list"}
         description={

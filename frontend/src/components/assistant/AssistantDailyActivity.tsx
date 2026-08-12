@@ -56,7 +56,6 @@ export default function AssistantDailyActivity({ refreshKey = 0 }: AssistantDail
 
   return (
     <ConsoleModule
-      eyebrow="AI Operations"
       title="Alerts treated by AI Assistant"
       description="Successfully completed alert-analysis sessions, grouped by the hour they finished in your local time."
       tone="info"

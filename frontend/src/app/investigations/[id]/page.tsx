@@ -12,6 +12,7 @@ import TabBar from "@/components/shared/TabBar";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import MetadataGrid, { type MetadataItem } from "@/components/ui/MetadataGrid";
 import PageHero from "@/components/ui/PageHero";
+import { Details, MenuItem, OverflowMenu } from "@/components/ui/Primitives";
 import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
 
@@ -475,9 +476,7 @@ export default function InvestigationPage() {
     return (
       <div style={pageShellStyle}>
         <PageHero
-          eyebrow="Investigation Detail"
           title={investigationTitle}
-          description="Loading the console shell, collector state, and report workspace."
           status={<StatusPill tone="neutral" mono>Loading</StatusPill>}
           badges={(
             <>
@@ -497,7 +496,7 @@ export default function InvestigationPage() {
           )}
         />
         <div style={{ marginTop: 22 }}>
-          <ConsoleModule eyebrow="Console" title="Investigative workspace" description="The detail shell is assembling the shared analyst view.">
+          <ConsoleModule title="Loading investigation">
             <div style={{ display: "grid", gap: 18 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 <Spinner message="Loading investigation..." />
@@ -537,107 +536,72 @@ export default function InvestigationPage() {
 
     return (
       <div style={pageShellStyle}>
+        {/* A running investigation used to state its own progress six times:
+            in the header sentence, a status pill, two badges, four stat cards,
+            a progress module and the stage list. Progress belongs in one
+            place, and what the analyst is waiting for is the stage. */}
         <PageHero
-          eyebrow="Investigation Detail"
           title={investigationTitle}
-          description={(
-            <>
-              <span>Live collection is still in flight.</span>
-              <span style={{ marginLeft: 8, color: "var(--text-dim)" }}>
-                {investigationState === "created" ? "Queued" : humanizeState(investigationState)} | SSE {sse.connected ? "live" : "reconnecting"} | {elapsedSec}s elapsed
-              </span>
-            </>
-          )}
+          description={`${humanizeState(investigationState)} · ${currentProgressPct}% · ${collectorCompleteCount} of ${collectorRows.length} collectors done · ${elapsedSec}s elapsed`}
           status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
-          badges={(
-            <>
-              <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
-                {sse.connected ? "SSE LIVE" : "POLLING"}
-              </StatusPill>
-              <StatusPill tone={reportReady ? "success" : "warning"} size="sm" outline mono>
-                {reportReady ? "REPORT READY" : "COLLECTING"}
-              </StatusPill>
-            </>
-          )}
           actions={(
             <>
               <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
               {isCancellable ? (
                 <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
-                  {canceling ? "Cancelling..." : "Cancel Investigation"}
+                  {canceling ? "Cancelling..." : "Cancel investigation"}
                 </ConsoleActionButton>
               ) : null}
             </>
           )}
-          stats={(
-            <>
-              <SignalCard label="Progress" value={String(currentProgressPct) + "%"} caption={stageSummary} tone={investigationStatusTone} accent={stateAccent(investigationState)} compact />
-              <SignalCard label="Stage" value={humanizeState(investigationState)} caption="Current orchestration state" tone={investigationStatusTone} compact />
-              <SignalCard label="Collectors" value={collectorRows.length} caption={String(collectorCompleteCount) + " complete / " + String(collectorPendingCount) + " pending"} tone="info" compact />
-              <SignalCard label="Coverage" value={String(collectorCoverage) + "%"} caption="Collector completion ratio" tone={collectorCoverage >= 75 ? "success" : "warning"} compact />
-            </>
-          )}
         />
-        <MetadataGrid items={investigationMetaItems} title="Investigation Snapshot" eyebrow="Structured metadata" description="The shared console surface summarizes the active investigation before you enter the detailed tabs." />
         <div style={consoleSectionSpacing}>
-          <div style={consoleGridStyle}>
-            <ConsoleModule
-              eyebrow="Pipeline"
-              title="Investigation progress"
-              description="Collectors are still running and the narrative layer has not finalized yet."
-              tone={investigationStatusTone}
-              variant="glass"
-            >
-              <div style={{ display: "grid", gap: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={consoleLabelStyle}>Progress</span>
-                  <StatusPill tone={investigationStatusTone} mono>{progressPct}%</StatusPill>
-                </div>
-                <div style={progressTrackStyle}>
-                  <div
-                    style={{
-                      ...progressBarStyle,
-                      width: `${progressPct}%`,
-                      background: liveState === "failed"
-                        ? "linear-gradient(90deg, #ef4444, #f87171)"
-                        : "linear-gradient(90deg, var(--accent), #34d399)",
-                    }}
-                  />
-                </div>
-                <div style={consoleBodyStyle}>{stageText}</div>
+          <ConsoleModule title="Progress" tone={investigationStatusTone} variant="glass">
+            <div style={{ display: "grid", gap: "var(--space-3)" }}>
+              <div
+                style={progressTrackStyle}
+                role="progressbar"
+                aria-valuenow={progressPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Investigation progress"
+              >
+                <div
+                  style={{
+                    ...progressBarStyle,
+                    width: `${progressPct}%`,
+                    background: liveState === "failed"
+                      ? "var(--status-danger)"
+                      : "linear-gradient(90deg, var(--accent), var(--status-success))",
+                  }}
+                />
               </div>
-            </ConsoleModule>
-            <ConsoleModule
-              eyebrow="Stages"
-              title="Execution path"
-              description="A quick read on where the orchestration currently sits."
-              tone="info"
-              variant="dense"
-            >
-              <div style={{ display: "grid", gap: 10 }}>
+              <div style={consoleBodyStyle}>{stageText}</div>
+              <div style={{ display: "grid", gap: "var(--space-2)" }}>
                 {steps.map((step) => (
                   <div key={step.key} style={stageRowStyle(step.active, step.done)}>
-                    <span style={stageIconStyle(step.active, step.done)}>{step.done ? "Done" : step.active ? "Live" : "Pending"}</span>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{step.label}</span>
+                    <span style={stageIconStyle(step.active, step.done)}>{step.done ? "Done" : step.active ? "Running" : "Pending"}</span>
+                    <span style={{ fontSize: "var(--font-meta)", fontWeight: 600 }}>{step.label}</span>
                   </div>
                 ))}
               </div>
-            </ConsoleModule>
-          </div>
-          <ConsoleModule
-            eyebrow="Telemetry"
-            title="Collector timings"
-            description="Live collector timing stays visible while the investigation is still in progress."
-            variant="solid"
-            tone="info"
-          >
+            </div>
+          </ConsoleModule>
+
+          {/* Connection state, per-collector timings and the metadata snapshot
+              are diagnostics — available, not in the way of the wait. */}
+          <Details summary="Technical details">
+            <MetadataGrid items={investigationMetaItems} compact />
+            <div style={{ marginTop: "var(--space-3)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+              Updates: {sse.connected ? "live stream" : "polling (stream reconnecting)"}
+            </div>
             <CollectorTimingTable
               rows={collectorRows}
               totalDurationMs={sse.totalElapsedMs ?? (elapsedSec * 1000)}
               live={true}
-              title="Collector Timings"
+              title="Collector timings"
             />
-          </ConsoleModule>
+          </Details>
           {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
         </div>
         {false && <div style={{ paddingTop: 24 }}>
@@ -815,115 +779,114 @@ export default function InvestigationPage() {
   // ─── Main report view ───
   return (
     <div style={pageShellStyle}>
+      {/* The entity, its verdict and what to do next. Model name, stream state,
+          run id and "report ready" moved into Technical details below — none of
+          them changes what the analyst does with the verdict. */}
       <PageHero
-        eyebrow="Investigation Detail"
         title={investigationTitle}
-        description={(
-          <>
-            <span>Threat Analyst Console view for the active investigation.</span>
-            <span style={{ marginLeft: 8, color: "var(--text-dim)" }}>
-              {shortId(investigationId)} | {createdLabel}{detail?.concluded_at ? " | Completed " + concludedLabel : ""}
-            </span>
-          </>
-        )}
+        description={concludedLabel ? `Completed ${concludedLabel}` : createdLabel}
         status={<StatusPill tone={investigationStatusTone} mono>{humanizeState(investigationState)}</StatusPill>}
         badges={(
           <>
             {detail?.observable_type && detail.observable_type !== "domain" ? (
               <StatusPill tone="info" size="sm" outline mono>{detail.observable_type}</StatusPill>
             ) : null}
-            {report?.ai_model ? (
-              <StatusPill
-                tone={String(report.ai_model).startsWith("claude-") ? "warning" : "info"}
-                size="sm" outline mono
-              >
-                {String(report.ai_model).startsWith("claude-sonnet") ? "Sonnet 4.6"
-                  : String(report.ai_model).startsWith("claude-haiku") ? "Haiku 4.5"
-                  : report.ai_model === "gpt-5.6-luna" ? "GPT-5.6 Luna"
-                  : String(report.ai_model).startsWith("claude-opus") ? "Opus 4.6"
-                  : String(report.ai_model).replace(" (default)", "")}
-              </StatusPill>
-            ) : null}
-            <StatusPill tone={sse.connected ? "success" : "warning"} size="sm" outline mono>
-              {sse.connected ? "SSE LIVE" : "POLLING"}
-            </StatusPill>
-            <StatusPill tone={reportReady ? "success" : "warning"} size="sm" outline mono>
-              {reportReady ? "REPORT READY" : "COLLECTING"}
-            </StatusPill>
             {reportWasRecomputed ? (
-              <StatusPill tone="info" size="sm" outline mono>RECOMPUTED</StatusPill>
+              <StatusPill tone="info" size="sm" outline mono>Recomputed</StatusPill>
             ) : null}
           </>
         )}
         actions={(
           <>
-            <ConsoleActionButton onClick={() => router.push("/")}>New Investigation</ConsoleActionButton>
+            {/* One primary action, one secondary, the rest behind an overflow.
+                Nine equally-weighted buttons made "Delete" as prominent as
+                "Refresh". */}
             <ConsoleActionButton onClick={() => { void handleOpenAssistant(); }}>Open in AI Assistant</ConsoleActionButton>
-            {isCancellable ? (
-              <ConsoleActionButton onClick={handleCancel} tone="danger" disabled={canceling}>
-                {canceling ? "Cancelling..." : "Cancel"}
-              </ConsoleActionButton>
-            ) : null}
-            <ConsoleActionButton onClick={handleDelete} tone="danger" disabled={deleting}>
-              {deleting ? "Deleting..." : "Delete"}
-            </ConsoleActionButton>
-            <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/pdf", "_blank"); }}>Export PDF</ConsoleActionButton>
-            <ConsoleActionButton onClick={() => { window.open("/api/investigations/" + investigationId + "/export/markdown", "_blank"); }}>Export MD</ConsoleActionButton>
-            <ConsoleActionButton onClick={() => {
-              const blob = new Blob([JSON.stringify({ evidence, report, detail }, null, 2)], { type: "application/json" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = (detail?.domain || "investigation") + "-full.json";
-              a.click();
-              URL.revokeObjectURL(url);
-            }}>
-              Export JSON
-            </ConsoleActionButton>
             <ConsoleActionButton onClick={handleRefresh}>Refresh</ConsoleActionButton>
-          </>
-        )}
-        stats={(
-          <>
-            <SignalCard label="Progress" value={reportReady ? "100%" : String(currentProgressPct) + "%"} caption={reportReady ? "Investigation complete" : stageSummary} tone={investigationStatusTone} accent={stateAccent(investigationState)} compact />
-            <SignalCard label="Collectors" value={collectorRows.length} caption={String(collectorCompleteCount) + " complete / " + String(collectorPendingCount) + " pending"} tone="info" compact />
-            <SignalCard label="Coverage" value={String(collectorCoverage) + "%"} caption="Collector completion ratio" tone={collectorCoverage >= 75 ? "success" : "warning"} compact />
-            <SignalCard label="Workspace" value={tabs.length} caption="Available report sections" tone="neutral" compact />
+            <OverflowMenu label="More investigation actions">
+              {(close) => (
+                <>
+                  <MenuItem onClick={() => { close(); router.push("/"); }}>New investigation</MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      window.open("/api/investigations/" + investigationId + "/export/pdf", "_blank");
+                    }}
+                  >
+                    Export as PDF
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      window.open("/api/investigations/" + investigationId + "/export/markdown", "_blank");
+                    }}
+                  >
+                    Export as Markdown
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      const blob = new Blob([JSON.stringify({ evidence, report, detail }, null, 2)], { type: "application/json" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = (detail?.domain || "investigation") + "-full.json";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Export raw JSON
+                  </MenuItem>
+                  {isCancellable ? (
+                    <MenuItem danger disabled={canceling} onClick={() => { close(); handleCancel(); }}>
+                      {canceling ? "Cancelling…" : "Cancel investigation"}
+                    </MenuItem>
+                  ) : null}
+                  <MenuItem danger disabled={deleting} onClick={() => { close(); handleDelete(); }}>
+                    {deleting ? "Deleting…" : "Delete investigation"}
+                  </MenuItem>
+                </>
+              )}
+            </OverflowMenu>
           </>
         )}
       />
-      <MetadataGrid items={investigationMetaItems} title="Investigation Snapshot" eyebrow="Structured metadata" description="The shared console surface summarizes the active investigation before you enter the detailed tabs." />
       <div style={consoleSectionSpacing}>
         {cancelError ? <div style={inlineErrorStyle}>{cancelError}</div> : null}
 
+        {/* Evidence coverage stays visible — a report built on 9 of 14
+            collectors is a different thing from a complete one. Timings, ids,
+            model and stream state collapse. */}
         {evidence ? (
-          <div style={consoleGridStyle}>
-            <ConsoleModule
-              eyebrow="Pipeline"
-              title="Collector progress"
-              description="A compact execution view before you enter the detailed report sections."
-              tone="info"
-              variant="glass"
-            >
-              <ProgressTimeline
-                collectors={Object.fromEntries(
-                  collectorKeys.map((c) => {
-                    const evidenceKey = c === "asn" ? "hosting" : c;
-                    const collectorData = evidence?.[evidenceKey];
-                    const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
-                    return [c, status];
-                  })
-                )}
-                analystDone={!!report}
-              />
-            </ConsoleModule>
-            <ConsoleModule
-              eyebrow="Timing"
-              title="Collector timings"
-              description="Wall-clock timing for each collection stage."
-              tone="neutral"
-              variant="solid"
-            >
+          <ConsoleModule
+            title={`Collector coverage — ${collectorCoverage}%`}
+            description={
+              collectorPendingCount > 0
+                ? `${collectorCompleteCount} of ${collectorRows.length} complete, ${collectorPendingCount} pending or failed`
+                : `All ${collectorRows.length} collectors completed`
+            }
+            tone={collectorCoverage >= 75 ? "success" : "warning"}
+            variant="glass"
+          >
+            <ProgressTimeline
+              collectors={Object.fromEntries(
+                collectorKeys.map((c) => {
+                  const evidenceKey = c === "asn" ? "hosting" : c;
+                  const collectorData = evidence?.[evidenceKey];
+                  const status = collectorData?.meta?.status || (collectorData ? "completed" : "pending");
+                  return [c, status];
+                })
+              )}
+              analystDone={!!report}
+            />
+
+            <Details summary="Technical details">
+              <MetadataGrid items={investigationMetaItems} compact />
+              <div style={{ marginTop: "var(--space-3)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+                Run {shortId(investigationId)}
+                {report?.ai_model ? ` · analysed by ${String(report.ai_model).replace(" (default)", "")}` : ""}
+                {` · updates via ${sse.connected ? "live stream" : "polling"}`}
+              </div>
               <CollectorTimingTable
                 rows={collectorRows}
                 totalDurationMs={
@@ -931,19 +894,15 @@ export default function InvestigationPage() {
                     ? Math.max(0, new Date(detail.concluded_at).getTime() - new Date(detail.created_at).getTime())
                     : undefined
                 }
-                title="Collector Timings"
+                title="Collector timings"
               />
-            </ConsoleModule>
-          </div>
+            </Details>
+          </ConsoleModule>
         ) : null}
 
-        <ConsoleModule
-          eyebrow="Report Workspace"
-          title="Analysis tabs"
-          description="Navigate the executive summary, evidence, findings, pivots, and raw data from a single investigation shell."
-          tone="info"
-          variant="glass"
-        >
+        {/* The tab bar names its own sections; a heading and a sentence above it
+            explaining that tabs are tabs was pure interface-about-interface. */}
+        <ConsoleModule variant="glass">
           <div ref={setReportTabsNode}>
             <TabBar tabs={tabs} active={activeTab} onChange={(id) => setActiveTab(id as TabId)} />
           </div>

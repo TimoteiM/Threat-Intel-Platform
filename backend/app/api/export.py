@@ -8,10 +8,13 @@ GET /api/investigations/{id}/export/markdown
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from app.dependencies import DBSession
+from app.services import report_pdf_cache
 from app.services.investigation_service import InvestigationService
 from app.services.export_service import export_pdf, export_json, export_markdown
 
@@ -45,13 +48,26 @@ async def export_investigation_pdf(investigation_id: str, session: DBSession):
         "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
-    try:
-        pdf_bytes = export_pdf(evidence, report, detail_dict)
-    except RuntimeError as exc:
-        raise HTTPException(500, f"PDF export failed: {exc}") from exc
+    # The worker renders this as the investigation concludes, so the usual path
+    # is a file read. Rendering here is the fallback for investigations that
+    # finished before the cache existed, and for runs whose render failed.
+    fingerprint = report_pdf_cache.pdf_fingerprint(evidence, report, detail_dict)
+    pdf_bytes = await report_pdf_cache.load_cached_pdf(session, investigation_id, fingerprint)
 
-    if not pdf_bytes.startswith(b"%PDF"):
-        raise HTTPException(500, "PDF export produced an invalid file payload.")
+    if pdf_bytes is None:
+        try:
+            # Synchronous and slow. Inline on the event loop it stalls *every*
+            # request for the duration — one analyst exporting a report made the
+            # whole platform stop answering, which read to everyone else as
+            # "the tabs won't load".
+            pdf_bytes = await asyncio.to_thread(export_pdf, evidence, report, detail_dict)
+        except RuntimeError as exc:
+            raise HTTPException(500, f"PDF export failed: {exc}") from exc
+
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise HTTPException(500, "PDF export produced an invalid file payload.")
+
+        await report_pdf_cache.store_pdf(session, investigation_id, fingerprint, pdf_bytes)
 
     return Response(
         content=pdf_bytes,
@@ -89,7 +105,7 @@ async def export_investigation_json(investigation_id: str, session: DBSession):
         "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
-    json_bytes = export_json(evidence, report, detail_dict)
+    json_bytes = await asyncio.to_thread(export_json, evidence, report, detail_dict)
 
     return Response(
         content=json_bytes,
@@ -127,7 +143,7 @@ async def export_investigation_md(investigation_id: str, session: DBSession):
         "concluded_at": detail.concluded_at.isoformat() if detail.concluded_at else None,
     }
 
-    md_text = export_markdown(evidence, report, detail_dict)
+    md_text = await asyncio.to_thread(export_markdown, evidence, report, detail_dict)
 
     return Response(
         content=md_text.encode("utf-8"),

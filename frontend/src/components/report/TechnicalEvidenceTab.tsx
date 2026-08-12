@@ -2523,17 +2523,18 @@ function Section({ title, children, action }: { title: string; children: React.R
   const split = React.useContext(EvidenceSplitContext);
   if (split?.activeTitle && split.activeTitle !== title) return null;
   return (
-    <div style={{ marginBottom: 32 }}>
+    <div style={{ marginBottom: "var(--space-6)" }}>
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: 14, paddingBottom: 8, borderBottom: "1px solid var(--border)",
+        marginBottom: "var(--space-3)", paddingBottom: "var(--space-2)",
+        borderBottom: "1px solid var(--panel-divider)",
       }}>
-        <div style={{
-          fontSize: 13, fontWeight: 600, color: "var(--accent)",
-          letterSpacing: "0.01em", fontFamily: "var(--font-sans)",
+        <h3 style={{
+          fontSize: "var(--font-section-title)", fontWeight: 700, color: "var(--text-secondary)",
+          letterSpacing: "0.06em", textTransform: "uppercase", margin: 0,
         }}>
           {title}
-        </div>
+        </h3>
         {action && <div>{action}</div>}
       </div>
       {children}

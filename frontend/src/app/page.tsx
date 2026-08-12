@@ -14,6 +14,7 @@ import {
 import type { InvestigationInputType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
+import { Details, MetaDot, PageHeader } from "@/components/ui/Primitives";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,65 +37,9 @@ function timeAgo(dateStr: string): string {
   return `${d}d ago`;
 }
 
-// ─── Animated counter ────────────────────────────────────────────────────────
-
-function useCounter(target: number, duration = 900): number {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    if (target === 0) return;
-    let start: number | null = null;
-    const step = (ts: number) => {
-      if (!start) start = ts;
-      const progress = Math.min((ts - start) / duration, 1);
-      // ease-out cubic
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setValue(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }, [target, duration]);
-  return value;
-}
-
-// ─── Stats card ──────────────────────────────────────────────────────────────
-
-function StatCard({ value, label, accent }: { value: number; label: string; accent?: string }) {
-  const count = useCounter(value);
-  return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      padding: "14px 24px",
-      background: "var(--bg-card)",
-      border: "1px solid var(--border)",
-      borderRadius: "var(--radius-lg)",
-      minWidth: 110,
-    }}>
-      <span style={{
-        fontSize: 26,
-        fontWeight: 800,
-        fontFamily: "var(--font-mono)",
-        color: accent || "var(--text)",
-        letterSpacing: "0.02em",
-        lineHeight: 1,
-      }}>
-        {count.toLocaleString()}
-      </span>
-      <span style={{
-        fontSize: 10,
-        fontWeight: 600,
-        color: "var(--text-muted)",
-        fontFamily: "var(--font-sans)",
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        marginTop: 5,
-      }}>
-        {label}
-      </span>
-    </div>
-  );
-}
+// The animated counter and its bordered stat card went with the hero: three
+// numbers that counted up on every page load, in three boxes, above the form.
+// The same figures now sit inline in the header.
 
 // ─── Collector strip ─────────────────────────────────────────────────────────
 
@@ -889,92 +834,43 @@ export default function HomePage() {
         />
       )}
 
-      {/* ── Hero ── */}
-      <div style={{
-        textAlign: "center",
-        paddingTop: 40,
-        paddingBottom: 8,
-      }} className="animate-in">
+      {/* The page an analyst opens to start work. The form used to sit below a
+          centred marketing hero, a pulsing capability badge, a scrolling list of
+          24 collectors and a three-step explainer — roughly a full viewport
+          before anything you could type into. Header, then the form. */}
+      <PageHeader
+        title="New investigation"
+        subtitle="Submit a domain, IP, URL, file hash or email address for a full analyst report."
+        meta={
+          stats.total > 0 ? (
+            <>
+              <span>{stats.total.toLocaleString()} investigated</span>
+              <MetaDot />
+              <span style={{ color: "var(--status-danger)" }}>{stats.threats.toLocaleString()} malicious</span>
+              <MetaDot />
+              <span style={{ color: "var(--status-warning)" }}>{totalHighRisk.toLocaleString()} high risk</span>
+            </>
+          ) : undefined
+        }
+      />
 
-        <div style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 12px",
-          background: "rgba(96,165,250,0.08)",
-          border: "1px solid rgba(96,165,250,0.2)",
-          borderRadius: 20,
-          marginBottom: 16,
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: "50%",
-            background: "#60a5fa",
-            display: "inline-block",
-            animation: "pulse 2s ease-in-out infinite",
-          }} />
-          <span style={{
-            fontSize: 11, fontWeight: 600, color: "#60a5fa",
-            fontFamily: "var(--font-sans)", letterSpacing: "0.04em",
-          }}>
-            AI-Powered · Evidence-Based · MITRE ATT&CK Mapped
-          </span>
-        </div>
-
-        <h1 style={{
-          fontSize: 32,
-          fontWeight: 800,
-          fontFamily: "var(--font-mono)",
-          color: "var(--text)",
-          letterSpacing: "0.01em",
-          lineHeight: 1.2,
-          marginBottom: 10,
-        }}>
-          Threat Intelligence Platform
-        </h1>
-
-        <p style={{
-          fontSize: 14,
-          color: "var(--text-dim)",
-          fontFamily: "var(--font-sans)",
-          maxWidth: 520,
-          margin: "0 auto 24px",
-          lineHeight: 1.6,
-        }}>
-          Submit a domain, IP, URL, file hash, or email and get a full analyst-grade report —
-          classification, IOCs, findings, and actionable SOC steps.
-        </p>
-
-        {/* Stats row — only shown if data exists */}
-        {stats.total > 0 && (
-          <div style={{
-            display: "inline-flex",
-            gap: 10,
-            justifyContent: "center",
-            flexWrap: "wrap",
-          }}>
-            <StatCard value={stats.total}      label="Investigated" />
-            <StatCard value={stats.threats}    label="Threats Found"  accent="#f87171" />
-            <StatCard value={totalHighRisk}    label="High Risk"      accent="#fbbf24" />
-          </div>
-        )}
+      <div style={{ marginTop: "var(--space-5)" }}>
+        <InvestigationInput onSubmit={handleSubmit} loading={loading} />
       </div>
 
-      {/* ── Collector strip ── */}
-      <CollectorStrip />
-
-      {/* ── How it works ── */}
-      <HowItWorks />
-
-      {/* ── Investigation form ── */}
-      <InvestigationInput onSubmit={handleSubmit} loading={loading} />
-
-      {/* ── Recent investigations ── */}
       <RecentInvestigations
         items={recent}
         deletingId={deletingId}
         onDelete={handleDeleteRecent}
         onOpen={(id) => router.push(`/investigations/${id}`)}
       />
+
+      {/* Onboarding, kept for a first-time analyst and out of the way of
+          everyone else. */}
+      <Details summary="How an investigation works, and what it checks">
+        <HowItWorks />
+        <CollectorStrip />
+      </Details>
 
     </div>
   );

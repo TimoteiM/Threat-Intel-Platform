@@ -1,5 +1,17 @@
 "use client";
 
+/**
+ * The page header.
+ *
+ * This was a 26px-radius panel with two radial gradients, a hero shadow and a
+ * 38px display title — roughly a fifth of a laptop viewport spent before the
+ * first piece of information. It is now a title, a line of context and the
+ * page's actions over a divider, and the space goes to the content.
+ *
+ * The props are unchanged so every page that already renders one keeps working;
+ * `stats` now lays out as an inline metric strip rather than a grid of cards.
+ */
+
 import React from "react";
 import type { ConsoleTone } from "@/components/ui/ConsoleModule";
 
@@ -30,123 +42,109 @@ export default function PageHero({
   style,
   className,
 }: PageHeroProps) {
-  const colors = resolveToneColor(tone, accent);
-
   return (
-    <section
-      className={className}
-      style={{
-        position: "relative",
-        overflow: "hidden",
-        borderRadius: 26,
-        border: `1px solid ${colors.border}`,
-        background: "var(--panel-card-bg)",
-        boxShadow: "var(--panel-shadow-hero)",
-        padding: 24,
-        ...style,
-      }}
-    >
+    <header className={className} style={{ display: "grid", gap: "var(--space-3)", ...style }}>
       <div
-        aria-hidden="true"
         style={{
-          position: "absolute",
-          inset: 0,
-          background:
-            "radial-gradient(900px circle at 6% 0%, rgba(102, 168, 255, 0.18), transparent 40%), radial-gradient(700px circle at 92% 8%, rgba(251, 191, 36, 0.08), transparent 34%)",
-          pointerEvents: "none",
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: "var(--space-4)",
+          flexWrap: "wrap",
+          paddingBottom: "var(--space-3)",
+          borderBottom: "1px solid var(--panel-divider)",
         }}
-      />
-      <div style={{ position: "relative", zIndex: 1, display: "grid", gap: 22 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 0, flex: "1 1 460px" }}>
-            {eyebrow ? (
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 800,
-                  letterSpacing: "0.18em",
-                  textTransform: "uppercase",
-                  color: colors.eyebrow,
-                  marginBottom: 10,
-                }}
-              >
-                {eyebrow}
-              </div>
-            ) : null}
+      >
+        <div style={{ minWidth: 0, flex: "1 1 420px" }}>
+          {eyebrow ? (
             <div
               style={{
+                fontSize: "var(--font-micro)",
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: eyebrowColor(tone, accent),
+                marginBottom: 4,
+              }}
+            >
+              {eyebrow}
+            </div>
+          ) : null}
+
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+            <h1
+              style={{
                 fontFamily: "var(--font-display)",
-                fontSize: 38,
-                lineHeight: 1.06,
-                letterSpacing: "-0.04em",
+                fontSize: "var(--font-page-title)",
+                lineHeight: 1.2,
+                letterSpacing: "-0.01em",
                 fontWeight: 700,
                 color: "var(--text-strong)",
-                wordBreak: "break-word",
+                margin: 0,
+                overflowWrap: "anywhere",
+                minWidth: 0,
               }}
             >
               {title}
-            </div>
-            {description ? (
-              <div
-                style={{
-                  marginTop: 14,
-                  maxWidth: 900,
-                  fontSize: 15,
-                  lineHeight: 1.75,
-                  color: "var(--text-secondary)",
-                }}
-              >
-                {description}
-              </div>
-            ) : null}
+            </h1>
+            {status}
           </div>
 
-          {status || actions || badges ? (
-            <div style={{ display: "grid", justifyItems: "end", gap: 10, flex: "0 0 auto" }}>
-              {status ? <div>{status}</div> : null}
-              {badges ? <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 }}>{badges}</div> : null}
-              {actions ? <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 10 }}>{actions}</div> : null}
+          {description ? (
+            <div
+              style={{
+                marginTop: 4,
+                maxWidth: "76ch",
+                fontSize: "var(--font-meta)",
+                lineHeight: 1.6,
+                color: "var(--text-dim)",
+              }}
+            >
+              {description}
+            </div>
+          ) : null}
+
+          {badges ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
+              {badges}
             </div>
           ) : null}
         </div>
 
-        {stats ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 14 }}>{stats}</div>
+        {actions ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", flex: "0 0 auto" }}>{actions}</div>
         ) : null}
       </div>
-    </section>
+
+      {stats ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--space-5) var(--space-6)",
+            paddingBottom: "var(--space-3)",
+            borderBottom: "1px solid var(--panel-divider-soft)",
+          }}
+        >
+          {stats}
+        </div>
+      ) : null}
+    </header>
   );
 }
 
-function resolveToneColor(tone: ConsoleTone, accent?: string) {
-  if (accent) {
-    return {
-      eyebrow: "var(--text-dim)",
-      border: hexToRgba(accent, 0.24),
-    };
-  }
-
+function eyebrowColor(tone: ConsoleTone, accent?: string) {
+  if (accent) return accent;
   switch (tone) {
     case "success":
-      return { eyebrow: "var(--tone-success-eyebrow)", border: "rgba(56, 217, 169, 0.24)" };
+      return "var(--tone-success-eyebrow)";
     case "warning":
-      return { eyebrow: "var(--tone-warning-eyebrow)", border: "rgba(251, 191, 36, 0.24)" };
+      return "var(--tone-warning-eyebrow)";
     case "danger":
-      return { eyebrow: "var(--tone-danger-eyebrow)", border: "rgba(251, 113, 133, 0.24)" };
+      return "var(--tone-danger-eyebrow)";
     case "neutral":
-      return { eyebrow: "var(--text-muted)", border: "rgba(120, 145, 178, 0.16)" };
-    case "info":
+      return "var(--text-muted)";
     default:
-      return { eyebrow: "var(--tone-info-eyebrow)", border: "rgba(102, 168, 255, 0.26)" };
+      return "var(--tone-info-eyebrow)";
   }
-}
-
-function hexToRgba(hex: string, alpha: number) {
-  const normalized = hex.replace("#", "");
-  if (normalized.length !== 6) return hex;
-  const r = Number.parseInt(normalized.slice(0, 2), 16);
-  const g = Number.parseInt(normalized.slice(2, 4), 16);
-  const b = Number.parseInt(normalized.slice(4, 6), 16);
-  if ([r, g, b].some((n) => Number.isNaN(n))) return hex;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

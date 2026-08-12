@@ -5,10 +5,8 @@ import { useRouter } from "next/navigation";
 import { deleteInvestigation, listInvestigations } from "@/lib/api";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import Spinner from "@/components/shared/Spinner";
-import PageHero from "@/components/ui/PageHero";
 import ConsoleModule from "@/components/ui/ConsoleModule";
-import MetadataGrid from "@/components/ui/MetadataGrid";
-import SignalCard from "@/components/ui/SignalCard";
+import { MetaDot, PageHeader } from "@/components/ui/Primitives";
 import StatusPill from "@/components/ui/StatusPill";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 
@@ -107,85 +105,40 @@ export default function InvestigationsListPage() {
       style={{ paddingTop: 12, paddingBottom: 40 }}
       data-density={settings.listDensity}
     >
-      <PageHero
-        eyebrow="Investigations catalog"
+      {/* The filter state used to be reported five times over: in the hero
+          copy, in four badges, in four stat cards, and in a six-field grid —
+          all of it restating what the filter controls below already show. */}
+      <PageHeader
         title="Investigations"
-        description={
+        meta={
           <>
-            A premium, scan-friendly catalog of cases with the same fetch, search, filter, and pagination behavior you already use.
-            {debouncedSearch
-              ? ` Search is narrowed to "${debouncedSearch}".`
-              : ` Browse the ${buildQueueSummary(filterLabel, classificationLabel, hideDuplicates)}.`}
-          </>
-        }
-        status={<StatusPill tone="info" mono>{total} total</StatusPill>}
-        badges={
-          <>
-            <StatusPill tone={getFilterTone(filter)} mono>{filterLabel}</StatusPill>
-            <StatusPill tone={getClassificationTone(classificationFilter)} mono>{classificationLabel}</StatusPill>
-            {hideDuplicates ? <StatusPill tone="info" mono>Duplicates hidden</StatusPill> : null}
-            {debouncedSearch ? <StatusPill tone="warning" mono>Search active</StatusPill> : <StatusPill tone="neutral" mono>Catalog view</StatusPill>}
+            <span>
+              {total === 0 ? "No results" : `${showingFrom}–${showingTo} of ${total}`}
+            </span>
+            {totalPages > 1 && (
+              <>
+                <MetaDot />
+                <span>
+                  Page {page + 1} of {totalPages}
+                </span>
+              </>
+            )}
+            {debouncedSearch && (
+              <>
+                <MetaDot />
+                <span>Search: “{debouncedSearch}”</span>
+              </>
+            )}
           </>
         }
         actions={
-          <button
-            onClick={() => router.push("/")}
-            style={buttonStyle("primary")}
-          >
-            + New Investigation
+          <button onClick={() => router.push("/")} style={buttonStyle("primary")}>
+            New investigation
           </button>
-        }
-        stats={
-          <>
-            <SignalCard
-              compact
-              tone="info"
-              label="Results"
-              value={total}
-              caption={filteredHint}
-              trend="flat"
-            />
-            <SignalCard
-              compact
-              tone={loading ? "warning" : "success"}
-              label="Showing"
-              value={total === 0 ? "0" : `${showingFrom}-${showingTo}`}
-              caption={`Page ${page + 1} of ${totalPages}`}
-              trend={loading ? "flat" : "up"}
-            />
-            <SignalCard
-              compact
-              tone="neutral"
-              label="Filter"
-              value={filterLabel}
-              caption={classificationFilter === "all" ? "All classifications" : classificationLabel}
-              trend="flat"
-            />
-            <SignalCard
-              compact
-              tone={hideDuplicates ? "info" : "neutral"}
-              label="Duplicates"
-              value={hideDuplicates ? "Hidden" : "Shown"}
-              caption={`Page size ${pageSize}`}
-              trend="flat"
-            />
-          </>
         }
       />
 
-      <div style={{ height: 18 }} />
-
-      <ConsoleModule
-        eyebrow="Query surface"
-        title="Search and filters"
-        description="Keep the investigation queue tight with a debounced search, state and classification filters, duplicate suppression, and a simple per-page selector."
-        variant="glass"
-        actions={
-          <StatusPill tone="neutral" size="sm" mono>
-            {totalPages} page{totalPages !== 1 ? "s" : ""}
-          </StatusPill>
-        }
-      >
+      <ConsoleModule variant="glass">
         <div className="controls-grid">
           <div className="search-panel">
             <label className="console-label" htmlFor="investigation-search">
@@ -200,19 +153,6 @@ export default function InvestigationsListPage() {
               style={searchInputStyle()}
             />
           </div>
-
-          <MetadataGrid
-            compact
-            columns={2}
-            items={[
-              { label: "Active state", value: filterLabel, tone: getFilterTone(filter), mono: true },
-              { label: "Classification", value: classificationLabel, tone: getClassificationTone(classificationFilter), mono: true },
-              { label: "Page size", value: `${pageSize} rows`, tone: "info", mono: true },
-              { label: "Duplicates", value: hideDuplicates ? "Newest only" : "All cases", tone: hideDuplicates ? "info" : "neutral", mono: true },
-              { label: "Page", value: `${page + 1} / ${totalPages}`, tone: "neutral", mono: true },
-              { label: "Query", value: debouncedSearch || "All investigated values", tone: debouncedSearch ? "warning" : "neutral", mono: true },
-            ]}
-          />
         </div>
 
         <div style={{ height: 14 }} />
@@ -293,7 +233,6 @@ export default function InvestigationsListPage() {
         <Spinner message="Loading investigations..." />
       ) : investigations.length === 0 ? (
         <ConsoleModule
-          eyebrow="Catalog empty"
           title="No investigations found"
           description="Try a broader search, clear the current filter, or adjust the page size to surface more results."
           variant="dense"
@@ -309,7 +248,6 @@ export default function InvestigationsListPage() {
         </ConsoleModule>
       ) : (
         <ConsoleModule
-          eyebrow="Case queue"
           title="Investigation catalog"
           description="Click any row to open the case. The desktop view stays dense for scanability, while the mobile view shifts to stacked cards."
           variant="solid"
@@ -1036,15 +974,6 @@ function buildFilteredHint({
   return parts.join(" • ");
 }
 
-function buildQueueSummary(stateLabel: string, classificationLabel: string, hideDuplicates: boolean) {
-  const parts = [
-    stateLabel.toLowerCase(),
-    classificationLabel !== "All" ? classificationLabel.toLowerCase() : null,
-    hideDuplicates ? "deduped" : null,
-    "queue",
-  ].filter(Boolean);
-  return parts.join(" ");
-}
 
 function filterToneColors(tone: ReturnType<typeof getFilterTone>) {
   switch (tone) {

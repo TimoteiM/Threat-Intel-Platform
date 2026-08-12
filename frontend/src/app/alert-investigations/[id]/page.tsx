@@ -8,6 +8,7 @@ import ConsoleModule from "@/components/ui/ConsoleModule";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
 import PageHero from "@/components/ui/PageHero";
+import { MenuItem, OverflowMenu } from "@/components/ui/Primitives";
 import {
   alertInvestigationExportUrl,
   cancelAlertInvestigation,
@@ -204,7 +205,6 @@ export default function AlertInvestigationDetailPage() {
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
       <PageHero
-        eyebrow="Alert Body Investigation"
         title={run.title}
         description={
           isActive
@@ -247,62 +247,68 @@ export default function AlertInvestigationDetailPage() {
           </div>
         }
         actions={
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          /* Was eight equally-weighted buttons, five of them export variants.
+             Now: read the report, and everything else under one control. */
+          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
             {isActive && (
               <button onClick={handleCancel} style={secondaryButtonStyle}>
                 Cancel run
               </button>
             )}
             {exportList.length > 0 && (
-              <>
-                <button
-                  onClick={() => router.push(`/alert-investigations/${runId}/report`)}
-                  title="See the report-ready export rendered — domain reports and the other IOCs, exactly as the API serves them"
-                  style={{ ...secondaryButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
-                >
-                  Preview report
-                </button>
-                <button onClick={handleCopy} style={secondaryButtonStyle}>
-                  {copied ? "Copied ✓" : `Copy JSON list (${exportList.length})`}
-                </button>
-                <button
-                  onClick={() => handleDownload("reports")}
-                  title="The integration contract: [AI report, one report per indicator]"
-                  style={secondaryButtonStyle}
-                >
-                  Download JSON list
-                </button>
-                <button
-                  onClick={() => handleDownload("report")}
-                  title="Report-ready: [executive summary, indicator + soc_report] — the same data model our SOC PDF renders, without the raw collector dumps"
-                  style={secondaryButtonStyle}
-                >
-                  Download report list
-                </button>
-                <button
-                  onClick={() => handleDownload("full")}
-                  title="Everything, including every collector's raw output — AnyRun process trees, HAR captures, full IOC inventories. Megabytes per domain; use the report list to build a report."
-                  style={secondaryButtonStyle}
-                >
-                  Download raw evidence list
-                </button>
-                <button
-                  onClick={handleCopyExportUrl}
-                  title="Give this URL to the reporting platform — one GET returns the JSON list"
-                  style={secondaryButtonStyle}
-                >
-                  {urlCopied ? "URL copied ✓" : "Copy export URL"}
-                </button>
-              </>
+              <button
+                onClick={() => router.push(`/alert-investigations/${runId}/report`)}
+                title="See the report-ready export rendered — domain reports and the other IOCs, exactly as the API serves them"
+                style={{ ...secondaryButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
+              >
+                Preview report
+              </button>
             )}
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              title="Delete this run and the investigations it started"
-              style={dangerButtonStyle}
-            >
-              {deleting ? "Deleting…" : "Delete run"}
-            </button>
+            <OverflowMenu label="Export and run actions">
+              {(close) => (
+                <>
+                  {exportList.length > 0 && (
+                    <>
+                      <MenuItem onClick={() => { close(); handleCopy(); }}>
+                        {copied ? "Copied" : `Copy JSON list (${exportList.length})`}
+                      </MenuItem>
+                      <MenuItem
+                        title="The integration contract: [AI report, one report per indicator]"
+                        onClick={() => { close(); handleDownload("reports"); }}
+                      >
+                        Download JSON list
+                      </MenuItem>
+                      <MenuItem
+                        title="Report-ready: [executive summary, indicator + soc_report] — the same data model our SOC PDF renders, without the raw collector dumps"
+                        onClick={() => { close(); handleDownload("report"); }}
+                      >
+                        Download report list
+                      </MenuItem>
+                      <MenuItem
+                        title="Everything, including every collector's raw output. Megabytes per domain."
+                        onClick={() => { close(); handleDownload("full"); }}
+                      >
+                        Download raw evidence list
+                      </MenuItem>
+                      <MenuItem
+                        title="Give this URL to the reporting platform — one GET returns the JSON list"
+                        onClick={() => { close(); handleCopyExportUrl(); }}
+                      >
+                        {urlCopied ? "URL copied" : "Copy export URL"}
+                      </MenuItem>
+                    </>
+                  )}
+                  <MenuItem
+                    danger
+                    disabled={deleting}
+                    title="Delete this run and the investigations it started"
+                    onClick={() => { close(); handleDelete(); }}
+                  >
+                    {deleting ? "Deleting…" : "Delete run"}
+                  </MenuItem>
+                </>
+              )}
+            </OverflowMenu>
           </div>
         }
       />
@@ -320,7 +326,6 @@ export default function AlertInvestigationDetailPage() {
       {run.alert_body && (
         <ConsoleModule
           title="Alert body"
-          eyebrow="Source"
           description={
             run.extraction
               ? `${run.extraction.total} indicator(s) extracted from ${run.extraction.characters} characters`
@@ -349,7 +354,6 @@ export default function AlertInvestigationDetailPage() {
       {aiReport && (
         <ConsoleModule
           title="AI assistant analysis"
-          eyebrow="Report 1 of the exported list"
           description="The raw alert body was sanitised and analysed by the AI assistant — identifiers were tokenised before the model saw them and restored afterwards."
           tone={aiReport.status === "failed" ? "danger" : "info"}
           actions={
@@ -424,7 +428,6 @@ export default function AlertInvestigationDetailPage() {
       {run.indicator_summary?.indicators?.length ? (
         <ConsoleModule
           title="What the sources found"
-          eyebrow="Indicator summary"
           description="Facts from the collectors — detections, the file a hash refers to, signatures, feed listings. The AI narrative above reads the alert text only."
           tone={run.overall_verdict === "malicious" ? "danger" : run.overall_verdict === "suspicious" ? "warning" : "info"}
         >

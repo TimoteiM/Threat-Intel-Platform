@@ -23,106 +23,87 @@ export default function EvidenceTable({ title, data, columns, showHeader = false
   if (data.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: "var(--space-4)" }}>
       {title && (
         <div
           style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: "var(--text-dim)",
-            letterSpacing: "0.01em",
-            marginBottom: 6,
-            padding: "6px 0",
-            borderBottom: "1px solid var(--border-dim)",
-            fontFamily: "var(--font-sans)",
+            fontSize: "var(--font-micro)",
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: "var(--text-muted)",
+            marginBottom: "var(--space-1)",
           }}
         >
           {title}
         </div>
       )}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        {showHeader && (
-          <thead>
-            <tr>
-              {columns.map((col, idx) => (
-                <th
-                  key={col.key}
-                  style={{
-                    textAlign: "left",
-                    padding: "6px 12px",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: "0.04em",
-                    color: "var(--text-muted)",
-                    borderBottom: "1px solid var(--border-dim)",
-                    whiteSpace: "nowrap",
-                    fontFamily: "var(--font-mono)",
-                    width: idx === 0 ? "30%" : "auto",
-                  }}
-                >
-                  {col.label || col.key.toUpperCase()}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        )}
-        <tbody>
-          {data.map((row, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid var(--bg-root)" }}>
-              {columns.map((col, j) => {
-                const val = row[col.key];
-                const display: React.ReactNode =
-                  val === null || val === undefined
-                    ? "-"
-                    : React.isValidElement(val)
-                    ? val
-                    : typeof val === "boolean"
-                    ? val
-                      ? "Yes"
-                      : "No"
-                    : String(val);
-                const empty = isEmptyDisplay(display);
+      <div className="ds-table-wrap">
+        <table className="ds-table">
+          {showHeader && (
+            <thead>
+              <tr>
+                {columns.map((col, idx) => (
+                  <th key={col.key} scope="col" style={{ width: idx === 0 ? "30%" : "auto" }}>
+                    {col.label || col.key.toUpperCase()}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {data.map((row, i) => (
+              <tr key={i}>
+                {columns.map((col, j) => {
+                  const val = row[col.key];
+                  const display: React.ReactNode =
+                    val === null || val === undefined
+                      ? "—"
+                      : React.isValidElement(val)
+                      ? val
+                      : typeof val === "boolean"
+                      ? val
+                        ? "Yes"
+                        : "No"
+                      : String(val);
+                  const empty = isEmptyDisplay(display);
+                  // Severity colours the text, never the cell. Filled cells put
+                  // a wall of tinted blocks behind values that mostly say
+                  // "medium", and the one real finding stops standing out.
+                  const severity = j > 0 && !empty ? classifySeverity(display, col.key) : "neutral";
 
-                return (
-                  <td
-                    key={j}
-                    style={{
-                      padding: "7px 12px",
-                      fontSize: 11,
-                      color: (() => {
-                        if (j === 0) return "var(--text-dim)";
-                        if (empty) return "var(--text-muted)";
-                        const sev = classifySeverity(display, col.key);
-                        if (sev === "malicious") return "var(--red)";
-                        if (sev === "suspicious") return "var(--yellow)";
-                        if (sev === "legit") return "var(--green)";
-                        return "var(--text-primary)";
-                      })(),
-                      fontWeight: j === 0 ? 600 : 400,
-                      width: j === 0 ? "30%" : "auto",
-                      background: (() => {
-                        if (j > 0 && !empty) {
-                          const sev = classifySeverity(display, col.key);
-                          if (sev === "malicious") return "rgba(239,68,68,0.14)";
-                          if (sev === "suspicious") return "rgba(245,158,11,0.14)";
-                          if (sev === "legit") return "rgba(52,211,153,0.10)";
-                          return "transparent";
-                        }
-                        return i % 2 === 0 ? "transparent" : "rgba(15,23,42,0.4)";
-                      })(),
-                      whiteSpace: col.wrap ? "normal" : "nowrap",
-                      wordBreak: col.wrap ? "break-all" : "normal",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {display}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                  return (
+                    <td
+                      key={j}
+                      style={{
+                        color:
+                          j === 0
+                            ? "var(--text-dim)"
+                            : empty
+                            ? "var(--text-muted)"
+                            : severity === "malicious"
+                            ? "var(--status-danger)"
+                            : severity === "suspicious"
+                            ? "var(--status-warning)"
+                            : severity === "legit"
+                            ? "var(--status-success)"
+                            : "var(--text-secondary)",
+                        fontWeight: j === 0 || severity === "malicious" ? 600 : 400,
+                        width: j === 0 ? "30%" : "auto",
+                        whiteSpace: col.wrap ? "normal" : "nowrap",
+                        overflowWrap: col.wrap ? "anywhere" : "normal",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {display}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

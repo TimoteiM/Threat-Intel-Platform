@@ -23,6 +23,7 @@ import ConsoleModule from "@/components/ui/ConsoleModule";
 import IntelTable from "@/components/ui/IntelTable";
 import MetadataGrid from "@/components/ui/MetadataGrid";
 import PageHero from "@/components/ui/PageHero";
+import { ErrorState, LoadingState, Page, PageHeader } from "@/components/ui/Primitives";
 import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
 
@@ -128,33 +129,8 @@ export default function DashboardPage() {
 
   const { pieData, riskData, timelineData, highestRiskBucket, classificationTotals, maliciousCount, suspiciousCount, benignCount, inconclusiveCount, totalLabel, maliciousShare } = derived;
 
-  const summaryItems = [
-    {
-      label: "Investigations",
-      value: stats.total_investigations.toLocaleString(),
-      hint: "All ingested cases currently visible in the workspace.",
-      tone: "info" as const,
-    },
-    {
-      label: "Concluded",
-      value: totalLabel,
-      hint: "Resolved investigations that feed the current signal mix.",
-      tone: "success" as const,
-    },
-    {
-      label: "Malicious share",
-      value: `${maliciousShare}%`,
-      hint: "Portion of concluded items carrying a malicious verdict.",
-      tone: "danger" as const,
-    },
-    {
-      label: "Peak risk bucket",
-      value: highestRiskBucket ? `${highestRiskBucket.bucket} (${highestRiskBucket.count})` : "No risk data",
-      hint: "Most populated risk band in the current sample.",
-      tone: "warning" as const,
-      mono: true,
-    },
-  ];
+  // The header metrics used to be repeated three times over: as hero badges, as
+  // four stat cards, and again as an "operational snapshot" grid. One copy.
 
   const recentMaliciousRows = stats.recent_malicious.map((inv) => ({
     id: inv.id,
@@ -198,52 +174,31 @@ export default function DashboardPage() {
   return (
     <div style={{ paddingTop: 18, paddingBottom: 40, display: "grid", gap: 18 }}>
       <PageHero
-        eyebrow="Mission Control"
-        title="Dashboard overview"
-        description="A live command surface for intelligence volume, risk posture, and the latest malicious activity across the workspace."
-        status={<StatusPill tone="info">Live telemetry</StatusPill>}
-        badges={
-          <>
-            <StatusPill tone="neutral" outline>
-              30d window
-            </StatusPill>
-            <StatusPill tone={maliciousCount > suspiciousCount ? "danger" : "warning"} outline>
-              {maliciousCount} malicious
-            </StatusPill>
-            <StatusPill tone={suspiciousCount > 0 ? "warning" : "neutral"} outline>
-              {suspiciousCount} suspicious
-            </StatusPill>
-          </>
-        }
+        title="Overview"
+        description="Investigation volume, verdict mix and the latest malicious findings."
         stats={
           <>
             <SignalCard
-              label="Total investigations"
-              value={stats.total_investigations.toLocaleString()}
-              caption="Workspace-wide cases currently tracked in the system."
-              tone="info"
-              trend="up"
-            />
-            <SignalCard
               label="Malicious"
               value={maliciousCount.toLocaleString()}
-              caption="Confirmed hostile findings that should stay top of mind."
+              caption={`${maliciousShare}% of concluded`}
               tone="danger"
-              trend={maliciousCount > suspiciousCount ? "up" : "flat"}
+              accent="var(--status-danger)"
             />
             <SignalCard
               label="Suspicious"
               value={suspiciousCount.toLocaleString()}
-              caption="Investigations that warrant attention but need corroboration."
+              caption="needs corroboration"
               tone="warning"
-              trend={suspiciousCount > 0 ? "up" : "flat"}
+              accent="var(--status-warning)"
             />
+            <SignalCard label="Concluded" value={classificationTotals.toLocaleString()} tone="neutral" />
+            <SignalCard label="Total investigations" value={stats.total_investigations.toLocaleString()} tone="neutral" />
             <SignalCard
-              label="Concluded"
-              value={classificationTotals.toLocaleString()}
-              caption="Resolved investigations reflected in the current dashboard mix."
-              tone="success"
-              trend="flat"
+              label="Peak risk band"
+              value={highestRiskBucket ? highestRiskBucket.bucket : "—"}
+              caption={highestRiskBucket ? `${highestRiskBucket.count} investigations` : "no risk data"}
+              tone="neutral"
             />
           </>
         }
@@ -258,25 +213,8 @@ export default function DashboardPage() {
         }
       />
 
-      <ConsoleModule
-        eyebrow="Mission Brief"
-        title="Operational snapshot"
-        description="The fastest scan of the workspace: what is happening now, how concentrated the risk is, and where the latest malicious activity is landing."
-        variant="glass"
-        compact
-      >
-        <MetadataGrid items={summaryItems} compact />
-      </ConsoleModule>
-
       <div style={twoColumnGrid}>
-        <ConsoleModule
-          eyebrow="Classification"
-          title="Verdict distribution"
-          description="How the workload is spread across benign, suspicious, malicious, and inconclusive results."
-          tone="info"
-          variant="solid"
-          actions={<StatusPill tone="info" outline>{pieData.length} active classes</StatusPill>}
-        >
+        <ConsoleModule title="Verdict distribution" tone="info" variant="solid">
           {pieData.length > 0 ? (
             <div style={chartSplitLayout}>
               <div style={{ minHeight: 240 }}>
@@ -307,7 +245,6 @@ export default function DashboardPage() {
                       <span style={{ ...legendSwatchStyle, background: entry.color }} />
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={legendLabelStyle}>{config?.label || entry.name}</div>
-                        <div style={legendHintStyle}>Classification slice of the current dashboard total.</div>
                       </div>
                       <div style={{ fontFamily: "var(--font-mono)", color: entry.color, fontWeight: 700 }}>{entry.value}</div>
                     </div>
@@ -320,14 +257,7 @@ export default function DashboardPage() {
           )}
         </ConsoleModule>
 
-        <ConsoleModule
-          eyebrow="Risk"
-          title="Score distribution"
-          description="The workspace risk profile plotted by score bucket so spikes stand out immediately."
-          tone="warning"
-          variant="solid"
-          actions={<StatusPill tone="warning" outline>Risk posture</StatusPill>}
-        >
+        <ConsoleModule title="Risk score distribution" tone="warning" variant="solid">
           {riskData.some((bucket) => bucket.count > 0) ? (
             <div style={{ display: "grid", gap: 14 }}>
               <ResponsiveContainer width="100%" height={240}>
@@ -339,39 +269,25 @@ export default function DashboardPage() {
                   <Bar dataKey="count" fill="#60a5fa" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-              <MetadataGrid
-                compact
-                items={[
-                  {
-                    label: "Largest bucket",
-                    value: highestRiskBucket ? highestRiskBucket.bucket : "-",
-                    hint: highestRiskBucket ? `${highestRiskBucket.count} investigations in the busiest band.` : "No populated buckets yet.",
-                    tone: "warning",
-                    mono: true,
-                  },
-                  {
-                    label: "Current signal mix",
-                    value: `${maliciousCount} malicious / ${suspiciousCount} suspicious`,
-                    hint: `${benignCount} benign and ${inconclusiveCount} inconclusive round out the view.`,
-                    tone: maliciousCount > suspiciousCount ? "danger" : "info",
-                  },
-                ]}
-              />
+              {/* The largest bucket and the malicious/suspicious split are both
+                  in the header strip already; repeating them under the chart
+                  they describe added nothing. */}
+              <div style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+                {benignCount} benign · {inconclusiveCount} inconclusive
+              </div>
             </div>
           ) : (
-            <EmptyPanel title="No risk buckets available" description="Risk data will appear here once the backend returns score distribution data." />
+            <EmptyPanel title="No risk scores recorded yet" description="This chart fills in once investigations conclude with a score." />
           )}
         </ConsoleModule>
       </div>
 
       {timelineData.length > 0 ? (
         <ConsoleModule
-          eyebrow="Activity"
-          title="Investigation timeline"
-          description="Rolling activity over the last 30 days, stacked by classification so surges are easy to spot."
+          title="Activity, last 30 days"
+          description="Stacked by verdict, so a surge shows which kind it is."
           tone="info"
           variant="glass"
-          actions={<StatusPill tone="neutral" outline>{timelineData.length} days</StatusPill>}
         >
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={timelineData}>
@@ -387,14 +303,8 @@ export default function DashboardPage() {
           </ResponsiveContainer>
         </ConsoleModule>
       ) : (
-        <ConsoleModule
-          eyebrow="Activity"
-          title="Investigation timeline"
-          description="This module will light up when the system has enough activity to plot a 30 day trend."
-          tone="neutral"
-          variant="glass"
-        >
-          <EmptyPanel title="No timeline data yet" description="Once investigations accumulate, the timeline will reveal activity bursts and classification shifts." />
+        <ConsoleModule title="Activity, last 30 days" tone="neutral" variant="glass">
+          <EmptyPanel title="No activity in the last 30 days" description="" />
         </ConsoleModule>
       )}
 
@@ -446,13 +356,7 @@ export default function DashboardPage() {
         </ConsoleModule>
       </div>
 
-      <ConsoleModule
-        eyebrow="Recent Activity"
-        title="Recent malicious investigations"
-        description="The most recent hostile cases, arranged as a scan-friendly intelligence table."
-        tone="danger"
-        variant="glass"
-      >
+      <ConsoleModule title="Recent malicious investigations" tone="danger" variant="glass">
         {recentMaliciousRows.length > 0 ? (
           <IntelTable
             columns={[
@@ -484,36 +388,13 @@ function DashboardState({
   loading?: boolean;
   danger?: boolean;
 }) {
+  // Loading and failure states used to render four placeholder stat cards and
+  // two panels of prose about themselves. A line each is enough.
   return (
-    <div style={{ paddingTop: 18, paddingBottom: 40, display: "grid", gap: 18 }}>
-      <PageHero
-        eyebrow="Mission Control"
-        title={title}
-        description={description}
-        status={<StatusPill tone={danger ? "danger" : loading ? "info" : "warning"}>{loading ? "warming" : danger ? "error" : "pending"}</StatusPill>}
-        stats={
-          <>
-            <SignalCard label="Telemetry" value={loading ? "Loading" : danger ? "Unavailable" : "Pending"} tone={danger ? "danger" : "info"} trend="flat" />
-            <SignalCard label="Signal mix" value="—" caption="No overview data is available yet." tone="neutral" trend="flat" />
-            <SignalCard label="Risk posture" value="—" caption="Waiting on dashboard statistics from the backend." tone="warning" trend="flat" />
-            <SignalCard label="Recent activity" value="—" caption="The timeline will populate after the feed returns." tone="success" trend="flat" />
-          </>
-        }
-      />
-
-      <ConsoleModule
-        eyebrow="Console State"
-        title={loading ? "Loading intelligence stream" : "Dashboard unavailable"}
-        description={description}
-        tone={danger ? "danger" : "neutral"}
-        variant="glass"
-      >
-        <EmptyPanel
-          title={loading ? "Fetching dashboard stats" : "Unable to render the dashboard"}
-          description={loading ? "The landing page is collecting the latest telemetry." : "The overview snapshot could not be loaded from the backend. Refresh the page or try again shortly."}
-        />
-      </ConsoleModule>
-    </div>
+    <Page>
+      <PageHeader title="Overview" />
+      {loading ? <LoadingState label={title} /> : <ErrorState title={title} detail={description} />}
+    </Page>
   );
 }
 

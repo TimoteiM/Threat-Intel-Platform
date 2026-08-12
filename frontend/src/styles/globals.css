@@ -24,14 +24,42 @@
   --shell-warning: #fbbf24;
   --shell-danger: #fb7185;
   --shell-info: #66a8ff;
-  --shell-radius-xs: 6px;
-  --shell-radius-sm: 10px;
-  --shell-radius-md: 14px;
-  --shell-radius-lg: 18px;
-  --shell-radius-xl: 24px;
+  /* Radii are deliberately small: a 24px corner reads as a marketing card, and
+     an analyst screen is a working surface, not a landing page. */
+  --shell-radius-xs: 4px;
+  --shell-radius-sm: 6px;
+  --shell-radius-md: 8px;
+  --shell-radius-lg: 10px;
+  --shell-radius-xl: 12px;
   --shell-shadow-sm: 0 1px 2px rgba(3, 8, 20, 0.24);
-  --shell-shadow-md: 0 12px 32px rgba(3, 8, 20, 0.28);
-  --shell-shadow-lg: 0 24px 64px rgba(3, 8, 20, 0.38);
+  --shell-shadow-md: 0 6px 18px rgba(3, 8, 20, 0.26);
+  --shell-shadow-lg: 0 12px 32px rgba(3, 8, 20, 0.32);
+
+  /* Spacing scale. Every gap in the redesigned surfaces comes from here so
+     density is one decision rather than a hundred inline numbers. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 28px;
+  --space-7: 40px;
+
+  /* Type scale. Page title down to metadata, six steps, no in-between sizes. */
+  --font-page-title: 20px;
+  --font-section-title: 13px;
+  --font-body: 13px;
+  --font-meta: 12px;
+  --font-micro: 11px;
+
+  /* Semantic status. One source for every state colour in the product, so a
+     failure looks the same on a run, a collector, a rule and a form. */
+  --status-success: var(--shell-success);
+  --status-info: var(--shell-info);
+  --status-warning: var(--shell-warning);
+  --status-danger: var(--shell-danger);
+  --status-critical: #f43f5e;
+  --status-neutral: var(--shell-text-muted);
   --shell-max-width: 1680px;
   --shell-gutter: 20px;
   --app-header-height: 72px;
@@ -757,4 +785,476 @@ body.process-graph-fullscreen .app-shell__main {
 .badge-active {
   background-size: 200% 100%;
   animation: shimmer 3s linear infinite;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Design system
+
+   The product had one container primitive — a large bordered card — and used
+   it for everything from a page title to a single scalar. These classes are
+   the alternatives: headings, rows, dividers and tables that carry structure
+   without drawing a box around it. Cards remain, for things that really are
+   separate objects.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Page header: title, one line of context, actions. No box, no gradient. */
+.ds-page {
+  display: grid;
+  /* Caps the track at the container: an `auto` track takes its width from
+     the widest unwrappable child, which lets one long title push the whole
+     page past the viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+}
+
+.ds-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--panel-divider);
+}
+
+.ds-page-header__title {
+  font-family: var(--font-display);
+  font-size: var(--font-page-title);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ds-page-header__subtitle {
+  margin-top: var(--space-1);
+  font-size: var(--font-meta);
+  color: var(--text-dim);
+  max-width: 76ch;
+}
+
+.ds-page-header__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+  font-size: var(--font-micro);
+  color: var(--text-muted);
+}
+
+.ds-page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Section: a heading and its content, separated by space rather than a border. */
+.ds-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.ds-section__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.ds-section__title {
+  font-size: var(--font-section-title);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.ds-section__hint {
+  font-size: var(--font-micro);
+  color: var(--text-muted);
+}
+
+/* Card: only for a genuinely distinct object or workflow. */
+.ds-card {
+  border: 1px solid var(--panel-divider-strong);
+  border-radius: var(--shell-radius-lg);
+  background: var(--shell-surface);
+  padding: var(--space-4);
+}
+
+.ds-card--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Rows: the default alternative to a card per record. */
+.ds-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ds-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--panel-divider-soft);
+  min-width: 0;
+}
+
+.ds-row:last-child {
+  border-bottom: 0;
+}
+
+.ds-row--link {
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 0.12s ease;
+  padding-inline: var(--space-2);
+  margin-inline: calc(var(--space-2) * -1);
+  border-radius: var(--shell-radius-sm);
+}
+
+.ds-row--link:hover,
+.ds-row--link:focus-visible {
+  background: var(--panel-row-alt);
+}
+
+/* Metadata: aligned label/value pairs, no border per field. */
+.ds-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+}
+
+.ds-meta__label {
+  font-size: var(--font-micro);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.ds-meta__value {
+  font-size: var(--font-meta);
+  color: var(--text);
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Metric strip: a few high-value numbers on one line, no box per number. */
+.ds-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5) var(--space-6);
+  padding: var(--space-3) 0;
+  border-block: 1px solid var(--panel-divider-soft);
+}
+
+.ds-metric__label {
+  font-size: var(--font-micro);
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ds-metric__value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text-strong);
+  margin-top: 2px;
+}
+
+.ds-metric__hint {
+  font-size: var(--font-micro);
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* Tables: for comparable records. */
+.ds-table-wrap {
+  overflow-x: auto;
+}
+
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-meta);
+}
+
+.ds-table th {
+  text-align: left;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--panel-divider-strong);
+  white-space: nowrap;
+}
+
+.ds-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--panel-divider-soft);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.ds-table tbody tr:hover {
+  background: var(--panel-row-alt);
+}
+
+.ds-table td:first-child,
+.ds-table th:first-child {
+  padding-left: 0;
+}
+
+.ds-table td:last-child,
+.ds-table th:last-child {
+  padding-right: 0;
+}
+
+/* Badges: status in colour *and* words. */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--shell-radius-xs);
+  border: 1px solid currentColor;
+  font-size: var(--font-micro);
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.ds-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: none;
+}
+
+/* Progressive disclosure. */
+.ds-details {
+  border-top: 1px solid var(--panel-divider-soft);
+  padding-top: var(--space-2);
+}
+
+.ds-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: var(--space-1) 0;
+}
+
+.ds-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ds-details > summary::before {
+  content: "▸";
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.ds-details[open] > summary::before {
+  content: "▾";
+}
+
+.ds-details > summary:hover {
+  color: var(--text);
+}
+
+.ds-details__body {
+  padding: var(--space-3) 0 var(--space-1);
+}
+
+/* Empty, loading and error states share one shape. */
+.ds-state {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  padding: var(--space-5) 0;
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+}
+
+.ds-state__title {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Buttons: one primary, restrained secondaries, separated destructive. */
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--shell-radius-sm);
+  border: 1px solid var(--panel-divider-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-meta);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ds-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--shell-border-strong);
+  background: var(--panel-row-alt);
+}
+
+.ds-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ds-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #05111f;
+}
+
+.ds-btn--primary:hover:not(:disabled) {
+  background: var(--shell-accent-strong);
+  border-color: var(--shell-accent-strong);
+  color: #05111f;
+}
+
+.ds-btn--danger {
+  color: var(--red);
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+.ds-btn--danger:hover:not(:disabled) {
+  background: rgba(251, 113, 133, 0.1);
+  color: var(--red);
+}
+
+.ds-btn--quiet {
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+/* Toolbars reflow instead of growing a wall of buttons. */
+.ds-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.ds-toolbar__spacer {
+  margin-left: auto;
+}
+
+/* Screen-reader-only text, for icon-only controls and table captions. */
+.ds-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Safety net for implicit grid columns.
+   A `display: grid` with no template puts everything in one *implicit* column,
+   and an implicit `auto` track is sized by its widest child's max-content. One
+   unwrappable string — a 255-character alert title, a tokenised redirect URL —
+   then sets the width for every sibling and the column overflows its container.
+
+   `grid-auto-columns` affects implicit tracks only, so this is inert on any
+   element that is not a grid and on any grid that declares its own columns.
+   It is applied to everything rather than to specific selectors because the
+   problem does not care whether `display: grid` arrived via an inline style, a
+   utility class or a CSS module — an earlier, narrower version of this rule
+   missed the CSS-module grids entirely. Verified safe: nothing in this app uses
+   `grid-auto-flow: column`, which is the one case where sizing implicit columns
+   at 1fr would change an intended layout. `:where()` keeps specificity at zero
+   so any component can still opt out. */
+.app-shell__main :where(*) {
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+/* Denser gutters on smaller screens — padding is the first thing to give. */
+@media (max-width: 900px) {
+  :root {
+    --shell-gutter: 14px;
+  }
+
+  .app-shell__main {
+    padding: 16px var(--shell-gutter) 28px;
+  }
+
+  .ds-page {
+    gap: var(--space-4);
+  }
+
+  .ds-metrics {
+    gap: var(--space-4);
+  }
+
+  .ds-metric__value {
+    font-size: 18px;
+  }
+}
+
+/* Motion is decoration here; anyone who asks for less gets none of it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-in,
+  .animate-fade-up,
+  .animate-scale-in,
+  .animate-slide-down,
+  .animate-slide-right,
+  .animate-count,
+  .stat-value {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .stagger-1,
+  .stagger-2,
+  .stagger-3,
+  .stagger-4,
+  .stagger-5,
+  .stagger-6,
+  .stagger-7,
+  .stagger-8 {
+    opacity: 1;
+    animation-delay: 0s;
+  }
 }

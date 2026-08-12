@@ -1,5 +1,17 @@
 "use client";
 
+/**
+ * Metadata as aligned label/value pairs.
+ *
+ * This was one bordered, shadowed card per field — the literal "one card per
+ * metadata field" pattern. Twelve fields meant twelve boxes, which made a
+ * record id look as important as a verdict.
+ *
+ * Now a definition list: labels small and muted, values readable, alignment
+ * doing the work the borders were doing. Same props, so call sites are
+ * untouched; `tone` now colours the value rather than framing it.
+ */
+
 import React from "react";
 import type { ConsoleTone } from "@/components/ui/ConsoleModule";
 
@@ -34,79 +46,86 @@ export default function MetadataGrid({
   style,
 }: MetadataGridProps) {
   return (
-    <section className={className} style={{ display: "grid", gap: compact ? 12 : 16, ...style }}>
+    <section className={className} style={{ display: "grid", gap: "var(--space-3)", ...style }}>
       {title || eyebrow || description ? (
-        <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ display: "grid", gap: 2 }}>
           {eyebrow ? (
-            <div style={eyebrowStyle}>
+            <div
+              style={{
+                fontSize: "var(--font-micro)",
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "var(--text-muted)",
+              }}
+            >
               {eyebrow}
             </div>
           ) : null}
-          {title ? <div style={titleStyle}>{title}</div> : null}
-          {description ? <div style={descriptionStyle}>{description}</div> : null}
+          {title ? (
+            <h2
+              style={{
+                fontSize: "var(--font-section-title)",
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: "var(--text-secondary)",
+                margin: 0,
+              }}
+            >
+              {title}
+            </h2>
+          ) : null}
+          {description ? (
+            <div style={{ fontSize: "var(--font-micro)", lineHeight: 1.6, color: "var(--text-muted)", maxWidth: "76ch" }}>
+              {description}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      <div
+      <dl
+        className="ds-meta"
         style={{
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: columns ? `repeat(${columns}, minmax(0, 1fr))` : "repeat(auto-fit, minmax(220px, 1fr))",
+          gridTemplateColumns: columns
+            ? `repeat(${columns}, minmax(0, 1fr))`
+            : `repeat(auto-fit, minmax(${compact ? 160 : 200}px, 1fr))`,
         }}
       >
         {items.map((item, index) => {
-          const toneColor = toneColorFor(item.tone || "neutral");
           const value = normalizeValue(item.value);
           return (
             <div
               key={`${String(item.label)}-${index}`}
-              style={{
-                gridColumn: item.span ? `span ${item.span}` : "auto",
-                borderRadius: compact ? 12 : 18,
-                border: "1px solid var(--panel-divider-strong)",
-                background: "var(--panel-card-bg)",
-                padding: compact ? "10px 12px" : 16,
-                boxShadow: "var(--panel-shadow-soft)",
-              }}
+              style={{ gridColumn: item.span ? `span ${item.span}` : "auto", minWidth: 0 }}
             >
-              <div
+              <dt className="ds-meta__label">{item.label}</dt>
+              <dd
+                className="ds-meta__value"
                 style={{
-                  fontSize: 11,
-                  fontWeight: 800,
-                  letterSpacing: "0.14em",
-                  textTransform: "uppercase",
-                  color: toneColor.label,
-                  marginBottom: compact ? 6 : 10,
-                }}
-              >
-                {item.label}
-              </div>
-              <div
-                style={{
-                  fontFamily: item.mono ? "var(--font-mono)" : "var(--font-display)",
-                  fontSize: compact ? 14 : 15,
-                  lineHeight: 1.6,
-                  color: "var(--text-strong)",
-                  wordBreak: "break-word",
+                  fontFamily: item.mono ? "var(--font-mono)" : "var(--font-sans)",
+                  color: valueColor(item.tone),
                   whiteSpace: valueNeedsWrap(value) ? "pre-wrap" : "normal",
                 }}
               >
                 {value}
-              </div>
-              {item.hint ? <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6, color: "var(--text-muted)" }}>{item.hint}</div> : null}
+              </dd>
+              {item.hint ? (
+                <div style={{ marginTop: 2, fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>{item.hint}</div>
+              ) : null}
             </div>
           );
         })}
-      </div>
+      </dl>
     </section>
   );
 }
 
 function normalizeValue(value: React.ReactNode) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "—";
   if (React.isValidElement(value)) return value;
   if (Array.isArray(value)) {
-    if (!value.length) return "-";
+    if (!value.length) return "—";
     return value.map((item) => (typeof item === "string" ? item : String(item))).join(", ");
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -124,40 +143,15 @@ function valueNeedsWrap(value: React.ReactNode) {
   return typeof value === "string" && value.length > 80;
 }
 
-function toneColorFor(tone: ConsoleTone) {
+function valueColor(tone?: ConsoleTone) {
   switch (tone) {
     case "success":
-      return { label: "var(--tone-success-eyebrow)" };
+      return "var(--status-success)";
     case "warning":
-      return { label: "var(--tone-warning-eyebrow)" };
+      return "var(--status-warning)";
     case "danger":
-      return { label: "var(--tone-danger-eyebrow)" };
-    case "info":
-      return { label: "var(--tone-info-eyebrow)" };
-    case "neutral":
+      return "var(--status-danger)";
     default:
-      return { label: "var(--text-dim)" };
+      return "var(--text)";
   }
 }
-
-const eyebrowStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: "0.16em",
-  textTransform: "uppercase",
-  color: "var(--text-dim)",
-};
-
-const titleStyle: React.CSSProperties = {
-  fontFamily: "var(--font-display)",
-  fontSize: 20,
-  fontWeight: 700,
-  color: "var(--text-strong)",
-  letterSpacing: "-0.02em",
-};
-
-const descriptionStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.7,
-  color: "var(--text-secondary)",
-};

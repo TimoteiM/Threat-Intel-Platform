@@ -107,6 +107,68 @@ function anyrunConflictItems(items: any[]): any[] {
   return items.filter((item) => Boolean(verdictContext(item)?.conflict));
 }
 
+// Mirrors `_ANYRUN_MALICIOUS_LABEL_MARKERS` in `app/services/decision_engine.py`.
+// Keep the two in step: this is what the score escalates on, so the UI has to
+// name the same labels the engine acted on.
+const ANYRUN_MALICIOUS_LABEL_MARKERS = [
+  "phish", "clickfix", "clearfake", "fake captcha", "fake-captcha",
+  "exploit-kit", "exploit kit", "exploit", "etherhiding", "tdsshop",
+  "credential theft", "credential harvesting", "stealer",
+];
+
+/**
+ * Labels that escalated a clean provider verdict.
+ *
+ * ANY.RUN returns `clean` — "no threats detected" — on tasks it has tagged
+ * `phishing`, because the automated run never triggered the behaviour. The
+ * decision engine escalates on the label, which used to leave this tab showing
+ * CLEAN beside a risk score of 92 with nothing on screen connecting the two.
+ */
+function anyrunEscalatingLabels(item: any): string[] {
+  const provider = providerVerdict(item);
+  if (!["CLEAN", "BENIGN", "SAFE", "UNKNOWN"].includes(provider)) return [];
+  const raw = item?.raw_summary || {};
+  return _uniq([
+    ...normalizedAnyrunLabels(item?.tags),
+    ...normalizedAnyrunLabels(item?.threat_names),
+    ...normalizedAnyrunLabels(raw?.tags),
+    ...normalizedAnyrunLabels(raw?.threatName),
+    ...normalizedAnyrunLabels(raw?.html_threat_labels),
+  ]).filter((label) =>
+    ANYRUN_MALICIOUS_LABEL_MARKERS.some((marker) => label.toLowerCase().includes(marker)),
+  );
+}
+
+/** Explains, in place, why a CLEAN row still raised the case's risk score. */
+function AnyRunLabelEscalationNotice({ items }: { items: any[] }) {
+  const labels = _uniq(items.flatMap(anyrunEscalatingLabels));
+  if (!labels.length) return null;
+  return (
+    <div
+      role="note"
+      style={{
+        borderLeft: "3px solid var(--status-warning)",
+        background: "rgba(251, 191, 36, 0.07)",
+        borderRadius: "0 var(--shell-radius-sm) var(--shell-radius-sm) 0",
+        padding: "var(--space-3) var(--space-4)",
+        margin: "var(--space-2) 0 var(--space-3)",
+        color: "var(--text-secondary)",
+        fontSize: "var(--font-meta)",
+        lineHeight: 1.6,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "var(--status-warning)", marginBottom: 2 }}>
+        Clean verdict, but the sample is labelled {labels.join(", ")}
+      </div>
+      ANY.RUN reported no threats and still applied {labels.length === 1 ? "this label" : "these labels"}.
+      An automated run that never interacts with the page often fails to trigger the behaviour its own
+      label describes, so this platform escalates on the label and treats the clean verdict as
+      incomplete coverage. <strong>That escalation is what raised this case&apos;s risk score</strong>,
+      not the provider verdict shown above.
+    </div>
+  );
+}
+
 function isActionableNetworkThreat(threat: any): boolean {
   return Boolean(threat) && threat?.excluded_from_final_risk !== true;
 }
@@ -3370,6 +3432,7 @@ export default function AnyRunInteractiveEvidence({
         ]}
         showHeader
       />
+      <AnyRunLabelEscalationNotice items={items} />
       {sensitiveFormDetection?.detected && (
         <div style={{
           marginTop: 10,

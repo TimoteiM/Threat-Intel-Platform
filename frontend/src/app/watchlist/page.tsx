@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "@/lib/api";
 import Spinner from "@/components/shared/Spinner";
+import { Button, Page, PageHeader } from "@/components/ui/Primitives";
 
 /* ─── Style constants ─── */
 
@@ -296,49 +297,30 @@ export default function WatchlistPage() {
   ];
 
   return (
-    <div style={{ paddingTop: 20, paddingBottom: 40, maxWidth: 1100 }}>
-      {/* Header row */}
-      <div className="animate-in" style={{
-        display: "flex", justifyContent: "space-between",
-        alignItems: "flex-start", marginBottom: 16,
-      }}>
-        <div>
-          <div style={{
-            fontSize: 18, fontWeight: 800, color: "var(--text)",
-            letterSpacing: "0.04em", fontFamily: "var(--font-mono)",
-            marginBottom: 4,
-          }}>
-            DOMAIN WATCHLIST
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            Monitor domains for changes — {total} domain{total !== 1 ? "s" : ""} tracked
-          </div>
-        </div>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          style={{
-            padding: "10px 20px",
-            background: showAddForm ? "var(--bg-card)" : "linear-gradient(135deg, #3b82f6, #2563eb)",
-            border: showAddForm ? "1px solid var(--border)" : "none",
-            borderRadius: "var(--radius)",
-            color: showAddForm ? "var(--text-dim)" : "#fff",
-            fontSize: 11, fontWeight: 700, cursor: "pointer",
-            fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
-          }}
-        >
-          {showAddForm ? "CANCEL" : "+ ADD DOMAIN"}
-        </button>
-      </div>
+    <Page>
+      <PageHeader
+        title="Watchlist"
+        subtitle="Domains re-checked on a schedule, so a verdict that changes is noticed rather than going stale."
+        meta={
+          <span>
+            {total} domain{total !== 1 ? "s" : ""} tracked
+          </span>
+        }
+        actions={
+          <Button variant={showAddForm ? "secondary" : "primary"} onClick={() => setShowAddForm(!showAddForm)}>
+            {showAddForm ? "Cancel" : "Add domain"}
+          </Button>
+        }
+      />
 
       {/* Add form (collapsible) */}
       {showAddForm && (
-        <form onSubmit={handleAdd} className="animate-slide-down" style={{
-          padding: 20,
-          background: "var(--bg-card)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius)", marginBottom: 16,
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", marginBottom: 12, letterSpacing: "0.08em" }}>
-            ADD DOMAIN TO WATCHLIST
+        <form onSubmit={handleAdd} className="animate-slide-down ds-card">
+          <div style={{
+            fontSize: "var(--font-micro)", fontWeight: 700, color: "var(--text-muted)",
+            marginBottom: "var(--space-3)", letterSpacing: "0.06em", textTransform: "uppercase",
+          }}>
+            Add domain to watchlist
           </div>
           <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
             <input
@@ -866,7 +848,7 @@ export default function WatchlistPage() {
           />
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 

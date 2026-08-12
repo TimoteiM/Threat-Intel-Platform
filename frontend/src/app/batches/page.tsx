@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import BatchUpload from "@/components/batch/BatchUpload";
 import * as api from "@/lib/api";
+import { Page, PageHeader, Section } from "@/components/ui/Primitives";
 
 export default function BatchesPage() {
   const router = useRouter();
@@ -34,26 +35,17 @@ export default function BatchesPage() {
   };
 
   return (
-    <div style={{ paddingBottom: 40 }}>
+    <Page>
+      <PageHeader
+        title="Batch investigations"
+        subtitle="Upload a list of domains, IPs or URLs to investigate together."
+      />
+
       <BatchUpload onUpload={handleUpload} loading={uploading} />
 
       {batches.length > 0 && (
-        <div className="animate-fade-up" style={{ marginTop: 24 }}>
-          <div style={{
-            fontSize: 13, fontWeight: 600, color: "var(--text-dim)",
-            letterSpacing: "0.01em", marginBottom: 10,
-            fontFamily: "var(--font-sans)",
-          }}>
-            Recent Batches
-          </div>
-          <div style={{
-            display: "flex", flexDirection: "column",
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-lg)",
-            overflow: "hidden",
-            boxShadow: "var(--shadow-sm)",
-          }}>
+        <Section title="Recent batches" as="h2">
+          <div style={{ display: "flex", flexDirection: "column" }}>
             {batches.map((batch, i) => (
               <button
                 key={batch.id}
@@ -90,9 +82,9 @@ export default function BatchesPage() {
               </button>
             ))}
           </div>
-        </div>
+        </Section>
       )}
-    </div>
+    </Page>
   );
 }
 

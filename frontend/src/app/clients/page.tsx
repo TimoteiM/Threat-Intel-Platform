@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { Button, Page, PageHeader } from "@/components/ui/Primitives";
 import {
   listClients,
   createClient,
@@ -142,35 +143,16 @@ export default function ClientsPage() {
   const totalPages = Math.ceil(total / PAGE_LIMIT);
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px", paddingBottom: 60 }}>
-
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-sans)", color: "var(--text)", margin: 0 }}>
-            Clients
-          </h1>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-sans)", marginTop: 3 }}>
-            Registered client organizations — monitor domains and brand keywords
-          </div>
-        </div>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          style={{
-            padding: "10px 20px",
-            background: showAdd ? "var(--bg-elevated)" : "linear-gradient(135deg, #60a5fa, #818cf8)",
-            border: "none",
-            borderRadius: "var(--radius)",
-            color: showAdd ? "var(--text-dim)" : "#fff",
-            fontSize: 13,
-            fontWeight: 600,
-            fontFamily: "var(--font-sans)",
-            cursor: "pointer",
-          }}
-        >
-          {showAdd ? "Cancel" : "+ Add Client"}
-        </button>
-      </div>
+    <Page>
+      <PageHeader
+        title="Clients"
+        subtitle="Organizations whose domains and brand keywords are monitored for impersonation."
+        actions={
+          <Button variant={showAdd ? "secondary" : "primary"} onClick={() => setShowAdd(!showAdd)}>
+            {showAdd ? "Cancel" : "Add client"}
+          </Button>
+        }
+      />
 
       {/* Add form */}
       {showAdd && (
@@ -411,10 +393,10 @@ export default function ClientsPage() {
         </div>
       )}
 
-      <div style={{ textAlign: "right", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)", marginTop: 10 }}>
+      <div style={{ textAlign: "right", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
         {total} client{total !== 1 ? "s" : ""} total
       </div>
-    </div>
+    </Page>
   );
 }
 

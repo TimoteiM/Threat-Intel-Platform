@@ -2393,8 +2393,56 @@ def _persist_results(
             if inv and inv.batch_id:
                 _update_batch_progress(session, inv.batch_id)
 
+            # -- Pre-render the report PDF -------------------------------
+            # Rendering takes seconds and the report will not change again, so
+            # it happens here rather than on the analyst's Export click. Runs
+            # after the commit deliberately: the investigation's own results
+            # are already durable, so a slow or failed render costs nothing.
+            _prerender_report_pdf(session, investigation_id, inv, evidence_data, report_data)
+
     except Exception as e:
         logger.error(f"[{investigation_id}] Failed to persist results: {e}")
+
+
+def _prerender_report_pdf(session, investigation_id: str, inv, evidence_data: dict, report_data: dict) -> None:
+    """
+    Render the report PDF now, so Export is a download rather than a wait.
+
+    The `detail` dict is built to match `app/api/export.py` field for field. It
+    has to: the cache is keyed on a hash of these inputs, so a dict that differs
+    even in one value fingerprints differently, misses on every request, and
+    quietly turns this into wasted work at the end of every investigation.
+    """
+    if inv is None:
+        return
+    try:
+        from app.services.provider_branding import normalize_anyrun_branding
+        from app.services.report_pdf_cache import render_and_store_sync
+
+        # The API serves the report through `normalize_anyrun_branding`, so the
+        # worker must fingerprint — and render — the normalised form. Hashing
+        # the raw report here would differ from what the API hashes on read,
+        # and every request would miss the cache it just wrote.
+        report_data = normalize_anyrun_branding(report_data)
+
+        session.refresh(inv)
+        detail = {
+            "id": str(inv.id),
+            "domain": inv.domain,
+            "observable_type": getattr(inv, "observable_type", "domain"),
+            "state": inv.state,
+            "classification": inv.classification,
+            "confidence": inv.confidence,
+            "risk_score": inv.risk_score,
+            "recommended_action": inv.recommended_action,
+            "client_domain": inv.client_domain,
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
+            "updated_at": inv.updated_at.isoformat() if inv.updated_at else None,
+            "concluded_at": inv.concluded_at.isoformat() if inv.concluded_at else None,
+        }
+        render_and_store_sync(session, str(inv.id), evidence_data, report_data, detail)
+    except Exception as exc:
+        logger.warning("[%s] Report PDF pre-render skipped: %s", investigation_id, exc)
 
 
 def _align_final_risk_with_report(evidence_data: dict, report_data: dict) -> None:

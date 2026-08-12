@@ -1,5 +1,19 @@
 "use client";
 
+/**
+ * A content section.
+ *
+ * This was the application's default container: a 22px-radius panel with a
+ * gradient wash, a glowing accent bar, a heavy shadow and a 24px display title.
+ * Eighteen files render it, several of them nested two deep, which is most of
+ * why the product read as boxes-inside-boxes with no hierarchy.
+ *
+ * It is now a heading plus its content. `variant="outline"` and `"solid"` keep
+ * a light border for sections that really are distinct objects; `"glass"` and
+ * `"dense"` are borderless, separated by space alone. The API is unchanged so
+ * every existing call site keeps working.
+ */
+
 import React from "react";
 
 export type ConsoleTone = "neutral" | "info" | "success" | "warning" | "danger";
@@ -34,186 +48,113 @@ export default function ConsoleModule({
   className,
   style,
 }: ConsoleModuleProps) {
-  const toneColor = resolveToneColor(tone, accent);
-  const surface = resolveSurface(variant);
-  const padding = compact ? 16 : 20;
+  // Only the bordered variants pay for a box. The rest are separated by space,
+  // which is what stops sections nesting into a stack of frames.
+  const bordered = variant === "solid" || variant === "outline";
+  const padding = bordered ? (compact ? "var(--space-3)" : "var(--space-4)") : 0;
 
   return (
     <section
       className={className}
       style={{
-        position: "relative",
-        overflow: "hidden",
-        borderRadius: 22,
-        border: `1px solid ${variant === "outline" ? toneColor.border : "var(--panel-divider-strong)"}`,
-        background: surface.background,
-        boxShadow: surface.shadow,
+        borderRadius: bordered ? "var(--shell-radius-lg)" : 0,
+        border: bordered ? "1px solid var(--panel-divider-strong)" : "none",
+        background: bordered ? "var(--shell-surface)" : "transparent",
+        padding,
+        display: "grid",
+        // An `auto` grid track is sized by its widest item's max-content, so a
+        // single unwrappable string — a 255-character alert title — stretches
+        // the column past the container and every sibling row with it.
+        // `minmax(0, 1fr)` caps the track at the container width.
+        gridTemplateColumns: "minmax(0, 1fr)",
+        gap: "var(--space-3)",
+        minWidth: 0,
         ...style,
       }}
     >
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: `linear-gradient(180deg, ${toneColor.glow} 0%, transparent 28%)`,
-          pointerEvents: "none",
-        }}
-      />
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          inset: "auto 0 0 0",
-          height: 2,
-          background: `linear-gradient(90deg, transparent, ${toneColor.accent}, transparent)`,
-          opacity: 0.9,
-          pointerEvents: "none",
-        }}
-      />
-
       {(title || eyebrow || description || actions) && (
-        <header
+        <div
           style={{
-            position: "relative",
-            zIndex: 1,
             display: "flex",
-            alignItems: "flex-start",
+            alignItems: "baseline",
             justifyContent: "space-between",
-            gap: 16,
-            padding: `${padding}px ${padding}px ${compact ? 14 : 16}px`,
-            borderBottom: "1px solid var(--panel-divider)",
+            gap: "var(--space-3)",
+            flexWrap: "wrap",
           }}
         >
           <div style={{ minWidth: 0 }}>
             {eyebrow ? (
               <div
                 style={{
-                  fontSize: 11,
+                  fontSize: "var(--font-micro)",
                   fontWeight: 700,
-                  letterSpacing: "0.14em",
+                  letterSpacing: "0.1em",
                   textTransform: "uppercase",
-                  color: toneColor.eyebrow,
-                  marginBottom: title ? 8 : 0,
+                  color: eyebrowColor(tone, accent),
+                  marginBottom: 2,
                 }}
               >
                 {eyebrow}
               </div>
             ) : null}
             {title ? (
-              <div
+              <h2
                 style={{
-                  fontFamily: "var(--font-display)",
-                  fontSize: compact ? 20 : 24,
+                  fontSize: "var(--font-section-title)",
                   fontWeight: 700,
-                  lineHeight: 1.15,
-                  color: "var(--text-strong)",
-                  letterSpacing: "-0.02em",
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  lineHeight: 1.3,
+                  color: "var(--text-secondary)",
+                  margin: 0,
                 }}
               >
                 {title}
-              </div>
+              </h2>
             ) : null}
             {description ? (
               <div
                 style={{
-                  marginTop: title ? 8 : 0,
-                  fontSize: 13,
-                  lineHeight: 1.7,
-                  color: "var(--text-secondary)",
-                  maxWidth: 860,
+                  marginTop: 2,
+                  fontSize: "var(--font-micro)",
+                  lineHeight: 1.6,
+                  color: "var(--text-muted)",
+                  maxWidth: "76ch",
                 }}
               >
                 {description}
               </div>
             ) : null}
           </div>
-          {actions ? <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>{actions}</div> : null}
-        </header>
+          {actions ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+              {actions}
+            </div>
+          ) : null}
+        </div>
       )}
 
-      <div
-        style={{
-          position: "relative",
-          zIndex: 1,
-          padding: padding,
-        }}
-      >
-        {children}
-      </div>
+      <div style={{ minWidth: 0 }}>{children}</div>
 
       {footer ? (
-        <footer
-          style={{
-            position: "relative",
-            zIndex: 1,
-            padding: `0 ${padding}px ${padding}px`,
-          }}
-        >
-          <div style={{ borderTop: "1px solid var(--panel-divider)", paddingTop: 14 }}>{footer}</div>
-        </footer>
+        <div style={{ borderTop: "1px solid var(--panel-divider-soft)", paddingTop: "var(--space-3)" }}>{footer}</div>
       ) : null}
     </section>
   );
 }
 
-function resolveToneColor(tone: ConsoleTone, accent?: string) {
-  if (accent) {
-    return {
-      accent,
-      glow: hexToRgba(accent, 0.18),
-      border: hexToRgba(accent, 0.28),
-      eyebrow: "var(--text-dim)",
-    };
-  }
-
+function eyebrowColor(tone: ConsoleTone, accent?: string) {
+  if (accent) return accent;
   switch (tone) {
     case "success":
-      return { accent: "var(--green)", glow: "rgba(56, 217, 169, 0.12)", border: "rgba(56, 217, 169, 0.28)", eyebrow: "var(--tone-success-eyebrow)" };
+      return "var(--tone-success-eyebrow)";
     case "warning":
-      return { accent: "var(--yellow)", glow: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.28)", eyebrow: "var(--tone-warning-eyebrow)" };
+      return "var(--tone-warning-eyebrow)";
     case "danger":
-      return { accent: "var(--red)", glow: "rgba(251, 113, 133, 0.12)", border: "rgba(251, 113, 133, 0.28)", eyebrow: "var(--tone-danger-eyebrow)" };
+      return "var(--tone-danger-eyebrow)";
     case "neutral":
-      return { accent: "var(--text-muted)", glow: "rgba(120, 145, 178, 0.08)", border: "rgba(120, 145, 178, 0.18)", eyebrow: "var(--text-muted)" };
-    case "info":
+      return "var(--text-muted)";
     default:
-      return { accent: "var(--accent)", glow: "rgba(102, 168, 255, 0.14)", border: "rgba(102, 168, 255, 0.28)", eyebrow: "var(--tone-info-eyebrow)" };
+      return "var(--tone-info-eyebrow)";
   }
-}
-
-function resolveSurface(variant: ConsoleModuleVariant) {
-  switch (variant) {
-    case "glass":
-      return {
-        background: "var(--panel-glass-bg)",
-        shadow: "var(--panel-shadow-glass)",
-      };
-    case "outline":
-      return {
-        background: "var(--panel-outline-bg)",
-        shadow: "none",
-      };
-    case "dense":
-      return {
-        background: "var(--panel-dense-bg)",
-        shadow: "var(--panel-shadow-soft)",
-      };
-    case "solid":
-    default:
-      return {
-        background: "var(--panel-solid-bg)",
-        shadow: "var(--panel-shadow-module)",
-      };
-  }
-}
-
-function hexToRgba(hex: string, alpha: number) {
-  const normalized = hex.replace("#", "");
-  if (normalized.length !== 6) return hex;
-  const r = Number.parseInt(normalized.slice(0, 2), 16);
-  const g = Number.parseInt(normalized.slice(2, 4), 16);
-  const b = Number.parseInt(normalized.slice(4, 6), 16);
-  if ([r, g, b].some((n) => Number.isNaN(n))) return hex;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

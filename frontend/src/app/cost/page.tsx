@@ -11,35 +11,32 @@
  * Savings are counts of work not done, not money: a skipped VirusTotal lookup
  * is worth a different amount to everyone, so the valuation is left to whoever
  * is reading.
+ *
+ * The one thing an analyst acts on here is a provider close to its quota, so
+ * that is what the page leads with when it happens.
  */
 
 import React, { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { CostDashboard } from "@/lib/types";
-import Spinner from "@/components/shared/Spinner";
-
-const CARD: React.CSSProperties = {
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  padding: 16,
-};
-
-const LABEL: React.CSSProperties = {
-  fontSize: 9,
-  fontWeight: 700,
-  color: "var(--text-muted)",
-  letterSpacing: "0.08em",
-  fontFamily: "var(--font-mono)",
-};
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  MetricStrip,
+  Page,
+  PageHeader,
+  Section,
+} from "@/components/ui/Primitives";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
 
 function usageColor(percent: number | null): string {
-  if (percent === null) return "#64748b";
-  if (percent >= 90) return "#ef4444";
-  if (percent >= 70) return "#f59e0b";
-  return "#10b981";
+  if (percent === null) return "var(--status-neutral)";
+  if (percent >= 90) return "var(--status-danger)";
+  if (percent >= 70) return "var(--status-warning)";
+  return "var(--status-success)";
 }
 
 export default function CostPage() {
@@ -61,205 +58,160 @@ export default function CostPage() {
   }, [fetchData]);
 
   const savings = data?.savings;
+  // A provider over 70% of its daily quota is the only thing on this page that
+  // needs doing something about, so it is lifted out of the list.
+  const pressured = (data?.providers || []).filter(
+    (provider) => provider.percent_used !== null && provider.percent_used >= 70,
+  );
 
   return (
-    <div style={{ paddingTop: 20, paddingBottom: 40, maxWidth: 1280 }}>
-      <div
-        className="animate-in"
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 800,
-              color: "var(--text)",
-              letterSpacing: "0.04em",
-              marginBottom: 4,
-              ...MONO,
-            }}
-          >
-            COST AND QUOTA
+    <Page>
+      <PageHeader
+        title="Cost and quota"
+        subtitle="What we spent on providers, and what we avoided spending."
+        actions={
+          <div className="ds-toolbar" role="group" aria-label="Time window">
+            {[7, 30, 90].map((value) => (
+              <Button
+                key={value}
+                variant={days === value ? "primary" : "secondary"}
+                aria-pressed={days === value}
+                onClick={() => setDays(value)}
+              >
+                {value}d
+              </Button>
+            ))}
           </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            What we spent on providers, and what we avoided spending
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {[7, 30, 90].map((value) => (
-            <button
-              key={value}
-              onClick={() => setDays(value)}
-              style={{
-                padding: "6px 12px",
-                background: days === value ? "var(--bg-hover)" : "transparent",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: days === value ? "var(--text)" : "var(--text-dim)",
-                fontSize: 10,
-                fontWeight: 700,
-                cursor: "pointer",
-                ...MONO,
-              }}
-            >
-              {value}D
-            </button>
-          ))}
-        </div>
-      </div>
+        }
+      />
 
       {loading ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: 60 }}>
-          <Spinner />
-        </div>
+        <LoadingState label="Loading usage…" />
       ) : !data ? (
-        <div style={{ ...CARD, borderStyle: "dashed", color: "var(--text-dim)", fontSize: 12 }}>
-          Could not load usage. The counters live in Redis — check that it is reachable.
-        </div>
+        <ErrorState
+          title="Could not load usage"
+          detail="The counters live in Redis — check that it is reachable."
+          action={
+            <Button onClick={fetchData} variant="secondary">
+              Try again
+            </Button>
+          }
+        />
       ) : (
         <>
-          <div
-            style={{
-              ...CARD,
-              marginBottom: 16,
-              fontSize: 12,
-              color: "var(--text)",
-              borderLeft: "3px solid #3b82f6",
-            }}
-          >
-            {data.note}
-          </div>
-
-          {/* Savings */}
-          {savings && (
-            <>
-              <div style={{ ...LABEL, marginBottom: 8 }}>WORK AVOIDED</div>
-              <div style={{ display: "flex", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-                <Tile
-                  label="Lookups avoided"
-                  value={savings.indicator_lookups_avoided}
-                  accent="#10b981"
-                  hint={
-                    savings.avoidance_rate !== null
-                      ? `${Math.round(savings.avoidance_rate * 100)}% of all indicator work`
-                      : undefined
-                  }
-                />
-                <Tile label="By exclusion list" value={savings.avoided_by_exclusion_list} />
-                <Tile label="By prior reuse" value={savings.avoided_by_prior_investigation_reuse} />
-                <Tile
-                  label="Duplicate alerts absorbed"
-                  value={savings.duplicate_alert_deliveries_absorbed}
-                />
-                <Tile label="AI analyses skipped" value={savings.ai_analyses_skipped} />
-              </div>
-              <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 20 }}>
-                Counted from {savings.alert_runs} alert run{savings.alert_runs !== 1 ? "s" : ""} in this
-                window · {savings.indicator_lookups_performed} lookup
-                {savings.indicator_lookups_performed !== 1 ? "s" : ""} actually performed ·{" "}
-                {savings.exclusion_hits_all_time} exclusion hits all time
-              </div>
-            </>
+          {pressured.length > 0 && (
+            <ErrorState
+              partial
+              title={`${pressured.length} provider${pressured.length === 1 ? "" : "s"} near the daily quota`}
+              detail={pressured
+                .map((provider) => `${provider.provider} ${provider.percent_used}% (${provider.remaining_today} left)`)
+                .join(" · ")}
+            />
           )}
 
-          {/* Spend */}
-          <div style={{ ...LABEL, marginBottom: 8 }}>PROVIDER USAGE</div>
-          {data.providers.length === 0 ? (
-            <div style={{ ...CARD, borderStyle: "dashed", color: "var(--text-dim)", fontSize: 12 }}>
-              No provider requests recorded yet today or this month.
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {data.providers.map((provider) => (
-                <div key={provider.key} style={{ ...CARD, padding: "12px 16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", minWidth: 150 }}>
-                      {provider.provider}
-                    </span>
-                    <span style={{ fontSize: 11, color: "var(--text-dim)", ...MONO }}>
-                      {provider.requests_today} today · {provider.requests_this_month} this month
-                    </span>
-                    {provider.daily_limit && (
-                      <span style={{ fontSize: 10, color: "var(--text-muted)", ...MONO }}>
-                        limit {provider.daily_limit}/day · {provider.remaining_today} left
+          {savings && (
+            <Section
+              title="Work avoided"
+              hint={`From ${savings.alert_runs} alert run${savings.alert_runs !== 1 ? "s" : ""} in this window · ${
+                savings.indicator_lookups_performed
+              } lookup${savings.indicator_lookups_performed !== 1 ? "s" : ""} actually performed · ${
+                savings.exclusion_hits_all_time
+              } exclusion hits all time`}
+            >
+              <MetricStrip
+                metrics={[
+                  {
+                    label: "Lookups avoided",
+                    value: savings.indicator_lookups_avoided.toLocaleString(),
+                    status: "success",
+                    hint:
+                      savings.avoidance_rate !== null
+                        ? `${Math.round(savings.avoidance_rate * 100)}% of all indicator work`
+                        : undefined,
+                  },
+                  { label: "By exclusion list", value: savings.avoided_by_exclusion_list.toLocaleString() },
+                  { label: "By prior reuse", value: savings.avoided_by_prior_investigation_reuse.toLocaleString() },
+                  {
+                    label: "Duplicate alerts absorbed",
+                    value: savings.duplicate_alert_deliveries_absorbed.toLocaleString(),
+                  },
+                  { label: "AI analyses skipped", value: savings.ai_analyses_skipped.toLocaleString() },
+                ]}
+              />
+            </Section>
+          )}
+
+          <Section title="Provider usage" hint={data.note}>
+            {data.providers.length === 0 ? (
+              <EmptyState title="No provider requests recorded yet today or this month." />
+            ) : (
+              <div className="ds-rows">
+                {data.providers.map((provider) => (
+                  <div key={provider.key} style={{ padding: "var(--space-3) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "var(--font-body)", fontWeight: 600, color: "var(--text)", minWidth: 150 }}>
+                        {provider.provider}
                       </span>
-                    )}
+                      <span style={{ fontSize: "var(--font-meta)", color: "var(--text-dim)", ...MONO }}>
+                        {provider.requests_today} today · {provider.requests_this_month} this month
+                      </span>
+                      {provider.daily_limit && (
+                        <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)", ...MONO }}>
+                          limit {provider.daily_limit}/day · {provider.remaining_today} left
+                        </span>
+                      )}
+                      {provider.percent_used !== null && (
+                        <span
+                          style={{
+                            marginLeft: "auto",
+                            fontSize: "var(--font-body)",
+                            fontWeight: 700,
+                            color: usageColor(provider.percent_used),
+                            ...MONO,
+                          }}
+                        >
+                          {provider.percent_used}%
+                        </span>
+                      )}
+                    </div>
                     {provider.percent_used !== null && (
-                      <span
+                      <div
+                        role="progressbar"
+                        aria-valuenow={provider.percent_used}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={`${provider.provider} daily quota used`}
                         style={{
-                          marginLeft: "auto",
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color: usageColor(provider.percent_used),
-                          ...MONO,
+                          marginTop: "var(--space-2)",
+                          height: 3,
+                          background: "var(--bg-input)",
+                          borderRadius: 2,
+                          overflow: "hidden",
                         }}
                       >
-                        {provider.percent_used}%
-                      </span>
+                        <div
+                          style={{
+                            width: `${Math.min(provider.percent_used, 100)}%`,
+                            height: "100%",
+                            background: usageColor(provider.percent_used),
+                          }}
+                        />
+                      </div>
                     )}
                   </div>
-                  {provider.percent_used !== null && (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        height: 4,
-                        background: "var(--bg-input)",
-                        borderRadius: 2,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${Math.min(provider.percent_used, 100)}%`,
-                          height: "100%",
-                          background: usageColor(provider.percent_used),
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
 
-          {data.providers_idle.length > 0 && (
-            <div style={{ marginTop: 12, fontSize: 10, color: "var(--text-muted)" }}>
-              No requests recorded: {data.providers_idle.join(", ")}. A configured provider showing
-              nothing is either unused or not reporting its usage.
-            </div>
-          )}
+            {data.providers_idle.length > 0 && (
+              <div style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+                No requests recorded: {data.providers_idle.join(", ")}. A configured provider showing
+                nothing is either unused or not reporting its usage.
+              </div>
+            )}
+          </Section>
         </>
       )}
-    </div>
-  );
-}
-
-function Tile({
-  label,
-  value,
-  hint,
-  accent,
-}: {
-  label: string;
-  value: number;
-  hint?: string;
-  accent?: string;
-}) {
-  return (
-    <div style={{ ...CARD, flex: 1, minWidth: 160 }}>
-      <div style={LABEL}>{label.toUpperCase()}</div>
-      <div
-        style={{
-          fontSize: 24,
-          fontWeight: 700,
-          color: accent || "var(--text)",
-          marginTop: 6,
-          ...MONO,
-        }}
-      >
-        {value.toLocaleString()}
-      </div>
-      {hint && <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 4 }}>{hint}</div>}
-    </div>
+    </Page>
   );
 }

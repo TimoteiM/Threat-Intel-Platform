@@ -315,9 +315,8 @@ export default function EmailInvestigationsPage() {
   return (
     <div style={{ paddingTop: 18, paddingBottom: 44, display: "grid", gap: 18 }}>
       <PageHero
-        eyebrow="Threat Analyst Console"
-        title="Email Investigation"
-        description="Upload an .eml or .msg sample, inspect prior runs, and follow the workflow from intake through verdict in a single console surface."
+        title="Email investigation"
+        description="Upload an .eml or .msg sample to extract its indicators, headers and links, and get a verdict."
         status={<StatusPill tone={workflowTone} mono>{workflowLabel}</StatusPill>}
         badges={
           <>
@@ -383,9 +382,7 @@ export default function EmailInvestigationsPage() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
         <ConsoleModule
-          eyebrow="Archive"
-          title="History"
-          description="Recent runs and live cancel controls. Open a previous run to repopulate the result pane."
+          title="Recent runs"
           tone="info"
           actions={<StatusPill tone={historyTotal ? "info" : "neutral"} outline mono>{`${historyTotal} records`}</StatusPill>}
         >
@@ -577,9 +574,7 @@ export default function EmailInvestigationsPage() {
         </ConsoleModule>
 
         <ConsoleModule
-          eyebrow="Sample intake"
-          title="Upload"
-          description="Configure the email analysis before submission. The current options do not change the existing run logic."
+          title="Upload a sample"
           tone="info"
           actions={<StatusPill tone={file ? "success" : "neutral"} outline mono>{fileStateLabel}</StatusPill>}
         >
@@ -686,8 +681,7 @@ export default function EmailInvestigationsPage() {
 
       {error && (
         <ConsoleModule
-          eyebrow="Run status"
-          title="Attention"
+          title="Run failed"
           description={error}
           tone="danger"
           variant="outline"
@@ -696,9 +690,7 @@ export default function EmailInvestigationsPage() {
         </ConsoleModule>
       )}
       <ConsoleModule
-        eyebrow="Orchestration"
         title="Progress"
-        description="Live upload, enrichment, and verdict state. The step list updates while the backend pipeline runs."
         tone={progressTone}
         actions={activeRunId ? <StatusPill tone="warning" outline mono>Cancelable</StatusPill> : <StatusPill tone="neutral" outline mono>Idle</StatusPill>}
       >
@@ -768,9 +760,8 @@ export default function EmailInvestigationsPage() {
       </ConsoleModule>
 
       <ConsoleModule
-        eyebrow="Investigation output"
         title="Results"
-        description={result?.email_subject || "Structured resolution, indicators, and sandbox context for the current sample."}
+        description={result?.email_subject || undefined}
         tone={result ? "success" : "neutral"}
         actions={result ? <StatusPill tone="success" outline mono>Report ready</StatusPill> : <StatusPill tone="neutral" outline mono>No report</StatusPill>}
       >
@@ -872,7 +863,7 @@ export default function EmailInvestigationsPage() {
           {activeResultTab === "summary" && <>
 
           {/* ── Email Summary ── */}
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Email Summary</div>
             <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
               {result.email_subject || "No subject"}
@@ -950,7 +941,7 @@ export default function EmailInvestigationsPage() {
             const spoofability = String(es.spoofability_score || "").toLowerCase();
             const spoofColor = spoofability === "high" ? "#ef4444" : spoofability === "medium" ? "#f59e0b" : spoofability === "low" ? "#60a5fa" : "#34d399";
             return (
-              <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+              <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
                   Email Authentication &amp; Security Posture
                 </div>
@@ -960,7 +951,7 @@ export default function EmailInvestigationsPage() {
                     const headerVal = String(auth?.[k] || "none").toLowerCase();
                     const c = headerVal === "pass" ? "#34d399" : headerVal === "fail" || headerVal === "permerror" ? "#ef4444" : "#f59e0b";
                     return (
-                      <div key={k} style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                      <div key={k} style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{k.toUpperCase()} (header)</div>
                         <div style={{ fontSize: 14, fontWeight: 700, color: c }}>{headerVal.toUpperCase()}</div>
                       </div>
@@ -968,7 +959,7 @@ export default function EmailInvestigationsPage() {
                   })}
                   {/* Live DNS DMARC policy */}
                   {es.dmarc_policy !== undefined && (
-                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DMARC Policy (DNS)</div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: es.dmarc_policy === "reject" ? "#34d399" : es.dmarc_policy === "quarantine" ? "#60a5fa" : "#f59e0b" }}>
                         {String(es.dmarc_policy || "none").toUpperCase()}
@@ -977,7 +968,7 @@ export default function EmailInvestigationsPage() {
                   )}
                   {/* SPF all qualifier */}
                   {es.spf_all_qualifier !== undefined && (
-                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>SPF All Qualifier</div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: es.spf_all_qualifier === "-all" ? "#34d399" : es.spf_all_qualifier === "+all" ? "#ef4444" : "#f59e0b" }}>
                         {String(es.spf_all_qualifier || "none")}
@@ -985,7 +976,7 @@ export default function EmailInvestigationsPage() {
                     </div>
                   )}
                   {/* DKIM selectors */}
-                  <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                  <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                     <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DKIM Selectors</div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: (es.dkim_selectors_found || []).length > 0 ? "#34d399" : "#f59e0b" }}>
                       {(es.dkim_selectors_found || []).length > 0 ? (es.dkim_selectors_found || []).join(", ") : "None found"}
@@ -993,7 +984,7 @@ export default function EmailInvestigationsPage() {
                   </div>
                   {/* Security score */}
                   {typeof es.email_security_score === "number" && (
-                    <div style={{ padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                    <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Security Score</div>
                       <div style={{ fontSize: 14, fontWeight: 700, color: es.email_security_score >= 80 ? "#34d399" : es.email_security_score >= 50 ? "#f59e0b" : "#ef4444" }}>
                         {es.email_security_score}/100
@@ -1018,7 +1009,7 @@ export default function EmailInvestigationsPage() {
           })()}
 
           {/* ── Investigation Summary (AI narrative) ── */}
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
               Investigation Summary
               <span style={{ marginLeft: 8, fontSize: 10, color: "var(--text-muted)", fontWeight: 400 }}>
@@ -1038,7 +1029,7 @@ export default function EmailInvestigationsPage() {
               })()}
             </div>
             {result?.resolution?.sender_domain_analysis?.primary_reasoning && (
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 12, padding: "10px 12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 12, padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                 {result.resolution.sender_domain_analysis.primary_reasoning}
               </div>
             )}
@@ -1065,7 +1056,7 @@ export default function EmailInvestigationsPage() {
           </div>
 
           {/* ── Indicator Checks ── */}
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Indicator Checks</div>
             <div style={{ display: "grid", gap: 8 }}>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
@@ -1361,7 +1352,7 @@ export default function EmailInvestigationsPage() {
 
           {activeResultTab === "indicators" && <>
 
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Attachment Hash Checks</div>
             {!result?.indicator_checks?.attachments?.items?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No attachments found.</div>
@@ -1430,7 +1421,7 @@ export default function EmailInvestigationsPage() {
             </div>
           )}
 
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>URL Reputation and Destination</div>
             {!result?.indicator_checks?.urls?.length ? (
               <div style={{ fontSize: 12, color: "var(--text-dim)" }}>No URLs found.</div>

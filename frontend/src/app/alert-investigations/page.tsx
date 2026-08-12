@@ -76,9 +76,8 @@ export default function AlertInvestigationsPage() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 18, paddingBottom: 56 }}>
       <PageHero
-        eyebrow="Alert Body"
         title="Alert Body Investigations"
         description="Paste a raw alert on the New Investigation page — every IOC it contains is extracted, run through the collectors, and returned as a list of JSON reports."
         actions={
@@ -141,7 +140,10 @@ export default function AlertInvestigationsPage() {
             No alert body investigations yet.
           </div>
         ) : (
-          <div style={{ display: "grid", gap: 8 }}>
+          /* Some runs are titled with a whole flattened log line — 255
+             characters, unwrappable. Without a capped track, that one row sets
+             the column width and every other row overflows the card with it. */
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
             {items.map((run) => (
               <div
                 key={run.run_id}
@@ -158,6 +160,7 @@ export default function AlertInvestigationsPage() {
                   display: "flex",
                   alignItems: "center",
                   gap: 14,
+                  minWidth: 0,
                   padding: "11px 14px",
                   borderRadius: 12,
                   border: "1px solid var(--panel-divider-strong)",

@@ -348,9 +348,7 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         source_label = "sandbox" if anyrun_context.get("sandbox") else "TI"
         network_label = f" via {anyrun_context['network']}" if anyrun_context.get("network") else ""
         score_label = f" score {anyrun_context['threat_score']}" if anyrun_context.get("threat_score") is not None else ""
-        details: list[str] = [
-            f"AnyRun {source_label} returned a {anyrun_verdict.upper()} verdict for the investigated indicator."
-        ]
+        details: list[str] = [_anyrun_verdict_sentence(anyrun_verdict, source_label, anyrun_context)]
         if anyrun_context.get("threat_score") is not None:
             details.append(f"Provider threat score: {anyrun_context['threat_score']}/100.")
         if anyrun_context.get("network"):
@@ -364,7 +362,12 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
                 "A visible data-entry form was detected in the rendered page, but the form was not submitted; "
                 "interaction-dependent behavior therefore remains untested."
             )
-        if anyrun_malicious:
+        if anyrun_malicious and anyrun_context.get("escalated_by"):
+            details.append(
+                "Decision impact: the provider label — not the provider verdict — set the deterministic "
+                "domain/URL score to 90 before lexical blending and trusted-source floors."
+            )
+        elif anyrun_malicious:
             details.append("Decision impact: a MALICIOUS sandbox verdict sets the deterministic domain/URL score to 90 before lexical blending and trusted-source floors.")
         elif anyrun_suspicious:
             details.append("Decision impact: a SUSPICIOUS sandbox verdict sets the deterministic domain/URL score to 60 before lexical blending and trusted-source floors.")
@@ -375,13 +378,24 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             if form_detection.get("detected")
             else ""
         )
+        # The headline must not read as a provider verdict when the provider did
+        # not give one. An escalation by label says so in the title, so the
+        # finding and the sandbox table on the same screen cannot disagree.
+        escalated_labels = [str(label) for label in (anyrun_context.get("escalated_by") or []) if str(label).strip()]
+        provider_verdict = str(anyrun_context.get("provider_verdict") or "").strip().upper()
+        headline = (
+            f"AnyRun {source_label} labelled {', '.join(escalated_labels[:2])}"
+            f" (provider verdict: {provider_verdict or 'none'})"
+            if escalated_labels
+            else f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}"
+        )
         key_evidence.append(
-            f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}{score_label}{network_label}"
+            f"{headline}{score_label}{network_label}"
             f"{interaction_label} - {names}provider evidence"
         )
         findings.append({
             "id": "anyrun_verdict",
-            "title": f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}",
+            "title": headline,
             "description": " ".join(details),
             "severity": "critical" if anyrun_malicious else ("high" if anyrun_suspicious else "info"),
             "evidence_refs": ["hybrid_analysis.items"],
@@ -734,6 +748,21 @@ def _pivots_to_other_domains(infra: dict[str, Any], evidence_data: dict[str, Any
 
 
 def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
+    """
+    The verdict this platform acts on, which is not always the one ANY.RUN gave.
+
+    A threat label outranks a clean verdict. ANY.RUN routinely returns
+    `verdict: clean` — "No threats detected" — on a task it has simultaneously
+    tagged `phishing`, because the automated run never triggered the behaviour
+    the label describes. Trusting the verdict there would let a known phishing
+    kit through on the strength of a sandbox that did not click anything.
+
+    The cost of that rule is a report that reads as if ANY.RUN called something
+    malicious when it did not, so `context` carries the reason: `escalated_by`
+    names the labels that overrode the verdict and `provider_verdict` keeps what
+    the provider actually said. Anything describing this decision to an analyst
+    must use both — see `_anyrun_verdict_sentence`.
+    """
     verdict = str(hybrid.get("verdict") or "").strip().lower()
     names: list[str] = _anyrun_labels_from_item(hybrid)
     context: dict[str, Any] = _anyrun_context_from_item(hybrid)
@@ -765,9 +794,15 @@ def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[s
                 )
             ):
                 context = item_context
+    provider_verdict = verdict if verdict in {"malicious", "suspicious", "clean"} else ""
+    context = {**context, "provider_verdict": provider_verdict}
     if malicious_labels:
+        # Record that the label, not the verdict, is what escalated this — so the
+        # finding can say so instead of claiming ANY.RUN returned MALICIOUS.
+        if provider_verdict != "malicious":
+            context = {**context, "escalated_by": list(malicious_labels)}
         return "malicious", malicious_labels, context
-    return verdict if verdict in {"malicious", "suspicious", "clean"} else "", names, context
+    return provider_verdict, names, context
 
 
 def _anyrun_context_from_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -857,6 +892,34 @@ def _anyrun_labels_from_item(item: dict[str, Any]) -> list[str]:
             add(summary.get("detectedType"))
             add(summary.get("tracker") or summary.get("trackers"))
     return labels
+
+
+def _anyrun_verdict_sentence(verdict: str, source_label: str, context: dict[str, Any]) -> str:
+    """
+    Say what ANY.RUN reported, and separately what this platform concluded.
+
+    The old wording asserted "AnyRun sandbox returned a MALICIOUS verdict" from
+    the *resolved* verdict, so a clean run carrying a `phishing` label was
+    reported as a malicious provider verdict — a claim the provider never made,
+    contradicted by the sandbox table on the same screen.
+    """
+    escalated_by = [str(label) for label in (context.get("escalated_by") or []) if str(label).strip()]
+    provider = str(context.get("provider_verdict") or "").strip().upper()
+    if not escalated_by:
+        return f"AnyRun {source_label} returned a {verdict.upper()} verdict for the investigated indicator."
+
+    labels = ", ".join(escalated_by[:4])
+    provider_clause = (
+        f"returned {provider} (\"no threats detected\")"
+        if provider == "CLEAN"
+        else f"returned {provider}" if provider else "returned no verdict"
+    )
+    return (
+        f"AnyRun {source_label} {provider_clause} but labelled the sample {labels}. "
+        "The label is treated as authoritative: an automated run that never interacts with the page "
+        "routinely fails to trigger the behaviour its own label describes, so this platform escalates "
+        "on the label and records the provider verdict as incomplete rather than clean."
+    )
 
 
 def _anyrun_malicious_labels(labels: list[str]) -> list[str]:

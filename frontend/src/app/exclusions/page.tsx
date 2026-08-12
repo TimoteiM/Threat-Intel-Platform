@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import type { Exclusion } from "@/lib/types";
 import Spinner from "@/components/shared/Spinner";
+import { Button, MetaDot, Page, PageHeader } from "@/components/ui/Primitives";
 
 /* ─── Style constants ─── */
 
@@ -170,80 +171,52 @@ export default function ExclusionsPage() {
   const activeType = TYPE_OPTIONS.find((opt) => opt.value === newType) ?? TYPE_OPTIONS[0];
 
   return (
-    <div style={{ paddingTop: 20, paddingBottom: 40, maxWidth: 1100 }}>
-      {/* Header row */}
-      <div
-        className="animate-in"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 16,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 800,
-              color: "var(--text)",
-              letterSpacing: "0.04em",
-              fontFamily: "var(--font-mono)",
-              marginBottom: 4,
-            }}
-          >
-            EXCLUSION LIST
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            Treated as benign without analysis — {total} entr{total !== 1 ? "ies" : "y"}
-            {totalSkipped > 0 && `, ${totalSkipped} indicator lookup${totalSkipped !== 1 ? "s" : ""} saved on this page`}
-          </div>
-        </div>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          style={{
-            padding: "10px 20px",
-            background: showAddForm ? "var(--bg-card)" : "linear-gradient(135deg, #3b82f6, #2563eb)",
-            border: showAddForm ? "1px solid var(--border)" : "none",
-            borderRadius: "var(--radius)",
-            color: showAddForm ? "var(--text-dim)" : "#fff",
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: "pointer",
-            fontFamily: "var(--font-mono)",
-            letterSpacing: "0.06em",
-          }}
-        >
-          {showAddForm ? "CANCEL" : "+ ADD EXCLUSION"}
-        </button>
-      </div>
+    <Page>
+      <PageHeader
+        title="Exclusion list"
+        subtitle="Indicators treated as benign without analysis. Anything here is never looked up."
+        meta={
+          <>
+            <span>
+              {total} entr{total !== 1 ? "ies" : "y"}
+            </span>
+            {totalSkipped > 0 && (
+              <>
+                <MetaDot />
+                <span>
+                  {totalSkipped} lookup{totalSkipped !== 1 ? "s" : ""} saved on this page
+                </span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <Button variant={showAddForm ? "secondary" : "primary"} onClick={() => setShowAddForm(!showAddForm)}>
+            {showAddForm ? "Cancel" : "Add exclusion"}
+          </Button>
+        }
+      />
 
       {/* Add form */}
       {showAddForm && (
         <form
           onSubmit={handleAdd}
-          className="animate-slide-down"
-          style={{
-            padding: 20,
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            marginBottom: 16,
-          }}
+          className="animate-slide-down ds-card"
         >
           <div
             style={{
-              fontSize: 11,
+              fontSize: "var(--font-micro)",
               fontWeight: 700,
               color: "var(--text-muted)",
-              marginBottom: 12,
-              letterSpacing: "0.08em",
+              marginBottom: "var(--space-3)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
             }}
           >
-            EXCLUDE AN INDICATOR
+            Exclude an indicator
           </div>
 
-          <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: "var(--space-3)", marginBottom: "var(--space-3)", flexWrap: "wrap" }}>
             <select
               value={newType}
               onChange={(e) => setNewType(e.target.value)}
@@ -438,10 +411,8 @@ export default function ExclusionsPage() {
               <div
                 key={entry.id}
                 style={{
-                  padding: "14px 16px",
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
+                  padding: "var(--space-3) 0",
+                  borderBottom: "1px solid var(--panel-divider-soft)",
                   opacity: inactive ? 0.55 : 1,
                 }}
               >
@@ -643,6 +614,6 @@ export default function ExclusionsPage() {
           </button>
         </div>
       )}
-    </div>
+    </Page>
   );
 }

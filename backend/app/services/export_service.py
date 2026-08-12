@@ -150,12 +150,50 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     return "\n".join(lines)
 
 
+# An unbreakable run this long has no line-break opportunity, and WeasyPrint's
+# cost grows exponentially in the number of them: on one real report, 18 such
+# tokens took the render from 6 seconds to 70. Measured on that document —
+# 85% of the content rendered in 6.7s, and each additional ~800 bytes carrying
+# one more token doubled it: 12.5s, 24.7s, 54.5s.
+_UNBREAKABLE_RUN_THRESHOLD = 200
+_UNBREAKABLE_RUN_CHUNK = 24
+_UNBREAKABLE_RUN_RE = re.compile(r'(?<![\w/=:.-])([^\s<>"\']{%d,})' % _UNBREAKABLE_RUN_THRESHOLD)
+
+
+def _add_break_opportunities(html: str) -> str:
+    """
+    Give the line-breaker somewhere to break inside very long tokens.
+
+    Phishing URLs carry JWTs and tracking blobs — one real sample was a single
+    1,037-character token, repeated across nine table cells. Rendering that took
+    70 seconds and blocked every other request in the process.
+
+    `<wbr>` is used rather than a zero-width space because it is what actually
+    works: a ZWSP leaves the run a single text node and only bought 14%, while
+    `<wbr>` splits it into separate inline boxes and cuts the render 5×. The full
+    value is preserved either way — truncating evidence in a security report to
+    save render time is not a trade worth making, and the JSON and Markdown
+    exports carry the same value untouched.
+    """
+    def split(match: re.Match[str]) -> str:
+        token = match.group(1)
+        return "<wbr>".join(
+            token[index:index + _UNBREAKABLE_RUN_CHUNK]
+            for index in range(0, len(token), _UNBREAKABLE_RUN_CHUNK)
+        )
+
+    return _UNBREAKABLE_RUN_RE.sub(split, html)
+
+
 def export_pdf(evidence: dict, report: dict, detail: dict) -> bytes:
     """
     Export investigation as PDF.
     Uses WeasyPrint to render HTML → PDF.
+
+    Blocking and CPU-bound — callers on the event loop must run it in a thread,
+    or the whole API stalls for the duration. See `app/api/export.py`.
     """
-    html = _build_pdf_html(evidence, report, detail)
+    html = _add_break_opportunities(_build_pdf_html(evidence, report, detail))
 
     try:
         from weasyprint import HTML
