@@ -1127,6 +1127,12 @@ class CollectedEvidence(BaseModel):
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AnalystFinding(BaseModel):
+    # Nested inside AnalystReport, which is used directly as the deep agent's
+    # `response_format`. Providers running strict structured output require
+    # `additionalProperties: false` on *every* object in the schema, not just the root,
+    # and Pydantic only emits it for models that forbid extras.
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     title: str
     description: str
@@ -1139,6 +1145,8 @@ class AnalystFinding(BaseModel):
 
 
 class IOC(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # see AnalystFinding
+
     type: IOCType
     value: str
     context: str
@@ -1146,7 +1154,19 @@ class IOC(BaseModel):
 
 
 class AnalystReport(BaseModel):
-    """Structured output from the Claude analyst."""
+    """Structured output from the analyst.
+
+    Used directly as `response_format` for the deep agent, so the schema must stay
+    strict: some providers reject a tool schema without `additionalProperties: false`.
+
+    Note that `classification`, `confidence`, `risk_score`, `recommended_action` and
+    `risk_rationale` are *proposals*. The deterministic decision engine
+    (`decision_engine.apply_decision_to_report`) overwrites all five before the report is
+    stored, and the system prompt tells the model so.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     # Classification
     classification: Classification
     confidence: Confidence
@@ -1171,8 +1191,20 @@ class AnalystReport(BaseModel):
     recommended_steps: list[str] = []
 
     # Risk
-    risk_score: Optional[int] = Field(None, ge=0, le=100)
+    #
+    # No ge/le on the Field. This model is the deep agent's `response_format`, and
+    # OpenAI's strict structured-output mode does not support `minimum`/`maximum` —
+    # LangChain passes them straight through, so the request would 400. Clamping in a
+    # validator keeps the 0-100 guarantee, emits a strict-safe schema, and is more
+    # forgiving than rejecting: a model that answers 150 should not cost us the whole
+    # report. The decision engine overwrites this field before persistence anyway.
+    risk_score: Optional[int] = None
     risk_rationale: Optional[str] = None
+
+    @field_validator("risk_score")
+    @classmethod
+    def _clamp_risk_score(cls, value: Optional[int]) -> Optional[int]:
+        return None if value is None else max(0, min(100, value))
 
     # Narrative sections (for report UI)
     executive_summary: Optional[str] = None

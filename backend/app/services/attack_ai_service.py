@@ -220,47 +220,51 @@ def propose_attack_techniques(
 
 
 def _complete(system: str, user: str, *, model: str | None) -> str:
-    """One completion, OpenAI first and Anthropic as fallback."""
+    """
+    One completion, the configured provider first and Anthropic as fallback.
+
+    Synchronous `invoke`, not `ainvoke`: this runs inside a Celery task with no event loop
+    of its own.
+
+    Never raises — every failure returns "", because a missing ATT&CK proposal must not
+    touch the run. Note the primary is also abandoned on *empty* text, which
+    `.with_fallbacks()` could not express because it only fires on exceptions.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.analyst.models import (
+        build_anthropic_model,
+        build_model,
+        configured_model_id,
+        message_text,
+        primary_model_configured,
+    )
     from app.config import get_settings
     from app.services.provider_usage_metrics import record_provider_request
 
     settings = get_settings()
-    chosen = (model or settings.openai_model or "").strip()
+    # Resolved from the configured provider, so a local deployment does not ask its server
+    # for settings.openai_model.
+    chosen = (model or configured_model_id(settings) or "").strip()
+    messages = [SystemMessage(system), HumanMessage(user)]
 
-    if settings.openai_api_key and not chosen.startswith("claude-"):
+    if primary_model_configured(settings) and not chosen.startswith("claude-"):
         try:
-            import openai
-
-            client = openai.OpenAI(api_key=settings.openai_api_key)
             record_provider_request("openai", scope="attack_assessment")
-            response = client.responses.create(
-                model=chosen or settings.openai_model,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_output_tokens=1024,
-            )
-            text = getattr(response, "output_text", None) or ""
+            text = message_text(build_model(chosen or None, max_tokens=1024).invoke(messages))
             if text.strip():
                 return text
         except Exception as exc:
-            logger.warning("ATT&CK AI: OpenAI call failed (%s), trying fallback", exc)
+            logger.warning("ATT&CK AI: primary call failed (%s), trying fallback", exc)
 
     if not settings.anthropic_api_key:
         return ""
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         record_provider_request("anthropic", scope="attack_assessment")
-        message = client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=1024,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return message.content[0].text if message and message.content else ""
+        # Preserved quirk: the fallback uses settings.anthropic_model and ignores the
+        # caller's `model`. Changing that is a behaviour change, so it is left alone rather
+        # than fixed as a side effect of the provider migration.
+        return message_text(build_anthropic_model(max_tokens=1024).invoke(messages))
     except Exception as exc:
         logger.warning("ATT&CK AI: fallback call failed (%s)", exc)
         return ""

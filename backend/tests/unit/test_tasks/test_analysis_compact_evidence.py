@@ -1,58 +1,13 @@
-import pytest
-
 from app.tasks.analysis_task import (
     _annotate_compact_analyst_report,
     _generate_automated_report,
     _build_prompt_too_long_fallback_report,
-    _build_analyst_input_evidence,
+    _build_analyst_evidence_digest,
     _build_iocs_from_evidence,
     _ensure_report_completeness,
     _inject_lexical_contribution,
     _is_prompt_too_long_error,
-    _run_analyst_with_compaction,
 )
-
-
-def test_compact_evidence_trims_large_lists_for_llm():
-    evidence = {
-        "domain": "example.com",
-        "investigation_id": "x",
-        "timestamps": {"started": "2026-03-09T00:00:00Z"},
-        "intel": {"related_urls": [f"https://a{i}.example.com" for i in range(120)]},
-        "js_analysis": {"captured_requests": [{"url": f"https://r{i}.example.com"} for i in range(80)]},
-        "signals": [{"id": str(i)} for i in range(90)],
-    }
-
-    compact = _build_analyst_input_evidence(evidence)
-
-    assert len(compact["intel"]["related_urls"]) == 80
-    assert len(compact["js_analysis"]["captured_requests"]) == 80
-    assert len(compact["signals"]) == 80
-
-
-def test_compact_evidence_digest_tier_reduces_large_sections_more_aggressively():
-    evidence = {
-        "domain": "example.com",
-        "investigation_id": "x",
-        "timestamps": {"started": "2026-03-09T00:00:00Z"},
-        "intel": {"related_urls": [f"https://a{i}.example.com" for i in range(120)]},
-        "js_analysis": {
-            "captured_requests": [{"url": f"https://r{i}.example.com"} for i in range(80)],
-            "tracking_pixels": [f"https://t{i}.example.com/pixel" for i in range(40)],
-        },
-        "signals": [{"id": str(i)} for i in range(90)],
-    }
-
-    standard = _build_analyst_input_evidence(evidence, tier="standard")
-    compact = _build_analyst_input_evidence(evidence, tier="compact")
-    digest = _build_analyst_input_evidence(evidence, tier="digest")
-
-    assert len(standard["intel"]["related_urls"]) == 80
-    assert len(standard["js_analysis"]["captured_requests"]) == 80
-    assert len(digest["intel"]["related_urls"]) < len(compact["intel"]["related_urls"])
-    assert len(digest["js_analysis"]["captured_requests"]) < len(compact["js_analysis"]["captured_requests"])
-    assert len(digest["signals"]) < len(compact["signals"])
-    assert len(digest["js_analysis"]["tracking_pixels"]) < len(compact["js_analysis"]["tracking_pixels"])
 
 
 def test_analyst_input_includes_grounded_associated_with_digest():
@@ -83,8 +38,7 @@ def test_analyst_input_includes_grounded_associated_with_digest():
         },
     }
 
-    compact = _build_analyst_input_evidence(evidence, tier="standard")
-    digest = compact["analyst_digest"]
+    digest = _build_analyst_evidence_digest(evidence, tier="standard")
 
     assert "paypal" in digest["associated_with"].lower()
     assert any("title" in basis.lower() or "osint" in basis.lower() for basis in digest["association_basis"])
@@ -98,9 +52,9 @@ def test_analyst_input_accepts_non_ascii_association_candidates():
         "http": {"title": "Веблинкс — Каталог сайтов"},
     }
 
-    compact = _build_analyst_input_evidence(evidence, tier="standard")
+    digest = _build_analyst_evidence_digest(evidence, tier="standard")
 
-    assert "Веблинкс" in compact["analyst_digest"]["associated_with"]
+    assert "Веблинкс" in digest["associated_with"]
 
 
 def test_analyst_input_ignores_punctuation_only_association_candidates():
@@ -111,9 +65,9 @@ def test_analyst_input_ignores_punctuation_only_association_candidates():
         "http": {"title": "———"},
     }
 
-    compact = _build_analyst_input_evidence(evidence, tier="standard")
+    digest = _build_analyst_evidence_digest(evidence, tier="standard")
 
-    assert compact["analyst_digest"]["associated_with"] == ""
+    assert digest["associated_with"] == ""
 
 
 def test_automated_report_does_not_escalate_contextual_http_inputs_without_suspicious_domain_context():
@@ -152,83 +106,6 @@ def test_automated_report_does_not_escalate_contextual_http_inputs_without_suspi
     assert "were not used to raise risk" in finding["description"]
 
 
-def test_digest_mode_summarizes_heavyweight_collectors():
-    evidence = {
-        "domain": "example.com",
-        "investigation_id": "x",
-        "timestamps": {"started": "2026-03-09T00:00:00Z"},
-        "vt": {
-            "malicious_count": 7,
-            "suspicious_count": 1,
-            "total_vendors": 94,
-            "vendor_results": [
-                {"vendor": f"Vendor{i}", "category": "malicious", "result": "Phishing", "method": "ai"}
-                for i in range(30)
-            ],
-            "tags": [f"tag{i}" for i in range(20)],
-        },
-        "brave_osint": {
-            "top_hits": [
-                {
-                    "title": f"Finding {i}",
-                    "url": f"https://example.com/{i}",
-                    "description": "desc" * 40,
-                    "source": "blog",
-                    "matched_keywords": ["scam"],
-                    "score": 70,
-                }
-                for i in range(8)
-            ],
-            "observed_results": [{"title": f"Obs {i}", "url": "https://obs", "description": "x", "source": "blog"} for i in range(20)],
-            "all_results": [{"title": f"All {i}", "url": "https://all", "description": "x", "source": "blog"} for i in range(20)],
-            "summary": "summary" * 80,
-        },
-        "hybrid_analysis": {
-            "items": [
-                {
-                    "checked": True,
-                    "indicator_type": "url",
-                    "verdict": "malicious",
-                    "analysis_id": "ha-1",
-                    "threat_score": 95,
-                    "dynamic_io_summary": {
-                        "contacted_domains": [f"d{i}.example.com" for i in range(30)],
-                        "contacted_ips": [f"1.1.1.{i}" for i in range(30)],
-                    },
-                    "raw_summary": {"huge": "X" * 4000},
-                }
-            ]
-        },
-        "intel": {
-            "related_subdomains": [f"s{i}.example.com" for i in range(100)],
-            "cert_entries_raw": [{"serial": str(i), "subject": "example"} for i in range(100)],
-        },
-    }
-
-    digest = _build_analyst_input_evidence(evidence, tier="digest")
-
-    assert len(digest["vt"]["vendor_results"]) <= 5
-    assert len(digest["brave_osint"]["top_hits"]) <= 3
-    assert digest["brave_osint"]["observed_results"] == []
-    assert digest["brave_osint"]["all_results"] == []
-    assert len(digest["hybrid_analysis"]["items"][0]["dynamic_io_summary"]["contacted_domains"]) <= 5
-    assert len(digest["intel"]["cert_entries_raw"]) == 0
-    assert "collector_summaries" in digest["analyst_digest"]
-
-
-def test_compact_evidence_truncates_long_strings():
-    long_text = "A" * 5000
-    evidence = {
-        "domain": "example.com",
-        "investigation_id": "x",
-        "timestamps": {"started": "2026-03-09T00:00:00Z"},
-        "http": {"title": long_text},
-    }
-    compact = _build_analyst_input_evidence(evidence)
-    assert compact["http"]["title"].endswith("...[truncated]")
-    assert len(compact["http"]["title"]) <= 4015
-
-
 def test_is_prompt_too_long_error_only_matches_prompt_overflow():
     assert _is_prompt_too_long_error(
         RuntimeError(
@@ -237,54 +114,6 @@ def test_is_prompt_too_long_error_only_matches_prompt_overflow():
         )
     )
     assert not _is_prompt_too_long_error(RuntimeError("Error code: 429 - rate limited"))
-
-
-def test_run_analyst_with_compaction_retries_prompt_too_long(monkeypatch):
-    calls = []
-
-    def fake_run_analyst_sync(evidence_data, max_iterations, timeout_seconds):
-        calls.append(evidence_data["_analyst_compaction_tier"])
-        if len(calls) == 1:
-            raise RuntimeError(
-                "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', "
-                "'message': 'prompt is too long: 205366 tokens > 200000 maximum'}}"
-            )
-        return (
-            {"classification": "benign", "primary_reasoning": "Reasoning", "executive_summary": "Summary"},
-            "claude-haiku-4-5-20251001",
-        )
-
-    monkeypatch.setattr("app.tasks.analysis_task._run_analyst_sync", fake_run_analyst_sync)
-
-    report, tier, actual_model = _run_analyst_with_compaction(
-        {"domain": "example.com", "investigation_id": "x", "timestamps": {}},
-        max_iterations=3,
-        timeout_seconds=120,
-    )
-
-    assert calls == ["standard", "compact"]
-    assert tier == "compact"
-    assert actual_model == "claude-haiku-4-5-20251001"
-    assert report["classification"] == "benign"
-
-
-def test_run_analyst_with_compaction_does_not_retry_non_size_errors(monkeypatch):
-    calls = []
-
-    def fake_run_analyst_sync(evidence_data, max_iterations, timeout_seconds):
-        calls.append(evidence_data["_analyst_compaction_tier"])
-        raise RuntimeError("Error code: 429 - rate limited")
-
-    monkeypatch.setattr("app.tasks.analysis_task._run_analyst_sync", fake_run_analyst_sync)
-
-    with pytest.raises(RuntimeError, match="rate limited"):
-        _run_analyst_with_compaction(
-            {"domain": "example.com", "investigation_id": "x", "timestamps": {}},
-            max_iterations=3,
-            timeout_seconds=120,
-        )
-
-    assert calls == ["standard"]
 
 
 def test_annotate_compact_analyst_report_adds_note_for_non_standard_tier():

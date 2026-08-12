@@ -7,11 +7,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import PureWindowsPath
 from uuid import UUID
 
-import anthropic
+from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.models.database import AssistantEntry, AssistantSession, Investigation
@@ -316,63 +315,68 @@ class AssistantService:
                 return await self._call_claude(model=model, system=system, user_text=user_text)
             return await self._call_openai(model=model, system=system, user_text=user_text)
 
-        primary_model = (getattr(self.settings, "openai_model", None) or PRIMARY_MODEL).strip()
+        from app.analyst.models import configured_model_id, primary_model_configured
+
+        # The primary model id comes from the configured provider, not from openai_model:
+        # under LLM_PROVIDER=openai_compatible that would ask the local server for
+        # "gpt-5.6-luna" and 404.
+        primary_model = (configured_model_id(self.settings) or PRIMARY_MODEL).strip() or PRIMARY_MODEL
         fallback_model = (getattr(self.settings, "anthropic_model", None) or FALLBACK_MODEL).strip()
 
-        if self.settings.openai_api_key:
+        if primary_model_configured(self.settings):
             try:
                 logger.info("Assistant primary model=%s", primary_model)
                 text = await self._call_openai(model=primary_model, system=system, user_text=user_text)
                 if text.strip():
                     return text
-                logger.warning("Assistant OpenAI returned empty output; falling back to Claude Haiku 4.5")
+                logger.warning("Assistant primary model returned empty output; falling back to Anthropic")
             except Exception as exc:
                 logger.warning(
-                    "Assistant OpenAI call failed (%s: %s); falling back to Claude Haiku 4.5",
+                    "Assistant primary model call failed (%s: %s); falling back to Anthropic",
                     type(exc).__name__,
                     exc,
                 )
 
         if not self.settings.anthropic_api_key:
             raise ValueError(
-                "Both primary (OpenAI) and fallback (Claude Haiku 4.5) are unavailable: "
-                "OPENAI_API_KEY and ANTHROPIC_API_KEY are both unset."
+                "Primary and fallback AI providers are unavailable. Configure a primary "
+                "(LLM_PROVIDER=openai_compatible with LLM_MODEL and LLM_BASE_URL, or "
+                "OPENAI_API_KEY), or set ANTHROPIC_API_KEY as the fallback."
             )
         logger.info("Assistant fallback model=%s", fallback_model)
         return await self._call_claude(model=fallback_model, system=system, user_text=user_text)
 
     async def _call_openai(self, *, model: str, system: str, user_text: str) -> str:
-        client = AsyncOpenAI(api_key=self.settings.openai_api_key)
+        """
+        The primary call, through the configured provider.
+
+        Kept named `_call_openai` because `_call_with_fallback` above and the service's
+        tests both address it by name; with LLM_PROVIDER=openai_compatible it reaches a
+        local server instead. Everything around it — the PII tokenization in
+        sanitize_entries, `_scrub_token_leakage`, `_restore_tokens` — is untouched.
+        """
+        from app.analyst.models import build_model, message_text
+
         record_provider_request("openai")
-        response = await client.responses.create(
-            model=model,
-            input=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_text},
-            ],
-            max_output_tokens=4096,
+        response = await build_model(model, max_tokens=4096).ainvoke(
+            [SystemMessage(system), HumanMessage(user_text)]
         )
-        raw_text = getattr(response, "output_text", None) or ""
-        if raw_text:
-            return raw_text
-        chunks: list[str] = []
-        for item in getattr(response, "output", []) or []:
-            for content in getattr(item, "content", []) or []:
-                text = getattr(content, "text", None)
-                if text:
-                    chunks.append(text)
-        return "\n".join(chunks).strip()
+        return message_text(response)
 
     async def _call_claude(self, *, model: str, system: str, user_text: str) -> str:
-        client = anthropic.AsyncAnthropic(api_key=self.settings.anthropic_api_key)
+        """
+        The Anthropic fallback.
+
+        Explicitly Anthropic rather than build_model: routing the fallback by LLM_PROVIDER
+        would retry whatever just failed.
+        """
+        from app.analyst.models import build_anthropic_model, message_text
+
         record_provider_request("anthropic")
-        response = await client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": user_text}],
+        response = await build_anthropic_model(model, max_tokens=4096).ainvoke(
+            [SystemMessage(system), HumanMessage(user_text)]
         )
-        return response.content[0].text if response and response.content else ""
+        return message_text(response)
 
     async def export_session_markdown(self, session_id: UUID) -> str:
         assistant_session = await self._get_session(session_id)

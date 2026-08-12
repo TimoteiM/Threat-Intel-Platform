@@ -16,9 +16,15 @@ from pydantic import AliasChoices, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
+# Repo root first: that is the solution-level location, and it is the file
+# docker-compose.yml already reads (`env_file: .env`, resolved relative to the compose
+# file) for the api, worker and beat services. Keeping one .env for the whole solution is
+# the point — backend/.env stays supported as a fallback so existing checkouts and the
+# container's own /app/.env keep working, but when both exist the root wins, because
+# silently preferring the nested one is how you end up editing a file that has no effect.
 _ENV_CANDIDATES = [
-    _BACKEND_DIR / ".env",           # backend/.env (container /app/.env)
-    _BACKEND_DIR.parent / ".env",    # repo root .env for local runs
+    _BACKEND_DIR.parent / ".env",    # repo root .env — the solution-level file
+    _BACKEND_DIR / ".env",           # backend/.env (container /app/.env) — fallback
 ]
 _ENV_FILE_PATH = next((p for p in _ENV_CANDIDATES if p.exists()), None)
 _ENV_FILE = str(_ENV_FILE_PATH) if _ENV_FILE_PATH else None
@@ -115,6 +121,22 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     log_level: str = "INFO"
 
+    # —— LLM provider ———
+    # Defaults to "openai" so a deployment that only sets OPENAI_API_KEY behaves exactly
+    # as it did before the analyst moved to LangGraph. openai_model / anthropic_model
+    # above keep their current meaning and are still the model ids for those providers.
+    #
+    # llm_model and llm_base_url are mandatory when llm_provider=openai_compatible, but
+    # they are deliberately not validated here — see require_openai_compatible_config().
+    # They also deliberately have no working defaults: a plausible fallback base URL is
+    # how an unloaded .env turns into a running system pointed at the wrong endpoint.
+    llm_provider: str = "openai"          # openai | openai_compatible | anthropic
+    llm_model: str = ""                   # required when llm_provider=openai_compatible
+    llm_base_url: str = ""                # required when llm_provider=openai_compatible
+    llm_fallback_model: str = ""          # optional second model for ModelFallbackMiddleware
+    llm_api_key: str = "not-needed"       # local servers ignore it, clients demand it
+    llm_temperature: float = 0.0          # the verdict is not the model's job
+
     # —— Investigation Defaults ———
     max_analyst_iterations: int = 1
     analyst_timeout_seconds: int = 180
@@ -178,9 +200,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_ai_provider_keys(self) -> "Settings":
-        if not self.openai_api_key and not self.anthropic_api_key:
+        if not self.openai_api_key and not self.anthropic_api_key and not self.llm_base_url:
             raise ValueError(
-                "At least one AI provider key must be set: OPENAI_API_KEY or ANTHROPIC_API_KEY."
+                "At least one AI provider must be configured: OPENAI_API_KEY, "
+                "ANTHROPIC_API_KEY, or LLM_BASE_URL for a local OpenAI-compatible server."
             )
         return self
 
@@ -223,6 +246,55 @@ def _parse_limit_overrides(raw: str) -> dict[str, float]:
     return overrides
 
 
+def require_anthropic_key() -> str:
+    """
+    Fetch the Anthropic key, failing loudly.
+
+    Reached two ways: LLM_PROVIDER=anthropic, and any per-request model override starting
+    with "claude-" (which routes to Anthropic regardless of provider). The message names
+    both, because the override path is the surprising one.
+    """
+    key = get_settings().anthropic_api_key
+    if not key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set, but an Anthropic model was requested "
+            "(LLM_PROVIDER=anthropic, or a model override starting with 'claude-')."
+        )
+    return key
+
+
+def require_openai_compatible_config(model: str) -> str:
+    """
+    Validate the resolved model and base URL, failing loudly, and return the base URL.
+
+    Enforced here rather than as a Settings validator on purpose. get_settings() is
+    imported at module scope all over the codebase, and the deterministic half of the
+    pipeline — collectors, signals, the decision engine, _generate_automated_report,
+    recompute_report_for_existing_investigation — is meant to run with no model
+    configured at all. A missing-field validator would break all of it, and the test
+    suite on a checkout with no .env. These raise when the model is *built*, which is the
+    only moment they matter.
+
+    `model` is the *resolved* value, so a per-request override satisfies this without
+    LLM_MODEL being set. The error names the .env paths that were searched, because the
+    way this fails in practice is a .env that exists but was never found.
+    """
+    settings = get_settings()
+    missing = [
+        name
+        for name, value in (("LLM_MODEL", model), ("LLM_BASE_URL", settings.llm_base_url))
+        if not (value or "").strip()
+    ]
+    if missing:
+        candidates = ", ".join(str(p) for p in _ENV_CANDIDATES)
+        raise RuntimeError(
+            f"{' and '.join(missing)} must be set when LLM_PROVIDER=openai_compatible. "
+            "Set them in .env, or set LLM_PROVIDER=openai with OPENAI_API_KEY. "
+            f"Checked .env candidates: {candidates}"
+        )
+    return settings.llm_base_url
+
+
 @lru_cache()
 def get_settings() -> Settings:
     """Cached settings singleton."""
@@ -231,8 +303,8 @@ def get_settings() -> Settings:
     except ValidationError as exc:
         candidates = ", ".join(str(p) for p in _ENV_CANDIDATES)
         raise RuntimeError(
-            "Configuration validation failed. Ensure required keys are set "
-            "(OPENAI_API_KEY or ANTHROPIC_API_KEY). "
+            "Configuration validation failed. Ensure at least one AI provider is "
+            "configured (OPENAI_API_KEY, ANTHROPIC_API_KEY, or LLM_BASE_URL). "
             f"Checked .env candidates: {candidates}"
         ) from exc
     print(

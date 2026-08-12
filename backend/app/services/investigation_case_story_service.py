@@ -8,8 +8,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-import anthropic
-from openai import AsyncOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, get_settings
@@ -205,13 +205,23 @@ class InvestigationCaseStoryService:
                 content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
                 for ref, data_url in images[:3]:
                     content.extend([{"type": "input_text", "text": f"Screenshot evidence reference: {ref}"}, {"type": "input_image", "image_url": data_url, "detail": "high"}])
-                response = await AsyncOpenAI(api_key=self.settings.openai_api_key).responses.parse(
-                    model=primary, instructions=SYSTEM, input=[{"role": "user", "content": content}],
-                    text_format=schema, reasoning={"effort": "low"}, max_output_tokens=4500, store=False,
+                # use_responses_api keeps the {"type": "input_image", ...} blocks above
+                # valid (they are the Responses shape, not chat-completions'), and
+                # store=False preserves the deliberate no-retention choice at this site.
+                chat = ChatOpenAI(
+                    model=primary, api_key=self.settings.openai_api_key,
+                    use_responses_api=True, reasoning={"effort": "low"},
+                    max_tokens=4500, model_kwargs={"store": False},
                 )
-                parsed = getattr(response, "output_parsed", None)
+                parsed = await chat.with_structured_output(schema).ainvoke(
+                    [SystemMessage(SYSTEM), HumanMessage(content=content)]
+                )
                 if parsed is not None:
                     return parsed, primary
+                # Deliberately a ValueError, not a ValidationError: this reaches the
+                # generic handler below and *does* pay for the Claude fallback, which is
+                # the pre-migration behaviour. Only a ValidationError short-circuits to
+                # the zero-cost local story.
                 raise ValueError("OpenAI returned no structured output")
             except ValidationError as exc:
                 # A paid response arrived but failed structured parsing (usually
@@ -226,11 +236,23 @@ class InvestigationCaseStoryService:
         fallback = (self.settings.anthropic_model or "claude-haiku-4-5-20251001").strip()
         if not self.settings.anthropic_api_key:
             raise ValueError("AI Case Story unavailable: both primary and fallback providers are unavailable")
-        response = await anthropic.AsyncAnthropic(api_key=self.settings.anthropic_api_key).messages.create(
-            model=fallback, max_tokens=4500, system=SYSTEM + "\nReturn only concise JSON matching this schema:\n" + json.dumps(schema.model_json_schema()),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text if response.content else "{}"
+        # Kept as a text call with the schema embedded in the system prompt, fences
+        # stripped by hand, rather than switched to with_structured_output. The latter
+        # would use tool-based structured output — arguably better, but a behaviour change
+        # on the paid fallback path, and a ValidationError raised here is meant to
+        # propagate (the API layer maps ValueError/ValidationError to a 503).
+        # Note this branch drops the images entirely: it is text-only, as before.
+        from app.analyst.models import build_anthropic_model, message_text
+
+        response = await build_anthropic_model(fallback, max_tokens=4500).ainvoke([
+            SystemMessage(
+                SYSTEM
+                + "\nReturn only concise JSON matching this schema:\n"
+                + json.dumps(schema.model_json_schema())
+            ),
+            HumanMessage(prompt),
+        ])
+        raw = message_text(response) or "{}"
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return schema.model_validate_json(raw), fallback
 

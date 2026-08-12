@@ -1,8 +1,12 @@
-"""Tests for analyst response parser."""
+"""Tests for the analyst report chain (tier 2: JSON-in-prose salvage)."""
 
 import pytest
 
-from app.analyst.response_parser import parse_response, _extract_json, _extract_narrative_sections
+from app.analyst.report import parse_response, extract_json, _extract_narrative_sections
+
+# `extract_json` is public in app.analyst.report (it was `_extract_json` in the deleted
+# response_parser); the alias keeps these cases readable.
+_extract_json = extract_json
 
 
 class TestExtractJson:

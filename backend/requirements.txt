@@ -1,7 +1,7 @@
 ﻿# â”€â”€â”€ Core â”€â”€â”€
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-pydantic>=2.10.0
+pydantic==2.13.4          # pinned with the LangChain stack; see the analyst section
 pydantic-settings>=2.6.0
 aiofiles>=24.1.0
 python-multipart>=0.0.9
@@ -37,8 +37,30 @@ playwright>=1.40.0
 Pillow>=10.0.0
 
 # â”€â”€â”€ Claude API â”€â”€â”€
-anthropic>=0.42.0
-openai>=1.68.0
+# Pinned, not floated: langchain-openai requires openai>=2.45,<3 and
+# langchain-anthropic requires anthropic>=0.120. Left as ">=" these re-resolve on every
+# image build (openai 3.0.0 already exists and would be picked), which would silently
+# move the SDK under the raw responses.create / responses.parse / messages.create call
+# sites in app/services/.
+anthropic==0.121.0
+openai==2.54.0
+
+# --- LangChain / LangGraph analyst ---
+# Pinned with "==" deliberately. Everything else here is ">=" with no lockfile and
+# docker/Dockerfile.api does a bare "pip install -r requirements.txt", so an unpinned
+# LangChain would re-resolve the whole tree underneath 1,500 lines of Pydantic v2
+# schemas in app/models/schemas.py on the next build.
+#
+# langchain-anthropic stays installed even in a local-only deployment: deepagents.graph
+# imports ChatAnthropic at module top level. langchain-google-genai is likewise a hard
+# dependency of deepagents and is otherwise unused.
+deepagents==0.7.4
+langchain==1.3.14
+langchain-core==1.5.3
+langchain-openai==1.4.1
+langchain-anthropic==1.5.4
+langchain-google-genai==4.3.3
+langgraph==1.2.10
 # â”€â”€â”€ Export â”€â”€â”€
 weasyprint>=63.0
 jinja2>=3.1.0
@@ -46,7 +68,7 @@ boto3>=1.35.0
 # â”€â”€â”€ Dev / Test â”€â”€â”€
 pytest>=8.3.0
 pytest-asyncio>=0.24.0
-httpx>=0.28.0
+httpx==0.28.1             # pinned with the LangChain stack; see the analyst section
 python-dotenv>=1.0.0
 extract-msg>=0.52.0
 

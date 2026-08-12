@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Literal, Optional
 
-import anthropic
-from openai import AsyncOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, ConfigDict
 
 from app.config import get_settings
 from app.services.provider_usage_metrics import record_provider_request
@@ -23,6 +23,63 @@ logger = logging.getLogger(__name__)
 
 PRIMARY_MODEL = "gpt-5.6-luna"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+
+
+# ── Tier-1 structured output ─────────────────────────────────────────────────────
+#
+# Mirrors the JSON shape the system prompt asks for. It exists to make the model's
+# *output well-formed*, not to define this service's output contract — that is
+# `_parse_interpreter_output`, which every caller downstream depends on, so a validated
+# result is serialized straight back to JSON text and fed through it.
+#
+# Enums are Literal rather than str so the provider constrains them at generation time;
+# `_parse_interpreter_output` clamps them again for the free-text tier.
+
+class _Strict(BaseModel):
+    # Providers running strict structured output require additionalProperties:false on
+    # every nested object, and Pydantic only emits it for models that forbid extras.
+    model_config = ConfigDict(extra="forbid")
+
+
+class SenderCompany(_Strict):
+    name: str
+    description: str
+
+
+class DomainFinding(_Strict):
+    title: str
+    severity: Literal["low", "medium", "high"]
+    description: str
+
+
+class SenderDomainAnalysis(_Strict):
+    classification: Literal["benign", "suspicious", "malicious", "unknown"]
+    primary_reasoning: str
+    findings: list[DomainFinding] = []
+
+
+class UrlAssessment(_Strict):
+    url: str
+    where_it_points: str
+    legitimacy: Literal["legitimate", "suspicious", "malicious", "unknown"]
+    narrative: str
+
+
+class AttachmentNarrative(_Strict):
+    filename: str
+    sha256: Optional[str] = None
+    narrative: str
+
+
+class EmailInterpretation(_Strict):
+    overall_verdict: Literal["clean", "suspicious", "malicious", "inconclusive"]
+    confidence: Literal["low", "medium", "high"]
+    primary_signals: list[str] = []
+    url_summary: str
+    sender_company: SenderCompany
+    sender_domain_analysis: SenderDomainAnalysis
+    url_assessments: list[UrlAssessment] = []
+    attachment_narratives: list[AttachmentNarrative] = []
 
 
 SYSTEM_PROMPT = """You are a Senior SOC Analyst AI performing structured email threat investigations.
@@ -129,10 +186,14 @@ async def interpret_email_results_with_ai(
         f"```json\n{json.dumps(payload, ensure_ascii=True, indent=2)}\n```"
     )
 
+    from app.analyst.models import configured_model_id, primary_model_configured
+
     text = ""
-    primary_model = (settings.openai_model or PRIMARY_MODEL).strip() or PRIMARY_MODEL
+    # From the configured provider, not openai_model: under openai_compatible the latter
+    # would ask the local server for a model it does not serve.
+    primary_model = (configured_model_id(settings) or PRIMARY_MODEL).strip() or PRIMARY_MODEL
     fallback_model = (settings.anthropic_model or FALLBACK_MODEL).strip() or FALLBACK_MODEL
-    if settings.openai_api_key:
+    if primary_model_configured(settings):
         try:
             text = await _call_openai(
                 api_key=settings.openai_api_key,
@@ -141,11 +202,11 @@ async def interpret_email_results_with_ai(
                 user_text=user_text,
             )
             if not (text or "").strip():
-                logger.warning("OpenAI email interpretation returned empty output. Falling back to Claude Haiku 4.5.")
+                logger.warning("Primary email interpretation returned empty output. Falling back to Anthropic.")
                 text = ""
         except Exception as openai_err:
             logger.warning(
-                "OpenAI email interpretation failed (%s: %s). Falling back to Claude Haiku 4.5.",
+                "Primary email interpretation failed (%s: %s). Falling back to Anthropic.",
                 type(openai_err).__name__,
                 openai_err,
             )
@@ -154,8 +215,9 @@ async def interpret_email_results_with_ai(
     if not (text or "").strip():
         if not settings.anthropic_api_key:
             raise ValueError(
-                "Both primary (OpenAI) and fallback (Claude Haiku 4.5) are unavailable: "
-                "OPENAI_API_KEY and ANTHROPIC_API_KEY are both unset."
+                "Primary and fallback AI providers are unavailable. Configure a primary "
+                "(LLM_PROVIDER=openai_compatible with LLM_MODEL and LLM_BASE_URL, or "
+                "OPENAI_API_KEY), or set ANTHROPIC_API_KEY as the fallback."
             )
         text = await _call_claude(
             api_key=settings.anthropic_api_key,
@@ -299,35 +361,54 @@ def _parse_interpreter_output(text: str) -> dict[str, Any]:
 
 
 async def _call_openai(api_key: str, model: str, system: str, user_text: str) -> str:
-    client = AsyncOpenAI(api_key=api_key)
+    """
+    Primary interpretation, through the configured provider.
+
+    `api_key` is now unused — build_model reads the key and the provider from settings —
+    but the parameter stays so the two call sites above keep their shape and so an
+    LLM_PROVIDER=openai_compatible deployment reaches this path unchanged.
+
+    Returns JSON *text*, not a dict: `_parse_interpreter_output` owns the output contract
+    and every caller downstream depends on the exact shape it produces. Tier 1 asks for
+    structured output so the text is well-formed; when the model cannot hold the schema we
+    fall back to free text and let the tolerant parser do its job.
+    """
+    from app.analyst.models import build_model, message_text
+
     record_provider_request("openai")
-    response = await client.responses.create(
-        model=model,
-        input=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_text},
-        ],
-        max_output_tokens=3000,
+    chat = build_model(model, max_tokens=3000)
+    messages = [SystemMessage(system), HumanMessage(user_text)]
+
+    try:
+        parsed = await chat.with_structured_output(EmailInterpretation).ainvoke(messages)
+    except Exception as exc:
+        # Small local models frequently cannot hold an 8-field nested schema. Free text
+        # plus the tolerant parser is the retry they need.
+        logger.info(
+            "Email interpretation structured output unavailable (%s: %s); retrying as text",
+            type(exc).__name__, exc,
+        )
+        return message_text(await chat.ainvoke(messages))
+
+    if parsed is None:
+        return ""
+    return json.dumps(
+        parsed.model_dump() if hasattr(parsed, "model_dump") else parsed,
+        ensure_ascii=True,
     )
-    text = getattr(response, "output_text", None) or ""
-    if text:
-        return text
-    chunks: list[str] = []
-    for item in getattr(response, "output", []) or []:
-        for content in getattr(item, "content", []) or []:
-            part = getattr(content, "text", None)
-            if part:
-                chunks.append(part)
-    return "\n".join(chunks).strip()
 
 
 async def _call_claude(api_key: str, model: str, system: str, user_text: str) -> str:
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    """
+    Anthropic fallback. `api_key` is unused; see `_call_openai`.
+
+    Explicitly Anthropic rather than build_model, because this is the *fallback* — routing
+    it by LLM_PROVIDER would retry the same server that just failed.
+    """
+    from app.analyst.models import build_anthropic_model, message_text
+
     record_provider_request("anthropic")
-    response = await client.messages.create(
-        model=model,
-        max_tokens=3000,
-        system=system,
-        messages=[{"role": "user", "content": user_text}],
+    response = await build_anthropic_model(model, max_tokens=3000).ainvoke(
+        [SystemMessage(system), HumanMessage(user_text)]
     )
-    return response.content[0].text if response and response.content else ""
+    return message_text(response)

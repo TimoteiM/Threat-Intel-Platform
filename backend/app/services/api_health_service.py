@@ -100,6 +100,7 @@ def get_api_health_snapshot(*, force_refresh: bool = False) -> APIHealthResponse
             source="configuration",
             settings=settings,
         ),
+        *_local_llm_providers(settings=settings),
     ]
     providers[4:4] = _probe_anyrun_providers(settings=settings, configured_keys=anyrun_keys)
     return APIHealthResponse(
@@ -394,6 +395,40 @@ def _normalize_from_headers(
         requests_this_month=usage["requests_this_month"],
         error=error,
     )
+
+
+def _local_llm_providers(*, settings: Any) -> list[APIProviderHealth]:
+    """
+    A row for the locally hosted model, when one is configured.
+
+    Without this, LLM_PROVIDER=openai_compatible reports as no AI provider at all: the
+    OpenAI and Anthropic rows above key off their API keys, and a local deployment has
+    neither. Only emitted for that provider, so hosted deployments see no new row.
+
+    The target comes from `describe_model()`, which reports rather than raises precisely
+    so health stays answerable when the model is misconfigured.
+    """
+    # getattr rather than attribute access: this module takes `settings: Any` and is
+    # exercised with hand-rolled stubs that only carry the fields under test.
+    if getattr(settings, "llm_provider", "openai") != "openai_compatible":
+        return []
+
+    from app.analyst.models import describe_model
+
+    configured = bool(
+        (getattr(settings, "llm_model", "") or "").strip()
+        and (getattr(settings, "llm_base_url", "") or "").strip()
+    )
+    return [
+        _configured_provider(
+            "local-llm",
+            f"Local LLM ({describe_model()})",
+            configured=configured,
+            source="configuration",
+            missing_hint=None if configured else "Set LLM_MODEL and LLM_BASE_URL.",
+            settings=settings,
+        )
+    ]
 
 
 def _configured_provider(

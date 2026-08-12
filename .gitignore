@@ -6,7 +6,9 @@ build/
 .eggs/
 *.egg
 .env
-.env.example
+# The template is meant to be committed — the runbook's first setup step is
+# `copy .env.example .env`, which cannot work if it is ignored.
+!.env.example
 .venv/
 venv/
 env/
@@ -20,3 +22,7 @@ artifacts/
 .coverage
 htmlcov/
 nul
+
+# Machine-specific compose overrides (port remaps etc.) — never shared.
+docker-compose.override.yml
+.env.bak*

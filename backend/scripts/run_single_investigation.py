@@ -155,12 +155,39 @@ def main():
 
 
 async def _run_analyst(evidence_data: dict) -> dict:
-    """Run the AI analyst on collected evidence."""
-    from app.models.schemas import CollectedEvidence
-    from app.analyst.orchestrator import run_analyst
+    """
+    Run the AI analyst on collected evidence.
 
-    evidence_obj = CollectedEvidence(**evidence_data)
-    report = await run_analyst(evidence_obj, iteration=0, max_iterations=1)
+    Mirrors analysis_task._run_analyst_sync minus the event-loop wrapper (this script is
+    already inside asyncio.run) and minus the decision-engine overlay — the CLI shows raw
+    analyst output on purpose, which is why the classification it prints can differ from
+    what an investigation would persist.
+    """
+    from app.analyst import evidence_files
+    from app.analyst.agent import build_agent, run_analyst
+    from app.tasks.analysis_task import _build_analyst_evidence_digest
+
+    investigation_id = str(evidence_data.get("investigation_id") or "cli")
+    digest_markdown = evidence_files.render_markdown(
+        _build_analyst_evidence_digest(evidence_data, tier="standard")
+    )
+    files = evidence_files.build(
+        evidence_data,
+        investigation_id=investigation_id,
+        statuses={},
+        digest_markdown=digest_markdown,
+        signals=evidence_data.get("signals"),
+        data_gaps=evidence_data.get("data_gaps"),
+    )
+    report, source, _state = await run_analyst(
+        build_agent(),
+        domain=str(evidence_data.get("domain") or ""),
+        investigation_id=investigation_id,
+        files=files,
+        observable_type=str(evidence_data.get("observable_type") or "domain"),
+        digest_markdown=digest_markdown,
+    )
+    print(f"  · analyst report source: {source}")
     return report.model_dump(mode="json")
 
 

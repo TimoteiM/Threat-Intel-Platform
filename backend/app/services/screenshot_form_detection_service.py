@@ -7,7 +7,8 @@ import io
 import logging
 from typing import Any
 
-from openai import OpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -83,16 +84,26 @@ def detect_sensitive_forms_in_screenshots(
         }
 
     try:
-        response = OpenAI(api_key=api_key, timeout=30.0, max_retries=1).responses.parse(
+        # Single provider, no fallback, and it must never raise — every failure returns
+        # the "unavailable" dict below. use_responses_api keeps this on the Responses API,
+        # which is what the {"type": "input_image", ...} blocks above are shaped for (the
+        # chat-completions shape is {"image_url": {"url": ...}} instead). store=False is a
+        # deliberate no-retention choice, and timeout/max_retries here are the only
+        # client-level ones in the codebase.
+        chat = ChatOpenAI(
             model=str(getattr(settings, "openai_model", "") or "gpt-5.6-luna"),
-            instructions=_SYSTEM,
-            input=[{"role": "user", "content": content}],
-            text_format=ScreenshotFormResult,
+            api_key=api_key,
+            use_responses_api=True,
             reasoning={"effort": "low"},
-            max_output_tokens=900,
-            store=False,
+            max_tokens=900,
+            model_kwargs={"store": False},
+            timeout=30.0,
+            max_retries=1,
         )
-        parsed = response.output_parsed
+        # Sync invoke: the only caller is hybrid_analysis_collector, which is sync.
+        parsed = chat.with_structured_output(ScreenshotFormResult).invoke(
+            [SystemMessage(_SYSTEM), HumanMessage(content=content)]
+        )
         if parsed is None:
             raise ValueError("Screenshot form detector returned no structured output")
         result = parsed.model_dump()

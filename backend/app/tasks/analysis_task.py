@@ -887,13 +887,34 @@ def run_analysis(
     else:
         report_phase_start = time.monotonic()
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
-                          "Evidence collected. Running analyst...", 90)
-        actual_model = ""  # updated by _run_analyst_with_compaction; fallback paths leave it blank
+                          "Evidence collected. Preparing analyst evidence bundle...", 90)
+
+        # Orientation digest. Always tier="standard": the tier only ever controlled how
+        # many signals (15/8/5) and gaps (10/5/3) were listed, and with the bundle on the
+        # agent's filesystem there is nothing left to shrink for.
+        #
+        # Deliberately a local, not evidence_data["analyst_digest"]. Before this change
+        # the digest only ever existed on the deep copy _build_analyst_input_evidence
+        # threw away, so it was never persisted. Assigning it here would grow
+        # evidence_json on every domain/url investigation and would leave a stale digest
+        # for recompute_report_for_existing_investigation to read back.
+        analyst_digest = _build_analyst_evidence_digest(evidence_data, tier="standard")
+        digest_markdown = _render_analyst_digest_markdown(analyst_digest)
+
+        actual_model = ""  # updated by _run_analyst_sync; fallback paths leave it blank
+        analyst_source = ""
         try:
-            report_data, analyst_tier, actual_model = _run_analyst_with_compaction(
+            _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
+                              "Analyst reviewing evidence...", 92)
+            report_data, analyst_source, actual_model = _run_analyst_sync(
                 evidence_data,
-                max_iterations=max_iterations,
+                investigation_id=investigation_id,
+                statuses=collector_statuses,
+                digest_markdown=digest_markdown,
+                decision=decision_report,
                 timeout_seconds=settings.analyst_timeout_seconds,
+                client_domain=client_domain,
+                context=_analyst_operator_context(evidence_data),
             )
             if _is_parser_fallback_report(report_data):
                 logger.warning(
@@ -910,7 +931,16 @@ def run_analysis(
                 if raw_summary:
                     auto_report["executive_summary"] = raw_summary
                 report_data = auto_report
-            report_data = _annotate_compact_analyst_report(report_data, used_tier=analyst_tier)
+            # Stamped after the swap: the swap above replaces report_data with a fresh
+            # dict, so a source recorded inside _run_analyst_sync would be lost on exactly
+            # the "fallback" case that most needs recording. Lands in report_json, which
+            # is where every field added since migration 001 lives — no migration needed.
+            report_data["analyst_report_source"] = analyst_source
+            # A documented pass-through: _annotate_compact_analyst_report returns its
+            # input unchanged when used_tier == "standard", and there is no compaction
+            # tier any more. Kept in place so the call site and the helper both survive if
+            # a size-driven tier is ever reintroduced.
+            report_data = _annotate_compact_analyst_report(report_data, used_tier="standard")
             report_data = apply_decision_to_report(report_data, decision_report)
         except TimeoutError as e:
             logger.warning(
@@ -933,8 +963,12 @@ def run_analysis(
                 report_data["executive_summary"] = f"{timeout_note} {report_data['executive_summary']}".strip()
         except Exception as e:
             if _is_prompt_too_long_error(e):
+                # Defensive net. With the bundle on the agent's filesystem the resident
+                # prompt is the system prompt plus the task message plus digest.md, so
+                # this should not arise on a hosted model — but a small local context
+                # window or an oversized tool result can still trip it.
                 logger.warning(
-                    f"[{investigation_id}] Analyst prompt exceeded model limits after compact retries: {e}. "
+                    f"[{investigation_id}] Analyst prompt exceeded model limits: {e}. "
                     "Falling back to automated report."
                 )
                 report_data = _build_prompt_too_long_fallback_report(
@@ -957,6 +991,15 @@ def run_analysis(
                     "recommended_steps": ["Review evidence manually  -  analyst encountered an error"],
                     "risk_score": None,
                 }, decision_report)
+        # After the try/except, so it fires on all four exits. An agent loop plus the case
+        # story that follows is the longest stretch in the pipeline; without this the
+        # stream sits at 92 for up to three minutes.
+        _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
+                          "Analyst report received. Finalizing assessment...", 96)
+        # The next four lines are load-bearing and their order must not change. :2 is
+        # deliberately reversed — it pushes the lexical contribution and the phishing
+        # redirect floor into the decision, so that :3 can overlay the decision back onto
+        # the report without discarding them.
         _inject_lexical_contribution(report_data, evidence_data)
         _apply_phishing_redirect_risk_floor(report_data, evidence_data, observable_type)
         decision_report = apply_decision_to_report(decision_report, report_data)
@@ -2205,31 +2248,147 @@ def _looks_like_ip(value: str) -> bool:
         return False
 
 
+def _render_analyst_digest_markdown(digest: dict) -> str:
+    """
+    Thin seam over app.analyst.evidence_files.render_markdown.
+
+    Function-local import: keeping every app.analyst.* import inside a function preserves
+    the property that `import app.tasks.analysis_task` needs no LangChain stack, which
+    four test modules and app/tasks/__init__.py rely on at collection time.
+    """
+    from app.analyst.evidence_files import render_markdown
+
+    return render_markdown(digest)
+
+
+def _analyst_operator_context(evidence_data: dict) -> str:
+    """
+    Operator-supplied text for the analyst task message.
+
+    Reproduces the deleted prompt_builder's `<operator_supplied_context>` block: the
+    source is external_context, *not* run_analysis's own `context` argument, which has
+    never been forwarded to a model. Each field keeps its 1000-character truncation.
+    Widening either is a change to the prompt-injection surface, not a refactor.
+    """
+    external = evidence_data.get("external_context")
+    if not isinstance(external, dict):
+        return ""
+    from app.analyst.system_prompt import MAX_OPERATOR_CONTEXT_CHARS
+
+    parts: list[str] = []
+    for label, key in (
+        ("SOC ticket notes", "soc_ticket_notes"),
+        ("Additional context", "additional_context"),
+    ):
+        text = str(external.get(key) or "").strip()
+        if text:
+            parts.append(f"{label}: {text[:MAX_OPERATOR_CONTEXT_CHARS]}")
+    return "\n".join(parts)
+
+
+def _answering_model_id(state: dict, *, configured: str) -> str:
+    """
+    The bare id of the model that actually answered.
+
+    Read off the final AI message's `response_metadata` rather than off settings: with
+    ModelFallbackMiddleware installed the answering model may not be the configured one,
+    and report_data["ai_model"] is supposed to record what answered.
+
+    It must stay a BARE model id. frontend/src/components/report/ExecutiveSummaryTab.tsx
+    renders the badge by string-matching `startsWith("claude-")`, `== "gpt-5.6-luna"` and
+    so on, falling through to displaying the raw string — so describe_model()'s
+    "openai:gpt-5.6-luna" / "qwen3:32b @ http://..." form is deliberately not used here.
+    """
+    for message in reversed(state.get("messages") or []):
+        metadata = getattr(message, "response_metadata", None)
+        if not isinstance(metadata, dict):
+            continue
+        reported = str(metadata.get("model_name") or metadata.get("model") or "").strip()
+        if not reported:
+            continue
+        # A provider may answer with a dated snapshot ("gpt-4o-2024-08-06") where the
+        # pre-LangChain build recorded exactly settings.openai_model. Collapse a snapshot
+        # back to the configured id so the badge keeps matching; report the metadata id
+        # verbatim only when it is a genuinely different model — which is the case that
+        # matters, because it means the fallback answered.
+        return configured if configured and reported.startswith(configured) else reported
+    return configured
+
+
 def _run_analyst_sync(
     evidence_data: dict,
-    max_iterations: int,
+    *,
+    investigation_id: str,
+    statuses: dict,
+    digest_markdown: str,
+    decision: dict | None,
     timeout_seconds: int,
-) -> tuple[dict, str]:
+    client_domain: str | None = None,
+    context: str | None = None,
+    model_override: str | None = None,
+) -> tuple[dict, str, str]:
     """
     Synchronous wrapper for the async LLM analyst call.
     Celery workers are sync, so we run the async code in a new event loop.
-    Returns (report_dict, actual_model_id).
+    Returns (report_dict, analyst_report_source, actual_model_id).
+
+    `evidence_data` is serialized to the agent's virtual filesystem rather than validated
+    into a CollectedEvidence first. That round-trip was lossy — extra="ignore" silently
+    dropped target_domain, network_profile and pipeline_timings_ms — and there is nothing
+    to validate when the destination is a JSON file the model reads with read_file.
     """
     import asyncio
-    from app.models.schemas import CollectedEvidence
-    from app.analyst.orchestrator import run_analyst
 
-    evidence_obj = CollectedEvidence(**evidence_data)
+    from app.analyst import evidence_files
+    from app.analyst.models import configured_model_id
+
+    files = evidence_files.build(
+        evidence_data,
+        investigation_id=investigation_id,
+        statuses=statuses,
+        digest_markdown=digest_markdown,
+        signals=evidence_data.get("signals"),
+        data_gaps=evidence_data.get("data_gaps"),
+        decision=decision,
+    )
+    logger.info(
+        "[%s] Analyst evidence bundle: %d files, %d bytes on disk, %d chars resident digest",
+        investigation_id,
+        len(files),
+        sum(len(body.encode("utf-8")) for body in files.values()),
+        len(digest_markdown),
+    )
+
+    async def _go() -> tuple[dict, str, str]:
+        # Built inside the coroutine and never cached. worker_pool="threads" plus a fresh
+        # event loop per call means a cached ChatOpenAI would hold an httpx AsyncClient
+        # bound to the loop that made it, and the second investigation on that thread gets
+        # "Future attached to a different loop" — the same class of bug that
+        # alert_body_ai_service.py works around with poolclass=NullPool. A graph compile
+        # is tens of milliseconds against a 180-second budget.
+        from app.analyst.agent import build_agent, run_analyst
+
+        agent = build_agent(model_override=model_override)
+        report, source, state = await run_analyst(
+            agent,
+            domain=str(evidence_data.get("domain") or ""),
+            investigation_id=investigation_id,
+            files=files,
+            observable_type=str(evidence_data.get("observable_type") or "domain"),
+            digest_markdown=digest_markdown,
+            client_domain=client_domain,
+            context=context,
+        )
+        model_id = _answering_model_id(
+            state, configured=model_override or configured_model_id()
+        )
+        return report.model_dump(mode="json"), source, model_id
 
     loop = asyncio.new_event_loop()
     try:
-        report, actual_model = loop.run_until_complete(
-            asyncio.wait_for(
-                run_analyst(evidence_obj, iteration=0, max_iterations=max_iterations),
-                timeout=timeout_seconds,
-            )
+        report_dict, source, actual_model = loop.run_until_complete(
+            asyncio.wait_for(_go(), timeout=timeout_seconds)
         )
-        report_dict = report.model_dump(mode="json")
 
         # Enrich findings with MITRE ATT&CK metadata
         try:
@@ -2239,7 +2398,17 @@ def _run_analyst_sync(
         except Exception:
             pass  # ATT&CK enrichment is non-critical
 
-        return report_dict, actual_model
+        if source != "structured":
+            logger.warning(
+                "[%s] Analyst report came via the %s path — the configured model may not be "
+                "holding the report schema", investigation_id, source,
+            )
+        logger.info(
+            "[%s] Analyst result: source=%s classification=%s risk_score=%s model=%s",
+            investigation_id, source,
+            report_dict.get("classification"), report_dict.get("risk_score"), actual_model,
+        )
+        return report_dict, source, actual_model
     finally:
         loop.close()
 
@@ -2889,104 +3058,6 @@ def _attach_artifact_ids(value: object, artifact_ids: dict[str, str]) -> None:
             _attach_artifact_ids(child, artifact_ids)
 
 
-def _build_analyst_input_evidence(evidence_data: dict, tier: str = "standard") -> dict:
-    """
-    Build a compact evidence payload for LLM analysis while preserving the full
-    evidence object for persistence and UI rendering.
-    """
-    compact = copy.deepcopy(evidence_data or {})
-    compact["_analyst_compaction_tier"] = tier
-    compact["analyst_digest"] = _build_analyst_evidence_digest(evidence_data, tier=tier)
-    _summarize_heavy_analyst_sections(compact, tier=tier)
-
-    if tier == "standard":
-        trim_limits = {
-            ("intel", "related_subdomains"): 100,
-            ("intel", "related_urls"): 80,
-            ("intel", "historical_ip_addresses"): 50,
-            ("intel", "certificates"): 50,
-            ("js_analysis", "captured_requests"): 80,
-            ("js_analysis", "request_domains"): 50,
-            ("js_analysis", "tracking_pixels"): 40,
-            ("js_analysis", "suspicious_scripts"): 40,
-            ("js_analysis", "data_exfil_indicators"): 40,
-            ("js_analysis", "console_errors"): 30,
-            ("subdomains", "resolved"): 100,
-            ("subdomains", "unresolved"): 80,
-            ("subdomains", "interesting_subdomains"): 60,
-            ("threat_feeds", "threatfox_matches"): 50,
-            ("threat_feeds", "recent_reports"): 50,
-            ("cert_timeline", "entries"): 100,
-            ("favicon_intel", "hosts"): 75,
-            ("infrastructure_pivot", "related_ips"): 50,
-            ("signals",): 80,
-            ("data_gaps",): 40,
-            ("artifact_hashes",): 50,
-        }
-        text_limit = 4000
-    elif tier == "compact":
-        trim_limits = {
-            ("intel", "related_subdomains"): 20,
-            ("intel", "related_urls"): 12,
-            ("intel", "historical_ip_addresses"): 10,
-            ("intel", "certificates"): 10,
-            ("js_analysis", "captured_requests"): 10,
-            ("js_analysis", "request_domains"): 10,
-            ("js_analysis", "tracking_pixels"): 8,
-            ("js_analysis", "suspicious_scripts"): 8,
-            ("js_analysis", "data_exfil_indicators"): 8,
-            ("js_analysis", "console_errors"): 5,
-            ("subdomains", "resolved"): 20,
-            ("subdomains", "unresolved"): 20,
-            ("subdomains", "interesting_subdomains"): 12,
-            ("threat_feeds", "threatfox_matches"): 10,
-            ("threat_feeds", "recent_reports"): 10,
-            ("cert_timeline", "entries"): 15,
-            ("favicon_intel", "hosts"): 12,
-            ("infrastructure_pivot", "related_ips"): 10,
-            ("signals",): 20,
-            ("data_gaps",): 10,
-            ("artifact_hashes",): 20,
-        }
-        text_limit = 1000
-    else:
-        trim_limits = {
-            ("intel", "related_subdomains"): 10,
-            ("intel", "related_urls"): 5,
-            ("intel", "historical_ip_addresses"): 5,
-            ("intel", "certificates"): 5,
-            ("js_analysis", "captured_requests"): 4,
-            ("js_analysis", "request_domains"): 5,
-            ("js_analysis", "tracking_pixels"): 3,
-            ("js_analysis", "suspicious_scripts"): 3,
-            ("js_analysis", "data_exfil_indicators"): 3,
-            ("js_analysis", "console_errors"): 3,
-            ("subdomains", "resolved"): 10,
-            ("subdomains", "unresolved"): 10,
-            ("subdomains", "interesting_subdomains"): 6,
-            ("threat_feeds", "threatfox_matches"): 5,
-            ("threat_feeds", "recent_reports"): 5,
-            ("cert_timeline", "entries"): 8,
-            ("favicon_intel", "hosts"): 6,
-            ("infrastructure_pivot", "related_ips"): 5,
-            ("signals",): 8,
-            ("data_gaps",): 6,
-            ("artifact_hashes",): 10,
-        }
-        text_limit = 600
-        _drop_paths(
-            compact,
-            [
-                ["screenshot"],
-                ["artifact_hashes"],
-            ],
-        )
-
-    for path, limit in trim_limits.items():
-        _trim_list(compact, list(path), limit)
-
-    _trim_nested_text(compact, max_chars=text_limit)
-    return compact
 
 
 def _build_analyst_evidence_digest(evidence_data: dict, *, tier: str) -> dict:
@@ -3336,100 +3407,8 @@ def _digest_redirect_destination(redirect_dest: dict) -> dict:
     }
 
 
-def _summarize_heavy_analyst_sections(compact: dict, *, tier: str) -> None:
-    vt = compact.get("vt")
-    if isinstance(vt, dict):
-        vt["vendor_results"] = (vt.get("vendor_results") or [])[: (25 if tier == "standard" else 6 if tier == "compact" else 5)]
-        vt["tags"] = (vt.get("tags") or [])[: (20 if tier == "standard" else 6 if tier == "compact" else 5)]
-        vt_dns_records = vt.get("vt_dns_records")
-        if isinstance(vt_dns_records, list):
-            vt["vt_dns_records"] = vt_dns_records[:10 if tier == "standard" else 3]
-
-    intel = compact.get("intel")
-    if isinstance(intel, dict):
-        intel["cert_entries_raw"] = []
-        intel["related_subdomains"] = (intel.get("related_subdomains") or [])[: (75 if tier == "standard" else 10 if tier == "compact" else 5)]
-        intel["related_certs"] = (intel.get("related_certs") or [])[: (20 if tier == "standard" else 5)]
-
-    brave = compact.get("brave_osint")
-    if isinstance(brave, dict):
-        brave["top_hits"] = (brave.get("top_hits") or [])[: (10 if tier == "standard" else 4 if tier == "compact" else 3)]
-        brave["observed_results"] = (brave.get("observed_results") or [])[: (10 if tier == "standard" else 0)]
-        brave["all_results"] = (brave.get("all_results") or [])[: (10 if tier == "standard" else 0)]
-        brave["queries"] = (brave.get("queries") or [])[: (8 if tier == "standard" else 3)]
-
-    js = compact.get("js_analysis")
-    if isinstance(js, dict):
-        js["captured_requests"] = (js.get("captured_requests") or [])[: (80 if tier == "standard" else 10 if tier == "compact" else 4)]
-        js["request_domains"] = (js.get("request_domains") or [])[: (40 if tier == "standard" else 6 if tier == "compact" else 4)]
-        post_endpoints = []
-        for item in (js.get("post_endpoints") or [])[: (25 if tier == "standard" else 10)]:
-            if isinstance(item, dict) and (item.get("is_credential_form") or tier != "digest"):
-                post_endpoints.append(item)
-        js["post_endpoints"] = post_endpoints[: (20 if tier == "standard" else 5 if tier == "compact" else 3)]
-
-    hybrid = compact.get("hybrid_analysis")
-    if isinstance(hybrid, dict):
-        summarized_items = []
-        for item in (hybrid.get("items") or [])[: (6 if tier == "standard" else 3)]:
-            if not isinstance(item, dict):
-                continue
-            dynamic = item.get("dynamic_io_summary") or {}
-            raw = item.get("raw_summary") or {}
-            summarized_items.append(
-                {
-                    "checked": item.get("checked"),
-                    "indicator_type": item.get("indicator_type"),
-                    "verdict": item.get("verdict"),
-                    "analysis_id": item.get("analysis_id"),
-                    "threat_score": item.get("threat_score"),
-                    "error": item.get("error"),
-                    "cache_hit": item.get("cache_hit"),
-                    "dynamic_io_summary": {
-                        "contacted_domains": (dynamic.get("contacted_domains") or [])[: (20 if tier == "standard" else 5)],
-                        "contacted_ips": (dynamic.get("contacted_ips") or [])[: (20 if tier == "standard" else 5)],
-                        "processes": (dynamic.get("processes") or [])[: (15 if tier == "standard" else 5)],
-                    },
-                    "sandbox_intelligence": _digest_anyrun_sandbox_intelligence(item.get("sandbox_intelligence") or {}),
-                    "raw_summary": dict(list(raw.items())[:5]) if isinstance(raw, dict) else {},
-                }
-            )
-        hybrid["items"] = summarized_items
-
-    http = compact.get("http")
-    if isinstance(http, dict):
-        http["response_headers"] = dict(list((http.get("response_headers") or {}).items())[: (16 if tier == "standard" else 8)])
-        http["external_resources"] = (http.get("external_resources") or [])[: (30 if tier == "standard" else 8)]
 
 
-def _run_analyst_with_compaction(
-    evidence_data: dict,
-    *,
-    max_iterations: int,
-    timeout_seconds: int,
-) -> tuple[dict, str, str]:
-    """
-    Returns (report_dict, compaction_tier, actual_model_id).
-    """
-    last_error: Exception | None = None
-    tiers = ("standard", "compact", "digest")
-    for tier in tiers:
-        analyst_input = _build_analyst_input_evidence(evidence_data, tier=tier)
-        try:
-            report_dict, actual_model = _run_analyst_sync(
-                analyst_input,
-                max_iterations,
-                timeout_seconds=timeout_seconds,
-            )
-            return report_dict, tier, actual_model
-        except Exception as exc:
-            if not _is_prompt_too_long_error(exc) or tier == tiers[-1]:
-                raise
-            last_error = exc
-            logger.warning("Analyst prompt exceeded model limits at tier=%s; retrying with smaller payload.", tier)
-    if last_error:
-        raise last_error
-    raise RuntimeError("Analyst compaction retry exhausted without result")
 
 
 def _is_prompt_too_long_error(exc: Exception) -> bool:
@@ -3472,48 +3451,10 @@ def _build_prompt_too_long_fallback_report(automated_report: dict, *, prompt_err
     return fallback
 
 
-def _trim_list(payload: dict, path: list[str], limit: int) -> None:
-    node = payload
-    for key in path[:-1]:
-        if not isinstance(node, dict):
-            return
-        node = node.get(key)
-        if node is None:
-            return
-    if not isinstance(node, dict):
-        return
-    leaf = path[-1]
-    value = node.get(leaf)
-    if isinstance(value, list) and len(value) > limit:
-        node[leaf] = value[:limit]
-    elif isinstance(value, dict) and len(value) > limit:
-        node[leaf] = dict(list(value.items())[:limit])
 
 
-def _drop_paths(payload: dict, paths: list[list[str]]) -> None:
-    for path in paths:
-        node = payload
-        for key in path[:-1]:
-            if not isinstance(node, dict):
-                node = None
-                break
-            node = node.get(key)
-            if node is None:
-                break
-        if isinstance(node, dict):
-            node.pop(path[-1], None)
 
 
-def _trim_nested_text(value, *, max_chars: int):
-    if isinstance(value, dict):
-        for k, v in list(value.items()):
-            value[k] = _trim_nested_text(v, max_chars=max_chars)
-        return value
-    if isinstance(value, list):
-        return [_trim_nested_text(v, max_chars=max_chars) for v in value]
-    if isinstance(value, str) and len(value) > max_chars:
-        return value[:max_chars] + "...[truncated]"
-    return value
 
 
 def _should_reuse_urlscan_screenshot(evidence_data: dict, observable_type: str) -> bool:
