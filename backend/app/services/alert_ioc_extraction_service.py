@@ -35,7 +35,9 @@ from app.utils.domain_utils import extract_registered_domain, has_public_suffix
 from app.utils.log_text import (
     has_file_suffix,
     is_field_name,
+    is_siem_field_path,
     looks_like_code_identifier,
+    mask_structured_keys,
 )
 
 # ── Refang patterns ───────────────────────────────────────────────────────────
@@ -135,7 +137,11 @@ def extract_alert_indicators(
     """
     raw_text = str(alert_body or "")
     raw_lower = raw_text.lower()
-    text = refang(raw_text)
+    # Blank out object keys before anything is matched. A key is a field name and
+    # can never be an indicator, so the reliable fix is structural — stop the
+    # matcher from seeing keys at all — rather than judging each dotted token by
+    # its spelling. Masking preserves every offset, so positions stay accurate.
+    text = mask_structured_keys(refang(raw_text))
 
     found: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -664,6 +670,11 @@ def _looks_like_domain(value: str) -> bool:
     # looked up as `net.security`. Case tells them apart, so this has to run on
     # the value as written, before the lowercasing above is relied on.
     if looks_like_code_identifier(raw):
+        return False
+    # `agent.id`, `rule.id`, `system.channel` — `.id` is Indonesia and `.channel`
+    # and `.computer` are real gTLDs, so the public suffix list cannot refuse
+    # them. One Wazuh alert produced seven of these as investigated "domains".
+    if is_siem_field_path(candidate):
         return False
     labels = candidate.split(".")
     if len(labels) < 2:
