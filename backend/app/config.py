@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     anyrun_url_sandbox_analysis_timeout: int = 120  # opt_timeout sent to AnyRun for URL/domain tasks
     anyrun_url_sandbox_mitm: bool = True            # HTTPS MITM proxy — captures form POSTs on phishing pages
     anyrun_max_upload_mb: int = 100
+    # How many sandbox tasks this plan may run at once. Submissions are queued
+    # to this number rather than racing each other into "403 Parallel task limit".
+    anyrun_max_parallel_submissions: int = 1
+    # How long a sandbox task waits for a free slot before deferring. A slot is
+    # held for the whole analysis, so this allows a couple of full runs ahead in
+    # the queue while still bounding how long a worker thread can be parked.
+    anyrun_submission_queue_wait_seconds: int = 600
     anyrun_parallel_limit_retries: int = 8
     anyrun_parallel_backoff_seconds: int = 10
     anyrun_transient_retries: int = 3
