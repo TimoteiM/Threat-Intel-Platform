@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -195,6 +196,22 @@ class Evidence(Base):
     signals: Mapped[list] = mapped_column(JSONB, default=list)
     data_gaps: Mapped[list] = mapped_column(JSONB, default=list)
     external_context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Two fields the dashboard groups by, lifted out of the JSON at write time.
+    # `evidence_json` averages ~300 KB, so reading one string out of it made
+    # Postgres detoast the whole value — 3 seconds per aggregate. Postgres
+    # maintains these itself, so nothing writes them and they cannot drift.
+    # Read-only: assigning to them raises. See migration 019.
+    whois_registrar: Mapped[str | None] = mapped_column(
+        Text,
+        Computed("evidence_json->'whois'->>'registrar'", persisted=True),
+        nullable=True,
+    )
+    hosting_asn_org: Mapped[str | None] = mapped_column(
+        Text,
+        Computed("evidence_json->'hosting'->>'asn_org'", persisted=True),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -576,6 +593,25 @@ class AlertBodyInvestigationRun(Base):
     # producing them, which is what detection-quality reporting groups by.
     detection_rule_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     detection_rule_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # The parts of result_json the rollups read, lifted out at write time.
+    # Detection quality, ATT&CK coverage and the cost dashboard each scan every
+    # run in their window; reading these from the 14 KB payload cost 729 ms of
+    # fetching to do 0.6 ms of arithmetic. Postgres maintains them, so nothing
+    # writes them and they cannot drift from result_json. See migration 020.
+    result_attack_assessment: Mapped[dict | None] = mapped_column(
+        JSONB, Computed("result_json->'attack_assessment'", persisted=True), nullable=True
+    )
+    result_summary: Mapped[dict | None] = mapped_column(
+        JSONB, Computed("result_json->'summary'", persisted=True), nullable=True
+    )
+    result_extraction: Mapped[dict | None] = mapped_column(
+        JSONB, Computed("result_json->'extraction'", persisted=True), nullable=True
+    )
+    result_overall_verdict: Mapped[str | None] = mapped_column(
+        Text, Computed("result_json->>'overall_verdict'", persisted=True), nullable=True
+    )
+
     # Where to POST the finished report list, when the sender asked for one.
     callback_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

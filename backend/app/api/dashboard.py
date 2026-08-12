@@ -93,13 +93,13 @@ async def get_stats(session: DBSession):
         })
 
     # ── Top registrars (from evidence JSONB, malicious/suspicious only) ──
-    top_registrars = await _get_top_jsonb_field(
-        session, "whois", "registrar", ["malicious", "suspicious"]
+    top_registrars = await _get_top_evidence_field(
+        session, "whois_registrar", ["malicious", "suspicious"]
     )
 
-    # ── Top hosting providers (from evidence JSONB) ──
-    top_hosting = await _get_top_jsonb_field(
-        session, "hosting", "asn_org", ["malicious", "suspicious"]
+    # ── Top hosting providers ──
+    top_hosting = await _get_top_evidence_field(
+        session, "hosting_asn_org", ["malicious", "suspicious"]
     )
 
     # ── Recent malicious investigations ──
@@ -153,39 +153,45 @@ def _build_recent_malicious(rows: Iterable) -> list[dict]:
     return recent_malicious
 
 
-async def _get_top_jsonb_field(
+# The evidence columns this may group by. An allowlist rather than an arbitrary
+# column name, because the value is interpolated into SQL — these are generated
+# columns maintained by Postgres (migration 019), not caller input.
+_TOP_FIELD_COLUMNS = {"whois_registrar", "hosting_asn_org"}
+
+
+async def _get_top_evidence_field(
     session: AsyncSession,
-    evidence_key: str,
-    field_name: str,
+    column: str,
     classifications: list[str],
     limit: int = 10,
 ) -> list[dict]:
     """
-    Extract top values from a JSONB field within evidence,
-    filtered to specific classifications.
+    Most common values of one evidence field, for the given classifications.
+
+    Reads a stored generated column rather than digging into `evidence_json`.
+    The JSONB averages ~300 KB per row, so extracting one string from it made
+    Postgres detoast the entire value — this query took 3 seconds, and the two
+    panels that use it accounted for most of a 6-second dashboard. Off the JSON
+    it is ~1 ms.
     """
+    if column not in _TOP_FIELD_COLUMNS:
+        raise ValueError(f"Unsupported evidence column: {column}")
+
     try:
         result = await session.execute(
-            text("""
-                SELECT
-                    e.evidence_json->:evidence_key->>:field_name AS field_value,
-                    COUNT(*) AS count
+            text(f"""
+                SELECT e.{column} AS field_value, COUNT(*) AS count
                 FROM evidence e
                 JOIN investigations i ON i.id = e.investigation_id
                 WHERE i.classification = ANY(:classifications)
                   AND i.state = 'concluded'
-                  AND e.evidence_json->:evidence_key->>:field_name IS NOT NULL
-                  AND e.evidence_json->:evidence_key->>:field_name != ''
+                  AND e.{column} IS NOT NULL
+                  AND e.{column} != ''
                 GROUP BY field_value
                 ORDER BY count DESC
                 LIMIT :limit
             """),
-            {
-                "evidence_key": evidence_key,
-                "field_name": field_name,
-                "classifications": classifications,
-                "limit": limit,
-            },
+            {"classifications": classifications, "limit": limit},
         )
         return [{"name": row.field_value, "count": row.count} for row in result]
     except Exception:

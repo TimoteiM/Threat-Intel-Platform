@@ -118,22 +118,22 @@ async def _savings(db: AsyncSession, cutoff: datetime) -> dict[str, Any]:
     Every figure here is an indicator lookup that did not happen, read back from
     what the run recorded at the time.
     """
+    # Only the two roll-up blocks are read; `result_json` averages 14 KB and
+    # pulling it for every run in the window dominated this endpoint.
     runs = (
         await db.execute(
             select(
-                AlertBodyInvestigationRun.result_json,
-                AlertBodyInvestigationRun.alert_body_hash,
-                AlertBodyInvestigationRun.external_ref,
+                AlertBodyInvestigationRun.result_extraction,
+                AlertBodyInvestigationRun.result_summary,
             ).where(AlertBodyInvestigationRun.created_at >= cutoff)
         )
     ).all()
 
     excluded = reused = ai_skipped = 0
     investigated = 0
-    for payload, _hash, _ref in runs:
-        payload = payload or {}
-        extraction = payload.get("extraction") or {}
-        summary = payload.get("summary") or {}
+    for extraction, summary in runs:
+        extraction = extraction or {}
+        summary = summary or {}
         excluded += int(extraction.get("excluded_total") or 0)
         reused += int(summary.get("indicators_reused") or 0)
         investigated += int(summary.get("indicators_investigated") or 0)
