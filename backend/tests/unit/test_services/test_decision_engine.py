@@ -519,3 +519,96 @@ def test_an_established_domain_gains_no_age_signal():
 
     _score, reasons = _domain_weak_signal_score(_clean_business_site(whois={"domain_age_days": 5246}))
     assert not any("registered domain" in reason for reason in reasons)
+
+
+def _anyrun_labelled_clean(vt: dict | None = None, **extra):
+    """A sandbox run that returned CLEAN while tagging the sample `phishing`."""
+    evidence = {
+        "observable_type": "url",
+        "hybrid_analysis": {
+            "items": [
+                {
+                    "verdict": "clean",
+                    "raw_summary": {"mode": "sandbox", "tags": ["phishing"]},
+                }
+            ]
+        },
+        "threat_feeds": {},
+        "http": {},
+        "urlscan": {},
+        "intel": {},
+        "whois": {"domain_age_days": 400},
+    }
+    if vt is not None:
+        evidence["vt"] = {"found": True, "meta": {"status": "completed"}, **vt}
+    evidence.update(extra)
+    return evidence
+
+
+def test_a_label_only_escalation_that_virustotal_broadly_contradicts_is_not_malicious():
+    """
+    ANY.RUN's label outranks its own CLEAN verdict — but not against the field.
+
+    A real case scored malicious/90/high on nothing but a `phishing` tag, while
+    VirusTotal's 92 vendors returned zero malicious and zero suspicious. The
+    escalation still stands, because an automated run that never interacts with
+    the page routinely misses what its label describes; it just stops claiming
+    certainty, so the case reaches an analyst instead of an auto-block.
+    """
+    decision = build_decision_report(
+        _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92}),
+        "url",
+    )
+    assert decision["classification"] == "suspicious"
+    assert decision["risk_score"] == 60
+
+
+def test_a_thin_virustotal_result_does_not_overturn_the_label():
+    """Eight vendors finding nothing is not the field disagreeing."""
+    decision = build_decision_report(
+        _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 8}),
+        "url",
+    )
+    assert decision["classification"] == "malicious"
+
+
+def test_a_missing_virustotal_result_does_not_overturn_the_label():
+    """Nothing looked, so nothing contradicts — absence is not evidence."""
+    decision = build_decision_report(_anyrun_labelled_clean(None), "url")
+    assert decision["classification"] == "malicious"
+
+
+def test_any_corroborating_signal_restores_the_malicious_verdict():
+    """The downgrade applies only when the label is genuinely the sole signal."""
+    decision = build_decision_report(
+        _anyrun_labelled_clean(
+            {"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92},
+            threat_feeds={"threatfox_matches": [{"ioc": "x"}]},
+        ),
+        "url",
+    )
+    assert decision["classification"] == "malicious"
+
+
+def test_a_real_malicious_provider_verdict_is_untouched():
+    """This narrows label-only escalations, not verdicts ANY.RUN actually gave."""
+    evidence = _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92})
+    evidence["hybrid_analysis"]["items"][0]["verdict"] = "malicious"
+    decision = build_decision_report(evidence, "url")
+    assert decision["classification"] == "malicious"
+
+
+def test_a_named_campaign_cluster_is_not_overturned_by_a_clean_virustotal():
+    """
+    ClickFix, ClearFake and EtherHiding evade multi-vendor scanning by design.
+
+    A clean VirusTotal on one of those is the expected outcome of the technique,
+    not the field disagreeing — so the downgrade is reserved for a lone generic
+    label and never applies to a cluster naming a specific family.
+    """
+    evidence = _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92})
+    evidence["hybrid_analysis"]["items"][0]["raw_summary"]["tags"] = [
+        "clickfix", "phishing", "clearfake", "etherhiding",
+    ]
+    decision = build_decision_report(evidence, "url")
+    assert decision["classification"] == "malicious"
