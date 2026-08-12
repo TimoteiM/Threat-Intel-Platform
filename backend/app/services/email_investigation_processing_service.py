@@ -24,6 +24,14 @@ from app.utils.domain_utils import extract_registered_domain, normalize_domain
 NOT_PRESENT = "Not present in the provided evidence."
 
 
+
+def _without_content(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {k: v for k, v in att.items() if k != "content_b64"} if isinstance(att, dict) else att
+        for att in attachments
+    ]
+
+
 async def process_email_investigation(
     *,
     payload: bytes,
@@ -76,6 +84,7 @@ async def process_email_investigation(
         # Only send suspicious/malicious items to AI — clean ones waste tokens
         "indicator_checks": _compact_suspicious_checks_for_ai(checks),
         "email_security": _compact_email_security_for_ai(checks.get("email_security") or {}),
+        "sender_identity": checks.get("sender_identity") or {},
         "context": context or None,
         "ml_phishing_score": parsed_ml_score,
     }
@@ -141,6 +150,8 @@ async def process_email_investigation(
         resolution["primary_signals"] = det_signals
         resolution["confidence"] = "medium"
 
+    _apply_sender_identity_floor(resolution, checks)
+
     # Always build the bullet-point template as the primary formatted_resolution.
     # AI provides narratives for suspicious items that are woven into the template.
     resolution["formatted_resolution"] = _render_template_resolution(
@@ -162,7 +173,9 @@ async def process_email_investigation(
         "urls": extracted.get("urls") or [],
         "url_domains": extracted.get("url_domains") or [],
         "attachments_count": len(extracted.get("attachments") or []),
-        "attachments": extracted.get("attachments") or [],
+        # Bytes were retained only for local inspection and possible detonation;
+        # base64 of every attachment must not be written into the stored run.
+        "attachments": _without_content(extracted.get("attachments") or []),
         "indicator_checks": checks,
         "resolution_source": resolution_source,
         "resolution": resolution,
@@ -1429,6 +1442,40 @@ def _compact_email_security_for_ai(es: dict[str, Any]) -> dict[str, Any]:
             if isinstance(mx, dict)
         ),
     }
+
+
+def _apply_sender_identity_floor(resolution: dict[str, Any], checks: dict[str, Any]) -> None:
+    """
+    Do not let an email claiming to be someone else be reported as clean.
+
+    Business email compromise is the case every reputation check misses: the
+    domain is real, newly registered and correctly configured, so SPF, DKIM and
+    DMARC all pass and nothing has been reported about it yet. The signal is the
+    identity — a display name claiming a brand it does not own, or replies
+    addressed to a different domain than the sender.
+
+    A floor rather than a verdict: identity findings raise a clean result to
+    suspicious so it reaches an analyst, but they never manufacture a malicious
+    verdict on their own, because no evidence here says the destination is
+    hostile — only that the sender is not who they appear to be.
+    """
+    identity = checks.get("sender_identity") or {}
+    if str(identity.get("risk") or "none") != "high":
+        return
+
+    current = str(resolution.get("overall_verdict") or "").strip().lower()
+    if current in {"malicious", "suspicious"}:
+        return
+
+    resolution["overall_verdict"] = "suspicious"
+    resolution["confidence"] = "medium"
+    signals = list(resolution.get("primary_signals") or [])
+    for finding in identity.get("findings") or []:
+        if str(finding.get("severity")) == "high":
+            title = str(finding.get("title") or "").strip()
+            if title and title not in signals:
+                signals.append(title)
+    resolution["primary_signals"] = signals
 
 
 def _deterministic_overall_verdict(checks: dict[str, Any]) -> tuple[str, list[str]]:

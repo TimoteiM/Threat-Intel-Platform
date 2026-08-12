@@ -25,6 +25,9 @@ from sqlalchemy.orm import Session
 
 from app.collectors.email_security import analyze_email_security
 from app.collectors.urlscan_collector import URLScanCollector
+from app.services.email_attachment_inspection import inspect_attachments
+from app.services.email_sender_identity import analyse_sender_identity
+from app.services.email_url_triage import triage_email_urls
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
@@ -56,8 +59,28 @@ def run_email_indicator_checks(
 
     sender_ip = extracted.get("sender_ip")
     sender_domain = extracted.get("sender_domain")
-    urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u][: max(0, max_urls)]
     attachments = [a for a in (extracted.get("attachments") or []) if isinstance(a, dict)]
+
+    # Triage before spending anything. Checking every URL in an email meant ~20
+    # VirusTotal requests per message to re-learn the same few facts — one real
+    # message here carried 106 URLs across 5 destinations. Measured over this
+    # platform's own 87-email corpus, this cuts external URL lookups from 1,251
+    # to 107 while checking strictly more of what matters, because rewritten
+    # links are now unwrapped to their real destination first.
+    # Local, no quota. Runs before the URL triage because a link inside a PDF is
+    # invisible to a body-text scan and still needs checking, and because its
+    # findings decide which attachment — if any — is worth a sandbox credit.
+    attachment_inspection = inspect_attachments(attachments)
+
+    body_urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u]
+    attachment_urls = list(attachment_inspection.get("urls_found_in_attachments") or [])
+    triage = triage_email_urls(
+        body_urls + attachment_urls,
+        sender_domain=str(sender_domain or ""),
+        budget=max(0, max_urls),
+    )
+    selected = triage["selected"]
+    urls = [entry.url for entry in selected]
     max_urlscan_urls = min(len(urls), 5)
 
     checks: dict[str, Any] = {}
@@ -76,7 +99,7 @@ def run_email_indicator_checks(
         else:
             checks["sender_ip"] = {"present": False, "message": "Not present in the provided evidence."}
 
-        futures[pool.submit(_timed, "attachments", _check_attachments, attachments, max_hashes=max_attachment_hashes, run_anyrun=run_anyrun)] = "attachments"
+        futures[pool.submit(_timed, "attachments", _check_attachments, attachments, max_hashes=max_attachment_hashes, run_anyrun=run_anyrun, inspection=attachment_inspection)] = "attachments"
 
         url_futures: dict[Any, int] = {}
         for idx, url in enumerate(urls):
@@ -100,10 +123,40 @@ def run_email_indicator_checks(
                 checks[label] = result
 
     checks["urls"] = [url_results[i] for i in range(len(urls))]
+    for index, entry in enumerate(selected):
+        item = checks["urls"][index]
+        if not isinstance(item, dict):
+            continue
+        # Carry the triage decision onto the result so the report can show which
+        # link was really checked, and what it was wrapped in.
+        item["occurrences_in_email"] = entry.occurrences
+        item["selection_reasons"] = entry.reasons
+        if entry.unwrapped_from:
+            item["unwrapped_from"] = entry.unwrapped_from
+            item["original_urls"] = entry.original_urls
+
+    # An analyst must be able to see what was not checked and why. A URL budget
+    # that hides its own decisions is indistinguishable from a missed detection.
+    checks["url_triage"] = {
+        **triage["summary"],
+        "infrastructure": [
+            {"domain": e.domain, "occurrences": e.occurrences, "recognised_as": e.local_detail}
+            for e in triage["infrastructure"]
+        ],
+        "not_checked": [
+            {"domain": e.domain, "occurrences": e.occurrences, "score": e.score, "reasons": e.reasons}
+            for e in triage["deferred"]
+        ],
+    }
 
     # ── Phase 2: fast local work ──
     t2 = time.perf_counter()
     checks["content_ml"] = classify_email_content_locally(extracted)
+    # Who the message claims to be from, versus who sent it. Local only — BEC
+    # routinely passes SPF, DKIM and DMARC from a clean new domain, so no
+    # reputation or authentication check catches it.
+    checks["sender_identity"] = analyse_sender_identity(extracted)
+    checks["attachment_inspection"] = attachment_inspection
 
     attachment_items = (checks.get("attachments") or {}).get("items") or []
     vt_by_sha: dict[str, dict[str, Any]] = {}
@@ -439,13 +492,31 @@ def _check_ip(ip: str) -> dict[str, Any]:
     }
 
 
-def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, run_anyrun: bool) -> dict[str, Any]:
+# A sandbox detonation costs credits and takes minutes, so at most this many
+# attachments per email are ever submitted — and only ones local inspection
+# already found reason to distrust.
+MAX_SANDBOX_ATTACHMENTS_PER_EMAIL = 1
+
+
+def _check_attachments(
+    attachments: list[dict[str, Any]],
+    *,
+    max_hashes: int,
+    run_anyrun: bool,
+    inspection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not attachments:
         return {
             "present": False,
             "items": [],
             "message": "Not present in the provided evidence.",
         }
+
+    # Detonation is reserved for files that are both unknown to reputation and
+    # structurally suspicious. Hashing alone answers nothing about a payload
+    # nobody has submitted before, which is exactly what arrives in real phishing.
+    detonate_candidates = set((inspection or {}).get("detonation_candidates") or [])
+    detonations_left = MAX_SANDBOX_ATTACHMENTS_PER_EMAIL if run_anyrun else 0
 
     items: list[dict[str, Any]] = []
     for att in attachments[: max(0, max_hashes)]:
@@ -456,18 +527,74 @@ def _check_attachments(attachments: list[dict[str, Any]], *, max_hashes: int, ru
         if run_anyrun and sha256:
             anyrun_hash = _anyrun_hash_ti_lookup(sha256)
 
+        vt_result = _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"}
+
+        # Spend a detonation only when reputation has nothing and the file
+        # itself looked wrong. Either condition alone is not worth the credit:
+        # a known-bad hash needs no sandbox, and a clean-looking document that
+        # VirusTotal already knows tells us nothing new.
+        filename = str(att.get("filename") or "")
+        sandbox: dict[str, Any] = {"submitted": False, "reason": "Not requested"}
+        if run_anyrun:
+            if not att.get("content_b64"):
+                sandbox["reason"] = "Attachment content was not retained for submission."
+            elif bool(vt_result.get("found")):
+                sandbox["reason"] = "VirusTotal already has a report for this file."
+            elif filename not in detonate_candidates:
+                sandbox["reason"] = "Local inspection found nothing that warrants a sandbox credit."
+            elif detonations_left <= 0:
+                sandbox["reason"] = (
+                    f"Detonation budget for this email is spent "
+                    f"({MAX_SANDBOX_ATTACHMENTS_PER_EMAIL} per message)."
+                )
+            else:
+                detonations_left -= 1
+                sandbox = _detonate_attachment(att)
+
         items.append(
             {
                 "filename": att.get("filename"),
                 "sha256": sha256 or None,
                 "md5": att.get("md5"),
                 "size_bytes": att.get("size_bytes"),
-                "vt": _vt_lookup(sha256, "hash") if sha256 else {"found": False, "error": "Missing SHA256 hash"},
+                "vt": vt_result,
                 "anyrun": anyrun_hash,
                 "hybrid_analysis": anyrun_hash,  # backward compat
+                "sandbox": sandbox,
             }
         )
     return {"present": True, "items": items}
+
+
+def _detonate_attachment(att: dict[str, Any]) -> dict[str, Any]:
+    """Submit one attachment to the sandbox. Never raises — this is best effort."""
+    import base64 as _b64
+
+    filename = str(att.get("filename") or "attachment.bin")
+    try:
+        payload = _b64.b64decode(str(att.get("content_b64") or ""))
+    except Exception as exc:
+        return {"submitted": False, "reason": f"Could not decode attachment: {exc}"}
+    if not payload:
+        return {"submitted": False, "reason": "Attachment content was empty."}
+
+    try:
+        from app.services.anyrun_service import lookup_anyrun
+
+        # submit_on_not_found is what makes this a detonation rather than
+        # another reputation lookup — without it this function would spend the
+        # code path and none of the value.
+        result = lookup_anyrun(
+            indicator=str(att.get("sha256") or filename),
+            indicator_type="file",
+            file_bytes=payload,
+            file_name=filename,
+            submit_on_not_found=True,
+        )
+        return {"submitted": True, "reason": "Unknown to reputation and structurally suspicious.", "result": result}
+    except Exception as exc:
+        logger.warning("Attachment detonation failed for %s: %s", filename, exc)
+        return {"submitted": False, "reason": f"Sandbox submission failed: {type(exc).__name__}: {exc}"}
 
 
 def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:

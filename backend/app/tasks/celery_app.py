@@ -49,6 +49,13 @@ celery_app.conf.update(
             "task": "tasks.watchlist_check",
             "schedule": crontab(minute=0),  # Every hour, on the hour
         },
+        # A URL VirusTotal has never seen gets submitted for scanning, and the
+        # result lands after the investigation has already concluded. Without
+        # this the pending id was recorded and never chased.
+        "virustotal-collect-pending": {
+            "task": "tasks.vt_collect_pending",
+            "schedule": crontab(minute="*/15"),
+        },
     },
     timezone="UTC",
 )
@@ -63,4 +70,5 @@ celery_app.autodiscover_tasks([
     "app.tasks.watchlist_task",
     "app.tasks.alert_body_task",
     "app.tasks.alert_callback_task",
+    "app.tasks.vt_pending_task",
 ])
