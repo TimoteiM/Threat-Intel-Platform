@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import types
 
 from app.services import anyrun_service as svc
@@ -1016,7 +1017,15 @@ def test_submission_fallback_candidate_matches_provider_plan_restriction():
     assert svc._is_submission_fallback_candidate(exc) is True
 
 
-def test_submit_anyrun_task_retries_without_privacy_on_provider_plan_restriction(monkeypatch):
+def test_submit_anyrun_task_walks_named_privacy_levels_on_plan_restriction(monkeypatch):
+    """
+    The fallback names each privacy level instead of omitting the argument.
+
+    Omitting it lets the SDK apply its own default, which is `bylink` — a level
+    this plan forbids — so the retry was guaranteed to fail with the same 403
+    it was retrying, and the reported error was that guaranteed failure rather
+    than the original one.
+    """
     class _Settings:
         anyrun_parallel_limit_retries = 0
         anyrun_parallel_backoff_seconds = 0
@@ -1048,8 +1057,109 @@ def test_submit_anyrun_task_retries_without_privacy_on_provider_plan_restriction
     assert out == "task-ok"
     assert connector.calls == [
         ("https://example.test", "owner", True),
-        ("https://example.test", None, True),
+        ("https://example.test", "byteam", True),
     ]
+    # `public` is never reached automatically: publishing a customer's sample to
+    # a public feed is a disclosure decision, not a fallback.
+    assert "public" not in [call[1] for call in connector.calls]
+
+
+def test_submit_anyrun_task_reports_the_providers_own_error_text(monkeypatch):
+    """
+    A failure names what ANY.RUN said, not what our SDK wrapper felt like.
+
+    This previously returned "provider returned an empty/invalid response
+    (SDK null payload)" — a description of a bug in a component that was
+    working, while the provider's actual answer said which setting to change.
+    """
+    class _Settings:
+        anyrun_parallel_limit_retries = 0
+        anyrun_parallel_backoff_seconds = 0
+        anyrun_transient_retries = 0
+        anyrun_transient_backoff_seconds = 0
+
+    class _ProviderError(RuntimeError):
+        status_code = 403
+        description = "Chosen privacy type is unavailable due to plan limits or team privacy settings"
+
+    class _Connector:
+        def run_url_analysis(self, target, **kwargs):
+            raise _ProviderError("[AnyRun Exception] Status code: 403.")
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+
+    out = svc._submit_anyrun_task_with_fallback(
+        connector=_Connector(),
+        indicator="example.test",
+        indicator_type="url",
+        privacy_type="owner",
+        file_bytes=None,
+        file_name=None,
+    )
+
+    assert "Chosen privacy type is unavailable" in out["__error__"]
+    assert "403" in out["__error__"]
+    assert "SDK null payload" not in out["__error__"]
+    # The levels that were tried, so the next step is obvious from the message.
+    assert "owner" in out["__error__"] and "byteam" in out["__error__"]
+
+
+def test_sandbox_slot_admits_one_task_at_a_time(monkeypatch):
+    """
+    The plan allows one task at a time, so tasks queue rather than race.
+
+    The email pipeline sends the .eml and its URLs together; without this they
+    collided on the single slot and lost to "403 Parallel task limit".
+    """
+    import threading as _threading
+
+    class _Settings:
+        anyrun_max_parallel_submissions = 1
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    svc._SUBMISSION_GATE_STATE.clear()
+
+    overlap_seen = []
+    in_flight = 0
+    guard = _threading.Lock()
+
+    def run_one():
+        nonlocal in_flight
+        with svc._serialised_submission(30) as acquired:
+            assert acquired is True
+            with guard:
+                in_flight += 1
+                overlap_seen.append(in_flight)
+            time.sleep(0.05)
+            with guard:
+                in_flight -= 1
+
+    threads = [_threading.Thread(target=run_one) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert overlap_seen == [1, 1, 1, 1], f"tasks overlapped: {overlap_seen}"
+
+
+def test_sandbox_slot_is_released_when_the_task_raises(monkeypatch):
+    """A failed task must not strand the slot — the next one would never run."""
+    class _Settings:
+        anyrun_max_parallel_submissions = 1
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    svc._SUBMISSION_GATE_STATE.clear()
+
+    try:
+        with svc._serialised_submission(5) as acquired:
+            assert acquired is True
+            raise RuntimeError("submission blew up")
+    except RuntimeError:
+        pass
+
+    with svc._serialised_submission(2) as acquired:
+        assert acquired is True, "the slot was never released"
 
 
 def test_submit_anyrun_task_adds_residential_proxy_geo_when_country_selected(monkeypatch):
@@ -1398,3 +1508,58 @@ def test_run_sandbox_retries_summary_report_without_explicit_format(monkeypatch)
     assert out["verdict"] == "clean"
     assert out["analysis_id"] == "task-1"
     assert connector.report_calls[:2] == ["summary", None]
+
+
+def test_run_sandbox_defers_rather_than_queueing_forever(monkeypatch):
+    """
+    A task that cannot get the slot in time defers instead of parking.
+
+    Serialising must not create a new way to hang: the slot is held for a whole
+    analysis, so threads behind it need a bounded wait and an exit the rest of
+    the pipeline already understands.
+    """
+    class _Settings:
+        anyrun_max_parallel_submissions = 1
+        anyrun_submission_queue_wait_seconds = 1
+        anyrun_max_upload_mb = 100
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    svc._SUBMISSION_GATE_STATE.clear()
+
+    class _NeverReached:
+        @staticmethod
+        def windows(api_key):
+            raise AssertionError("no connector should be created without the slot")
+
+    # Occupy the only slot, then try to run a second task behind it.
+    with svc._serialised_submission(5) as acquired:
+        assert acquired is True
+        out = svc._run_sandbox(
+            sandbox_connector_cls=_NeverReached,
+            api_key="k",
+            sandbox_os="windows",
+            privacy_type="owner",
+            indicator="https://bad.example",
+            indicator_type="url",
+            file_bytes=None,
+            file_name=None,
+            timeout_seconds=45,
+        )
+
+    assert out["checked"] is False
+    assert "deferred" in str(out["error"])
+    # The deferred wording is what preserves the lookup half of the result.
+    assert svc._is_deferred_anyrun_sandbox_error(out["error"]) is True
+
+
+def test_privacy_plan_restriction_is_treated_as_deferred():
+    """
+    A forbidden privacy level is permanent for this key but not for the fallback
+    key, which may sit on a different plan — so the result stays retryable and
+    the lookup half is kept.
+    """
+    message = (
+        "ANY.RUN sandbox submission failed: HTTP 403: Chosen privacy type is unavailable "
+        "due to plan limits or team privacy settings (tried privacy levels: owner, byteam, bylink)"
+    )
+    assert svc._is_deferred_anyrun_sandbox_error(message) is True

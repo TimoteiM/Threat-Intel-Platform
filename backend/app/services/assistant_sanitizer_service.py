@@ -12,6 +12,7 @@ from app.utils.log_text import (
     has_file_suffix,
     has_internal_suffix,
     is_field_name,
+    is_siem_field_path,
     looks_like_code_identifier,
 )
 
@@ -351,6 +352,8 @@ def _is_redactable_host(text: str, match: re.Match[str]) -> bool:
     if has_file_suffix(original):
         return False
     if looks_like_code_identifier(original):
+        return False
+    if is_siem_field_path(original):
         return False
     if not (has_public_suffix(original) or has_internal_suffix(original)):
         return False

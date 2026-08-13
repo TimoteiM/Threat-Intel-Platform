@@ -41,9 +41,11 @@ from app.models.database import AlertBodyInvestigationRun
 async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
 
-    runs = (
+    # Only the assessment is needed. Selecting `result_json` pulled the whole
+    # 14 KB payload for every run — 21 MB to read 1.9 KB per row.
+    assessments = (
         await db.execute(
-            select(AlertBodyInvestigationRun.result_json).where(
+            select(AlertBodyInvestigationRun.result_attack_assessment).where(
                 AlertBodyInvestigationRun.created_at >= cutoff
             )
         )
@@ -56,8 +58,7 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
     ai_suggested: dict[str, int] = defaultdict(int)
     runs_assessed = 0
 
-    for payload in runs:
-        assessment = (payload or {}).get("attack_assessment")
+    for assessment in assessments:
         if not isinstance(assessment, dict):
             continue
         runs_assessed += 1
@@ -125,7 +126,7 @@ async def tactic_alerts(
                 AlertBodyInvestigationRun.highest_risk_score,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
-                AlertBodyInvestigationRun.result_json,
+                AlertBodyInvestigationRun.result_attack_assessment,
             )
             .where(AlertBodyInvestigationRun.created_at >= cutoff)
             .order_by(AlertBodyInvestigationRun.created_at.desc())
@@ -134,7 +135,7 @@ async def tactic_alerts(
 
     alerts: list[dict[str, Any]] = []
     for run in runs:
-        assessment = (run.result_json or {}).get("attack_assessment")
+        assessment = run.result_attack_assessment
         if not isinstance(assessment, dict):
             continue
         matched = _techniques_in_tactic(assessment, tactic)

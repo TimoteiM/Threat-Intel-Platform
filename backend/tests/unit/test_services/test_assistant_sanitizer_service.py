@@ -309,3 +309,22 @@ def test_a_keyed_hostname_under_an_unknown_suffix_is_still_redacted():
     result = sanitizer.sanitize_entry("Computer: box01.weirdsuffix\nhostname=db7.acme.zzinternal")
     hosts = sorted(v for t, v in result.token_map.items() if t.startswith("[HOST"))
     assert hosts == ["box01.weirdsuffix", "db7.acme.zzinternal"]
+
+
+def test_wazuh_field_names_are_not_redacted_as_hostnames():
+    """
+    Tokenising `rule.id` turns the narrative into nonsense.
+
+    The report ends up saying a detection fired on "[HOST_4]" when the real
+    value was the name of a field, not a machine.
+    """
+    text = (
+        '{\n'
+        '    "agent.name": "exprdsh002",\n'
+        '    "decoder.name": "windows_eventchannel",\n'
+        '    "rule.id": "60104",\n'
+        '    "data.win.system.computer": "exprdsh002.int.expertware.net"\n'
+        '}\n'
+    )
+    hosts = sorted(v for t, v in sanitizer.sanitize_entry(text).token_map.items() if t.startswith("[HOST"))
+    assert hosts == ["exprdsh002.int.expertware.net"]

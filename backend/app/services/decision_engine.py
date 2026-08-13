@@ -11,6 +11,12 @@ from __future__ import annotations
 from typing import Any
 
 
+# Labels broad enough that a clean multi-vendor scan is worth weighing against
+# them. Everything else in the marker list below names a specific family or kit,
+# where evading VirusTotal is part of the technique and a clean result there
+# argues nothing.
+_ANYRUN_GENERIC_LABELS = frozenset({"phishing", "phish", "suspicious"})
+
 _ANYRUN_MALICIOUS_LABEL_MARKERS = (
     "phish",
     "clickfix",
@@ -259,6 +265,51 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     anyrun_verdict, anyrun_names, anyrun_context = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
     anyrun_malicious = anyrun_verdict == "malicious"
     anyrun_suspicious = anyrun_verdict == "suspicious"
+
+    # A label-only escalation that a large clean VirusTotal result contradicts.
+    #
+    # `_best_anyrun_verdict` promotes a CLEAN sandbox run to malicious when the
+    # provider tagged the sample `phishing` or similar — the automated run often
+    # fails to trigger the behaviour its own label describes, so the label is
+    # trusted over the verdict. That is right when nothing else has looked.
+    #
+    # It is much weaker when something else has. One real case: ANY.RUN returned
+    # CLEAN, tagged it `phishing`, and the platform scored it malicious/90/high
+    # confidence — while VirusTotal's 92 vendors, collected minutes later,
+    # returned zero malicious and zero suspicious. The label was the only signal,
+    # and everything else that looked disagreed.
+    #
+    # So the escalation still stands, but it stops claiming certainty: the
+    # verdict drops to suspicious with medium confidence, which keeps the case in
+    # front of an analyst instead of auto-blocking on a contradicted tag. It
+    # applies only when the label is genuinely alone — any corroborating signal
+    # anywhere below restores the malicious path.
+    #
+    # And only when the label is *generic*. A lone `phishing` tag is the weakest
+    # thing ANY.RUN can say; a cluster naming a specific campaign — clickfix,
+    # clearfake, etherhiding, an exploit kit — is a fingerprint, and those
+    # families are known for evading multi-vendor scanning, so a clean
+    # VirusTotal is exactly what you would expect rather than a contradiction.
+    escalating_labels = [str(label).strip().casefold() for label in (anyrun_context.get("escalated_by") or [])]
+    anyrun_label_only = bool(escalating_labels)
+    anyrun_label_is_generic = len(escalating_labels) == 1 and escalating_labels[0] in _ANYRUN_GENERIC_LABELS
+    vt_broadly_clean = vt_found and vt_ran and vt_malicious == 0 and vt_suspicious == 0 and vt_total >= 20
+    anyrun_label_contradicted = (
+        anyrun_malicious
+        and anyrun_label_only
+        and anyrun_label_is_generic
+        and vt_broadly_clean
+        and not phishtank_positive
+        and not openphish_listed
+        and not tf_matches
+        and not intel_hits
+        and not urlscan_malicious
+        and not urlscan_suspicious
+        and not high_conf_http
+    )
+    if anyrun_label_contradicted:
+        anyrun_malicious = False
+        anyrun_suspicious = True
     form_detection = _best_sensitive_form_detection(evidence_data)
     anyrun_heuristics = _anyrun_heuristic_observations(evidence_data.get("hybrid_analysis") or {})
     # A clean observable is one nothing flagged — not one that also happens to

@@ -1698,7 +1698,13 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         ) : !vt.found && vt.meta?.status !== "completed" ? (
           <EmptyNote>VirusTotal data not available (API key not configured or collector not run)</EmptyNote>
         ) : !vt.found ? (
-          <EmptyNote>Domain not found in VirusTotal database</EmptyNote>
+          /* The collector records exactly what it tried and what came back —
+             whether the URL was unknown, whether the host was unknown too, and
+             whether a fresh scan is still running. This used to be thrown away
+             in favour of "Domain not found in VirusTotal database", which is
+             wrong twice over on a URL investigation: it names the wrong
+             observable, and it reads as a dead end when a scan is in flight. */
+          <VirusTotalNotFound vt={vt} />
         ) : (
           <>
             {/* File identity — only shown for hash/file investigations */}
@@ -2538,6 +2544,43 @@ function Section({ title, children, action }: { title: string; children: React.R
         {action && <div>{action}</div>}
       </div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * What VirusTotal actually said when it has no reputation to give.
+ *
+ * "Not found" covers three different situations an analyst needs to tell apart:
+ * nobody has ever scanned this, a scan is running right now, or the scan
+ * finished after the verdict was reached. Only the last two are actionable, and
+ * the old hardcoded message hid all three behind the same sentence.
+ */
+function VirusTotalNotFound({ vt }: { vt: any }) {
+  const notes = arr(vt?.notes).map((note: any) => String(note)).filter(Boolean);
+  const pending = Boolean(vt?.pending_analysis_id);
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)" }}>
+      <EmptyNote>
+        {pending
+          ? "VirusTotal had no report for this observable and is scanning it now."
+          : "VirusTotal has no reputation data for this observable."}
+      </EmptyNote>
+      {notes.length > 0 && (
+        <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+          {notes.map((note: string, index: number) => (
+            <li key={index} style={{ fontSize: "var(--font-meta)", color: "var(--text-dim)", lineHeight: 1.5 }}>
+              {note}
+            </li>
+          ))}
+        </ul>
+      )}
+      {pending && (
+        <div style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+          The result is collected automatically once the scan completes; this section fills in then.
+        </div>
+      )}
     </div>
   );
 }

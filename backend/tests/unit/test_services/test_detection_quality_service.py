@@ -10,6 +10,14 @@ from app.services import detection_quality_service as svc
 
 
 def _run(rule_id="100002", verdict="benign", **overrides):
+    """
+    One row as the query now returns it.
+
+    The service used to select whole entities and dig into `result_json`; it
+    now selects the stored generated columns that hold those sub-objects, so
+    these rows carry them the same way a real row does. `result_json` averaged
+    14 KB and the rollup read about 2.8 KB of it.
+    """
     payload = {
         "summary": {"indicators_investigated": 2},
         "extraction": {},
@@ -23,7 +31,10 @@ def _run(rule_id="100002", verdict="benign", **overrides):
         overall_verdict=verdict,
         highest_risk_score=overrides.pop("risk", 10),
         created_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        result_json=payload,
+        result_summary=payload.get("summary"),
+        result_extraction=payload.get("extraction"),
+        result_attack_assessment=payload.get("attack_assessment"),
+        result_overall_verdict=payload.get("overall_verdict"),
         **overrides,
     )
 

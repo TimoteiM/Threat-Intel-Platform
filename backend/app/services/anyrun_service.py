@@ -13,7 +13,7 @@ import queue
 import re
 import threading
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from inspect import Parameter, signature
 from typing import Any
 from urllib.parse import urlparse
@@ -889,6 +889,54 @@ def _lookup_intelligence(
         return _error(indicator_type, f"ANY.RUN intelligence lookup failed: {exc}")
 
 
+# ANY.RUN plans cap how many sandbox tasks may run at once; this account's cap is
+# one. The email pipeline submits the .eml and the URL analyses concurrently, so
+# they were racing for that single slot and losing to "403 Parallel task limit" —
+# a self-inflicted failure that the retry loop then spent minutes backing off
+# from.
+#
+# Sandbox tasks are serialised in-process so they queue instead of colliding. This
+# is a process-local lock, not a distributed one: the API and worker containers
+# each hold their own, so cross-process contention still falls through to the
+# existing retry path. That is deliberate — a shared lock would need Redis and
+# would turn a provider limit into a new failure mode of our own.
+_SUBMISSION_GATE_LOCK = threading.Lock()
+_SUBMISSION_GATE_STATE: dict[str, Any] = {}
+
+
+def _submission_gate() -> threading.Semaphore:
+    """Built on first use, so the module imports without reading settings."""
+    with _SUBMISSION_GATE_LOCK:
+        limit = max(1, int(getattr(get_settings(), "anyrun_max_parallel_submissions", 1) or 1))
+        gate = _SUBMISSION_GATE_STATE.get("gate")
+        if gate is None or _SUBMISSION_GATE_STATE.get("limit") != limit:
+            gate = threading.Semaphore(limit)
+            _SUBMISSION_GATE_STATE.update({"gate": gate, "limit": limit})
+        return gate
+
+
+@contextmanager
+def _serialised_submission(wait_seconds: int):
+    """
+    Wait for the sandbox slot, but not forever.
+
+    A holder that hits the provider's parallel limit backs off through its
+    retries before releasing, so an unbounded queue could park several threads
+    for a long time — the cure becoming a worse illness than the disease. After
+    `wait_seconds` the caller gives up and reports the deferred error the rest
+    of the pipeline already knows how to handle: the lookup half of the result
+    survives and the submission is retried later.
+    """
+    gate = _submission_gate()
+    if not gate.acquire(timeout=max(1, wait_seconds)):
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        gate.release()
+
+
 def _run_sandbox(
     *,
     sandbox_connector_cls: Any,
@@ -913,7 +961,20 @@ def _run_sandbox(
                         indicator_type,
                         f"ANY.RUN file sandbox skipped: sample size {file_size_mb:.1f} MB exceeds configured max {max_upload_mb} MB",
                     )
-        with ExitStack() as stack:
+        # One sandbox task at a time — see _serialised_submission. The gate wraps
+        # submission *and* the wait for the report, because ANY.RUN counts tasks
+        # that are running, not calls that are in flight: releasing at submission
+        # would let the next task start while the first is still executing, which
+        # is the collision this is here to prevent.
+        queue_wait = int(getattr(get_settings(), "anyrun_submission_queue_wait_seconds", 600) or 600)
+        with _serialised_submission(queue_wait) as acquired, ExitStack() as stack:
+            if not acquired:
+                return _error(
+                    indicator_type,
+                    "ANY.RUN sandbox submission deferred: the account's sandbox slot was still "
+                    f"busy after {queue_wait}s.",
+                    mode="sandbox",
+                )
             connector = _create_sandbox_connector(sandbox_connector_cls, api_key=api_key, sandbox_os=sandbox_os)
             if connector is None:
                 return _error(indicator_type, "Failed to initialize ANY.RUN sandbox connector", mode="sandbox")
@@ -1184,11 +1245,28 @@ def _submit_anyrun_task_with_fallback(
     if indicator_type not in {"url", "hash", "file"}:
         return {"__error__": f"Unsupported Any.Run indicator type: {indicator_type}"}
 
-    attempts: list[str | None] = []
-    preferred = str(privacy_type or "").strip()
+    # Privacy ladder, most private first.
+    #
+    # The fallback used to be `None`, meaning "send no opt_privacy_type and let
+    # the SDK decide". The SDK's default is `bylink`, which this account's plan
+    # forbids — so the fallback was guaranteed to fail with
+    # "Chosen privacy type is unavailable due to plan limits or team privacy
+    # settings", and because the reported error is the *last* one, that
+    # guaranteed failure masked whatever went wrong on the first attempt.
+    #
+    # Every level is now named explicitly, ordered so a sample is never made
+    # more public than necessary: `owner` keeps it private to the account,
+    # `byteam` shares it with the team, `bylink` needs the link to reach it.
+    # `public` is never attempted — publishing a customer's phishing email to a
+    # public sandbox feed is a disclosure decision, not a fallback, and it would
+    # be made silently on the way to a result nobody asked to publish.
+    attempts: list[str] = []
+    preferred = str(privacy_type or "").strip().lower()
     if preferred:
         attempts.append(preferred)
-    attempts.append(None)
+    for level in ("owner", "byteam", "bylink"):
+        if level not in attempts:
+            attempts.append(level)
 
     last_exc: Exception | None = None
     max_parallel_retries = int(getattr(settings, "anyrun_parallel_limit_retries", 8) or 8)
@@ -1260,23 +1338,49 @@ def _submit_anyrun_task_with_fallback(
                     return {
                         "__error__": (
                             "ANY.RUN sandbox submission failed: provider transient/server error "
-                            f"persisted after {max_transient_retries} retries. Last error: {exc}"
+                            f"persisted after {max_transient_retries} retries. "
+                            f"Last error: {_provider_error_text(exc)}"
                         )
                     }
                 if _is_submission_fallback_candidate(exc):
                     logger.debug("AnyRun submission fallback candidate (privacy=%s): %s", privacy, exc)
                     break
-                return {"__error__": f"ANY.RUN sandbox submission failed: {exc}"}
+                return {"__error__": f"ANY.RUN sandbox submission failed: {_provider_error_text(exc)}"}
 
     if isinstance(last_exc, Exception) and _is_submission_fallback_candidate(last_exc):
-        logger.warning("AnyRun submission failed with null payload for both privacy variants: %s", last_exc)
+        # Report what the provider actually said. This used to be replaced with
+        # "provider returned an empty/invalid response (SDK null payload)",
+        # which describes a bug that was not happening: ANY.RUN had answered
+        # clearly — "Chosen privacy type is unavailable due to plan limits or
+        # team privacy settings" — and the platform discarded that in favour of
+        # a message pointing at the SDK. Every hour spent on the wrong component
+        # started here.
+        logger.warning(
+            "AnyRun submission failed for every privacy level %s: %s", attempts, last_exc
+        )
         return {
             "__error__": (
-                "ANY.RUN sandbox submission failed: provider returned an empty/invalid response "
-                "(SDK null payload)."
+                f"ANY.RUN sandbox submission failed: {_provider_error_text(last_exc)} "
+                f"(tried privacy levels: {', '.join(attempts)})"
             )
         }
-    return {"__error__": f"ANY.RUN sandbox submission failed: {last_exc}"}
+    return {"__error__": f"ANY.RUN sandbox submission failed: {_provider_error_text(last_exc)}"}
+
+
+def _provider_error_text(exc: Exception | None) -> str:
+    """
+    The provider's own description of the failure, when it gave one.
+
+    The SDK raises with a `description` and `status_code`; those say what to fix.
+    Falls back to `str(exc)` so nothing is lost when the shape is different.
+    """
+    if exc is None:
+        return "no response from the provider"
+    description = str(getattr(exc, "description", "") or "").strip()
+    status = getattr(exc, "status_code", None)
+    if description:
+        return f"HTTP {status}: {description}" if status else description
+    return str(exc).strip() or type(exc).__name__
 
 
 def _call_with_supported_kwargs(
@@ -1325,8 +1429,20 @@ def _get_anyrun_summary_report(connector: Any, analysis_id: str) -> Any:
         return connector.get_analysis_report(analysis_id)
 
 
+def _matchable_error_text(exc: Exception | None) -> str:
+    """
+    Everything the exception says, for the matchers below.
+
+    `str(exc)` alone is not enough: the SDK carries the useful sentence on
+    `.description` and some raises leave the string terse, so a 403 that names
+    exactly which setting is wrong could read as an unclassified failure and
+    skip the privacy ladder entirely.
+    """
+    return f"{exc} {_provider_error_text(exc)}".strip().lower()
+
+
 def _is_submission_fallback_candidate(exc: Exception) -> bool:
-    text = str(exc or "").strip().lower()
+    text = _matchable_error_text(exc)
     if not text:
         return False
     return (
@@ -1344,14 +1460,14 @@ def _is_submission_fallback_candidate(exc: Exception) -> bool:
 
 
 def _is_parallel_limit_error(exc: Exception) -> bool:
-    text = str(exc or "").strip().lower()
+    text = _matchable_error_text(exc)
     if not text:
         return False
     return "parallel task limit" in text or ("status code: 403" in text and "parallel" in text)
 
 
 def _is_transient_provider_error(exc: Exception) -> bool:
-    text = str(exc or "").strip().lower()
+    text = _matchable_error_text(exc)
     if not text:
         return False
     return (
@@ -1532,7 +1648,13 @@ def _is_deferred_anyrun_sandbox_error(value: Any) -> bool:
         "parallel task limit" in text
         or "sandbox submission deferred" in text
         or "empty/invalid response" in text
+        # Still recognised so results stored before the message was corrected
+        # keep classifying the same way.
         or "sdk null payload" in text
+        # A privacy level this plan forbids is permanent for *this* key, but the
+        # fallback key may sit on a different plan — so the retry is worth
+        # taking, and the lookup half of the result is worth keeping either way.
+        or "privacy type is unavailable" in text
         or "api is not available on the free plan" in text
         or "provider transient/server error" in text
         or "unknown error" in text

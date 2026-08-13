@@ -249,3 +249,91 @@ def test_a_token_glued_across_punctuation_is_not_a_domain():
 def test_a_genuinely_defanged_domain_still_survives_the_glue_guard():
     result = extract_alert_indicators("User visited evil-corp[.]com and then paypal(dot)secure-login.net")
     assert sorted(_values(result, "domain")) == ["evil-corp.com", "secure-login.net"]
+
+
+def test_wazuh_field_names_are_not_extracted_as_domains():
+    """
+    `agent.id`, `rule.id`, `system.channel` are field paths, not hosts.
+
+    No suffix list can refuse them: `.id` is Indonesia, and `.name`, `.channel`
+    and `.computer` are all real gTLDs. One real Wazuh alert produced seven of
+    these as domain indicators and investigated every one against live
+    collectors.
+    """
+    alert = (
+        'Alert: Windows logon\n'
+        '{\n'
+        '    "agent.id": "1174",\n'
+        '    "agent.name": "exprdsh002",\n'
+        '    "agent.ip": "10.10.30.23",\n'
+        '    "decoder.name": "windows_eventchannel",\n'
+        '    "manager.name": "Siembiot",\n'
+        '    "rule.id": "60104",\n'
+        '    "data.win.system.channel": "Security",\n'
+        '    "data.win.system.computer": "exprdsh002.int.expertware.net"\n'
+        '}\n'
+    )
+    domains = _values(extract_alert_indicators(alert), "domain")
+    assert domains == ["expertware.net"]
+
+
+def test_escaped_json_keys_are_recognised_as_field_names():
+    """A Wazuh alert arrives as escaped JSON — `\\"agent.id\\": \\"1174\\"`."""
+    alert = 'body: "{\\"agent.id\\": \\"1174\\", \\"rule.id\\": \\"60104\\"}"'
+    assert _values(extract_alert_indicators(alert), "domain") == []
+
+
+def test_a_quoted_value_is_still_a_value():
+    """`"host": "evil.com"` — the key is a field, the value is a domain."""
+    alert = 'event:\n    "host": "evil-corp.com",\n    "rule.id": "5"\n'
+    assert _values(extract_alert_indicators(alert), "domain") == ["evil-corp.com"]
+
+
+def test_a_real_domain_starting_with_a_field_root_is_kept():
+    """
+    `data.gov.uk` opens with a field root but is a genuine host.
+
+    The guard requires both halves to look like a field path — a known root
+    *and* a last label that is not a public suffix a real host ends on — so a
+    legitimate domain beginning with `data.`, `host.` or `event.` survives.
+    """
+    alert = "Traffic observed to data.gov.uk from the workstation"
+    assert "data.gov.uk" in _values(extract_alert_indicators(alert), "domain")
+
+
+def test_object_keys_are_masked_before_matching():
+    """
+    Structure decides what a key is, not the spelling of the token.
+
+    Judging each dotted token by its shape is guesswork that `.id`, `.name`,
+    `.channel` and `.computer` all defeat, because every one of them is a real
+    TLD. Blanking keys before the matcher runs removes the question.
+    """
+    from app.utils.log_text import mask_structured_keys
+
+    masked = mask_structured_keys('{"agent.id": "1174", "dest": "evil-corp.com"}')
+    assert "agent.id" not in masked
+    assert "evil-corp.com" in masked
+
+
+def test_masking_preserves_every_offset():
+    """
+    Positions must survive.
+
+    `first_seen_at`, the field-name checks and the defanging comparison are all
+    offsets into the text, so the masked copy has to be the same length.
+    """
+    from app.utils.log_text import mask_structured_keys
+
+    for text in (
+        '{"agent.id": "1174"}',
+        'body: "{\\"rule.id\\": \\"60104\\"}"',
+        "prose with no structure at all",
+    ):
+        assert len(mask_structured_keys(text)) == len(text)
+
+
+def test_a_url_inside_an_escaped_json_value_is_still_extracted():
+    """Masking keys must not touch values, however deeply escaped."""
+    alert = 'body: "{\\"rule.id\\": \\"60104\\", \\"url\\": \\"http://bad-domain.com/x\\"}"'
+    assert _values(extract_alert_indicators(alert), "url") == ["http://bad-domain.com/x"]

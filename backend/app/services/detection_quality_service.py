@@ -46,14 +46,26 @@ async def detection_quality(
     """One row per detection rule seen in the window, worst signal-to-noise first."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
 
+    # Selecting the whole entity dragged `result_json` and `alert_body` along
+    # for every run in the window. Only these columns are read.
     rows = (
         await db.execute(
-            select(AlertBodyInvestigationRun).where(
+            select(
+                AlertBodyInvestigationRun.detection_rule_id,
+                AlertBodyInvestigationRun.detection_rule_name,
+                AlertBodyInvestigationRun.overall_verdict,
+                AlertBodyInvestigationRun.highest_risk_score,
+                AlertBodyInvestigationRun.created_at,
+                AlertBodyInvestigationRun.result_attack_assessment,
+                AlertBodyInvestigationRun.result_summary,
+                AlertBodyInvestigationRun.result_extraction,
+                AlertBodyInvestigationRun.result_overall_verdict,
+            ).where(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.detection_rule_id.isnot(None),
             )
         )
-    ).scalars().all()
+    ).all()
 
     feedback = await _feedback_by_rule(db, cutoff)
 
@@ -97,11 +109,10 @@ def _blank(rule_id: str, rule_name: str | None) -> dict[str, Any]:
     }
 
 
-def _accumulate(entry: dict[str, Any], run: AlertBodyInvestigationRun) -> None:
-    payload = run.result_json or {}
+def _accumulate(entry: dict[str, Any], run: Any) -> None:
     entry["alerts"] += 1
 
-    verdict = str(run.overall_verdict or payload.get("overall_verdict") or "inconclusive")
+    verdict = str(run.overall_verdict or run.result_overall_verdict or "inconclusive")
     if verdict in entry["verdicts"]:
         entry["verdicts"][verdict] += 1
 
@@ -111,14 +122,14 @@ def _accumulate(entry: dict[str, Any], run: AlertBodyInvestigationRun) -> None:
     if created and (entry["last_seen"] is None or created > entry["last_seen"]):
         entry["last_seen"] = created
 
-    extraction = payload.get("extraction") or {}
-    summary = payload.get("summary") or {}
+    extraction = run.result_extraction or {}
+    summary = run.result_summary or {}
     # An alert whose every indicator was whitelisted told the SOC nothing it did
     # not already know — the clearest possible waste signal.
     if extraction.get("excluded_total") and not summary.get("indicators_investigated"):
         entry["fully_excluded_alerts"] += 1
 
-    assessment = payload.get("attack_assessment") or {}
+    assessment = run.result_attack_assessment or {}
     for claim in assessment.get("techniques") or []:
         entry["attack_claims"] += 1
         if claim.get("status") == "confirmed":

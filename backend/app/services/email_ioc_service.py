@@ -70,6 +70,13 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
         sender_email = _fallback_sender_email(raw_email)
     sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else None
 
+    # Reply-To / Return-Path / Sender were parsed only to find *an* address when
+    # From was missing. Kept separately here because the disagreement between
+    # them is the signal — a reply address on another domain is how BEC works.
+    _reply_display, reply_to_email = parseaddr(_safe_header(msg.get("Reply-To") or ""))
+    _rp_display, return_path_email = parseaddr(_safe_header(msg.get("Return-Path") or ""))
+    _sender_display, sender_header_email = parseaddr(_safe_header(msg.get("Sender") or ""))
+
     auth_blob = " ".join((msg.get_all("Authentication-Results") or [])).strip()
     spf_result = _extract_token(SPF_RE, auth_blob) or "none"
     dkim_result = _extract_token(DKIM_RE, auth_blob) or "none"
@@ -91,6 +98,9 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
         "sender_name": sender_name,
         "sender_domain": sender_domain,
         "sender_ip": sender_ip,
+        "reply_to": (reply_to_email or "").strip().lower() or None,
+        "return_path": (return_path_email or "").strip().lower() or None,
+        "sender_header": (sender_header_email or "").strip().lower() or None,
         "authentication": {
             "spf": spf_result,
             "dkim": dkim_result,
@@ -129,6 +139,19 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
         sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else None
 
         headers_blob = _safe_header(getattr(msg_obj, "header", ""))
+
+        def _addr(header_name: str) -> str | None:
+            for value in _extract_headers(headers_blob, header_name):
+                _display, addr = parseaddr(_safe_header(value))
+                addr = (addr or "").strip().lower()
+                if addr:
+                    return addr
+            return None
+
+        reply_to_email = _addr("Reply-To")
+        return_path_email = _addr("Return-Path")
+        sender_header_email = _addr("Sender")
+
         auth_blob = " ".join(_extract_headers(headers_blob, "Authentication-Results")).strip()
         received_headers = _extract_headers(headers_blob, "Received")
         sender_ip = _extract_sender_ip(received_headers)
@@ -153,6 +176,9 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
             "sender_name": sender_name,
             "sender_domain": sender_domain,
             "sender_ip": sender_ip,
+            "reply_to": reply_to_email,
+            "return_path": return_path_email,
+            "sender_header": sender_header_email,
             "authentication": {
                 "spf": spf_result,
                 "dkim": dkim_result,
@@ -214,6 +240,21 @@ def _normalize_urls(values: list[str]) -> list[str]:
     return clean
 
 
+
+# Files larger than this are hashed and named but not carried in memory for
+# inspection. A 20 MB attachment is not what phishing uses, and holding several
+# of them per message is a real cost.
+_MAX_INSPECTABLE_BYTES = 8 * 1024 * 1024
+
+
+def _encoded_content(data: bytes) -> str | None:
+    if not data or len(data) > _MAX_INSPECTABLE_BYTES:
+        return None
+    import base64 as _b64
+
+    return _b64.b64encode(data).decode("ascii")
+
+
 def _extract_attachments(msg: Any) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for part in msg.walk():
@@ -230,6 +271,10 @@ def _extract_attachments(msg: Any) -> list[dict[str, Any]]:
                 "size_bytes": len(data),
                 "sha256": hashlib.sha256(data).hexdigest(),
                 "md5": hashlib.md5(data).hexdigest(),  # noqa: S324 - IOC compatibility
+                # Carried in memory so the attachment can be inspected rather
+                # than judged by its file extension. Stripped before the run is
+                # persisted — base64 of every attachment would bloat the row.
+                "content_b64": _encoded_content(data),
             }
         )
     return items
@@ -252,6 +297,7 @@ def _extract_msg_attachments(attachments: list[Any]) -> list[dict[str, Any]]:
                 "size_bytes": len(data),
                 "sha256": hashlib.sha256(data).hexdigest(),
                 "md5": hashlib.md5(data).hexdigest(),  # noqa: S324 - IOC compatibility
+                "content_b64": _encoded_content(data),
             }
         )
     return items
