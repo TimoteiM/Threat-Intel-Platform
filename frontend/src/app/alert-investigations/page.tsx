@@ -21,19 +21,44 @@ const VERDICT_COLORS: Record<string, string> = {
 
 const VERDICT_FILTERS = ["all", "malicious", "suspicious", "benign", "inconclusive"];
 
+const PAGE_SIZES = [25, 50, 100];
+
 export default function AlertInvestigationsPage() {
   const router = useRouter();
   const [items, setItems] = useState<AlertInvestigationRun[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
+  // Typing is debounced; paging and filtering are not. Sharing one debounce
+  // would put a quarter-second lag on every Next click for no reason.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [verdict, setVerdict] = useState("all");
+  const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Any change to what is being listed starts again at the first page —
+  // narrowing a filter while on page 4 would otherwise land on an empty page
+  // that reads as "no results". The offset is reset in the same update as the
+  // change rather than in a following effect, so the two settle in one render
+  // instead of firing a throwaway request at the old offset first.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setOffset(0);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listAlertInvestigations({ limit: 50, search, verdict });
+      const data = await listAlertInvestigations({
+        limit: pageSize,
+        offset,
+        search: debouncedSearch,
+        verdict,
+      });
       setItems(data.items || []);
       setTotal(data.total || 0);
     } catch {
@@ -42,12 +67,26 @@ export default function AlertInvestigationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, verdict]);
+  }, [debouncedSearch, verdict, pageSize, offset]);
 
   useEffect(() => {
-    const timer = setTimeout(load, 250);
-    return () => clearTimeout(timer);
+    load();
   }, [load]);
+
+  // Deleting the last row of the last page leaves the offset past the end,
+  // which would render an empty list rather than the page that is now last.
+  useEffect(() => {
+    if (!loading && offset > 0 && offset >= total) {
+      setOffset(Math.max(0, (Math.ceil(total / pageSize) - 1) * pageSize));
+    }
+  }, [loading, offset, total, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.floor(offset / pageSize) + 1;
+  const canGoPrevious = offset > 0;
+  const canGoNext = offset + pageSize < total;
+  const rangeStart = total === 0 ? 0 : offset + 1;
+  const rangeEnd = Math.min(offset + pageSize, total);
 
   const handleDelete = async (run: AlertInvestigationRun) => {
     const spawned = run.spawned_investigation_count || 0;
@@ -113,7 +152,10 @@ export default function AlertInvestigationsPage() {
             />
             <select
               value={verdict}
-              onChange={(e) => setVerdict(e.target.value)}
+              onChange={(e) => {
+                setVerdict(e.target.value);
+                setOffset(0);
+              }}
               style={{
                 padding: "7px 10px",
                 borderRadius: 8,
@@ -127,6 +169,29 @@ export default function AlertInvestigationsPage() {
               {VERDICT_FILTERS.map((option) => (
                 <option key={option} value={option}>
                   {option === "all" ? "All verdicts" : option}
+                </option>
+              ))}
+            </select>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setOffset(0);
+              }}
+              aria-label="Runs per page"
+              style={{
+                padding: "7px 10px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+                background: "var(--bg-input)",
+                color: "var(--text)",
+                fontSize: 12,
+                outline: "none",
+              }}
+            >
+              {PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size} per page
                 </option>
               ))}
             </select>
@@ -267,9 +332,63 @@ export default function AlertInvestigationsPage() {
             ))}
           </div>
         )}
+
+        {total > 0 ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 10,
+              marginTop: 14,
+              paddingTop: 12,
+              borderTop: "1px solid var(--panel-divider)",
+            }}
+          >
+            <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)" }}>
+              {rangeStart}–{rangeEnd} of {total}
+              {pageCount > 1 ? ` · page ${currentPage} of ${pageCount}` : ""}
+            </span>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setOffset((prev) => Math.max(0, prev - pageSize))}
+                disabled={!canGoPrevious || loading}
+                style={pageButtonStyle(canGoPrevious && !loading)}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setOffset((prev) => prev + pageSize)}
+                disabled={!canGoNext || loading}
+                style={pageButtonStyle(canGoNext && !loading)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </ConsoleModule>
     </div>
   );
+}
+
+function pageButtonStyle(enabled: boolean): React.CSSProperties {
+  return {
+    minWidth: 92,
+    padding: "6px 14px",
+    borderRadius: 8,
+    border: `1px solid ${enabled ? "var(--panel-divider-strong)" : "var(--panel-divider)"}`,
+    background: enabled ? "var(--panel-card-bg)" : "var(--bg-elevated)",
+    color: enabled ? "var(--text)" : "var(--text-muted)",
+    fontSize: 11.5,
+    fontWeight: 600,
+    fontFamily: "var(--font-sans)",
+    cursor: enabled ? "pointer" : "not-allowed",
+  };
 }
 
 const primaryButtonStyle: React.CSSProperties = {
