@@ -169,8 +169,58 @@ function AnyRunLabelEscalationNotice({ items }: { items: any[] }) {
   );
 }
 
+// Suricata rates alerts 1 (high), 2 (medium), 3 (informational). ANY.RUN sends
+// all three in one stream, and the informational tier is mostly notes that
+// ordinary traffic happened — "INFO [ANY.RUN] Google Tag Manager analytics",
+// classed "Not Suspicious Traffic". Those are not threat detections, and listing
+// them under "Network threats" told analysts a clean page was attacking them.
+//
+// Filtering here as well as in the collector is deliberate: evidence already
+// stored keeps its unfiltered event list, and re-collecting every past
+// investigation to fix a display problem would be the wrong trade.
+const BENIGN_THREAT_CLASSES = new Set([
+  "not suspicious traffic",
+  "misc activity",
+  "generic protocol command decode",
+  "unknown traffic",
+]);
+
 function isActionableNetworkThreat(threat: any): boolean {
-  return Boolean(threat) && threat?.excluded_from_final_risk !== true;
+  if (!threat || threat?.excluded_from_final_risk === true) return false;
+
+  const threatClass = String(threat?.class ?? threat?.classification ?? "").trim().toLowerCase();
+  if (BENIGN_THREAT_CLASSES.has(threatClass)) return false;
+
+  // Class first, priority only as a fallback: an unfamiliar high-priority class
+  // we have never catalogued should surface, not vanish.
+  const priority = Number(threat?.priority ?? 0);
+  const message = String(threat?.msg ?? threat?.message ?? "").trim().toUpperCase();
+  if (priority >= 3 && (message.startsWith("INFO") || !threatClass)) return false;
+
+  return true;
+}
+
+// Generic words that were scraped by substring-matching ANY.RUN's whole report
+// page, where they appear in menus and filter lists on every report. The
+// collector no longer produces them, but investigations already stored carry
+// them — and the merge that built `threat_names` copied them there too, so
+// hiding only `html_threat_labels` would leave the label on screen.
+//
+// Keyed off html_threat_labels rather than a blanket word ban, because a label
+// ANY.RUN's API genuinely returned is real and must still be shown. Measured on
+// the stored corpus: of 103 records labelled phishing, 100 were scraped and 3
+// came from the API — and all 3 of those were on non-clean verdicts.
+const FABRICATED_LABEL_WORDS = new Set([
+  "phishing", "phish", "credential", "credentials", "tds", "malware",
+  "suspicious", "trojan", "malicious", "spam", "scam", "exploit",
+  "stealer", "ransomware",
+]);
+
+function isFabricatedHtmlLabel(label: any, raw: any): boolean {
+  const normalized = String(label ?? "").trim().toLowerCase();
+  if (!FABRICATED_LABEL_WORDS.has(normalized)) return false;
+  const scraped = arr(raw?.html_threat_labels).map((x: any) => String(x ?? "").trim().toLowerCase());
+  return scraped.includes(normalized);
 }
 
 function AnyRunProviderFindings({ item }: { item: any }) {
@@ -184,7 +234,7 @@ function AnyRunProviderFindings({ item }: { item: any }) {
     ...normalizedAnyrunLabels(item?.threat_names),
     ...normalizedAnyrunLabels(raw?.tags),
     ...normalizedAnyrunLabels(raw?.html_threat_labels),
-  ]).filter(Boolean);
+  ]).filter(Boolean).filter((label) => !isFabricatedHtmlLabel(label, raw));
   const verdict = providerVerdict(item);
   if (!threats.length && !labels.length && !["MALICIOUS", "SUSPICIOUS"].includes(verdict)) return null;
 

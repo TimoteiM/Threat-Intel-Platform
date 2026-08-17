@@ -910,6 +910,20 @@ def test_anyrun_conflicting_clean_lookup_retains_malicious_with_clickfix_tags():
 
 
 def test_extract_anyrun_html_threat_labels_from_report_chips():
+    """
+    Specific families are still scraped from the report; "phishing" no longer is.
+
+    This test used to expect "phishing" here too. It cannot be honoured: the
+    scraper matches substrings across the entire report page, so it has no way
+    to tell this chip from the word in a nav menu or a filter dropdown. In the
+    stored corpus it scraped "phishing" from 99 reports, 91 of them tasks
+    ANY.RUN had marked "No threats detected".
+
+    Nothing real is lost. Of 103 records carrying a phishing label, only 3 came
+    from ANY.RUN's API rather than this scraper — and all 3 were on non-clean
+    verdicts. The API field is precise and still feeds threatName; this scraper
+    only ever needed to cover the specific families the JSON omits.
+    """
     html = """
     <span class="tag">clickfix</span>
     <span class="tag">phishing</span>
@@ -920,7 +934,8 @@ def test_extract_anyrun_html_threat_labels_from_report_chips():
 
     labels = svc._extract_anyrun_html_threat_labels(html)
 
-    assert labels == ["clickfix", "clearfake", "phishing", "exploit-kit", "obfuscated-js"]
+    assert labels == ["clickfix", "clearfake", "exploit-kit", "obfuscated-js"]
+    assert "phishing" not in labels
 
 
 def test_extract_anyrun_screenshots_uses_thumbnail_only_as_preview():
@@ -1563,3 +1578,174 @@ def test_privacy_plan_restriction_is_treated_as_deferred():
         "due to plan limits or team privacy settings (tried privacy levels: owner, byteam, bylink)"
     )
     assert svc._is_deferred_anyrun_sandbox_error(message) is True
+
+
+# ── Fabricated threat labels ──────────────────────────────────────────────────
+
+def test_no_html_marker_is_a_generic_word():
+    """
+    The marker test is a substring search over ANY.RUN's whole report page, so a
+    generic word matches on essentially every report regardless of verdict.
+
+    This has regressed twice already — "credential" and "tds" were removed, then
+    "phishing" was left in and scraped from 99 reports, 91 of which ANY.RUN had
+    called "No threats detected". Enforcing it here is what stops a third time.
+    """
+    for marker, label in svc._ANYRUN_HTML_THREAT_MARKERS:
+        assert marker.strip().lower() not in svc._GENERIC_LABEL_WORDS, (
+            f"marker {marker!r} is too generic for a document-wide substring match"
+        )
+        assert label.strip().lower() not in svc._GENERIC_LABEL_WORDS, (
+            f"label {label!r} is too generic for a document-wide substring match"
+        )
+
+
+def test_html_threat_labels_ignores_the_word_phishing_in_page_furniture():
+    """A word in the UI chrome is not a verdict about the sample."""
+    html = """
+      <html><head><title>ANY.RUN sandbox report</title></head>
+      <body>
+        <nav><ul><li>All</li><li>Phishing</li><li>Trojan</li><li>Ransomware</li></ul></nav>
+        <select id="tag-filter"><option value="phishing">phishing</option></select>
+        <script>const CATEGORIES = ["phishing","stealer","malware"];</script>
+        <div class="verdict">No threats detected</div>
+      </body></html>
+    """
+    assert svc._extract_anyrun_html_threat_labels(html) == []
+
+
+def test_html_threat_labels_still_finds_specific_families():
+    """The specific markers are the reason the scraper exists — keep them working."""
+    html = "<div class='chip'>ClickFix</div><div class='chip'>Fake CAPTCHA</div>"
+    labels = svc._extract_anyrun_html_threat_labels(html)
+    assert "clickfix" in labels
+    assert "fake-captcha" in labels
+
+
+# ── Informational Suricata events are not threats ─────────────────────────────
+
+def test_informational_suricata_events_are_not_threats():
+    """
+    "INFO [ANY.RUN] Google Tag Manager analytics", classed "Not Suspicious
+    Traffic", is a note that ordinary traffic happened — not a finding.
+    """
+    benign = {
+        "msg": "INFO [ANY.RUN] Google Tag Manager analytics (googletagmanager .com)",
+        "class": "Not Suspicious Traffic",
+        "priority": 3,
+        "pro": 0,
+    }
+    assert svc._is_significant_network_threat(benign) is False
+
+
+def test_real_suricata_findings_are_kept():
+    for threat in (
+        {"msg": "ET MALWARE Observed DNS Query", "class": "A Network Trojan was detected", "priority": 1},
+        {"msg": "ET EXPLOIT Kit Landing", "class": "Exploit Kit Activity Detected", "priority": 1},
+        {"msg": "ET PHISHING Landing Page", "class": "Possible Social Engineering Attempted", "priority": 2},
+    ):
+        assert svc._is_significant_network_threat(threat) is True, threat
+
+
+def test_unknown_high_priority_class_is_kept():
+    """An unfamiliar class we have never seen must not be dropped silently."""
+    assert svc._is_significant_network_threat(
+        {"msg": "Something new", "class": "Brand New Category", "priority": 1}
+    ) is True
+
+
+def test_split_network_threats_keeps_informational_events_rather_than_discarding_them():
+    threats = [
+        {"msg": "INFO [ANY.RUN] analytics", "class": "Not Suspicious Traffic", "priority": 3},
+        {"msg": "ET MALWARE beacon", "class": "A Network Trojan was detected", "priority": 1},
+    ]
+    significant, informational = svc._split_network_threats(threats)
+    assert len(significant) == 1 and significant[0]["class"] == "A Network Trojan was detected"
+    assert len(informational) == 1
+
+
+def test_all_informational_task_reports_zero_threats_not_the_raw_counter(monkeypatch):
+    """
+    The count must not fall back to ANY.RUN's unfiltered total.
+
+    behavior_counts sits next to fields that use `len(x) or counters[...]`. With
+    filtering, an all-informational task makes that len() zero, and the `or`
+    would hand back the raw count — reporting exactly the number the filter
+    exists to suppress.
+    """
+    class _Connector:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def run_url_analysis(self, target, **kwargs):
+            return "task-1"
+
+        def get_task_status(self, task_id):
+            yield {"status": "COMPLETED"}
+
+        def get_analysis_verdict(self, analysis_id):
+            return "No threats detected"
+
+        def get_analysis_report(self, analysis_id, report_format="summary"):
+            if report_format == "ioc":
+                return {"data": []}
+            if report_format == "html":
+                return "<html><body>filter: phishing</body></html>"
+            return {
+                "data": {
+                    "status": "completed",
+                    "analysis": {"permanentUrl": "https://app.any.run/tasks/task-1", "scores": {}},
+                    "network": {
+                        "dnsRequests": [], "httpRequests": [], "connections": [],
+                        "threats": [
+                            {"msg": "INFO [ANY.RUN] Google Tag Manager analytics",
+                             "class": "Not Suspicious Traffic", "priority": 3, "pro": 0},
+                            {"msg": "INFO [ANY.RUN] Google Tag Manager analytics",
+                             "class": "Not Suspicious Traffic", "priority": 3, "pro": 0},
+                            {"msg": "INFO [ANY.RUN] Google Tag Manager analytics",
+                             "class": "Not Suspicious Traffic", "priority": 3, "pro": 0},
+                        ],
+                    },
+                    "counters": {"threats": 3},
+                    "processes": [],
+                    "summary": {},
+                }
+            }
+
+    monkeypatch.setattr(svc, "_create_sandbox_connector", lambda *a, **k: _Connector())
+
+    out = svc._run_sandbox(
+        sandbox_connector_cls=object(), api_key="ak", sandbox_os="windows",
+        privacy_type="owner", indicator="patromil.test", indicator_type="url",
+        file_bytes=None, file_name=None, timeout_seconds=45,
+    )
+
+    raw = out["raw_summary"]
+    assert out["verdict"] == "clean"
+    assert raw["behavior_counts"]["network_threats"] == 0, "raw counter leaked through"
+    assert raw["behavior_counts"]["network_informational_events"] == 3
+    assert raw["behavior_details"]["network_threats"] == []
+    # And the clean run must not pick up a fabricated label from page furniture.
+    assert raw["html_threat_labels"] == []
+    assert "phishing" not in [str(t).lower() for t in raw.get("threatName") or []]
+
+
+def test_clean_run_with_only_informational_events_offers_no_malicious_reasons():
+    """
+    The end of the chain: with the label gone and the events reclassified, there
+    is nothing left to argue the sample was malicious.
+    """
+    result = {
+        "verdict": "clean",
+        "raw_summary": {
+            "verdict_text": "No threats detected",
+            "tags": [],
+            "threatName": [],
+            "behavior_counts": {"network_threats": 0, "network_informational_events": 3},
+            "behavior_details": {"network_threats": []},
+        },
+    }
+    assert svc._anyrun_concrete_sandbox_reasons(result) == []

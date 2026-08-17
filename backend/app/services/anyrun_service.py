@@ -64,10 +64,30 @@ _ANYRUN_CACHE_LOCK   = threading.Lock()
 _ANYRUN_RESULT_CACHE: dict[str, tuple[float, dict]] = {}  # key → (ts, result)
 _ANYRUN_CACHE_TTL    = 600  # seconds — 10 minutes
 
+# Words that may never be markers, because the marker test is a substring search
+# over ANY.RUN's whole HTML report — a full web application whose menus, filter
+# vocabularies, tag pickers and inline JS name every threat category it supports.
+# A generic word therefore matches on essentially every report, verdict or not.
+#
+# This has now bitten three times. "credential" and "tds" were removed after the
+# first two; "phishing" survived, and on this deployment it was scraped from 99
+# reports — 91 of them tasks where ANY.RUN said "No threats detected". It drove
+# clean sandbox runs to a malicious verdict at reputation_component 0.90.
+#
+# The list is enforced by a test, so removing a marker is not enough to keep it
+# from coming back.
+_GENERIC_LABEL_WORDS = frozenset(
+    {"phishing", "phish", "credential", "credentials", "tds", "malware", "suspicious",
+     "trojan", "malicious", "spam", "scam", "exploit", "stealer", "ransomware"}
+)
+
+# Every marker here must be distinctive enough that ANY.RUN's own interface does
+# not contain it incidentally. Measured against the stored corpus, each of these
+# produced zero false hits on clean runs; the generic words produced almost
+# nothing but false hits.
 _ANYRUN_HTML_THREAT_MARKERS: tuple[tuple[str, str], ...] = (
     ("clickfix", "clickfix"),
     ("clearfake", "clearfake"),
-    ("phishing", "phishing"),
     ("credential harvesting", "credential-harvesting"),
     ("credential theft", "credential-theft"),
     ("exploit-kit", "exploit-kit"),
@@ -784,12 +804,16 @@ def _lookup_intelligence(
                         dns_requests = _ensure_list(network.get("dnsRequests"))
                         http_requests = _ensure_list(network.get("httpRequests"))
                         connections = _ensure_list(network.get("connections"))
-                        network_threats = _ensure_list(network.get("threats"))
+                        network_threats, network_events = _split_network_threats(network.get("threats"))
                         behavior_details = {
                             "dns_requests": dns_requests[:200],
                             "http_requests": http_requests[:200],
                             "connections": connections[:200],
                             "network_threats": network_threats[:200],
+                            # Kept, but not as threats: informational Suricata
+                            # notes are context, and dropping them silently
+                            # would read as "nothing else happened".
+                            "network_informational_events": network_events[:200],
                             "processes": processes[:200],
                             "process_details": _extract_process_details(
                                 report_data,
@@ -1055,7 +1079,7 @@ def _run_sandbox(
         dns_requests = _ensure_list(network.get("dnsRequests"))
         http_requests = _ensure_list(network.get("httpRequests"))
         connections = _ensure_list(network.get("connections"))
-        network_threats = _ensure_list(network.get("threats"))
+        network_threats, network_events = _split_network_threats(network.get("threats"))
         ioc_items = _extract_iocs(ioc_report)
         ioc_types = [str(x.get("type") or "").lower() for x in ioc_items if isinstance(x, dict)]
         logger.debug(
@@ -1169,7 +1193,17 @@ def _run_sandbox(
                     "http_requests": len(http_requests) or _as_int(counters.get("httpRequests")),
                     "connections": len(connections) or _as_int(counters.get("connections")),
                     "dns_requests": len(dns_requests) or _as_int(counters.get("dnsRequests")),
-                    "network_threats": len(network_threats) or _as_int(counters.get("threats")),
+                    # No `or counters["threats"]` fallback here, unlike its
+                    # neighbours: that counter is ANY.RUN's unfiltered total, so
+                    # a task whose events are all informational would filter to
+                    # zero and then fall straight back to the raw count — the
+                    # exact number this filter exists to stop reporting.
+                    "network_threats": (
+                        len(network_threats)
+                        if (network_threats or network_events)
+                        else _as_int(counters.get("threats"))
+                    ),
+                    "network_informational_events": len(network_events),
                     "processes": len(processes) or _as_int(counters.get("processes")),
                 },
                 "behavior_details": {
@@ -1177,6 +1211,7 @@ def _run_sandbox(
                     "http_requests": http_requests[:200],
                     "connections": connections[:200],
                     "network_threats": network_threats[:200],
+                    "network_informational_events": network_events[:200],
                     "processes": processes[:200],
                     "process_details": process_details[:400],
                 },
@@ -1927,13 +1962,59 @@ def _extract_anyrun_screenshot_report_url(report_data: Any, html_report: Any) ->
     return None
 
 
+# Suricata rates every alert 1 (high), 2 (medium) or 3 (informational), and
+# ANY.RUN forwards all three tiers in one `network.threats` stream. The
+# informational tier is not a weaker threat — it is a note that ordinary traffic
+# happened: "INFO [ANY.RUN] Google Tag Manager analytics", classed literally
+# "Not Suspicious Traffic". It made up 1,498 of ~1,800 stored events here.
+#
+# Treating the whole stream as threats put Google Analytics under "Network
+# threats overview", and let three benign analytics beacons stand as the
+# corroborating evidence that turned a generic label into a malicious verdict.
+_BENIGN_THREAT_CLASSES = frozenset(
+    {
+        "not suspicious traffic",
+        "misc activity",
+        "generic protocol command decode",
+        "unknown traffic",
+    }
+)
+
+
+def _is_significant_network_threat(threat: Any) -> bool:
+    """
+    True when a Suricata event is a finding rather than a note about normal traffic.
+
+    Classification comes first because it is the field that actually carries
+    intent — priority is only consulted when the class is unknown, so a new
+    high-priority class we have never seen is kept rather than silently dropped.
+    """
+    if not isinstance(threat, dict):
+        return False
+    threat_class = str(threat.get("class") or threat.get("classification") or "").strip().lower()
+    if threat_class in _BENIGN_THREAT_CLASSES:
+        return False
+    priority = _as_int(threat.get("priority"))
+    message = str(threat.get("msg") or threat.get("message") or "").strip()
+    if priority >= 3 and (message.upper().startswith("INFO") or not threat_class):
+        return False
+    return True
+
+
+def _split_network_threats(threats: Any) -> tuple[list[Any], list[Any]]:
+    """Return (significant, informational) — never dropping either on the floor."""
+    items = _ensure_list(threats)
+    significant = [t for t in items if _is_significant_network_threat(t)]
+    informational = [t for t in items if not _is_significant_network_threat(t)]
+    return significant, informational
+
+
 def _extract_anyrun_html_threat_labels(html_report: Any) -> list[str]:
     if not isinstance(html_report, str) or not html_report:
         return []
     # The SDK JSON sometimes omits the chips visible in the ANY.RUN HTML report.
-    # Scan only for specific threat-family/behavior phrases. Generic words such as
-    # "credential" and "tds" occur in AnyRun's own UI/scripts and must not become
-    # threat labels merely because they exist somewhere in the HTML document.
+    # Scan only for specific threat-family/behavior phrases — see
+    # _GENERIC_LABEL_WORDS for why a generic word can never be one of them.
     compact = re.sub(r"[\s_]+", " ", html_report.casefold())
     out: list[str] = []
     seen: set[str] = set()
