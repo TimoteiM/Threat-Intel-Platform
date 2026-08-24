@@ -372,7 +372,22 @@ async def _create_alert_run(
             reuse_prior_investigations=request.reuse_prior_investigations,
             spawn_investigations=request.spawn_investigations,
         )
-        run.result_json = {**(run.result_json or {}), "task_id": task.id}
+        # The dispatch options are stored, not just the task id: if the worker
+        # dies mid-run the recovery sweeper has to re-queue this run exactly as
+        # it was first sent, and nothing else records what was asked for.
+        run.result_json = {
+            **(run.result_json or {}),
+            "task_id": task.id,
+            "dispatch_options": {
+                "requested_collectors": request.requested_collectors,
+                "max_indicators": request.max_indicators,
+                "run_ip_lookup": request.run_ip_lookup,
+                "run_ai": request.run_ai,
+                "include_raw_evidence": request.include_raw_evidence,
+                "reuse_prior_investigations": request.reuse_prior_investigations,
+                "spawn_investigations": request.spawn_investigations,
+            },
+        }
         await db.commit()
     except Exception as exc:
         run.status = "failed"

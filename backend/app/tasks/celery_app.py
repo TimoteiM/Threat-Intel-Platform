@@ -31,6 +31,15 @@ celery_app.conf.update(
     task_time_limit=120,           # Hard kill after 2 min
     task_soft_time_limit=90,       # Raise SoftTimeLimitExceeded after 90s
     task_acks_late=True,           # Ack after completion (not on receive)
+    # With acks_late a task killed mid-flight stays unacknowledged and Redis
+    # redelivers it once this expires. It must stay ABOVE the longest task's
+    # time limit (alert runs allow 1800s) or a still-running task gets handed to
+    # a second worker and the investigation runs twice. Stated here because the
+    # value was previously an inherited default nobody had chosen, and lowering
+    # it is the obvious-looking way to make recovery faster — it is not.
+    # Fast recovery is tasks.recover_stuck_alert_runs, which verifies liveness.
+    broker_transport_options={"visibility_timeout": 3600},
+    task_reject_on_worker_lost=True,
 
     # Performance
     # Use threads pool — prefork (billiard) fails on Windows with WinError 5/6
@@ -56,6 +65,14 @@ celery_app.conf.update(
             "task": "tasks.vt_collect_pending",
             "schedule": crontab(minute="*/15"),
         },
+        # A worker that dies mid-task leaves its run in `processing`. Redis will
+        # redeliver the message eventually, but not before the visibility
+        # timeout, which has to stay above the task's own 30-minute limit. This
+        # closes that gap to minutes instead of up to an hour.
+        "recover-stuck-alert-runs": {
+            "task": "tasks.recover_stuck_alert_runs",
+            "schedule": crontab(minute="*/3"),
+        },
     },
     timezone="UTC",
 )
@@ -68,6 +85,7 @@ celery_app.autodiscover_tasks([
     "app.tasks.batch_task",
     "app.tasks.email_investigation_task",
     "app.tasks.watchlist_task",
+    "app.tasks.alert_recovery_task",
     "app.tasks.alert_body_task",
     "app.tasks.alert_callback_task",
     "app.tasks.vt_pending_task",

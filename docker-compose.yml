@@ -36,6 +36,10 @@ services:
       context: ./backend
       dockerfile: ../docker/Dockerfile.api
     restart: unless-stopped
+    # A POST that waits for its report holds the connection for ~86s (p95 128s).
+    # With the default 10s grace period a restart cut those callers off; uvicorn
+    # drains in-flight requests on SIGTERM if it is given the time.
+    stop_grace_period: 330s
     ports:
       - "8000:8000"
     env_file: .env
@@ -72,6 +76,12 @@ services:
       context: ./backend
       dockerfile: ../docker/Dockerfile.worker
     restart: unless-stopped
+    # Celery stops warm on SIGTERM: it stops accepting work and finishes what it
+    # is already running. Docker's default grace period is 10s, and the median
+    # alert investigation takes 86s, so every deploy was SIGKILLing runs in
+    # flight and leaving them stuck in `processing`. Long enough for the p95
+    # (128s) with room; a run past this is caught by tasks.recover_stuck_alert_runs.
+    stop_grace_period: 300s
     shm_size: '2gb'
     env_file: .env
     environment:
