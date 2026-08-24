@@ -134,7 +134,9 @@ def lookup_anyrun(
     settings = get_settings()
     api_keys = _configured_anyrun_api_keys(settings)
     api_key = api_keys[0] if api_keys else ""
-    fallback_api_key = api_keys[1] if len(api_keys) > 1 else ""
+    # Rotated once per investigation, so consecutive runs that fall back do
+    # not both land on the same spare account.
+    fallback_api_keys = _fallback_keys_in_rotation(api_keys)
     sandbox_os = str(getattr(settings, "anyrun_sandbox_os", "windows") or "windows").strip().lower()
     privacy_type = str(getattr(settings, "anyrun_privacy_type", "owner") or "owner").strip().lower()
     timeout_url_domain = int(getattr(settings, "anyrun_timeout_url_domain_seconds", 45) or 45)
@@ -167,7 +169,7 @@ def lookup_anyrun(
         sandbox_result = _run_anyrun_sandbox_with_fallback(
             SandboxConnector,
             api_key=api_key,
-            fallback_api_key=fallback_api_key,
+            fallback_api_keys=fallback_api_keys,
             sandbox_os=sandbox_os,
             privacy_type=privacy_type,
             indicator=value,
@@ -239,7 +241,7 @@ def lookup_anyrun(
                     _run_anyrun_sandbox_with_fallback,
                     SandboxConnector,
                     api_key=api_key,
-                    fallback_api_key=fallback_api_key,
+                    fallback_api_keys=fallback_api_keys,
                     sandbox_os=sandbox_os,
                     privacy_type=privacy_type,
                     indicator=value,
@@ -312,7 +314,12 @@ def lookup_anyrun(
                     # Sandbox is primary, but conflicting clean lookup data means
                     # the analyst-facing verdict must explain whether concrete
                     # behavior supports the provider's task verdict.
-                    if (sandbox_result.get("raw_summary") or {}).get("api_key_slot") != "fallback":
+                    # Reconciliation compares this sandbox run against a TI
+                    # lookup made on the primary account. When the run came from
+                    # a spare account the two are not the same view, so it is
+                    # skipped. Asking a boolean rather than matching the slot
+                    # label, which now names *which* account ran.
+                    if not (sandbox_result.get("raw_summary") or {}).get("api_key_is_fallback"):
                         sandbox_result = _reconcile_anyrun_sandbox_lookup_verdict(sandbox_result, lookup_result)
                     raw = sandbox_result.get("raw_summary") or {}
                     sandbox_result["raw_summary"] = {
@@ -345,7 +352,7 @@ def lookup_anyrun(
                 # Hash sandbox (needs file bytes — wasn't run in parallel above)
                 hash_sandbox = _run_anyrun_sandbox_with_fallback(
                     SandboxConnector,
-                    api_key=api_key, fallback_api_key=fallback_api_key,
+                    api_key=api_key, fallback_api_keys=fallback_api_keys,
                     sandbox_os=sandbox_os, privacy_type=privacy_type,
                     indicator=value, indicator_type=indicator_type,
                     file_bytes=file_bytes, file_name=file_name,
@@ -426,7 +433,7 @@ def lookup_anyrun(
         _run_anyrun_sandbox_with_fallback(
             SandboxConnector,
             api_key=api_key,
-            fallback_api_key=fallback_api_key,
+            fallback_api_keys=fallback_api_keys,
             sandbox_os=sandbox_os,
             privacy_type=privacy_type,
             indicator=value,
@@ -487,7 +494,7 @@ def _run_anyrun_sandbox_with_fallback(
     sandbox_connector_cls: Any,
     *,
     api_key: str,
-    fallback_api_key: str,
+    fallback_api_keys: list[str],
     sandbox_os: str,
     privacy_type: str,
     indicator: str,
@@ -502,7 +509,7 @@ def _run_anyrun_sandbox_with_fallback(
     use_residential_proxy = bool(use_residential_proxy or normalized_proxy_country)
     cache_key    = (
         f"{indicator_type}:{indicator}:{sandbox_os}:{privacy_type}:"
-        f"{api_key}:{fallback_api_key}:{normalized_proxy_country}:{id(_run_sandbox)}"
+        f"{api_key}:{','.join(sorted(fallback_api_keys))}:{normalized_proxy_country}:{id(_run_sandbox)}"
     )
     gate_timeout = int(timeout_seconds or 60) + 120
     cache_enabled = getattr(_run_sandbox, "__module__", "") == __name__
@@ -532,30 +539,38 @@ def _run_anyrun_sandbox_with_fallback(
         sandbox_result["raw_summary"] = {
             **(raw if isinstance(raw, dict) else {}),
             "api_key_slot": "primary",
+            "api_key_is_fallback": False,
         }
-        if fallback_api_key and not sandbox_result.get("checked") and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error")):
-            fallback_result = _run_sandbox(
-                sandbox_connector_cls=sandbox_connector_cls,
-                api_key=fallback_api_key,
-                sandbox_os=sandbox_os,
-                privacy_type=privacy_type,
-                indicator=indicator,
-                indicator_type=indicator_type,
-                file_bytes=file_bytes,
-                file_name=file_name,
-                timeout_seconds=timeout_seconds,
-                use_residential_proxy=use_residential_proxy,
-                proxy_country=normalized_proxy_country,
-            )
-            raw = fallback_result.get("raw_summary") or {}
-            fallback_result["raw_summary"] = {
-                **(raw if isinstance(raw, dict) else {}),
-                "api_key_slot": "fallback",
-            }
-            if fallback_result.get("checked"):
+        if not sandbox_result.get("checked") and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error")):
+            for fallback_api_key in fallback_api_keys:
+                fallback_result = _run_sandbox(
+                    sandbox_connector_cls=sandbox_connector_cls,
+                    api_key=fallback_api_key,
+                    sandbox_os=sandbox_os,
+                    privacy_type=privacy_type,
+                    indicator=indicator,
+                    indicator_type=indicator_type,
+                    file_bytes=file_bytes,
+                    file_name=file_name,
+                    timeout_seconds=timeout_seconds,
+                    use_residential_proxy=use_residential_proxy,
+                    proxy_country=normalized_proxy_country,
+                )
+                raw = fallback_result.get("raw_summary") or {}
+                fallback_result["raw_summary"] = {
+                    **(raw if isinstance(raw, dict) else {}),
+                    "api_key_slot": _anyrun_key_scope(fallback_api_key),
+                    "api_key_is_fallback": True,
+                }
+                if fallback_result.get("checked"):
+                    return fallback_result
+                if _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
+                    # Spent too — merge its error in and try the next account.
+                    sandbox_result = _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
+                    continue
+                # A real failure, not an exhausted account: another key will
+                # fail the same way, so stop rather than burn the rest.
                 return fallback_result
-            if _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
-                return _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
         return sandbox_result
 
     # ── 2. Check out a key from the pool (blocks until one is free) ──────────
@@ -572,7 +587,9 @@ def _run_anyrun_sandbox_with_fallback(
         logger.warning("AnyRun key pool timeout (%ss) for %s — skipping sandbox", gate_timeout, indicator)
         return _error(indicator_type, "AnyRun sandbox gate timeout — no API key available", mode="sandbox")
 
-    key_label = "primary" if chosen_key == api_key else "fallback"
+    # Named per account: with three keys, "fallback" alone cannot tell you
+    # which one ran, and that is exactly what quota accounting needs.
+    key_label = "primary" if chosen_key == api_key else _anyrun_key_scope(chosen_key)
     logger.info("AnyRun checked out %s key for %s", key_label, indicator)
 
     try:
@@ -602,37 +619,46 @@ def _run_anyrun_sandbox_with_fallback(
         sandbox_result["raw_summary"] = {
             **(raw if isinstance(raw, dict) else {}),
             "api_key_slot": key_label,
+            "api_key_is_fallback": chosen_key != api_key,
         }
 
         if (
-            fallback_api_key
-            and chosen_key == api_key
+            chosen_key == api_key
             and not sandbox_result.get("checked")
             and _is_deferred_anyrun_sandbox_error(sandbox_result.get("error"))
         ):
-            logger.info("AnyRun retrying sandbox for %s using fallback key after deferred primary result", indicator)
-            fallback_result = _run_sandbox(
-                sandbox_connector_cls=sandbox_connector_cls,
-                api_key=fallback_api_key,
-                sandbox_os=sandbox_os,
-                privacy_type=privacy_type,
-                indicator=indicator,
-                indicator_type=indicator_type,
-                file_bytes=file_bytes,
-                file_name=file_name,
-                timeout_seconds=timeout_seconds,
-                use_residential_proxy=use_residential_proxy,
-                proxy_country=normalized_proxy_country,
-            )
-            raw = fallback_result.get("raw_summary") or {}
-            fallback_result["raw_summary"] = {
-                **(raw if isinstance(raw, dict) else {}),
-                "api_key_slot": "fallback",
-            }
-            if fallback_result.get("checked"):
+            for fallback_api_key in fallback_api_keys:
+                slot = _anyrun_key_scope(fallback_api_key)
+                logger.info(
+                    "AnyRun retrying sandbox for %s on %s after deferred primary result", indicator, slot
+                )
+                fallback_result = _run_sandbox(
+                    sandbox_connector_cls=sandbox_connector_cls,
+                    api_key=fallback_api_key,
+                    sandbox_os=sandbox_os,
+                    privacy_type=privacy_type,
+                    indicator=indicator,
+                    indicator_type=indicator_type,
+                    file_bytes=file_bytes,
+                    file_name=file_name,
+                    timeout_seconds=timeout_seconds,
+                    use_residential_proxy=use_residential_proxy,
+                    proxy_country=normalized_proxy_country,
+                )
+                raw = fallback_result.get("raw_summary") or {}
+                fallback_result["raw_summary"] = {
+                    **(raw if isinstance(raw, dict) else {}),
+                    "api_key_slot": slot,
+                    "api_key_is_fallback": True,
+                }
+                if fallback_result.get("checked"):
+                    sandbox_result = fallback_result
+                    break
+                if _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
+                    sandbox_result = _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
+                    continue
                 sandbox_result = fallback_result
-            elif _is_deferred_anyrun_sandbox_error(fallback_result.get("error")):
-                sandbox_result = _merge_deferred_sandbox_errors(sandbox_result, fallback_result)
+                break
 
         # ── 5. Cache successful results so waiting investigations get a hit ────
         if cache_enabled and sandbox_result.get("checked"):
@@ -646,17 +672,56 @@ def _run_anyrun_sandbox_with_fallback(
 
 
 def _configured_anyrun_api_keys(settings: Any) -> list[str]:
+    """
+    Every configured ANY.RUN account, primary first.
+
+    Order is the fallback order: index 0 is the account normally used, and the
+    rest are tried when it is exhausted or rate-limited. Duplicates are dropped
+    so pasting the same key twice cannot make one account look like two.
+    """
     seen: set[str] = set()
     keys: list[str] = []
     for raw in (
         getattr(settings, "anyrun_api_key", ""),
         getattr(settings, "anyrun_api_key_fallback", ""),
+        getattr(settings, "anyrun_api_key2", ""),
+        getattr(settings, "anyrun_api_key3", ""),
     ):
         key = str(raw or "").strip()
         if key and key not in seen:
             seen.add(key)
             keys.append(key)
     return keys
+
+
+# Which fallback account the next investigation should reach for first. The
+# request was explicit: when the primary is spent, alternate — one investigation
+# on key 2, the next on key 3 — rather than hammering one and leaving the other
+# idle until the first is also dead.
+#
+# Process-local. Under several Celery workers each keeps its own cursor, so the
+# split is even within a worker and only approximately even across them. That is
+# enough for spreading quota; it is not an accounting mechanism.
+_FALLBACK_CURSOR_LOCK = threading.Lock()
+_FALLBACK_CURSOR = {"next": 0}
+
+
+def _fallback_keys_in_rotation(api_keys: list[str]) -> list[str]:
+    """
+    The fallback accounts, rotated so consecutive investigations start on
+    different ones.
+
+    Returns the whole list rather than a single key: if the first choice is also
+    out of quota there is no reason to stop, and walking the remainder costs
+    nothing when the first one works.
+    """
+    fallbacks = api_keys[1:]
+    if len(fallbacks) < 2:
+        return fallbacks
+    with _FALLBACK_CURSOR_LOCK:
+        start = _FALLBACK_CURSOR["next"] % len(fallbacks)
+        _FALLBACK_CURSOR["next"] = (start + 1) % len(fallbacks)
+    return fallbacks[start:] + fallbacks[:start]
 
 
 def _anyrun_key_scope(api_key: str) -> str:
@@ -928,19 +993,30 @@ _SUBMISSION_GATE_LOCK = threading.Lock()
 _SUBMISSION_GATE_STATE: dict[str, Any] = {}
 
 
-def _submission_gate() -> threading.Semaphore:
-    """Built on first use, so the module imports without reading settings."""
+def _submission_gate(api_key: str = "") -> threading.Semaphore:
+    """
+    The slot semaphore for one ANY.RUN account.
+
+    Built on first use, so the module imports without reading settings.
+
+    Keyed by account, because the parallel-task cap is a property of the plan
+    behind a key, not of this process. A single shared gate would let a second
+    and third account buy quota without buying throughput — three keys would
+    still take turns through one slot.
+    """
     with _SUBMISSION_GATE_LOCK:
         limit = max(1, int(getattr(get_settings(), "anyrun_max_parallel_submissions", 1) or 1))
-        gate = _SUBMISSION_GATE_STATE.get("gate")
-        if gate is None or _SUBMISSION_GATE_STATE.get("limit") != limit:
+        slot = _anyrun_key_scope(api_key) if api_key else "default"
+        gate = _SUBMISSION_GATE_STATE.get(slot)
+        if gate is None or _SUBMISSION_GATE_STATE.get(f"{slot}:limit") != limit:
             gate = threading.Semaphore(limit)
-            _SUBMISSION_GATE_STATE.update({"gate": gate, "limit": limit})
+            _SUBMISSION_GATE_STATE[slot] = gate
+            _SUBMISSION_GATE_STATE[f"{slot}:limit"] = limit
         return gate
 
 
 @contextmanager
-def _serialised_submission(wait_seconds: int):
+def _serialised_submission(wait_seconds: int, api_key: str = ""):
     """
     Wait for the sandbox slot, but not forever.
 
@@ -951,7 +1027,7 @@ def _serialised_submission(wait_seconds: int):
     of the pipeline already knows how to handle: the lookup half of the result
     survives and the submission is retried later.
     """
-    gate = _submission_gate()
+    gate = _submission_gate(api_key)
     if not gate.acquire(timeout=max(1, wait_seconds)):
         yield False
         return
@@ -991,7 +1067,7 @@ def _run_sandbox(
         # would let the next task start while the first is still executing, which
         # is the collision this is here to prevent.
         queue_wait = int(getattr(get_settings(), "anyrun_submission_queue_wait_seconds", 600) or 600)
-        with _serialised_submission(queue_wait) as acquired, ExitStack() as stack:
+        with _serialised_submission(queue_wait, api_key) as acquired, ExitStack() as stack:
             if not acquired:
                 return _error(
                     indicator_type,

@@ -624,7 +624,11 @@ def test_lookup_anyrun_uses_fallback_key_when_primary_is_parallel_limited(monkey
     assert calls == ["ak-primary", "ak-fallback"]
     assert out["checked"] is True
     assert out["verdict"] == "malicious"
-    assert out["raw_summary"]["api_key_slot"] == "fallback"
+    # The label names the account rather than saying "fallback": with three
+    # keys configured, "fallback" cannot tell you which one spent quota.
+    assert out["raw_summary"]["api_key_slot"] == "key_2"
+    # Behaviour branches on this flag, never on the label.
+    assert out["raw_summary"]["api_key_is_fallback"] is True
 
 
 def test_lookup_anyrun_does_not_use_fallback_key_for_non_deferred_primary_error(monkeypatch):
@@ -1546,8 +1550,9 @@ def test_run_sandbox_defers_rather_than_queueing_forever(monkeypatch):
         def windows(api_key):
             raise AssertionError("no connector should be created without the slot")
 
-    # Occupy the only slot, then try to run a second task behind it.
-    with svc._serialised_submission(5) as acquired:
+    # Occupy the slot *of the account under test* — gates are per account, so
+    # holding a different one would prove nothing.
+    with svc._serialised_submission(5, "k") as acquired:
         assert acquired is True
         out = svc._run_sandbox(
             sandbox_connector_cls=_NeverReached,
@@ -1749,3 +1754,82 @@ def test_clean_run_with_only_informational_events_offers_no_malicious_reasons():
         },
     }
     assert svc._anyrun_concrete_sandbox_reasons(result) == []
+
+
+# ── Multiple ANY.RUN accounts ─────────────────────────────────────────────────
+
+def test_all_configured_keys_are_collected_in_fallback_order():
+    """Key2 and Key3 are accounts, not decoration — they must reach the service."""
+    class _Settings:
+        anyrun_api_key = "primary"
+        anyrun_api_key_fallback = ""
+        anyrun_api_key2 = "second"
+        anyrun_api_key3 = "third"
+
+    assert svc._configured_anyrun_api_keys(_Settings()) == ["primary", "second", "third"]
+
+
+def test_duplicate_keys_are_not_counted_twice():
+    """Pasting one key into two slots must not look like two accounts."""
+    class _Settings:
+        anyrun_api_key = "same"
+        anyrun_api_key_fallback = "same"
+        anyrun_api_key2 = "same"
+        anyrun_api_key3 = "other"
+
+    assert svc._configured_anyrun_api_keys(_Settings()) == ["same", "other"]
+
+
+def test_fallbacks_alternate_between_investigations():
+    """
+    One investigation on key 2, the next on key 3.
+
+    Without rotation every fallback lands on the same spare account, which burns
+    one quota while the other sits idle.
+    """
+    svc._FALLBACK_CURSOR["next"] = 0
+    keys = ["primary", "second", "third"]
+
+    first = svc._fallback_keys_in_rotation(keys)
+    second = svc._fallback_keys_in_rotation(keys)
+    third = svc._fallback_keys_in_rotation(keys)
+
+    assert first[0] == "second"
+    assert second[0] == "third"
+    assert third[0] == "second", "rotation must cycle, not walk off the end"
+    # Every account stays reachable — if the first choice is also spent, the
+    # rest of the list is still there to try.
+    for order in (first, second, third):
+        assert sorted(order) == ["second", "third"]
+
+
+def test_rotation_is_a_noop_with_a_single_fallback():
+    assert svc._fallback_keys_in_rotation(["primary", "only"]) == ["only"]
+    assert svc._fallback_keys_in_rotation(["primary"]) == []
+
+
+def test_each_account_gets_its_own_submission_slot(monkeypatch):
+    """
+    The parallel-task cap belongs to the plan behind a key, not to this process.
+
+    Sharing one gate across accounts would let extra keys add quota but no
+    throughput — three accounts still taking turns through a single slot.
+    """
+    class _Settings:
+        anyrun_api_key = "primary"
+        anyrun_api_key_fallback = ""
+        anyrun_api_key2 = "second"
+        anyrun_api_key3 = "third"
+        anyrun_max_parallel_submissions = 1
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    svc._SUBMISSION_GATE_STATE.clear()
+
+    # Holding the primary account's slot must not block a different account.
+    with svc._serialised_submission(5, "primary") as primary_held:
+        assert primary_held is True
+        with svc._serialised_submission(2, "second") as second_held:
+            assert second_held is True, "a second account was blocked by the first account's slot"
+        # ...but a second task on the *same* account still waits.
+        with svc._serialised_submission(1, "primary") as same_account:
+            assert same_account is False

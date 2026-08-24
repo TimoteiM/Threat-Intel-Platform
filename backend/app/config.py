@@ -65,7 +65,18 @@ class Settings(BaseSettings):
     brave_search_base_url: str = "https://api.search.brave.com/res/v1/web/search"
     brave_search_count: int = 10
     anyrun_api_key: str = ""
+    # Additional accounts, used in order once the one before it is exhausted or
+    # rate-limited. They are separate ANY.RUN accounts, so each carries its own
+    # quota and its own parallel-task allowance.
     anyrun_api_key_fallback: str = ""
+    anyrun_api_key2: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANYRUN_API_KEY2", "ANYRUN_API_KEY_2", "ANYRUN_API_KEY_FALLBACK2"),
+    )
+    anyrun_api_key3: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANYRUN_API_KEY3", "ANYRUN_API_KEY_3", "ANYRUN_API_KEY_FALLBACK3"),
+    )
     opencti_api_key: str = ""
     opencti_api_url: str = ""          # e.g. https://opencti.yourorg.com
     opencti_verify_ssl: bool = True    # set False for self-signed/internal certs

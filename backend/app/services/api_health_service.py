@@ -521,15 +521,18 @@ def _get_header_case_insensitive(headers: Any, key: str) -> str | None:
 
 
 def _configured_anyrun_api_keys(settings: Any) -> list[str]:
-    keys: list[str] = []
-    for raw in (
-        getattr(settings, "anyrun_api_key", ""),
-        getattr(settings, "anyrun_api_key_fallback", ""),
-    ):
-        value = str(raw or "").strip()
-        if value and value not in keys:
-            keys.append(value)
-    return keys
+    """
+    Delegate to the sandbox service, which owns the account list.
+
+    This was a second copy of that logic, and the copies drifted the moment a
+    third account was added: the service started using it while this page went
+    on reporting one key, so the quota you were burning was invisible on the
+    only screen built to show it. Imported lazily to keep the health page free
+    of the sandbox module's import cost at startup.
+    """
+    from app.services.anyrun_service import _configured_anyrun_api_keys as _keys
+
+    return _keys(settings)
 
 
 def _missing_required_parts(*, api_key: str, api_url: str) -> str | None:
