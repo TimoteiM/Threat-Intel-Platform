@@ -18,6 +18,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.services.abuseipdb_client import abuseipdb_get, configured_abuseipdb_api_keys
 from app.db.session import sync_engine
 from app.models.database import IPLookup
 
@@ -72,15 +73,18 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
     }
 
     # ── AbuseIPDB (verbose) ──
-    if not settings.abuseipdb_api_key:
+    if not configured_abuseipdb_api_keys(settings):
         result["errors"].append("AbuseIPDB API key not configured")
     else:
         try:
-            resp = requests.get(
-                "https://api.abuseipdb.com/api/v2/check",
-                headers={"Key": settings.abuseipdb_api_key, "Accept": "application/json"},
+            # Walks every configured key, so a key that has spent its daily
+            # 1,000 checks falls through to the spare rather than ending
+            # AbuseIPDB coverage until midnight UTC.
+            resp = abuseipdb_get(
+                "check",
                 params={"ipAddress": ip, "maxAgeInDays": 90, "verbose": ""},
                 timeout=timeout,
+                settings=settings,
             )
             resp.raise_for_status()
             data = resp.json().get("data", {})

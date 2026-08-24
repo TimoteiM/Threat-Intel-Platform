@@ -153,10 +153,33 @@ def _probe_virustotal() -> APIProviderHealth:
 
 
 def _probe_abuseipdb() -> APIProviderHealth:
-    settings = get_settings()
-    api_key = (settings.abuseipdb_api_key or "").strip()
-    if not api_key:
+    """
+    One card per configured AbuseIPDB key.
+
+    Each key is its own account with its own daily allowance, so a single
+    aggregate card would hide the thing worth knowing — which key is spent and
+    how much is left on the other.
+    """
+    from app.services.abuseipdb_client import configured_abuseipdb_api_keys
+
+    keys = configured_abuseipdb_api_keys()
+    if not keys:
         return _not_configured("abuseipdb", "AbuseIPDB")
+
+    entries = [
+        _probe_abuseipdb_key(api_key=api_key, index=index)
+        for index, api_key in enumerate(keys, start=1)
+    ]
+    primary = entries[0]
+    # Extra keys hang off the primary card, matching how AnyRun's are shown.
+    primary.details = entries[1:]
+    return primary
+
+
+def _probe_abuseipdb_key(*, api_key: str, index: int) -> APIProviderHealth:
+    label = "AbuseIPDB" if index == 1 else f"AbuseIPDB Key {index}"
+    provider = "abuseipdb" if index == 1 else f"abuseipdb_key_{index}"
+    usage = get_provider_usage("abuseipdb", scope=f"key_{index}")
 
     try:
         response = requests.get(
@@ -165,9 +188,9 @@ def _probe_abuseipdb() -> APIProviderHealth:
             params={"ipAddress": "8.8.8.8", "maxAgeInDays": 30},
             timeout=10,
         )
-        return _normalize_from_headers(
-            provider="abuseipdb",
-            display_name="AbuseIPDB",
+        health = _normalize_from_headers(
+            provider=provider,
+            display_name=label,
             response=response,
             remaining_keys=("x-ratelimit-remaining", "ratelimit-remaining"),
             limit_keys=("x-ratelimit-limit", "ratelimit-limit"),
@@ -175,9 +198,12 @@ def _probe_abuseipdb() -> APIProviderHealth:
             unit="credits/day",
             source="response_headers",
         )
+        health.requests_today = usage["requests_today"]
+        health.requests_this_month = usage["requests_this_month"]
+        return health
     except Exception as exc:
-        logger.warning("AbuseIPDB health probe failed: %s", exc)
-        return _unavailable("abuseipdb", "AbuseIPDB", str(exc))
+        logger.warning("AbuseIPDB key %s health probe failed: %s", index, exc)
+        return _unavailable(provider, label, str(exc))
 
 
 def _probe_urlscan() -> APIProviderHealth:
@@ -224,6 +250,7 @@ def _probe_anyrun_providers(*, settings: Any, configured_keys: list[str]) -> lis
                 index=index,
                 checked_at=checked_at,
                 usage=usage,
+                total_keys=len(configured_keys),
             )
         )
 
@@ -236,6 +263,7 @@ def _probe_anyrun_key(
     index: int,
     checked_at: datetime,
     usage: dict[str, int],
+    total_keys: int = 1,
 ) -> APIProviderHealth:
     label = "Primary" if index == 1 else ("Fallback" if index == 2 else f"Key {index}")
     display_name = f"AnyRun {label}"
@@ -315,12 +343,18 @@ def _probe_anyrun_key(
     threshold = None
     status = "configured"
     error = None
+    quota_scope = "per_key"
+    quota_shared_with = 0
 
     if team_api_total is not None and team_api_remaining is not None:
+        # A team pool. Every key on the team reports the same numbers, because
+        # it is the same balance — not three balances that happen to match.
         limit = team_api_total
         remaining = team_api_remaining
         threshold = max(limit * 0.1, 1)
         status = "low_quota" if remaining <= threshold else "healthy"
+        quota_scope = "shared_team"
+        quota_shared_with = max(0, total_keys - 1)
     elif personal_month_limit is not None:
         limit = personal_month_limit
         remaining = max(limit - usage["requests_this_month"], 0)
@@ -349,6 +383,9 @@ def _probe_anyrun_key(
         requests_this_month=usage["requests_this_month"],
         limit_period="month",
         error=error,
+        quota_scope=quota_scope,
+        quota_shared_with=quota_shared_with,
+        per_key_month_limit=personal_month_limit,
     )
 
 
@@ -513,8 +550,27 @@ def _find_datetime_header(headers: Any, keys: tuple[str, ...]) -> datetime | Non
 
 
 def _get_header_case_insensitive(headers: Any, key: str) -> str | None:
-    if isinstance(headers, dict):
-        for existing_key, value in headers.items():
+    """
+    Read one header regardless of case or container type.
+
+    The guard here used to be `isinstance(headers, dict)`. requests returns a
+    CaseInsensitiveDict, which is a MutableMapping and *not* a dict subclass, so
+    that test was false for every real response and this returned None every
+    time. Every provider reporting from response headers — VirusTotal,
+    AbuseIPDB, URLScan — showed "Telemetry unavailable" while the quota headers
+    were sitting in the response unread.
+    """
+    if headers is None:
+        return None
+    # CaseInsensitiveDict already does the matching; ask it first.
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(key)
+        if value is not None:
+            return str(value)
+    items = getattr(headers, "items", None)
+    if callable(items):
+        for existing_key, value in items():
             if str(existing_key).lower() == key.lower():
                 return str(value)
     return None

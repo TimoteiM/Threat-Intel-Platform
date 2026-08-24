@@ -31,6 +31,7 @@ from app.services.email_url_triage import triage_email_urls
 from app.collectors.vt_collector import VTCollector
 from app.collectors.visual_comparison import capture_screenshot
 from app.config import get_settings
+from app.services.abuseipdb_client import abuseipdb_get, configured_abuseipdb_api_keys
 from app.db.session import sync_engine
 from app.models.database import LookupCache
 from app.services.content_ml_service import classify_email_content_locally
@@ -676,16 +677,16 @@ def _vt_lookup(value: str, observable_type: str) -> dict[str, Any]:
 
 def _abuseipdb_lookup(ip: str) -> dict[str, Any]:
     settings = get_settings()
-    api_key = settings.abuseipdb_api_key
-    if not api_key:
+    if not configured_abuseipdb_api_keys(settings):
         return {"checked": False, "error": "ABUSEIPDB_API_KEY not configured"}
     try:
-        record_provider_request("abuseipdb")
-        resp = requests.get(
-            "https://api.abuseipdb.com/api/v2/check",
-            headers={"Key": api_key, "Accept": "application/json"},
+        # Falls through to the spare key when the first has spent its daily
+        # allowance; an email full of sender IPs is exactly what exhausts one.
+        resp = abuseipdb_get(
+            "check",
             params={"ipAddress": ip, "maxAgeInDays": 90, "verbose": ""},
             timeout=20,
+            settings=settings,
         )
         resp.raise_for_status()
         data = (resp.json() or {}).get("data") or {}

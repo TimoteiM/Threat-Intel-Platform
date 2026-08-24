@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-haiku-4-5-20251001"
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
+    # Second AbuseIPDB account, used when the first is out of daily checks.
+    abuseipdb_api_key2: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ABUSEIPDB_API_KEY2", "ABUSEIPDB_API_KEY_2", "ABUSEIPDB_API_KEY_FALLBACK"
+        ),
+    )
     phishtank_api_key: str = ""
     otx_api_key: str = Field(
         default="",

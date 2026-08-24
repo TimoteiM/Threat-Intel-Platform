@@ -1496,6 +1496,12 @@ class APIProviderHealth(BaseModel):
     requests_this_month: int = 0
     limit_period: Optional[str] = None
     error: Optional[str] = None
+    # Set when `remaining`/`limit` describe a pool this key shares with others
+    # rather than its own allowance. Without it, three keys on one team each
+    # report the same figure and read as three independent quotas.
+    quota_scope: Optional[str] = None          # "shared_team" | "per_key"
+    quota_shared_with: int = 0                 # other keys drawing on the same pool
+    per_key_month_limit: Optional[float] = None
     details: list["APIProviderHealth"] = Field(default_factory=list)
 
 

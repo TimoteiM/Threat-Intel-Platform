@@ -1151,6 +1151,12 @@ export interface APIProviderHealth {
   requests_this_month?: number;
   limit_period?: string | null;
   error?: string | null;
+  // "shared_team" means remaining/limit describe a pool this key shares with
+  // others, so the same figure appearing on several cards is one balance —
+  // not several that coincide.
+  quota_scope?: "shared_team" | "per_key" | null;
+  quota_shared_with?: number;
+  per_key_month_limit?: number | null;
   details?: APIProviderHealth[];
 }
 

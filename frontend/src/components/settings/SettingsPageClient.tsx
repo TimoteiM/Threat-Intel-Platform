@@ -30,7 +30,16 @@ const DENSITY_OPTIONS: Array<{ value: ListDensity; label: string }> = [
 
 function formatQuota(provider: APIProviderHealth): string {
   if (provider.limit != null && provider.remaining != null && provider.limit_period) {
-    return `${provider.remaining} / ${provider.limit} requests per ${provider.limit_period}`.trim();
+    // A shared pool must say so on every card that reports it. Three keys on one
+    // ANY.RUN team all read "959 / 1500", which looks like three quotas of 1500
+    // and is really one — the opposite of the conclusion you would draw.
+    const shared =
+      provider.quota_scope === "shared_team" && (provider.quota_shared_with ?? 0) > 0
+        ? ` (shared with ${provider.quota_shared_with} other key${
+            provider.quota_shared_with === 1 ? "" : "s"
+          })`
+        : "";
+    return `${provider.remaining} / ${provider.limit} requests per ${provider.limit_period}${shared}`.trim();
   }
   if (provider.remaining == null && provider.limit == null) {
     return provider.status === "configured" ? "Local usage only" : "Telemetry unavailable";
@@ -280,6 +289,12 @@ export default function SettingsPageClient() {
                     <InfoRow label="Last checked" value={formatDateTime(provider.last_checked_at)} />
                     <InfoRow label="Reset at" value={formatDateTime(provider.reset_at)} />
                     <InfoRow label="Limit period" value={provider.limit_period || "N/A"} />
+                    {provider.per_key_month_limit != null ? (
+                      <InfoRow
+                        label="This key's allowance"
+                        value={`${formatInteger(provider.per_key_month_limit)} / month`}
+                      />
+                    ) : null}
                     <InfoRow label="Source" value={provider.source || "N/A"} />
                   </div>
 
@@ -338,6 +353,12 @@ export default function SettingsPageClient() {
                               <InfoRow label="Requests today" value={formatInteger(detail.requests_today)} />
                               <InfoRow label="Requests this month" value={formatInteger(detail.requests_this_month)} />
                               <InfoRow label="Limit period" value={detail.limit_period || "N/A"} />
+                              {detail.per_key_month_limit != null ? (
+                                <InfoRow
+                                  label="This key's allowance"
+                                  value={`${formatInteger(detail.per_key_month_limit)} / month`}
+                                />
+                              ) : null}
                               <InfoRow label="Source" value={detail.source || "N/A"} />
                             </div>
                             {detail.error ? (

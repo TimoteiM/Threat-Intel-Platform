@@ -22,6 +22,7 @@ import requests
 
 from app.collectors.base import BaseCollector
 from app.config import get_settings
+from app.services.abuseipdb_client import abuseipdb_get
 from app.services.provider_usage_metrics import record_provider_request
 from app.models.schemas import (
     AbuseIPDBResult,
@@ -210,14 +211,21 @@ class ThreatFeedsCollector(BaseCollector):
         return ThreatFeedEvidence(meta=meta)
 
     def _query_abuseipdb(self, ip: str, api_key: str) -> AbuseIPDBResult | None:
-        """Check IP against AbuseIPDB."""
-        record_provider_request("abuseipdb")
-        resp = requests.get(
-            "https://api.abuseipdb.com/api/v2/check",
-            headers={"Key": api_key, "Accept": "application/json"},
+        """
+        Check IP against AbuseIPDB.
+
+        `api_key` is ignored in favour of the shared client, which walks every
+        configured key so a spent daily allowance falls through to the spare
+        instead of ending AbuseIPDB coverage for the day. The parameter stays
+        for the existing call sites and tests that pass it.
+        """
+        resp = abuseipdb_get(
+            "check",
             params={"ipAddress": ip, "maxAgeInDays": 90, "verbose": ""},
             timeout=self.timeout,
         )
+        if resp is None:
+            return None
         resp.raise_for_status()
         data = resp.json().get("data", {})
         if not data:
