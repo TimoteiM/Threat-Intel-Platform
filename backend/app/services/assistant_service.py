@@ -394,7 +394,15 @@ class AssistantService:
             escaped_token = token.replace("[", r"\[").replace("]", r"\]")
             restored = restored.replace(escaped_token, original)
             token_pattern = re.escape(token).replace(r"\[", r"\\?\[").replace(r"\]", r"\\?\]")
-            restored = re.sub(token_pattern, original, restored, flags=re.IGNORECASE)
+            # A function replacement, not the string itself. re.sub treats a
+            # string replacement as a *template* and parses backslash escapes in
+            # it — and the values being restored here are hostnames, paths and
+            # accounts. "POVGRP\dom29" carries \d, which is not a valid
+            # replacement escape, so re.sub raised
+            # "bad escape \d at position 6" and the whole AI narrative was lost
+            # for any alert mentioning a DOMAIN\user account or a Windows path.
+            # A callable returns the value verbatim and cannot be parsed at all.
+            restored = re.sub(token_pattern, lambda _match, value=original: value, restored, flags=re.IGNORECASE)
         return restored
 
     _INLINE_TOKEN_RE = re.compile(r"\\?\[(?P<prefix>[A-Z]+)_(?P<number>\d+)\\?\]", re.IGNORECASE)

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.opencti_hygiene import hygiene_note, is_hygiene_match
+
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
@@ -379,11 +381,18 @@ def _opencti_findings(opencti: dict[str, Any]) -> list[dict[str, Any]]:
     score = int(opencti.get("score") or 0)
     indicators = opencti.get("indicators") or []
     reports = opencti.get("reports") or []
-    severity = "high" if score >= 70 else ("medium" if indicators or reports else "low")
+    # A hygiene label is OpenCTI telling us this is warning-list infrastructure.
+    # Reported as context, never as severity — see opencti_hygiene.
+    hygiene = is_hygiene_match(opencti)
+    if hygiene:
+        severity = "info"
+    else:
+        severity = "high" if score >= 70 else ("medium" if indicators or reports else "low")
+    summary = hygiene_note(opencti) if hygiene else f"Known observable (score {score})"
     return [
         _finding(
             "OpenCTI", "opencti", "threat_intel", severity,
-            f"Known observable (score {score})",
+            summary,
             _clean({
                 "score": score,
                 "entity_type": opencti.get("observable_entity_type"),

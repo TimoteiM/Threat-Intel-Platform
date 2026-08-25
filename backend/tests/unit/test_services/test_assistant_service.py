@@ -397,3 +397,38 @@ async def test_list_sessions_searches_titles_and_entry_content() -> None:
     query_text = str(executed_query.compile(compile_kwargs={"literal_binds": False}))
     assert "assistant_sessions.title" in query_text
     assert "assistant_entries.raw_text" in query_text
+
+
+class _StubSession:
+    """_restore_tokens is pure string work — it never touches the database."""
+
+
+def test_restore_tokens_survives_windows_accounts_and_paths() -> None:
+    """
+    Restoring a value must never be parsed as a regex replacement template.
+
+    `re.sub` treats a string replacement as a template and interprets backslash
+    escapes inside it. The values restored here are hostnames, paths and
+    accounts, so a perfectly ordinary `DOMAIN\\user` carries `\\d` — not a valid
+    replacement escape — and re.sub raised "bad escape \\d at position 6". That
+    killed the whole AI narrative for any alert mentioning a Windows account or
+    file path, and the report fell back to the plain indicator summary.
+    """
+    service = AssistantService(_StubSession(), settings=_build_settings())
+
+    for original in (
+        r"POVGRP\dom29",          # the exact shape that broke it
+        r"C:\data\payload.exe",
+        r"CORP\svc-backup",
+        r"\\fileserver\share",
+        "plain-host-01",
+    ):
+        restored = service._restore_tokens("user [ACCOUNT_1] signed in", {"[ACCOUNT_1]": original})
+        assert restored == f"user {original} signed in", f"failed to restore {original!r}"
+
+
+def test_restore_tokens_handles_group_references_verbatim() -> None:
+    """A value containing \\1 or \\g<x> must come back as itself, not a backreference."""
+    service = AssistantService(_StubSession(), settings=_build_settings())
+    for original in (r"host\1name", r"a\g<0>b"):
+        assert service._restore_tokens("[HOST_1] failed", {"[HOST_1]": original}) == f"{original} failed"

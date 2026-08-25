@@ -38,6 +38,7 @@ from typing import Any, Callable, Iterable
 from app.collectors.registry import get_collector, get_collectors_for_type
 from app.config import get_settings
 from app.services.alert_body_ai_service import run_alert_body_ai_analysis
+from app.services.opencti_hygiene import is_hygiene_match
 from app.services.alert_indicator_summary_service import build_analysis_digest, build_indicator_summary
 from app.services.alert_finding_builder import build_indicator_findings
 from app.services.alert_ioc_extraction_service import (
@@ -972,7 +973,14 @@ def assess_indicator(
     if opencti and opencti.get("found"):
         score = int(opencti.get("score") or 0)
         indicators = opencti.get("indicators") or []
-        if score >= 70 or indicators:
+        if is_hygiene_match(opencti):
+            # OpenCTI matched this against a known-good warning list. Its score
+            # was the highest signal on the alert and decided the verdict, which
+            # is how Google DNS and the SHA-1 of an empty file were reported as
+            # malicious at 80. Contributing nothing leaves the decision to the
+            # collectors with actual evidence. See opencti_hygiene.
+            pass
+        elif score >= 70 or indicators:
             signals.append((max(65, min(90, score)), "opencti", f"OpenCTI knows this observable (score {score})"))
         else:
             signals.append((40, "opencti", f"OpenCTI knows this observable (score {score})"))

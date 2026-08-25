@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.opencti_hygiene import is_hygiene_match
+
 
 DEFAULT_WEIGHTS = {
     "lexical_score": 0.20,
@@ -178,6 +180,11 @@ def _infrastructure_score(evidence: dict[str, Any]) -> float:
 def _opencti_score(evidence: dict[str, Any]) -> float:
     best = 0.0
     for item in _opencti_items(evidence):
+        # A hygiene label means OpenCTI matched this against a known-good
+        # warning list. Scoring it anyway is how a public DNS resolver reached
+        # a malicious verdict — see opencti_hygiene.
+        if is_hygiene_match(item):
+            continue
         best = max(best, _single_opencti_score(item))
     return best
 
@@ -200,6 +207,11 @@ def _opencti_risk_floor(evidence: dict[str, Any]) -> int:
         if not item.get("found"):
             continue
         if _is_opencti_contextual_account_compromise(item):
+            continue
+        # Warning-list infrastructure must not get a risk floor. This one bites
+        # hardest: a floor of 70 forces suspicious regardless of what every
+        # other collector found.
+        if is_hygiene_match(item):
             continue
         score = int(item.get("score") or 0)
         richness = _opencti_richness(item)
