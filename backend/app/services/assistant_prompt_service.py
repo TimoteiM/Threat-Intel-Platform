@@ -51,6 +51,25 @@ Rules:
   cmd /c, or any script field, decode it and include the decoded plaintext in your analysis.
   Clearly label it as "Decoded payload:" followed by the actual decoded content in a code block.
   Do not just describe the encoding pattern. Always show what it decodes to.
+
+When there are no IPs, domains, hashes or URLs to pivot on:
+- Never decline, never return an empty or placeholder interpretation, and never say there is
+  nothing to analyse. An alert with no extractable indicator still carries a raw log line, a host,
+  a user, a file, a process and a signature name — that is what an analyst reads first, and it is
+  usually what decides the verdict. Absence of network or file indicators is a fact about the alert,
+  not a reason to stop.
+- Always state what triggered the alert, which asset, user or file was involved, what the raw log
+  actually shows happening, and an explicit verdict of benign, suspicious or malicious with the
+  reasoning behind it. "No indicators were extractable and the pattern matches known-benign
+  activity" is a complete and acceptable verdict; silence is not.
+- A generic or heuristic detection name — one containing "Generic", "Heur", "Suspicious", or a
+  vendor catch-all class — matched against a recognisable legitimate component such as an operating
+  system update, a known vendor installer or a signed system binary is a well-known false-positive
+  pattern. Say so directly and explain why the combination points that way, rather than treating the
+  detection name as evidence of compromise.
+- Activity entirely between private or internal addresses, with no external destination, materially
+  lowers the likelihood of exfiltration or command-and-control. State that as part of the assessment.
+  The absence of a public address is a finding about scope, never a reason to skip the alert.
 """
 
 

@@ -318,14 +318,15 @@ async def _create_alert_run(
     # Endpoint telemetry (Sysmon/EDR) is worth a run on its own: the process
     # behaviour is the evidence even when there is nothing to look up.
     endpoint_events = parse_endpoint_events(alert_body)
-    if extraction["investigable_total"] == 0 and not endpoint_events and not excluded_total:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Nothing to investigate: no URL, domain, IP or hash indicators and no "
-                "endpoint event fields were found in the alert body."
-            ),
-        )
+    # An alert with no extractable indicator is still an alert. It has a raw log
+    # line, a host, a user, a file, a signature name — everything an analyst
+    # reads first and most of what decides the verdict. This used to answer 422
+    # "nothing to investigate", which threw away every one of those: a generic
+    # AV detection on a signed OS binary, or a connection between two internal
+    # addresses, arrived as a refusal rather than an assessment.
+    #
+    # The only genuinely empty case — no payload at all — is already refused by
+    # _validated_alert_body above, which is where that check belongs.
 
     run = AlertBodyInvestigationRun(
         title=_run_title(request.title, alert_body),
@@ -983,8 +984,8 @@ async def _apply_exclusions(db: DBSession, extraction: dict[str, Any]) -> int:
 
     Doing this before the run is created is the whole point: an excluded value
     never reaches a collector, so the quota is saved rather than refunded.
-    `investigable_total` is what the pipeline and the 422 check both read, so it
-    has to reflect the exclusions too.
+    `investigable_total` is what the pipeline reads, so it has to reflect the
+    exclusions too.
     """
     indicators = extraction.get("indicators") or []
     if not indicators:
