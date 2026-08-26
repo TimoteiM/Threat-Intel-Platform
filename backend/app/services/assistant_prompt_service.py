@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.analyst.analysis_guidance import FULL_GUIDANCE
+
 import json
 from typing import Any
 
@@ -70,7 +72,7 @@ When there are no IPs, domains, hashes or URLs to pivot on:
 - Activity entirely between private or internal addresses, with no external destination, materially
   lowers the likelihood of exfiltration or command-and-control. State that as part of the assessment.
   The absence of a public address is a finding about scope, never a reason to skip the alert.
-"""
+""" + FULL_GUIDANCE
 
 
 INCIDENT_CORRELATION_SYSTEM_PROMPT = """You are a senior SOC analyst performing complex incident correlation.
@@ -105,7 +107,7 @@ Return a markdown report with these sections:
 - Affected Assets and Accounts
 - Root Cause
 - Remediation
-"""
+""" + FULL_GUIDANCE
 
 
 def build_alert_analysis_prompt(

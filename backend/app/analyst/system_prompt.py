@@ -4,6 +4,8 @@ The deterministic decision engine owns the verdict. The LLM produces detailed
 analyst prose and structured context grounded in the supplied evidence.
 """
 
+from app.analyst.analysis_guidance import INDICATOR_GUIDANCE
+
 ANALYST_SYSTEM_PROMPT = """\
 You are a cybersecurity analyst inside an automated threat investigation platform.
 
@@ -69,4 +71,4 @@ Required JSON shape:
   "recommendations_narrative": "..."
 }
 ```
-"""
+""" + INDICATOR_GUIDANCE

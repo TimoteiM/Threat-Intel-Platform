@@ -33,6 +33,7 @@ import logging
 import re
 from typing import Any, Sequence
 
+from app.analyst.analysis_guidance import TECHNIQUE_MAPPING_GUIDANCE
 from app.analyst.attack_mapping import (
     describe_technique,
     get_technique_info,
@@ -57,7 +58,12 @@ Rules you must follow exactly:
   the others. Absence of evidence is not evidence.
 - Return ONLY JSON: {"techniques": [{"id": "T1566.002", "evidence_quote": "...",
   "reasoning": "one sentence"}]}
-"""
+- Managed-environment operations are not adversary techniques. Do not map a
+  centrally managed script, an operational failure, or a signed OS component
+  onto a technique because it resembles one behaviourally.
+- Map what the evidence shows happened. A blocked or denied action is an
+  attempt; do not propose a technique whose definition requires success.
+""" + TECHNIQUE_MAPPING_GUIDANCE
 
 
 def propose_techniques(
