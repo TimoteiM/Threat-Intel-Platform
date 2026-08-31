@@ -202,23 +202,32 @@ genuinely the subject of the finding.
 """
 
 PUBLIC_IP_IDENTITY_CARD = """
-Present every public IP as an identity card, using the enrichment data:
+Never refer to a public IP by number alone. Every one carries either its
+identity card or a named role — a bare address with neither is not acceptable.
+
+Print the full card when the address's identity is itself part of the finding:
 
     {IP} (ISP: {isp}, Usage Type: {usage_type})
 
-Add Country when it matters: (ISP: ..., Usage Type: ..., Country: ...).
+Add Country when it matters: (ISP: ..., Usage Type: ..., Country: ...). That is
+the case when you are vouching for an address — a benign internal or managed
+egress you are telling the reader to accept — and when the ISP or usage type is
+the evidence for what you conclude.
 
-Then translate the usage type into plain language and let it name the address's
-role:
-- "Data Center/Web Hosting/Transit" on a known Tor node is a Tor exit; call it
-  a Tor IP address.
+Where the usage type resolves to a well-known role, name the role in prose
+instead of printing the card, provided the enrichment actually supports it:
+- "Data Center/Web Hosting/Transit" on a known Tor node, or an ISP that
+  identifies itself as Tor infrastructure, is a Tor exit.
 - "Content Delivery Network" is a CDN endpoint, usually benign infrastructure.
 - A corporate or education ISP matching the customer is the organisation's own
   managed egress.
 - A VPN provider range is VPN or proxy egress.
 
-Prefer that identity card to raw reputation statistics. Do not pad a sentence
-with "100% abuse confidence across 584 reports and 50 threat-pulse references";
+Do not infer a role the enrichment does not support; where it is absent or
+ambiguous, print the card and let the reader judge.
+
+Prefer either form to raw reputation statistics. Do not pad a sentence with
+"100% abuse confidence across 584 reports and 50 threat-pulse references";
 "associated with malicious activity" or "known Tor exit" carries the point. Cite
 a reputation figure only when it is the single decisive fact and no clearer
 descriptor exists.

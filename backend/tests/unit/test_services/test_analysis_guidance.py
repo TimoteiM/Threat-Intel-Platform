@@ -151,3 +151,20 @@ def test_alert_prompt_keeps_naming_the_process_that_drives_the_verdict():
     assert "name explicitly the one or two processes that actually drive the verdict" in flat
     # ...while everything else is reduced to a category.
     assert "reduce everything else to its category" in flat
+
+
+def test_public_ip_never_appears_without_identity_or_role():
+    """
+    The card is required where identity is the finding; a well-known role may
+    stand in for it. What is never allowed is a bare address with neither —
+    that was the gap the first version of this rule left open.
+    """
+    block = _flat(g.PUBLIC_IP_IDENTITY_CARD)
+    assert "never refer to a public ip by number alone" in block
+    assert "carries either its identity card or a named role" in block
+    # When to print the card in full.
+    assert "vouching for an address" in block
+    assert "isp or usage type is the evidence" in block
+    # When a role may stand in, and the limit on inferring one.
+    assert "name the role in prose instead of printing the card" in block
+    assert "do not infer a role the enrichment does not support" in block
