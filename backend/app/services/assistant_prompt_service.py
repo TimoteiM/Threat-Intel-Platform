@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.analyst.analysis_guidance import FULL_GUIDANCE
+from app.analyst.analysis_guidance import (
+    FULL_GUIDANCE,
+    WRITING_STYLE,
+    WRITING_STYLE_CORRELATION,
+)
 
 import json
 from typing import Any
@@ -32,9 +36,10 @@ Rules:
   affected/object filename, and the behavior that triggered the alert into the first two sentences.
   Prefer readable locations such as "the user's Downloads folder" or "a temporary .NET runtime directory"
   over repeating long full paths and command lines.
-- Name the executable explicitly; do not reduce a concrete process such as `example.exe` to generic
-  phrases like "an executable", "a binary", or "installer activity". When a file hash is available,
-  include it once in a short final sentence with its algorithm.
+- Name explicitly the one or two processes that actually drive the verdict — the RMM agent, the
+  script it ran, the binary that was detected. For those, never fall back on "an executable",
+  "a binary" or "installer activity" when you know the filename. Every other process in the
+  evidence is summarised by category rather than named; see the writing rules below.
 - The phrases must explain what happened, what the event likely means, whether there is or is not
   evidence of malicious activity, and whether the issue appears recurring if the evidence supports that.
 - Do not claim that activity is non-recurring or that no repeated execution occurred from a single event.
@@ -72,7 +77,7 @@ When there are no IPs, domains, hashes or URLs to pivot on:
 - Activity entirely between private or internal addresses, with no external destination, materially
   lowers the likelihood of exfiltration or command-and-control. State that as part of the assessment.
   The absence of a public address is a finding about scope, never a reason to skip the alert.
-""" + FULL_GUIDANCE
+""" + FULL_GUIDANCE + WRITING_STYLE
 
 
 INCIDENT_CORRELATION_SYSTEM_PROMPT = """You are a senior SOC analyst performing complex incident correlation.
@@ -107,7 +112,7 @@ Return a markdown report with these sections:
 - Affected Assets and Accounts
 - Root Cause
 - Remediation
-""" + FULL_GUIDANCE
+""" + FULL_GUIDANCE + WRITING_STYLE_CORRELATION
 
 
 def build_alert_analysis_prompt(

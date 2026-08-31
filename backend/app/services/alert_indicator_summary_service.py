@@ -159,6 +159,14 @@ def _describe(report: dict[str, Any]) -> dict[str, Any] | None:
             facts["sandbox"] = behaviour.get("summary")
             break
 
+    if kind in ("ip", "ipv4", "ipv6", "ip_address"):
+        card, identity_facts = _ip_identity(findings)
+        if card:
+            # First, so the address is introduced by what it is rather than by
+            # how many people have reported it.
+            parts.insert(0, card)
+            facts.update(identity_facts)
+
     feeds = [f for f in findings if f.get("collector") in ("threat_feeds", "intel", "opencti")]
     for feed in feeds[:2]:
         parts.append(str(feed.get("summary")))
@@ -202,6 +210,43 @@ def _label(kind: str, value: str) -> str:
     if kind == "hash":
         return f"{'SHA256' if len(value) == 64 else 'MD5' if len(value) == 32 else 'Hash'} {value[:16]}…"
     return f"{kind.upper()} {value}" if kind in ("ip", "url") else value
+
+
+def _ip_identity(findings: list[dict[str, Any]]) -> tuple[str | None, dict[str, Any]]:
+    """
+    The ISP / usage-type identity card for an IP, from AbuseIPDB's enrichment.
+
+    The reports the model writes are meant to introduce a public address by what
+    it *is* — "(ISP: ..., Usage Type: ...)", a Tor exit, a CDN endpoint — rather
+    than by its abuse statistics. That was impossible to honour: AbuseIPDB
+    carries isp, usage_type, country_code and is_tor in the finding's data, but
+    only the summary line reached the digest, and that line is nothing but
+    "Abuse confidence 100% from 584 report(s)" — precisely the statistic the
+    report is supposed to lead away from.
+    """
+    for finding in findings:
+        if str(finding.get("source") or "") != "AbuseIPDB":
+            continue
+        data = finding.get("data") or {}
+        isp = str(data.get("isp") or "").strip()
+        usage = str(data.get("usage_type") or "").strip()
+        country = str(data.get("country_code") or "").strip()
+        if not isp and not usage:
+            return None, {}
+
+        card = ", ".join(
+            part for part in (
+                f"ISP: {isp}" if isp else "",
+                f"Usage Type: {usage}" if usage else "",
+                f"Country: {country}" if country else "",
+            ) if part
+        )
+        facts = {"isp": isp or None, "usage_type": usage or None,
+                 "country_code": country or None, "is_tor": bool(data.get("is_tor")) or None}
+        if data.get("is_tor"):
+            return f"({card}) — known Tor exit", facts
+        return f"({card})", facts
+    return None, {}
 
 
 def _finding(findings: list[dict[str, Any]], collector: str, kind: str) -> dict[str, Any] | None:

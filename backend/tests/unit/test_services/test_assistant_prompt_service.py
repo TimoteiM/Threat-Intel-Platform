@@ -64,8 +64,14 @@ def test_alert_prompt_requires_endpoint_process_hash_and_attack_observables() ->
     assert "do not use bullets" in lowered
     assert "endpoint name" in lowered
     assert "executable/script filename" in lowered
-    assert "file hash is available" in lowered
-    assert "name the executable explicitly" in lowered
+    # The prompt used to require a hash in every report ("when a file hash is
+    # available, include it once...") and to name every concrete process. Both
+    # were replaced: a hash is now included only where it is the actionable IOC,
+    # and only the one or two processes that drive the verdict are named while
+    # the rest are summarised by category. Keeping the old assertions would hold
+    # the prompt to rules it deliberately no longer follows.
+    assert "only where it is the actionable ioc to block" in lowered
+    assert "name explicitly the one or two processes that actually drive the verdict" in lowered
     assert "do not claim that activity is non-recurring" in lowered
 
 

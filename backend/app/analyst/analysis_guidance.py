@@ -165,3 +165,124 @@ TECHNIQUE_MAPPING_GUIDANCE = _join(
     KNOWN_BENIGN_PATTERNS,
     ATTEMPTED_VS_SUCCESSFUL,
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Writing style. Derived from comparing this platform's output against
+# resolutions written by senior analysts: the reasoning was often right while
+# the prose read as an evidence dump. These rules are about what reaches the
+# page, not about what to conclude.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PROCESS_SUMMARIZATION = """
+Summarise processes; never enumerate them. When several processes appear, say
+what the cluster collectively represents rather than inventorying binaries. The
+reader wants to know what the activity is.
+
+Wrong: "autochk.exe, winlogon.exe, LogonUI.exe and spoolsv.exe launched, while
+services.exe started Notifier.exe and ds_monitor.exe, and reg.exe queried..."
+Right: "A cluster of standard Windows startup and service-initialisation
+processes ran, including antivirus and VMware Tools components, consistent with
+normal boot and servicing activity."
+
+Name the category the processes belong to — Windows startup/servicing, system
+maintenance, RMM or monitoring agent activity, .NET optimisation, normal RDP or
+user session initialisation — and name only the one or two processes that
+actually drive the verdict, such as the RMM agent and the script it ran. Reduce
+everything else to its category. Naming more than about three processes has
+almost certainly failed this rule.
+"""
+
+INTERNAL_IP_COLLAPSE = """
+Collapse private and internal addresses. Do not enumerate multiple RFC1918
+addresses (10.x, 172.16-31.x, 192.168.x). Refer to internal activity by host or
+by role — "internal share access", "the domain controller", "an internal
+source" — rather than listing each 10.x address. Internal IPs are scope context,
+not indicators to catalogue. Mention a single internal address only when it is
+genuinely the subject of the finding.
+"""
+
+PUBLIC_IP_IDENTITY_CARD = """
+Present every public IP as an identity card, using the enrichment data:
+
+    {IP} (ISP: {isp}, Usage Type: {usage_type})
+
+Add Country when it matters: (ISP: ..., Usage Type: ..., Country: ...).
+
+Then translate the usage type into plain language and let it name the address's
+role:
+- "Data Center/Web Hosting/Transit" on a known Tor node is a Tor exit; call it
+  a Tor IP address.
+- "Content Delivery Network" is a CDN endpoint, usually benign infrastructure.
+- A corporate or education ISP matching the customer is the organisation's own
+  managed egress.
+- A VPN provider range is VPN or proxy egress.
+
+Prefer that identity card to raw reputation statistics. Do not pad a sentence
+with "100% abuse confidence across 584 reports and 50 threat-pulse references";
+"associated with malicious activity" or "known Tor exit" carries the point. Cite
+a reputation figure only when it is the single decisive fact and no clearer
+descriptor exists.
+"""
+
+OUTCOME_OVER_REPUTATION = """
+Judge by outcome, not by the reputation of the source. A blocked, failed or
+denied sign-in from a malicious or Tor address is the security control working.
+The reading is attempted access, prevented, no compromise — not "malicious" as
+the headline verdict for the account. State what was attempted, that it was
+blocked and why (the error code, for instance 50053 or IdsLocked), and that no
+successful authentication or compromise was observed.
+
+Reserve a malicious verdict for the account or asset for evidence of a
+successful malicious action, not merely a hostile source that was stopped. When
+the outcome is blocked with no further access, close with a clean disposition —
+"No signs of account compromise were identified" — rather than a chain of "but
+these records do not by themselves show..." qualifiers.
+"""
+
+DROP_LOW_VALUE_DETAIL = """
+Leave out detail that does not change the verdict:
+- Full hash strings. Say a hash exists and whether it is clean or dirty. Include
+  the value itself only where it is the actionable IOC to block, or where the
+  report has an Indicators of Compromise section, which is where it belongs.
+- Translated source and destination IPs, 0.0.0.0 placeholders, firewall-origin
+  addresses and NAT artefacts.
+- Exact per-process timestamps and repeated near-identical event records.
+
+Explain the meaning instead: "routine certificate-revocation check", "normal for
+a domain controller already seen in this environment".
+"""
+
+LENGTH_TONE_AND_CLOSING = """
+Write tight, natural sentences, and aim for the shortest resolution that fully
+explains what happened and why. A clear case is often two to four sentences.
+
+Lead with the plain-language meaning of the activity, then the verdict, then a
+one-line disposition. Close cleanly: when a case is resolved, end with a short
+disposition — "No suspicious indicators were identified", "No further concerns
+remain", "The activity is benign" — not a trailing stack of hedges. Do not
+restate the same qualifier, such as "not successful access or confirmed
+compromise", more than once.
+"""
+
+
+# The full set, for a prompt that writes one short resolution.
+WRITING_STYLE = _join(
+    PROCESS_SUMMARIZATION,
+    INTERNAL_IP_COLLAPSE,
+    PUBLIC_IP_IDENTITY_CARD,
+    OUTCOME_OVER_REPUTATION,
+    DROP_LOW_VALUE_DETAIL,
+    LENGTH_TONE_AND_CLOSING,
+)
+
+# Correlation writes a multi-section incident report with its own Timeline and
+# Indicators of Compromise, so the length-and-closing rules — built around a
+# two-to-four-sentence resolution that ends on a disposition line — would fight
+# that structure. Everything about what reaches the page still applies.
+WRITING_STYLE_CORRELATION = _join(
+    PROCESS_SUMMARIZATION,
+    INTERNAL_IP_COLLAPSE,
+    PUBLIC_IP_IDENTITY_CARD,
+    OUTCOME_OVER_REPUTATION,
+    DROP_LOW_VALUE_DETAIL,
+)
