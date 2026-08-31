@@ -102,6 +102,17 @@ def run_alert_body_investigation_task(
         # The sender's own reference travels with the run, so their callback and
         # their ticket line up.
         payload["external_ref"] = (run.result_json or {}).get("external_ref")
+        # The pipeline builds a fresh payload, so anything recorded at ingest is
+        # otherwise lost the moment the run finishes. These say how much of a
+        # large log was actually scanned — exactly the facts a reader needs when
+        # the body runs to megabytes, and exactly the ones that vanished.
+        for carried in (
+            "alert_body_chars",
+            "analysed_body_chars",
+            "alert_body_truncated_for_analysis",
+        ):
+            if carried in (run.result_json or {}):
+                payload[carried] = (run.result_json or {})[carried]
         _update_run(
             parsed_id,
             status="completed",

@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, 
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from sqlalchemy.orm import defer
 from sqlalchemy import func, or_, select
 
 import redis as redis_lib
@@ -82,7 +83,11 @@ DEFAULT_WAIT_TIMEOUT_SECONDS = 300
 MIN_WAIT_TIMEOUT_SECONDS = 5
 MAX_WAIT_TIMEOUT_SECONDS = 900
 WAIT_POLL_SECONDS = 2
-MAX_ALERT_BODY_CHARS = 200_000
+# Extraction is linear at roughly six seconds per megabyte, so a very large body
+# is affordable in a background worker but not unbounded — a 100 MB paste would
+# hold a worker thread for ten minutes. Everything is stored and accepted; only
+# what is scanned for indicators is capped, and the run says when that happened.
+MAX_ANALYSED_ALERT_BODY_CHARS = 10_000_000
 
 
 @router.post("/extract")
@@ -100,7 +105,9 @@ async def extract_indicators(
     """
     request = _request_from_payload(payload, max_indicators=max_indicators)
     alert_body = _validated_alert_body(request.alert_body)
-    extraction = extract_alert_indicators(alert_body, max_indicators=request.max_indicators)
+    analysed_body = alert_body[:MAX_ANALYSED_ALERT_BODY_CHARS]
+    body_truncated_for_analysis = len(alert_body) > len(analysed_body)
+    extraction = extract_alert_indicators(analysed_body, max_indicators=request.max_indicators)
     excluded = await _apply_exclusions(db, extraction)
     await _attach_prior_investigations(db, extraction["indicators"])
     return {
@@ -312,12 +319,14 @@ async def _create_alert_run(
             logger.info("Alert ingest deduplicated onto run %s", existing.id)
             return _ingest_response(existing, deduplicated=True, deduplicated_by="alert_body")
 
-    extraction = extract_alert_indicators(alert_body, max_indicators=request.max_indicators)
+    analysed_body = alert_body[:MAX_ANALYSED_ALERT_BODY_CHARS]
+    body_truncated_for_analysis = len(alert_body) > len(analysed_body)
+    extraction = extract_alert_indicators(analysed_body, max_indicators=request.max_indicators)
     excluded_total = await _apply_exclusions(db, extraction)
     await _attach_prior_investigations(db, extraction["indicators"])
     # Endpoint telemetry (Sysmon/EDR) is worth a run on its own: the process
     # behaviour is the evidence even when there is nothing to look up.
-    endpoint_events = parse_endpoint_events(alert_body)
+    endpoint_events = parse_endpoint_events(analysed_body)
     # An alert with no extractable indicator is still an alert. It has a raw log
     # line, a host, a user, a file, a signature name — everything an analyst
     # reads first and most of what decides the verdict. This used to answer 422
@@ -344,6 +353,11 @@ async def _create_alert_run(
             "source": "alert_body",
             "status": "queued",
             "external_ref": external_ref,
+            # Said out loud rather than left to be inferred: an analyst reading
+            # a report on a 40 MB log needs to know which part of it was read.
+            "alert_body_chars": len(alert_body),
+            "analysed_body_chars": len(analysed_body),
+            "alert_body_truncated_for_analysis": body_truncated_for_analysis,
             "extraction": {
                 "counts": extraction["counts"],
                 "total": extraction["total"],
@@ -412,7 +426,10 @@ async def list_alert_investigations(
     search: str | None = Query(default=None),
     verdict: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    query = select(AlertBodyInvestigationRun)
+    # The body is deferred, not selected. _list_item never reads it, and now
+    # that any size is accepted a page of 25 rows would otherwise detoast 25
+    # arbitrarily large logs to render a list that shows none of them.
+    query = select(AlertBodyInvestigationRun).options(defer(AlertBodyInvestigationRun.alert_body))
     count_query = select(func.count(AlertBodyInvestigationRun.id))
 
     normalized_search = (search or "").strip()
@@ -883,11 +900,11 @@ def _validated_alert_body(value: str) -> str:
     alert_body = str(value or "").strip()
     if not alert_body:
         raise HTTPException(status_code=400, detail="Alert body cannot be empty.")
-    if len(alert_body) > MAX_ALERT_BODY_CHARS:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Alert body is too large (max {MAX_ALERT_BODY_CHARS} characters).",
-        )
+    # No size rejection. A large alert is still an alert, and a sender that gets
+    # 413 is left holding an event nothing will ever look at — the platform has
+    # no record of it and no way to say what it contained. Size is handled where
+    # it actually costs something: the analysis window below, which truncates
+    # and says so, and the list query, which no longer reads this column.
     return alert_body
 
 
