@@ -14,6 +14,8 @@ for what matching covers.
 
 from __future__ import annotations
 
+import json
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -22,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, or_, select
 
 from app.dependencies import DBSession
+from app.services.alert_field_service import SEVERITY_ONLY_FIELDS
 from app.models.database import Exclusion
 from app.models.schemas import ExclusionCheckRequest, ExclusionCreate, ExclusionUpdate
 from app.services.exclusion_service import (
@@ -132,6 +135,83 @@ async def create_exclusion(request: ExclusionCreate, db: DBSession) -> dict[str,
     return {**_serialize(row), "already_listed": False}
 
 
+@router.post("/alert", status_code=201)
+async def create_alert_exclusion(request: dict[str, Any], db: DBSession) -> dict[str, Any]:
+    """
+    Suppress a shape of alert, matched on its fields.
+
+    Every field must match for the suppression to apply, which is what keeps it
+    narrower than the rule: "1002 from this agent at Low" leaves the same rule
+    from another agent investigated.
+
+    Suppression removes the collector spend, not the record — the run is still
+    created and still counts towards correlation. An alert an analyst mutes as
+    routine is exactly the one that turns out to be step one of a chain, and a
+    dropped alert cannot be counted later.
+    """
+    fields = request.get("match_fields")
+    reason = str(request.get("reason") or "").strip()
+    if not isinstance(fields, dict) or not fields:
+        raise HTTPException(400, "match_fields must name at least one field to match on")
+    if not reason:
+        raise HTTPException(400, "reason is required — an unexplained suppression is how a real detection gets silenced for a year")
+
+    cleaned = {
+        str(key): str(value).strip()
+        for key, value in fields.items()
+        if str(value or "").strip()
+    }
+    if not cleaned:
+        raise HTTPException(400, "match_fields must name at least one field to match on")
+    if all(key in SEVERITY_ONLY_FIELDS for key in cleaned):
+        raise HTTPException(
+            400,
+            "A suppression cannot rest on severity alone. This deployment has alerts "
+            "arriving High that resolve benign, so the sender's severity is wrong in at "
+            "least one direction — add the rule or the agent.",
+        )
+
+    # A stable identity for the predicate, so re-submitting the same conditions
+    # updates that row instead of stacking duplicates that all match.
+    signature = json.dumps(dict(sorted(cleaned.items())), separators=(",", ":"))
+
+    existing = (
+        await db.execute(
+            select(Exclusion).where(
+                Exclusion.indicator_type == "alert",
+                Exclusion.normalized_value == signature,
+            )
+        )
+    ).scalars().first()
+
+    if existing is not None:
+        existing.active = True
+        existing.reason = reason
+        existing.match_fields = cleaned
+        existing.expires_at = _aware(request.get("expires_at"))
+        if request.get("added_by"):
+            existing.added_by = str(request["added_by"])[:255]
+        await db.commit()
+        await db.refresh(existing)
+        return {**_serialize(existing), "already_listed": True}
+
+    row = Exclusion(
+        indicator_type="alert",
+        value=", ".join(f"{k}={v}" for k, v in sorted(cleaned.items()))[:512],
+        normalized_value=signature[:512],
+        match_fields=cleaned,
+        reason=reason,
+        added_by=(str(request.get("added_by") or "").strip() or None),
+        match_subdomains=False,
+        expires_at=_aware(request.get("expires_at")),
+        active=True,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return {**_serialize(row), "already_listed": False}
+
+
 @router.post("/check")
 async def check_exclusions(request: ExclusionCheckRequest, db: DBSession) -> dict[str, Any]:
     """
@@ -216,6 +296,9 @@ def _serialize(row: Exclusion) -> dict[str, Any]:
         "reason": row.reason,
         "added_by": row.added_by,
         "match_subdomains": row.match_subdomains,
+        # Only alert exclusions carry it; the UI needs it to show what a
+        # suppression actually silences rather than an opaque signature.
+        "match_fields": row.match_fields,
         "active": row.active,
         "expired": bool(expires_at and expires_at <= datetime.now(timezone.utc)),
         "expires_at": expires_at.isoformat() if expires_at else None,

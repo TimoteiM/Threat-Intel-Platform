@@ -62,6 +62,12 @@ from app.services.exclusion_service import apply_to_indicators, load_matcher
 from app.services.alert_ioc_extraction_service import extract_alert_indicators
 from app.services.alert_payload_service import looks_like_siem_alert, normalize_alert_payload
 from app.services.alert_report_export_service import build_documents, investigation_ids_in
+from app.services.alert_field_service import (
+    SEVERITY_ONLY_FIELDS,
+    SUPPRESSIBLE_FIELDS,
+    entity_of,
+    extract_alert_fields,
+)
 from app.services.endpoint_event_service import parse_endpoint_events
 from app.services.indicator_history_service import (
     annotate_indicators,
@@ -321,8 +327,37 @@ async def _create_alert_run(
 
     analysed_body = alert_body[:MAX_ANALYSED_ALERT_BODY_CHARS]
     body_truncated_for_analysis = len(alert_body) > len(analysed_body)
+
+    # What the alert *is*, as opposed to what it contains. Two things read this:
+    # an `alert` exclusion matches on these fields, and correlation groups on
+    # the entity they yield.
+    alert_fields = extract_alert_fields(
+        analysed_body,
+        rule_id=(request.detection_rule_id or "").strip() or None,
+        rule_name=(request.detection_rule_name or "").strip() or None,
+    )
+    entity_host, entity_user = entity_of(alert_fields)
+
+    matcher = await load_matcher(db)
+    suppression = matcher.match_alert(alert_fields)
+
     extraction = extract_alert_indicators(analysed_body, max_indicators=request.max_indicators)
-    excluded_total = await _apply_exclusions(db, extraction)
+    excluded_total = await _apply_exclusions(db, extraction, matcher=matcher)
+
+    if suppression is not None:
+        # Suppression removes the spend, never the record. The run is still
+        # created, still carries its entity and timestamp, and still counts
+        # towards a correlation window — because the alert an analyst muted as
+        # routine is exactly the one that turns out to be step one of a chain,
+        # and a dropped alert cannot be counted later. The rule this silences
+        # produced 173 malicious verdicts alongside its noise.
+        logger.info(
+            "Alert matched suppression %s — recording without collector spend",
+            suppression.get("id"),
+        )
+        for indicator in extraction.get("indicators") or []:
+            indicator["investigable"] = False
+        extraction["investigable_total"] = 0
     await _attach_prior_investigations(db, extraction["indicators"])
     # Endpoint telemetry (Sysmon/EDR) is worth a run on its own: the process
     # behaviour is the evidence even when there is nothing to look up.
@@ -347,6 +382,8 @@ async def _create_alert_run(
         external_ref=external_ref,
         detection_rule_id=(request.detection_rule_id or "").strip()[:120] or None,
         detection_rule_name=(request.detection_rule_name or "").strip()[:512] or None,
+        entity_host=entity_host,
+        entity_user=entity_user,
         callback_url=callback_url,
         result_json={
             "schema_version": ALERT_REPORT_SCHEMA_VERSION,
@@ -355,6 +392,20 @@ async def _create_alert_run(
             "external_ref": external_ref,
             # Said out loud rather than left to be inferred: an analyst reading
             # a report on a 40 MB log needs to know which part of it was read.
+            # Recorded so a silenced alert is visible rather than merely absent.
+            # An exclusion nobody can see the effect of is how a real detection
+            # stays muted for a year.
+            "suppressed_by_exclusion": (
+                {
+                    "exclusion_id": str(suppression.get("id")),
+                    "reason": suppression.get("reason"),
+                    "match_fields": suppression.get("match_fields"),
+                }
+                if suppression is not None
+                else None
+            ),
+            "alert_fields": alert_fields,
+            "entity": {"host": entity_host, "user": entity_user},
             "alert_body_chars": len(alert_body),
             "analysed_body_chars": len(analysed_body),
             "alert_body_truncated_for_analysis": body_truncated_for_analysis,
@@ -463,6 +514,60 @@ async def list_alert_investigations(
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.get("/{run_id}/suppression-candidate")
+async def get_suppression_candidate(run_id: uuid.UUID, db: DBSession) -> dict[str, Any]:
+    """
+    The fields this alert could be suppressed on, and a proposed selection.
+
+    Suppression has to be narrower than the rule. Rule 1002 accounts for 68% of
+    this deployment's alerts and produced 173 malicious verdicts among them, so
+    "mute the rule" is both the obvious action and the wrong one. The proposal
+    therefore names the rule *and* the agent *and* the event shape — enough that
+    the same rule from another machine is still investigated.
+
+    Nothing is created here. The analyst sees exactly which conditions they are
+    about to commit to before anything is silenced.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+
+    stored = (run.result_json or {}).get("alert_fields")
+    fields = stored if isinstance(stored, dict) and stored else extract_alert_fields(
+        run.alert_body or "",
+        rule_id=run.detection_rule_id,
+        rule_name=run.detection_rule_name,
+    )
+
+    available = [
+        {
+            "field": name,
+            "value": fields[name],
+            # Severity is the sender's own opinion, and this deployment has
+            # alerts arriving High that resolve benign — so it is wrong in at
+            # least one direction. Offered, but never proposed on its own.
+            "severity_only": name in SEVERITY_ONLY_FIELDS,
+        }
+        for name in SUPPRESSIBLE_FIELDS
+        if fields.get(name)
+    ]
+
+    # The proposal: what the alert is, where it came from, and what kind of
+    # event it was. Identity before severity, and never severity alone.
+    preferred = [f for f in ("rule_id", "agent", "event_id", "event_name") if fields.get(f)]
+    if len(preferred) < 2:
+        preferred = [f["field"] for f in available if not f["severity_only"]][:3]
+
+    return {
+        "run_id": str(run.id),
+        "title": run.title,
+        "fields": available,
+        "proposed": {name: fields[name] for name in preferred if fields.get(name)},
+        "entity": {"host": run.entity_host, "user": run.entity_user},
+        "already_suppressed": bool((run.result_json or {}).get("suppressed_by_exclusion")),
     }
 
 
@@ -995,7 +1100,9 @@ async def _attach_prior_investigations(db: DBSession, indicators: list[dict[str,
     )
 
 
-async def _apply_exclusions(db: DBSession, extraction: dict[str, Any]) -> int:
+async def _apply_exclusions(
+    db: DBSession, extraction: dict[str, Any], *, matcher: Any | None = None
+) -> int:
     """
     Mark whitelisted indicators as not-to-be-investigated, and re-count.
 
@@ -1007,7 +1114,8 @@ async def _apply_exclusions(db: DBSession, extraction: dict[str, Any]) -> int:
     indicators = extraction.get("indicators") or []
     if not indicators:
         return 0
-    matcher = await load_matcher(db)
+    if matcher is None:
+        matcher = await load_matcher(db)
     excluded = apply_to_indicators(indicators, matcher)
     if excluded:
         extraction["investigable_total"] = sum(1 for item in indicators if item.get("investigable"))

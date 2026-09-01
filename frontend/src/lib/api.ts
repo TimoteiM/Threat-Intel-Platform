@@ -18,6 +18,7 @@ import type {
   Exclusion,
   FeedbackAccuracy,
   MismatchAlertsResponse,
+  SuppressionCandidate,
   TacticAlertsResponse,
 } from "./types";
 
@@ -769,6 +770,22 @@ export function getMismatchAlerts(params: {
   if (params.limit) qs.set("limit", String(params.limit));
   return request<MismatchAlertsResponse>(
     `/detections/attack-coverage/mismatch-alerts?${qs.toString()}`,
+  );
+}
+
+export function getSuppressionCandidate(runId: string) {
+  return request<SuppressionCandidate>(`/alert-investigations/${runId}/suppression-candidate`);
+}
+
+export function createAlertExclusion(data: {
+  match_fields: Record<string, string>;
+  reason: string;
+  added_by?: string;
+  expires_at?: string | null;
+}) {
+  return request<{ id: string; match_fields: Record<string, string>; already_listed: boolean }>(
+    "/exclusions/alert",
+    { method: "POST", body: JSON.stringify(data) },
   );
 }
 

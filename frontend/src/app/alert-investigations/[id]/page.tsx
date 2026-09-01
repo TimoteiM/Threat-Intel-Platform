@@ -12,8 +12,10 @@ import { MenuItem, OverflowMenu } from "@/components/ui/Primitives";
 import {
   alertInvestigationExportUrl,
   cancelAlertInvestigation,
+  createAlertExclusion,
   deleteAlertInvestigation,
   getAlertInvestigation,
+  getSuppressionCandidate,
   type AlertExportFormat,
 } from "@/lib/api";
 import type {
@@ -23,6 +25,7 @@ import type {
   AlertIndicatorReport,
   AlertInvestigationRun,
   AlertReport,
+  SuppressionCandidate,
 } from "@/lib/types";
 
 const ACTIVE_STATUSES = ["queued", "processing", "running"];
@@ -129,6 +132,9 @@ export default function AlertInvestigationDetailPage() {
 
   // Downloads come from the export endpoint, so the file an analyst saves is
   // byte-for-byte what another platform pulls from the API.
+  const [suppressOpen, setSuppressOpen] = useState(false);
+  const [suppressNote, setSuppressNote] = useState<string | null>(null);
+
   const handleDownload = (format: AlertExportFormat = "reports") => {
     const link = document.createElement("a");
     link.href = alertInvestigationExportUrl(runId, { format });
@@ -204,6 +210,28 @@ export default function AlertInvestigationDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
+      {suppressOpen && (
+        <SuppressDialog
+          runId={runId}
+          onClose={() => setSuppressOpen(false)}
+          onDone={(message) => {
+            setSuppressNote(message);
+            setSuppressOpen(false);
+          }}
+        />
+      )}
+      {suppressNote && (
+        <div
+          role="status"
+          style={{
+            padding: "10px 14px", borderRadius: 10, fontSize: 12,
+            border: "1px solid rgba(52, 211, 153, 0.35)",
+            background: "rgba(52, 211, 153, 0.08)", color: "var(--text)",
+          }}
+        >
+          {suppressNote}
+        </div>
+      )}
       <PageHero
         title={run.title}
         description={
@@ -264,6 +292,13 @@ export default function AlertInvestigationDetailPage() {
                 Preview report
               </button>
             )}
+            <button
+              onClick={() => setSuppressOpen(true)}
+              title="Stop spending collectors on this shape of alert. The run is still recorded and still counts towards correlation — only the lookups are skipped."
+              style={{ ...secondaryButtonStyle, borderColor: "var(--status-warning)", color: "var(--status-warning)" }}
+            >
+              Suppress
+            </button>
             <OverflowMenu label="Export and run actions">
               {(close) => (
                 <>
@@ -915,3 +950,187 @@ const typeBadgeStyle: React.CSSProperties = {
   color: "#818cf8",
   fontFamily: "var(--font-mono)",
 };
+
+/* ─── Suppressing a shape of alert ─── */
+
+/**
+ * Suppression has to be narrower than the rule.
+ *
+ * One Wazuh rule accounts for most of this deployment's alerts and produced 173
+ * malicious verdicts among them, so "mute the rule" is both the obvious action
+ * and the wrong one. The dialog opens on a proposal that names the rule *and*
+ * the agent *and* the event shape, and shows every condition before anything is
+ * silenced — an analyst commits to a predicate they can read, not a checkbox.
+ */
+function SuppressDialog({
+  runId,
+  onClose,
+  onDone,
+}: {
+  runId: string;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [candidate, setCandidate] = useState<SuppressionCandidate | null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSuppressionCandidate(runId)
+      .then((data) => {
+        if (cancelled) return;
+        setCandidate(data);
+        setSelected(Object.fromEntries(data.fields.map((f) => [f.field, f.field in data.proposed])));
+      })
+      .catch((e: any) => !cancelled && setError(e?.message || "Could not read this alert's fields"));
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  const chosen = (candidate?.fields || []).filter((f) => selected[f.field]);
+  const severityOnly = chosen.length > 0 && chosen.every((f) => f.severity_only);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await createAlertExclusion({
+        match_fields: Object.fromEntries(chosen.map((f) => [f.field, f.value])),
+        reason: reason.trim(),
+        added_by: "ui",
+      });
+      onDone(
+        result.already_listed
+          ? "That suppression already existed — it has been updated."
+          : `Suppressed. Alerts matching all ${chosen.length} condition(s) will be recorded without collector spend.`,
+      );
+    } catch (e: any) {
+      setError(e?.message || "Could not create the suppression");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Suppress this shape of alert"
+      style={{
+        position: "fixed", inset: 0, zIndex: 60, display: "grid", placeItems: "center",
+        background: "rgba(2, 6, 23, 0.62)", padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          width: "min(640px, 100%)", maxHeight: "84vh", overflowY: "auto",
+          background: "var(--panel-card-bg)", border: "1px solid var(--panel-divider-strong)",
+          borderRadius: 14, padding: 20, display: "grid", gap: 14,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0, fontSize: 15, color: "var(--text)" }}>Suppress this shape of alert</h2>
+          <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.55 }}>
+            Every condition below must match for an alert to be suppressed, so the same rule from a
+            different agent keeps being investigated. Suppressed alerts are still recorded — with
+            their entity and timing — so they still count towards correlation. Only the collector
+            spend is skipped.
+          </p>
+        </div>
+
+        {error && <div style={{ fontSize: 12, color: "var(--status-danger)" }}>{error}</div>}
+        {!candidate && !error && (
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Reading this alert…</div>
+        )}
+
+        {candidate?.already_suppressed && (
+          <div style={{ fontSize: 12, color: "var(--status-warning)" }}>
+            This alert already matched a suppression when it arrived.
+          </div>
+        )}
+
+        {candidate && (
+          <>
+            <div style={{ display: "grid", gap: 6 }}>
+              {candidate.fields.map((f) => (
+                <label
+                  key={f.field}
+                  style={{
+                    display: "flex", alignItems: "baseline", gap: 10, fontSize: 12,
+                    color: "var(--text)", cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!selected[f.field]}
+                    onChange={(e) => setSelected({ ...selected, [f.field]: e.target.checked })}
+                  />
+                  <span style={{ minWidth: 128, color: "var(--text-muted)" }}>{f.field}</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{f.value}</span>
+                  {f.severity_only && (
+                    <span
+                      title="The sender's own severity. Alerts arrive here marked High that resolve benign, so it is wrong in at least one direction — never suppress on this alone."
+                      style={{ color: "var(--status-warning)", fontSize: 10 }}
+                    >
+                      sender's severity
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+
+            {severityOnly && (
+              <div style={{ fontSize: 12, color: "var(--status-warning)", lineHeight: 1.5 }}>
+                Those are all the sender's own severity. Alerts arrive here marked High that resolve
+                benign, so severity is wrong in at least one direction — add the rule or the agent.
+              </div>
+            )}
+
+            <label style={{ display: "grid", gap: 5, fontSize: 12, color: "var(--text-muted)" }}>
+              Why is this safe to skip?
+              <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+                placeholder="e.g. Routine appsec-agent status heartbeat, no security value"
+                style={{
+                  padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)",
+                  background: "var(--bg-input)", color: "var(--text)", fontSize: 12, resize: "vertical",
+                }}
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={secondaryButtonStyle}>Cancel</button>
+              <button
+                onClick={save}
+                disabled={saving || chosen.length === 0 || !reason.trim() || severityOnly}
+                title={
+                  chosen.length === 0 ? "Select at least one condition"
+                    : !reason.trim() ? "A reason is required — an unexplained suppression is how a real detection gets silenced for a year"
+                    : severityOnly ? "Add the rule or the agent"
+                    : `Suppress alerts matching all ${chosen.length} condition(s)`
+                }
+                style={{
+                  ...secondaryButtonStyle,
+                  borderColor: "var(--status-warning)",
+                  color: "var(--status-warning)",
+                  opacity: saving || chosen.length === 0 || !reason.trim() || severityOnly ? 0.5 : 1,
+                }}
+              >
+                {saving ? "Suppressing…" : `Suppress (${chosen.length} condition${chosen.length === 1 ? "" : "s"})`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+

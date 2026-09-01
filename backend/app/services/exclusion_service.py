@@ -135,10 +135,22 @@ class ExclusionMatcher:
         self._networks: list[tuple[Any, dict[str, Any]]] = []
         self._urls: dict[str, dict[str, Any]] = {}
         self._hashes: dict[str, dict[str, Any]] = {}
+        # Alert exclusions are predicates, not values, so they cannot be indexed
+        # by a lookup key. The list is walked instead — it is analyst-authored
+        # and stays small, and it is consulted once per alert rather than once
+        # per indicator.
+        self._alerts: list[dict[str, Any]] = []
 
         for row in rows:
             entry = _as_dict(row)
             kind = str(entry.get("indicator_type") or "")
+            if kind == "alert":
+                # Checked first: an alert exclusion is a set of field
+                # conditions and carries no single value to key on, so the
+                # emptiness guard below would drop every one of them.
+                if isinstance(entry.get("match_fields"), dict) and entry["match_fields"]:
+                    self._alerts.append(entry)
+                continue
             value = str(entry.get("normalized_value") or "")
             if not value:
                 continue
@@ -162,10 +174,47 @@ class ExclusionMatcher:
     def __bool__(self) -> bool:
         return bool(
             self._domains or self._ips or self._networks or self._urls or self._hashes
+            or self._alerts
         )
 
     def __len__(self) -> int:
-        return len(self._domains) + len(self._ips) + len(self._networks) + len(self._urls) + len(self._hashes)
+        return (
+            len(self._domains) + len(self._ips) + len(self._networks)
+            + len(self._urls) + len(self._hashes) + len(self._alerts)
+        )
+
+    def match_alert(self, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        The first exclusion whose every field matches this alert, if any.
+
+        Every condition must hold. A partial match is not a match: an exclusion
+        written as "rule 1002 AND this agent AND Low" exists precisely so the
+        same rule from a different agent is still investigated, and honouring
+        only part of it would silence exactly what the analyst kept.
+
+        Comparison is case-insensitive on trimmed strings, because a rule id
+        arrives as "1002" or 1002 and an agent name's case is not a decision
+        anybody made.
+        """
+        if not self._alerts:
+            return None
+
+        present = {
+            key: str(value).strip().casefold()
+            for key, value in (fields or {}).items()
+            if value is not None and str(value).strip()
+        }
+        for entry in self._alerts:
+            conditions = entry.get("match_fields") or {}
+            if not conditions:
+                continue
+            if all(
+                present.get(str(key)) == str(want).strip().casefold()
+                for key, want in conditions.items()
+                if str(want).strip()
+            ):
+                return entry
+        return None
 
     def match(self, indicator_type: str, value: str) -> dict[str, Any] | None:
         """The exclusion covering this indicator, or None."""
@@ -234,6 +283,11 @@ def _as_dict(row: Exclusion | dict[str, Any]) -> dict[str, Any]:
         "reason": row.reason,
         "added_by": row.added_by,
         "match_subdomains": row.match_subdomains,
+        # Without this an alert exclusion reaches the matcher with no predicate
+        # and is dropped at construction — the row exists, the UI shows it, and
+        # it silences nothing. This adapter names its fields explicitly, so a
+        # new column is invisible here until it is added.
+        "match_fields": row.match_fields,
     }
 
 

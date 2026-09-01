@@ -2089,3 +2089,20 @@ export interface MismatchAlertsResponse {
     };
   }>;
 }
+
+
+/** The fields an investigated alert could be suppressed on. */
+export interface SuppressionCandidate {
+  run_id: string;
+  title: string;
+  fields: Array<{
+    field: string;
+    value: string;
+    /** The sender's own severity — never a suppression on its own. */
+    severity_only: boolean;
+  }>;
+  /** Pre-selected: narrow enough that the same rule elsewhere is still investigated. */
+  proposed: Record<string, string>;
+  entity: { host: string | null; user: string | null };
+  already_suppressed: boolean;
+}

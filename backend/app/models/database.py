@@ -336,6 +336,11 @@ class Exclusion(Base):
     added_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # A domain exclusion normally covers its subdomains; an IP one may be a CIDR.
     match_subdomains: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # `alert` exclusions only. Field name → value, all of which must match, so an
+    # analyst can silence one noisy shape ("rule 1002, this agent, Low") without
+    # silencing a rule that also produced real detections. A single
+    # normalized_value cannot express that, which is why this exists.
+    match_fields: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Optional review date — a temporary exclusion that stops applying by itself
     # is safer than one somebody has to remember to remove.
@@ -593,6 +598,14 @@ class AlertBodyInvestigationRun(Base):
     # producing them, which is what detection-quality reporting groups by.
     detection_rule_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     detection_rule_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # Who the alert is about. An attack chain is (entity, time window, tactics),
+    # and nothing here previously identified the device or the account — so no
+    # query could ask what else happened on that machine in the last 24 hours.
+    # Written at ingest from the alert body; null when the alert names neither,
+    # or when it was forwarded by the manager rather than seen on an endpoint.
+    entity_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    entity_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # The parts of result_json the rollups read, lifted out at write time.
     # Detection quality, ATT&CK coverage and the cost dashboard each scan every
