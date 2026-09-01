@@ -1556,7 +1556,23 @@ export interface AttackCoverageResponse {
   runs_assessed: number;
   techniques_seen: number;
   techniques: AttackCoverageTechnique[];
-  tactics: Array<{ tactic: string; techniques: number; claimed: number; confirmed: number; observed: number }>;
+  tactics: Array<{
+    tactic: string;
+    techniques: number;
+    claimed: number;
+    confirmed: number;
+    observed: number;
+    uncorroborated: number;
+    ai_suggested: number;
+    /** Distinct techniques under this tactic with at least one confirmation. */
+    confirmed_techniques: number;
+    /** Distinct techniques the AI proposed that no rule claimed. */
+    ai_suggested_techniques: number;
+  }>;
+  /** Evidence independently bore out what a rule claimed. */
+  confirmed_techniques: AttackCoverageTechnique[];
+  /** Proposed by the AI, claimed by no rule. */
+  ai_suggested_techniques: AttackCoverageTechnique[];
   /** Claimed by a rule, never once corroborated by evidence. */
   unvalidated_mappings: AttackCoverageTechnique[];
   /** Seen in evidence, never claimed by any detection. */

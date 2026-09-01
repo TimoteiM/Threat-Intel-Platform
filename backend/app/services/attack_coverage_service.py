@@ -91,6 +91,12 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
         "techniques_seen": len(techniques),
         "techniques": techniques,
         "tactics": _by_tactic(techniques),
+        # Confirmed: the evidence independently bore out what a rule claimed.
+        "confirmed_techniques": [row for row in techniques if row["confirmed"]],
+        # Found by the AI and claimed by no rule — the techniques a detection
+        # author has not thought of yet, which is a different question from a
+        # rule that was wrong.
+        "ai_suggested_techniques": [row for row in techniques if row["ai_suggested"]],
         "unvalidated_mappings": [
             row for row in techniques if row["claimed"] and not row["confirmed"]
         ],
@@ -246,7 +252,15 @@ def _by_tactic(techniques: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts deliberately do not sum to the technique total.
     """
     grouped: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"techniques": 0, "claimed": 0, "confirmed": 0, "observed": 0}
+        lambda: {
+            "techniques": 0, "claimed": 0, "confirmed": 0, "observed": 0,
+            # Carried so the page can filter tactics by the same lenses it
+            # offers for techniques. Without these a tactic row cannot say
+            # whether anything under it was ever confirmed, or whether the AI
+            # is the only reason it appears at all.
+            "uncorroborated": 0, "ai_suggested": 0,
+            "confirmed_techniques": 0, "ai_suggested_techniques": 0,
+        }
     )
     for row in techniques:
         for tactic in row["tactics"]:
@@ -255,6 +269,15 @@ def _by_tactic(techniques: list[dict[str, Any]]) -> list[dict[str, Any]]:
             bucket["claimed"] += row["claimed"]
             bucket["confirmed"] += row["confirmed"]
             bucket["observed"] += row["observed"]
+            bucket["uncorroborated"] += row["uncorroborated"]
+            bucket["ai_suggested"] += row["ai_suggested"]
+            # Distinct techniques, not occurrences: "3 confirmed techniques" is
+            # what an analyst reads a tactic row for, and one technique
+            # confirmed 40 times is not three.
+            if row["confirmed"]:
+                bucket["confirmed_techniques"] += 1
+            if row["ai_suggested"]:
+                bucket["ai_suggested_techniques"] += 1
     return [{"tactic": tactic, **counts} for tactic, counts in sorted(grouped.items())]
 
 

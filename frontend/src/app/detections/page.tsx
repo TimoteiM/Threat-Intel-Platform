@@ -249,7 +249,27 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
 
 /* ─── ATT&CK coverage ─── */
 
+/*
+ * Which question the tab is answering.
+ *
+ * The page previously showed only the two gap views — claimed-but-never-confirmed
+ * and observed-but-never-claimed — so there was no way to ask the two questions
+ * an analyst actually starts with: what has the evidence actually borne out, and
+ * what is the AI finding that no rule claims. Both were already in the payload;
+ * neither had a surface.
+ */
+type AttackLens = "all" | "confirmed" | "ai" | "gaps";
+
+const ATTACK_LENSES: Array<{ id: AttackLens; label: string; hint: string }> = [
+  { id: "all", label: "Everything", hint: "Every technique seen in this window" },
+  { id: "confirmed", label: "Confirmed", hint: "Evidence bore out what a rule claimed" },
+  { id: "ai", label: "AI-found", hint: "Proposed by AI analysis, claimed by no rule" },
+  { id: "gaps", label: "Gaps", hint: "Unvalidated mappings and undetected behaviour" },
+];
+
 function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: number }) {
+  const [lens, setLens] = useState<AttackLens>("all");
+
   if (!data || !data.runs_assessed) {
     return (
       <EmptyState
@@ -259,12 +279,34 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
     );
   }
 
+  // A tactic earns its row only if it has something to show under the current
+  // lens. "Confirmed" listing tactics with nothing confirmed would be the same
+  // noise the lens exists to remove.
+  const visibleTactics = data.tactics.filter((t) =>
+    lens === "confirmed" ? t.confirmed_techniques > 0
+      : lens === "ai" ? t.ai_suggested_techniques > 0
+      : lens === "gaps" ? t.claimed > t.confirmed || t.observed > t.claimed
+      : true,
+  );
+
   return (
     <div style={{ display: "grid", gap: "var(--space-5)" }}>
       <MetricStrip
         metrics={[
           { label: "Runs assessed", value: data.runs_assessed },
           { label: "Techniques seen", value: data.techniques_seen },
+          {
+            label: "Confirmed",
+            value: data.confirmed_techniques.length,
+            hint: "evidence bore out the claim",
+            status: data.confirmed_techniques.length ? "success" : "neutral",
+          },
+          {
+            label: "AI-found",
+            value: data.ai_suggested_techniques.length,
+            hint: "no rule claims these",
+            status: data.ai_suggested_techniques.length ? "warning" : "neutral",
+          },
           {
             label: "Unvalidated mappings",
             value: data.unvalidated_mappings.length,
@@ -280,15 +322,57 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
         ]}
       />
 
-      {/* Gaps first: a technique nothing claims is the finding on this page. */}
-      {data.undetected_behaviour.length > 0 && (
+      <LensPicker lens={lens} onChange={setLens} data={data} />
+
+      {(lens === "all" || lens === "confirmed") && (
+        data.confirmed_techniques.length > 0 ? (
+          <TechniqueList
+            title="Confirmed by evidence"
+            hint="A rule claimed these and what this platform collected independently bore them out."
+            rows={data.confirmed_techniques}
+          />
+        ) : lens === "confirmed" ? (
+          <Section
+            title="Nothing confirmed in this window"
+            hint="Not a rendering gap — no detection's ATT&CK mapping has been borne out by the evidence collected."
+          >
+            <div style={{ fontSize: "var(--font-meta)", color: "var(--text-muted)", lineHeight: 1.6 }}>
+              {data.unvalidated_mappings.length} technique
+              {data.unvalidated_mappings.length === 1 ? " was" : "s were"} claimed by a rule and never
+              corroborated. Where evidence did establish a technique it was a different one — a rule
+              claiming Valid Accounts on an alert whose evidence shows PowerShell and obfuscation, for
+              instance. That is what the two gap views below are for.
+            </div>
+          </Section>
+        ) : null
+      )}
+
+      {(lens === "all" || lens === "ai") && (
+        data.ai_suggested_techniques.length > 0 ? (
+          <TechniqueList
+            title="Found by AI, claimed by no rule"
+            hint="Proposed from the alert narrative and accepted only with a quote that exists in the evidence. Treat as leads for new detections, not as findings."
+            rows={data.ai_suggested_techniques}
+          />
+        ) : lens === "ai" ? (
+          <Section title="The AI proposed nothing in this window" hint="No technique was suggested that a rule had not already claimed.">
+            <div style={{ fontSize: "var(--font-meta)", color: "var(--text-muted)" }}>
+              Proposals are dropped unless they quote text that exists in the evidence, so an empty
+              result here means nothing cleared that bar — not that the pass did not run.
+            </div>
+          </Section>
+        ) : null
+      )}
+
+      {/* A technique nothing claims is still the finding on this page. */}
+      {(lens === "all" || lens === "gaps") && data.undetected_behaviour.length > 0 && (
         <TechniqueList
           title="Observed but never claimed by a detection"
           hint="Evidence showed these; no rule said they would. Detection gaps."
           rows={data.undetected_behaviour}
         />
       )}
-      {data.unvalidated_mappings.length > 0 && (
+      {(lens === "all" || lens === "gaps") && data.unvalidated_mappings.length > 0 && (
         <TechniqueList
           title="Claimed but never corroborated"
           hint="Rules assert these; the evidence has not yet borne one out. Rows marked 'not evidenceable here' are ones this platform could never confirm, whatever it collected."
@@ -296,11 +380,26 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
         />
       )}
 
-      <Section title="By tactic" hint="Select a tactic to list the alerts whose assessment touched it.">
+      <Section
+        title="By tactic"
+        hint={
+          lens === "confirmed"
+            ? "Tactics with at least one confirmed technique. Select one to list the alerts underneath it."
+            : lens === "ai"
+            ? "Tactics the AI proposed a technique for. Select one to list the alerts underneath it."
+            : "Select a tactic to list the alerts whose assessment touched it."
+        }
+      >
         <div className="ds-rows">
-          {data.tactics.map((tactic) => (
-            <TacticRow key={tactic.tactic} tactic={tactic} days={days} />
-          ))}
+          {visibleTactics.length === 0 ? (
+            <div style={{ fontSize: "var(--font-meta)", color: "var(--text-muted)" }}>
+              No tactic matches this view in the last {days} days.
+            </div>
+          ) : (
+            visibleTactics.map((tactic) => (
+              <TacticRow key={tactic.tactic} tactic={tactic} days={days} lens={lens} />
+            ))
+          )}
         </div>
       </Section>
 
@@ -319,6 +418,62 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
           </div>
         </Section>
       )}
+    </div>
+  );
+}
+
+/* ─── Which question the ATT&CK tab is answering ─── */
+
+function LensPicker({
+  lens,
+  onChange,
+  data,
+}: {
+  lens: AttackLens;
+  onChange: (next: AttackLens) => void;
+  data: AttackCoverageResponse;
+}) {
+  const count = (id: AttackLens) =>
+    id === "confirmed" ? data.confirmed_techniques.length
+      : id === "ai" ? data.ai_suggested_techniques.length
+      : id === "gaps" ? data.undetected_behaviour.length + data.unvalidated_mappings.length
+      : data.techniques_seen;
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {ATTACK_LENSES.map((option) => {
+        const active = option.id === lens;
+        const total = count(option.id);
+        return (
+          <button
+            key={option.id}
+            type="button"
+            title={option.hint}
+            aria-pressed={active}
+            onClick={() => onChange(option.id)}
+            // Never disabled. An empty lens is not a dead control: zero
+            // confirmed techniques across thousands of runs is the strongest
+            // statement this page can make, and a button that cannot be
+            // pressed would hide it.
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: `1px solid ${active ? "var(--accent)" : "var(--panel-divider-strong)"}`,
+              background: active ? "rgba(96, 165, 250, 0.12)" : "var(--panel-card-bg)",
+              color: "var(--text)",
+              fontSize: "var(--font-meta)",
+              fontWeight: active ? 700 : 500,
+              cursor: "pointer",
+            }}
+          >
+            {option.label}
+            <span style={{ color: "var(--text-dim)", ...MONO }}>{total}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -357,9 +512,11 @@ function formatWhen(iso: string | null): string {
 function TacticRow({
   tactic,
   days,
+  lens = "all",
 }: {
   tactic: AttackCoverageResponse["tactics"][number];
   days: number;
+  lens?: AttackLens;
 }) {
   const [open, setOpen] = useState(false);
   const [alerts, setAlerts] = useState<TacticAlert[] | null>(null);
@@ -417,6 +574,12 @@ function TacticRow({
         <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.techniques} techniques</span>
         <span style={{ color: "var(--text-dim)", ...MONO }}>{tactic.claimed} claimed</span>
         <span style={{ color: "var(--status-success)", ...MONO }}>{tactic.confirmed} confirmed</span>
+        {/* Only under the AI lens, where it is the reason the row is here. */}
+        {lens === "ai" && (
+          <span style={{ color: "var(--status-warning)", ...MONO }}>
+            {tactic.ai_suggested_techniques} AI-found
+          </span>
+        )}
       </button>
 
       {open && (
