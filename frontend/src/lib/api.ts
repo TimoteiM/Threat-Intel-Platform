@@ -17,6 +17,7 @@ import type {
   DetectionQualityResponse,
   Exclusion,
   FeedbackAccuracy,
+  MismatchAlertsResponse,
   TacticAlertsResponse,
 } from "./types";
 
@@ -753,6 +754,22 @@ export function getTacticAlerts(params: { tactic: string; days?: number; limit?:
   if (params.days) qs.set("days", String(params.days));
   if (params.limit) qs.set("limit", String(params.limit));
   return request<TacticAlertsResponse>(`/detections/attack-coverage/tactic-alerts?${qs.toString()}`);
+}
+
+export function getMismatchAlerts(params: {
+  rule_name: string;
+  technique: string;
+  rule_id?: string | null;
+  days?: number;
+  limit?: number;
+}) {
+  const qs = new URLSearchParams({ rule_name: params.rule_name, technique: params.technique });
+  if (params.rule_id) qs.set("rule_id", params.rule_id);
+  if (params.days) qs.set("days", String(params.days));
+  if (params.limit) qs.set("limit", String(params.limit));
+  return request<MismatchAlertsResponse>(
+    `/detections/attack-coverage/mismatch-alerts?${qs.toString()}`,
+  );
 }
 
 export function submitAnalystFeedback(data: {

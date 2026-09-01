@@ -19,6 +19,7 @@ import type {
   AttackCoverageResponse,
   DetectionQualityResponse,
   FeedbackAccuracy,
+  MismatchAlertsResponse,
   TacticAlert,
 } from "@/lib/types";
 import {
@@ -393,7 +394,7 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
         >
           <div style={{ display: "grid", gap: "var(--space-4)" }}>
             {data.mapping_mismatches.map((row) => (
-              <MismatchRow key={`${row.rule_id ?? ""}:${row.rule_name}`} row={row} />
+              <MismatchRow key={`${row.rule_id ?? ""}:${row.rule_name}`} row={row} days={days} />
             ))}
           </div>
         </Section>
@@ -501,15 +502,70 @@ function LensPicker({
 
 /* ─── A rule's claim against the evidence on the same alert ─── */
 
-function MismatchRow({ row }: { row: AttackCoverageResponse["mapping_mismatches"][number] }) {
+function MismatchRow({
+  row,
+  days,
+}: {
+  row: AttackCoverageResponse["mapping_mismatches"][number];
+  days: number;
+}) {
+  // Which evidenced technique is open, and the alerts behind it. Kept per row
+  // so opening one cell does not collapse another.
+  const [openTechnique, setOpenTechnique] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<MismatchAlertsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const openCell = async (technique: string) => {
+    if (openTechnique === technique) {
+      setOpenTechnique(null);
+      return;
+    }
+    setOpenTechnique(technique);
+    setAlerts(null);
+    setLoading(true);
+    try {
+      setAlerts(
+        await api.getMismatchAlerts({
+          rule_name: row.rule_name,
+          rule_id: row.rule_id,
+          technique,
+          days,
+        }),
+      );
+    } catch {
+      setAlerts(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const chip = (
     t: { id: string; name: string | null; runs: number; ai_only?: boolean },
     tone: "claim" | "evidence",
   ) => (
     <span
       key={t.id}
-      title={`${t.name || t.id}${t.ai_only ? " — proposed by AI only, not a deterministic signal" : ""} · ${t.runs} run${t.runs === 1 ? "" : "s"}`}
+      role={tone === "evidence" ? "button" : undefined}
+      tabIndex={tone === "evidence" ? 0 : undefined}
+      onClick={tone === "evidence" ? () => openCell(t.id) : undefined}
+      onKeyDown={
+        tone === "evidence"
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openCell(t.id);
+              }
+            }
+          : undefined
+      }
+      title={
+        tone === "evidence"
+          ? `${t.name || t.id}${t.ai_only ? " — proposed by AI only, not a deterministic signal" : ""} · ${t.runs} run${t.runs === 1 ? "" : "s"} · open the alerts`
+          : `${t.name || t.id} · claimed on ${t.runs} run${t.runs === 1 ? "" : "s"}`
+      }
       style={{
+        cursor: tone === "evidence" ? "pointer" : "default",
+        outline: tone === "evidence" && openTechnique === t.id ? "1px solid var(--accent)" : undefined,
         display: "inline-flex",
         alignItems: "center",
         gap: 5,
@@ -557,6 +613,81 @@ function MismatchRow({ row }: { row: AttackCoverageResponse["mapping_mismatches"
         <span style={{ color: "var(--text-dim)", fontSize: "var(--font-micro)" }}>but evidence shows</span>
         {row.evidenced_instead.map((t) => chip(t, "evidence"))}
       </div>
+
+      {openTechnique && (
+        <div
+          style={{
+            marginTop: 4,
+            paddingLeft: 12,
+            borderLeft: "2px solid var(--panel-divider-strong)",
+            display: "grid",
+            gap: 6,
+          }}
+        >
+          {loading && (
+            <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+              Loading alerts…
+            </span>
+          )}
+          {!loading && alerts && alerts.alerts.length === 0 && (
+            <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+              No alerts matched in the last {days} days.
+            </span>
+          )}
+          {!loading && alerts && alerts.alerts.length > 0 && (
+            <>
+              <span style={{ fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+                {alerts.total} alert{alerts.total === 1 ? "" : "s"} where this rule claimed{" "}
+                {row.claimed.map((c) => c.id).join(", ")} and the evidence established{" "}
+                {alerts.technique}
+                {alerts.technique_name ? ` (${alerts.technique_name})` : ""}.
+              </span>
+              {alerts.alerts.map((alert) => (
+                <div
+                  key={alert.run_id}
+                  style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}
+                >
+                  {/* A new tab, so the page keeps its place: this list is read
+                      by opening several alerts in turn and comparing them. */}
+                  <a
+                    href={`/alert-investigations/${alert.run_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--accent)", fontSize: "var(--font-micro)", fontWeight: 600 }}
+                  >
+                    {alert.title?.slice(0, 74) || alert.run_id}
+                  </a>
+                  {alert.evidenced.ai_suggested && (
+                    <span style={{ color: "var(--status-warning)", fontSize: "var(--font-micro)", ...MONO }}>
+                      AI
+                    </span>
+                  )}
+                  {/* The quote is why the technique was accepted, so it is the
+                      thing to read before trusting the row. */}
+                  {alert.evidenced.quotes.length > 0 && (
+                    <span
+                      title={alert.evidenced.explanation || undefined}
+                      style={{ color: "var(--text-dim)", fontSize: "var(--font-micro)", ...MONO }}
+                    >
+                      {alert.evidenced.quotes.map((q) => `"${q.slice(0, 40)}"`).join(" · ")}
+                    </span>
+                  )}
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      color: "var(--text-muted)",
+                      fontSize: "var(--font-micro)",
+                      ...MONO,
+                    }}
+                  >
+                    {alert.created_at ? new Date(alert.created_at).toLocaleString() : "—"}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -145,3 +145,100 @@ def test_groups_are_ordered_by_how_often_the_rule_misfires():
     rows = [_run("Loud rule", [{"id": "T1078"}], [{"id": "T1059"}])] * 5
     rows += [_run("Quiet rule", [{"id": "T1082"}], [{"id": "T1027"}])]
     assert [g["rule_name"] for g in _mapping_mismatches(rows)] == ["Loud rule", "Quiet rule"]
+
+
+# ── Drill-down into one mismatch cell ────────────────────────────────────────
+
+import pytest
+
+from app.services.attack_coverage_service import mismatch_alerts
+
+
+class _Row:
+    def __init__(self, assessment, rule_name, rule_id="r1", title="alert"):
+        from uuid import uuid4
+        from datetime import datetime, timezone
+        self.id = uuid4()
+        self.title = title
+        self.created_at = datetime.now(timezone.utc)
+        self.overall_verdict = "suspicious"
+        self.highest_risk_score = 50
+        self.detection_rule_id = rule_id
+        self.detection_rule_name = rule_name
+        self.result_attack_assessment = assessment
+
+
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _DB:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, _query):
+        return _Result(self._rows)
+
+
+MISMATCH = {
+    "techniques": [{"id": "T1078", "name": "Valid Accounts", "status": "not_corroborated"}],
+    "additional_techniques": [{
+        "id": "T1059.001", "name": "PowerShell", "source": None,
+        "explanation": "matched a literal command line",
+        "evidence": [{"matched": "-EncodedCommand"}, {"matched": "-NoProfile"}],
+    }],
+}
+
+
+@pytest.mark.asyncio
+async def test_drilldown_returns_the_runs_and_the_quote():
+    """
+    The quote is why the technique was accepted, so it is what an analyst reads
+    before trusting the row — especially for an AI proposal.
+    """
+    db = _DB([_Row(MISMATCH, "PowerShell rule")])
+    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    assert out["total"] == 1
+    alert = out["alerts"][0]
+    assert [c["id"] for c in alert["claimed"]] == ["T1078"]
+    assert alert["evidenced"]["quotes"] == ["-EncodedCommand", "-NoProfile"]
+    assert alert["evidenced"]["ai_suggested"] is False
+
+
+@pytest.mark.asyncio
+async def test_drilldown_only_returns_the_rule_that_was_clicked():
+    db = _DB([_Row(MISMATCH, "PowerShell rule"), _Row(MISMATCH, "Some other rule")])
+    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    assert out["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_drilldown_matches_the_unnamed_rule_placeholder():
+    """The aggregate groups a nameless rule under a placeholder; clicking it
+    has to find the same runs."""
+    db = _DB([_Row(MISMATCH, None)])
+    out = await mismatch_alerts(db, rule_name="(unnamed rule)", technique="T1059.001")
+    assert out["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_drilldown_excludes_runs_that_confirmed_something():
+    """Same definition as the aggregate, so the count reconciles with the chip."""
+    confirmed = {
+        "techniques": [{"id": "T1078", "status": "confirmed"}],
+        "additional_techniques": MISMATCH["additional_techniques"],
+    }
+    db = _DB([_Row(confirmed, "PowerShell rule")])
+    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    assert out["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_drilldown_ignores_a_different_technique():
+    db = _DB([_Row(MISMATCH, "PowerShell rule")])
+    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1027")
+    assert out["total"] == 0

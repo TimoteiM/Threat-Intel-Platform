@@ -4,6 +4,7 @@ Detection quality, ATT&CK coverage and analyst feedback.
 GET  /api/detections/quality        -> per-rule signal-to-noise, ATT&CK confirm rate
 GET  /api/detections/attack-coverage-> what detections claim vs what evidence shows
 GET  /api/detections/attack-coverage/tactic-alerts -> the alerts behind one tactic
+GET  /api/detections/attack-coverage/mismatch-alerts -> the alerts behind one claim/evidence mismatch
 POST /api/detections/feedback       -> record an analyst's true/false positive call
 GET  /api/detections/feedback       -> list feedback, newest first
 GET  /api/detections/feedback/accuracy -> how often the platform agreed with analysts
@@ -25,7 +26,7 @@ from sqlalchemy import func, select
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
-from app.services.attack_coverage_service import attack_coverage, tactic_alerts
+from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
@@ -66,6 +67,21 @@ async def get_tactic_alerts(
 ) -> dict[str, Any]:
     """The alerts whose assessment touched one tactic, newest first."""
     return await tactic_alerts(db, tactic=tactic, days=days, limit=limit)
+
+
+@router.get("/attack-coverage/mismatch-alerts")
+async def get_mismatch_alerts(
+    db: DBSession,
+    rule_name: str = Query(min_length=1, max_length=512),
+    technique: str = Query(min_length=2, max_length=20),
+    rule_id: str | None = Query(default=None, max_length=120),
+    days: int = Query(default=90, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """The alerts where this rule claimed one technique and the evidence showed another."""
+    return await mismatch_alerts(
+        db, rule_name=rule_name, technique=technique, rule_id=rule_id, days=days, limit=limit
+    )
 
 
 @router.post("/feedback", status_code=201)

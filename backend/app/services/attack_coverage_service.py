@@ -34,7 +34,12 @@ from typing import Any, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analyst.attack_mapping import TECHNIQUE_DB, describe_technique, technique_tactics
+from app.analyst.attack_mapping import (
+    TECHNIQUE_DB,
+    describe_technique,
+    normalize_technique_id,
+    technique_tactics,
+)
 from app.models.database import AlertBodyInvestigationRun
 
 
@@ -390,3 +395,117 @@ def _mapping_mismatches(rows: Sequence[Any], *, limit: int = 25) -> list[dict[st
 
     out.sort(key=lambda item: -item["runs"])
     return out[:limit]
+
+async def mismatch_alerts(
+    db: AsyncSession,
+    *,
+    rule_name: str,
+    technique: str,
+    rule_id: str | None = None,
+    days: int = 90,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """
+    The alerts behind one cell of the mismatch view.
+
+    A row says a rule claimed T1078 while the evidence showed T1059 across 33
+    runs. The next question is always which 33, and what the evidence actually
+    said — particularly for an AI proposal, where the quote it had to cite is
+    the whole basis for taking it seriously. Neither is answerable from the
+    aggregate, so this returns the runs themselves with that quote attached.
+
+    Same window and same mismatch definition as `attack_coverage`, so the count
+    here reconciles with the chip that was clicked.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+    wanted = normalize_technique_id(technique) or technique
+
+    runs = (
+        await db.execute(
+            select(
+                AlertBodyInvestigationRun.id,
+                AlertBodyInvestigationRun.title,
+                AlertBodyInvestigationRun.created_at,
+                AlertBodyInvestigationRun.overall_verdict,
+                AlertBodyInvestigationRun.highest_risk_score,
+                AlertBodyInvestigationRun.detection_rule_id,
+                AlertBodyInvestigationRun.detection_rule_name,
+                AlertBodyInvestigationRun.result_attack_assessment,
+            )
+            .where(AlertBodyInvestigationRun.created_at >= cutoff)
+            .order_by(AlertBodyInvestigationRun.created_at.desc())
+        )
+    ).all()
+
+    alerts: list[dict[str, Any]] = []
+    for run in runs:
+        assessment = run.result_attack_assessment
+        if not isinstance(assessment, dict):
+            continue
+
+        # Same identity the aggregate grouped on, including the placeholder for
+        # a run whose rule had no name.
+        this_rule = str(run.detection_rule_name or "").strip() or "(unnamed rule)"
+        if this_rule != rule_name:
+            continue
+        if rule_id and str(run.detection_rule_id or "") != rule_id:
+            continue
+
+        claims = [c for c in (assessment.get("techniques") or []) if isinstance(c, dict)]
+        found = [a for a in (assessment.get("additional_techniques") or []) if isinstance(a, dict)]
+        if not claims or not found:
+            continue
+        if any(c.get("status") == "confirmed" for c in claims):
+            continue
+
+        match = next(
+            (a for a in found if (normalize_technique_id(str(a.get("id") or "")) or "") == wanted),
+            None,
+        )
+        if match is None:
+            continue
+
+        # The quote is the point for an AI proposal: it was accepted only
+        # because this text exists in the evidence, so showing it is how an
+        # analyst checks the claim rather than trusting it.
+        quotes = [
+            str(entry.get("matched") or "").strip()
+            for entry in (match.get("evidence") or [])
+            if isinstance(entry, dict) and str(entry.get("matched") or "").strip()
+        ]
+
+        alerts.append(
+            {
+                "run_id": str(run.id),
+                "title": run.title,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "overall_verdict": run.overall_verdict,
+                "highest_risk_score": run.highest_risk_score,
+                "detection_rule_id": run.detection_rule_id,
+                "detection_rule_name": run.detection_rule_name,
+                "claimed": [
+                    {"id": str(c.get("id") or ""), "name": c.get("name"), "status": c.get("status")}
+                    for c in claims
+                    if c.get("id")
+                ],
+                "evidenced": {
+                    "id": wanted,
+                    "name": match.get("name") or (describe_technique(wanted) or {}).get("name"),
+                    "ai_suggested": match.get("source") == "ai_suggested",
+                    "explanation": match.get("explanation"),
+                    "quotes": quotes[:3],
+                },
+            }
+        )
+        if len(alerts) >= limit:
+            break
+
+    return {
+        "rule_name": rule_name,
+        "rule_id": rule_id,
+        "technique": wanted,
+        "technique_name": (describe_technique(wanted) or {}).get("name"),
+        "window_days": days,
+        "total": len(alerts),
+        "alerts": alerts,
+    }

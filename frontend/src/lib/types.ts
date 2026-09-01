@@ -2060,3 +2060,32 @@ export interface AlertInvestigationRun {
   reports?: AlertReport[];
   duration_ms?: number;
 }
+
+
+/** The alerts behind one claim/evidence mismatch cell. */
+export interface MismatchAlertsResponse {
+  rule_name: string;
+  rule_id: string | null;
+  technique: string;
+  technique_name: string | null;
+  window_days: number;
+  total: number;
+  alerts: Array<{
+    run_id: string;
+    title: string;
+    created_at: string | null;
+    overall_verdict: string | null;
+    highest_risk_score: number | null;
+    detection_rule_id: string | null;
+    detection_rule_name: string | null;
+    claimed: Array<{ id: string; name: string | null; status: string | null }>;
+    evidenced: {
+      id: string;
+      name: string | null;
+      ai_suggested: boolean;
+      explanation: string | null;
+      /** The text the technique was accepted on — how an analyst checks it. */
+      quotes: string[];
+    };
+  }>;
+}
