@@ -1578,6 +1578,24 @@ export interface AttackCoverageResponse {
   /** Seen in evidence, never claimed by any detection. */
   undetected_behaviour: AttackCoverageTechnique[];
   blind_spots: Array<{ tactic: string; techniques_we_could_evidence: number }>;
+  /**
+   * What a rule claimed against what the evidence found on the same alert.
+   * Only runs carrying both a claim and evidence — a run with a claim and
+   * nothing found is not a mismatch, it is an alert that carried no evidence.
+   */
+  mapping_mismatches: Array<{
+    rule_id: string | null;
+    rule_name: string;
+    runs: number;
+    claimed: Array<{ id: string; name: string | null; runs: number }>;
+    evidenced_instead: Array<{
+      id: string;
+      name: string | null;
+      runs: number;
+      /** Only ever proposed by AI here — a lead, not a deterministic signal. */
+      ai_only: boolean;
+    }>;
+  }>;
 }
 
 /** One alert run that touched a tactic, with the techniques of that tactic it carried. */

@@ -258,12 +258,17 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
  * what is the AI finding that no rule claims. Both were already in the payload;
  * neither had a surface.
  */
-type AttackLens = "all" | "confirmed" | "ai" | "gaps";
+type AttackLens = "all" | "confirmed" | "ai" | "mismatch" | "gaps";
 
 const ATTACK_LENSES: Array<{ id: AttackLens; label: string; hint: string }> = [
   { id: "all", label: "Everything", hint: "Every technique seen in this window" },
   { id: "confirmed", label: "Confirmed", hint: "Evidence bore out what a rule claimed" },
   { id: "ai", label: "AI-found", hint: "Proposed by AI analysis, claimed by no rule" },
+  {
+    id: "mismatch",
+    label: "Mapping mismatches",
+    hint: "Rules whose ATT&CK claim and the evidence on the same alert disagree",
+  },
   { id: "gaps", label: "Gaps", hint: "Unvalidated mappings and undetected behaviour" },
 ];
 
@@ -285,6 +290,7 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
   const visibleTactics = data.tactics.filter((t) =>
     lens === "confirmed" ? t.confirmed_techniques > 0
       : lens === "ai" ? t.ai_suggested_techniques > 0
+      : lens === "mismatch" ? false
       : lens === "gaps" ? t.claimed > t.confirmed || t.observed > t.claimed
       : true,
   );
@@ -380,6 +386,19 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
         />
       )}
 
+      {(lens === "all" || lens === "mismatch") && data.mapping_mismatches.length > 0 && (
+        <Section
+          title="Claimed one technique, evidenced another"
+          hint="Same alert, both sides. The rule's ATT&CK mapping on the left, what the investigation actually established on the right. Runs where nothing was found are not here — those are in Gaps."
+        >
+          <div style={{ display: "grid", gap: "var(--space-4)" }}>
+            {data.mapping_mismatches.map((row) => (
+              <MismatchRow key={`${row.rule_id ?? ""}:${row.rule_name}`} row={row} />
+            ))}
+          </div>
+        </Section>
+      )}
+
       <Section
         title="By tactic"
         hint={
@@ -436,6 +455,7 @@ function LensPicker({
   const count = (id: AttackLens) =>
     id === "confirmed" ? data.confirmed_techniques.length
       : id === "ai" ? data.ai_suggested_techniques.length
+      : id === "mismatch" ? data.mapping_mismatches.length
       : id === "gaps" ? data.undetected_behaviour.length + data.unvalidated_mappings.length
       : data.techniques_seen;
 
@@ -474,6 +494,69 @@ function LensPicker({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+
+/* ─── A rule's claim against the evidence on the same alert ─── */
+
+function MismatchRow({ row }: { row: AttackCoverageResponse["mapping_mismatches"][number] }) {
+  const chip = (
+    t: { id: string; name: string | null; runs: number; ai_only?: boolean },
+    tone: "claim" | "evidence",
+  ) => (
+    <span
+      key={t.id}
+      title={`${t.name || t.id}${t.ai_only ? " — proposed by AI only, not a deterministic signal" : ""} · ${t.runs} run${t.runs === 1 ? "" : "s"}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "3px 8px",
+        borderRadius: 6,
+        border: `1px solid ${tone === "claim" ? "var(--panel-divider-strong)" : "rgba(52, 211, 153, 0.35)"}`,
+        background: tone === "claim" ? "var(--bg-elevated)" : "rgba(52, 211, 153, 0.08)",
+        color: "var(--text)",
+        fontSize: "var(--font-micro)",
+        ...MONO,
+      }}
+    >
+      {t.id}
+      {t.ai_only && <span style={{ color: "var(--status-warning)" }}>AI</span>}
+      <span style={{ color: "var(--text-dim)" }}>{t.runs}</span>
+    </span>
+  );
+
+  return (
+    <div
+      className="ds-row"
+      style={{ display: "grid", gap: "var(--space-3)", alignItems: "start", padding: "var(--space-3) 0" }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text)", fontWeight: 600, fontSize: "var(--font-meta)" }}>
+          {row.rule_name}
+        </span>
+        {row.rule_id && (
+          <span style={{ color: "var(--text-muted)", fontSize: "var(--font-micro)", ...MONO }}>
+            {row.rule_id}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: "var(--font-micro)", ...MONO }}>
+          {row.runs} run{row.runs === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {/* Both sides on one line, because the disagreement is the point and
+          splitting them across sections is what hid it until now. */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-muted)", fontSize: "var(--font-micro)", minWidth: 62 }}>
+          claims
+        </span>
+        {row.claimed.map((t) => chip(t, "claim"))}
+        <span style={{ color: "var(--text-dim)", fontSize: "var(--font-micro)" }}>but evidence shows</span>
+        {row.evidenced_instead.map((t) => chip(t, "evidence"))}
+      </div>
     </div>
   );
 }

@@ -61,3 +61,87 @@ def test_a_tactic_with_nothing_confirmed_reports_zero():
     assert tactic["claimed"] == 2224
     assert tactic["confirmed_techniques"] == 0
     assert tactic["uncorroborated"] == 2224
+
+
+# ── Mapping mismatches ───────────────────────────────────────────────────────
+
+from app.services.attack_coverage_service import _mapping_mismatches
+
+
+def _run(rule, claims, found):
+    return (
+        {"techniques": claims, "additional_techniques": found},
+        "rule-1",
+        rule,
+    )
+
+
+def test_pairs_a_rules_claim_with_what_the_evidence_found():
+    rows = [
+        _run(
+            "PowerShell encoded command",
+            [{"id": "T1078", "name": "Valid Accounts", "status": "not_corroborated"}],
+            [{"id": "T1059.001", "name": "PowerShell"}, {"id": "T1027", "name": "Obfuscation"}],
+        )
+    ] * 3
+    group = _mapping_mismatches(rows)[0]
+    assert group["rule_name"] == "PowerShell encoded command"
+    assert group["runs"] == 3
+    assert [c["id"] for c in group["claimed"]] == ["T1078"]
+    assert {e["id"] for e in group["evidenced_instead"]} == {"T1059.001", "T1027"}
+
+
+def test_a_run_with_no_evidence_is_not_a_mismatch():
+    """
+    A claim with nothing found either way is what "claimed but never
+    corroborated" already reports. Counting it here would drown the rules whose
+    mapping is actually contradicted.
+    """
+    rows = [_run("Quiet rule", [{"id": "T1078", "status": "not_corroborated"}], [])]
+    assert _mapping_mismatches(rows) == []
+
+
+def test_a_confirmed_run_is_not_a_mismatch():
+    """The rule was right; whatever else the alert also showed is not a disagreement."""
+    rows = [
+        _run(
+            "Good rule",
+            [{"id": "T1059", "status": "confirmed"}],
+            [{"id": "T1027", "name": "Obfuscation"}],
+        )
+    ]
+    assert _mapping_mismatches(rows) == []
+
+
+def test_ai_only_evidence_is_marked_as_such():
+    """A model's lead and a deterministic signal are different grounds for
+    rewriting a rule, so the UI has to be able to tell them apart."""
+    rows = [
+        _run(
+            "Rule",
+            [{"id": "T1078", "status": "not_corroborated"}],
+            [
+                {"id": "T1105", "name": "Ingress Tool Transfer", "source": "ai_suggested"},
+                {"id": "T1059", "name": "Scripting"},
+            ],
+        )
+    ]
+    found = {e["id"]: e for e in _mapping_mismatches(rows)[0]["evidenced_instead"]}
+    assert found["T1105"]["ai_only"] is True
+    assert found["T1059"]["ai_only"] is False
+
+
+def test_deterministic_evidence_outranks_an_ai_suggestion_for_the_same_technique():
+    """Seen once by a signal means it is not AI-only, whatever else proposed it."""
+    rows = [
+        _run("Rule", [{"id": "T1078", "status": "not_corroborated"}],
+             [{"id": "T1059", "source": "ai_suggested"}, {"id": "T1059"}]),
+    ]
+    found = {e["id"]: e for e in _mapping_mismatches(rows)[0]["evidenced_instead"]}
+    assert found["T1059"]["ai_only"] is False
+
+
+def test_groups_are_ordered_by_how_often_the_rule_misfires():
+    rows = [_run("Loud rule", [{"id": "T1078"}], [{"id": "T1059"}])] * 5
+    rows += [_run("Quiet rule", [{"id": "T1082"}], [{"id": "T1027"}])]
+    assert [g["rule_name"] for g in _mapping_mismatches(rows)] == ["Loud rule", "Quiet rule"]

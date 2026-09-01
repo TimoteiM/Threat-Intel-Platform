@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,13 +43,18 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
 
     # Only the assessment is needed. Selecting `result_json` pulled the whole
     # 14 KB payload for every run — 21 MB to read 1.9 KB per row.
-    assessments = (
+    # The rule columns ride along so the mismatch view can name who owns a bad
+    # mapping. They are short varchars; the 14 KB result_json is still not read.
+    rows = (
         await db.execute(
-            select(AlertBodyInvestigationRun.result_attack_assessment).where(
-                AlertBodyInvestigationRun.created_at >= cutoff
-            )
+            select(
+                AlertBodyInvestigationRun.result_attack_assessment,
+                AlertBodyInvestigationRun.detection_rule_id,
+                AlertBodyInvestigationRun.detection_rule_name,
+            ).where(AlertBodyInvestigationRun.created_at >= cutoff)
         )
-    ).scalars().all()
+    ).all()
+    assessments = [row[0] for row in rows]
 
     claimed: dict[str, int] = defaultdict(int)
     confirmed: dict[str, int] = defaultdict(int)
@@ -104,6 +109,7 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
             row for row in techniques if row["observed"] and not row["claimed"]
         ],
         "blind_spots": _blind_spots(techniques),
+        "mapping_mismatches": _mapping_mismatches(rows),
     }
 
 
@@ -298,3 +304,89 @@ def _blind_spots(techniques: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for tactic, ids in sorted(coverable.items())
         if tactic not in seen_tactics
     ]
+
+
+def _mapping_mismatches(rows: Sequence[Any], *, limit: int = 25) -> list[dict[str, Any]]:
+    """
+    What a rule claimed against what the evidence found on the same alert.
+
+    Every ATT&CK claim in this deployment is not_corroborated — not because the
+    assessment is broken, but because the rules and the evidence are describing
+    different things. A rule claims T1078 Valid Accounts and the evidence on
+    that same run shows T1027 and T1059; a rule claims T1489 and the evidence
+    shows T1566.002. The existing views cannot show this: "claimed but never
+    corroborated" lists the claim with no idea what turned up instead, and
+    "observed but never claimed" lists the finding with no idea which rule
+    missed it. The pairing is the actionable part, and it only exists per run.
+
+    Only runs carrying both a claim and evidence are counted. A run with a claim
+    and nothing found is not a mismatch — it is an alert that carried no
+    evidence either way, which "claimed but never corroborated" already says.
+    """
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for assessment, rule_id, rule_name in rows:
+        if not isinstance(assessment, dict):
+            continue
+        claims = [c for c in (assessment.get("techniques") or []) if isinstance(c, dict)]
+        found = [a for a in (assessment.get("additional_techniques") or []) if isinstance(a, dict)]
+        if not claims or not found:
+            continue
+        # A run where something *was* confirmed is not a mismatch, whatever else
+        # it also found.
+        if any(c.get("status") == "confirmed" for c in claims):
+            continue
+
+        key = (str(rule_id or ""), str(rule_name or "").strip() or "(unnamed rule)")
+        bucket = grouped.setdefault(key, {
+            "rule_id": key[0] or None,
+            "rule_name": key[1],
+            "runs": 0,
+            "_claimed": defaultdict(int),
+            "_found": defaultdict(int),
+            "_found_names": {},
+            "_claimed_names": {},
+            "_ai_only": set(),
+        })
+        bucket["runs"] += 1
+
+        for claim in claims:
+            technique = str(claim.get("id") or "")
+            if technique:
+                bucket["_claimed"][technique] += 1
+                bucket["_claimed_names"][technique] = claim.get("name")
+        for item in found:
+            technique = str(item.get("id") or "")
+            if not technique:
+                continue
+            bucket["_found"][technique] += 1
+            bucket["_found_names"][technique] = item.get("name")
+            # Tracked so the UI can separate a deterministic signal from a
+            # model's suggestion. One is a rule that mapped the wrong thing;
+            # the other is a lead worth reading before rewriting anything.
+            if item.get("source") == "ai_suggested":
+                bucket["_ai_only"].add(technique)
+            else:
+                bucket["_ai_only"].discard(technique)
+
+    out: list[dict[str, Any]] = []
+    for bucket in grouped.values():
+        claimed_names = bucket.pop("_claimed_names")
+        found_names = bucket.pop("_found_names")
+        ai_only = bucket.pop("_ai_only")
+        claimed_counts = bucket.pop("_claimed")
+        found_counts = bucket.pop("_found")
+        bucket["claimed"] = [
+            {"id": tid, "name": claimed_names.get(tid) or (describe_technique(tid) or {}).get("name"),
+             "runs": count}
+            for tid, count in sorted(claimed_counts.items(), key=lambda kv: -kv[1])
+        ][:8]
+        bucket["evidenced_instead"] = [
+            {"id": tid, "name": found_names.get(tid) or (describe_technique(tid) or {}).get("name"),
+             "runs": count, "ai_only": tid in ai_only}
+            for tid, count in sorted(found_counts.items(), key=lambda kv: -kv[1])
+        ][:8]
+        out.append(bucket)
+
+    out.sort(key=lambda item: -item["runs"])
+    return out[:limit]
