@@ -68,6 +68,7 @@ from app.services.alert_field_service import (
     SUPPRESSIBLE_FIELDS,
     entity_of,
     extract_alert_fields,
+    source_of,
 )
 from app.services.endpoint_event_service import parse_endpoint_events
 from app.services.indicator_history_service import (
@@ -338,6 +339,7 @@ async def _create_alert_run(
         rule_name=(request.detection_rule_name or "").strip() or None,
     )
     entity_host, entity_user = entity_of(alert_fields)
+    alert_source = source_of(alert_fields, declared=(request.source or "").strip() or None)
 
     matcher = await load_matcher(db)
     suppression = matcher.match_alert(alert_fields)
@@ -385,6 +387,7 @@ async def _create_alert_run(
         detection_rule_name=(request.detection_rule_name or "").strip()[:512] or None,
         entity_host=entity_host,
         entity_user=entity_user,
+        alert_source=alert_source,
         callback_url=callback_url,
         result_json={
             "schema_version": ALERT_REPORT_SCHEMA_VERSION,
@@ -407,6 +410,7 @@ async def _create_alert_run(
             ),
             "alert_fields": alert_fields,
             "entity": {"host": entity_host, "user": entity_user},
+            "alert_source": alert_source,
             "alert_body_chars": len(alert_body),
             "analysed_body_chars": len(analysed_body),
             "alert_body_truncated_for_analysis": body_truncated_for_analysis,

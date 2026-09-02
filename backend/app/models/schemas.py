@@ -1274,6 +1274,11 @@ class AlertBodyInvestigationCreate(BaseModel):
     # analyst) instead of the inline collector run. None → ALERT_SPAWN_INVESTIGATIONS.
     spawn_investigations: Optional[bool] = None
     # ── Machine-to-machine ingest ──
+    # Which platform this came from. Correlation groups alerts by entity and
+    # must never join across senders: two platforms watching the same estate
+    # name hosts their own way, and a chain assembled from both is a
+    # fabrication. Derived from the forwarding manager when not declared.
+    source: Optional[str] = Field(default=None, max_length=120)
     # Where to POST the finished report list (format=report). http(s) only.
     callback_url: Optional[str] = Field(default=None, max_length=1024)
     # Reuse the run this alert already produced — matched on external_ref, or on

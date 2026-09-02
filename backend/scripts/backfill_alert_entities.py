@@ -20,12 +20,12 @@ import argparse
 import sys
 from collections import Counter
 
-from sqlalchemy import select
+from sqlalchemy import and_ as sa_and, select
 from sqlalchemy.orm import Session
 
 from app.db.session import sync_engine
 from app.models.database import AlertBodyInvestigationRun
-from app.services.alert_field_service import entity_of, extract_alert_fields
+from app.services.alert_field_service import entity_of, extract_alert_fields, source_of
 
 sync_engine.echo = False
 BATCH = 500
@@ -39,10 +39,21 @@ def main() -> int:
 
     stats: Counter = Counter()
     with Session(sync_engine) as session:
+        from sqlalchemy import or_
+
+        # Anything missing an entity *or* a source. Source arrived later than
+        # the entity columns, so runs backfilled once still have none — and
+        # correlation partitions on it, so a null source would silently pool
+        # every platform into one bucket.
         rows = session.execute(
             select(AlertBodyInvestigationRun).where(
-                AlertBodyInvestigationRun.entity_host.is_(None),
-                AlertBodyInvestigationRun.entity_user.is_(None),
+                or_(
+                    sa_and(
+                        AlertBodyInvestigationRun.entity_host.is_(None),
+                        AlertBodyInvestigationRun.entity_user.is_(None),
+                    ),
+                    AlertBodyInvestigationRun.alert_source.is_(None),
+                )
             )
         ).scalars().all()
 
@@ -56,8 +67,15 @@ def main() -> int:
                 rule_name=run.detection_rule_name,
             )
             host, user = entity_of(fields)
+            source = source_of(fields)
+            if args.apply and run.alert_source is None:
+                run.alert_source = source
+                stats["source_set"] += 1
             if not host and not user:
                 stats["no_entity_in_body"] += 1
+                continue
+            if run.entity_host or run.entity_user:
+                stats["entity_already_set"] += 1
                 continue
 
             stats["updated"] += 1
@@ -77,7 +95,8 @@ def main() -> int:
 
     print()
     print("DRY RUN — nothing written." if not args.apply else "APPLIED")
-    for key in ("updated", "with_host", "with_user", "no_entity_in_body"):
+    for key in ("updated", "with_host", "with_user", "source_set",
+                "entity_already_set", "no_entity_in_body"):
         print(f"  {key:20} {stats[key]}")
     return 0
 

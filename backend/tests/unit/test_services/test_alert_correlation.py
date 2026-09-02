@@ -82,3 +82,25 @@ def test_unmapped_tactics_are_dropped():
     )
     assert evidenced == {"Execution"}
     assert claimed == set()
+
+
+# ── Sources are never mixed ──────────────────────────────────────────────────
+
+from app.services.alert_field_service import UNKNOWN_SOURCE, source_of
+
+
+def test_the_sender_declares_its_own_source():
+    assert source_of({"manager": "Siembiot"}, declared="tracecat") == "tracecat"
+
+
+def test_the_forwarding_manager_identifies_the_platform():
+    assert source_of({"manager": "Siembiot"}) == "Siembiot"
+
+
+def test_an_undeclared_unmanaged_alert_stays_unknown():
+    """
+    Not guessed into a neighbouring source. An unknown correlates only with
+    other unknowns from the same feed, which is the conservative answer.
+    """
+    assert source_of({}) == UNKNOWN_SOURCE
+    assert source_of({"agent": "WKS-01"}) == UNKNOWN_SOURCE

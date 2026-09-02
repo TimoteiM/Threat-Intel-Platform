@@ -606,6 +606,9 @@ class AlertBodyInvestigationRun(Base):
     # or when it was forwarded by the manager rather than seen on an endpoint.
     entity_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     entity_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Which platform sent it. Correlation partitions on this: two senders name
+    # hosts their own way, and a chain assembled across them is a fabrication.
+    alert_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     # The parts of result_json the rollups read, lifted out at write time.
     # Detection quality, ATT&CK coverage and the cost dashboard each scan every

@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
+from app.services.alert_field_service import UNKNOWN_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,7 @@ async def correlate_alerts(
                 AlertBodyInvestigationRun.created_at,
                 AlertBodyInvestigationRun.entity_host,
                 AlertBodyInvestigationRun.entity_user,
+                AlertBodyInvestigationRun.alert_source,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.overall_verdict,
@@ -194,12 +196,17 @@ async def correlate_alerts(
         )
     ).all()
 
-    grouped: dict[str, list[Any]] = defaultdict(list)
+    # Keyed on (source, entity), never entity alone. Two platforms watching the
+    # same estate name hosts their own way, so joining across them would build a
+    # chain out of a Siembiot endpoint alert and an unrelated session alert
+    # about a similarly named host — a fabrication that looks exactly like the
+    # finding this exists to produce.
+    grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
     for row in rows:
-        grouped[str(row.entity_host)].append(row)
+        grouped[(str(row.alert_source or UNKNOWN_SOURCE), str(row.entity_host))].append(row)
 
     cases: list[dict[str, Any]] = []
-    for entity, members in grouped.items():
+    for (source, entity), members in grouped.items():
         rules = {str(m.detection_rule_id or m.detection_rule_name or "") for m in members}
         rules.discard("")
         if len(rules) < min_rules:
@@ -222,6 +229,7 @@ async def correlate_alerts(
         ordered = sorted(members, key=lambda m: m.created_at or cutoff)
         cases.append(
             {
+                "source": source,
                 "entity_host": entity,
                 "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
                 "window_hours": hours,
@@ -256,6 +264,7 @@ async def correlate_alerts(
     return {
         "window_hours": hours,
         "entities_seen": len(grouped),
+        "sources_seen": len({key[0] for key in grouped}),
         "cases": cases[:limit],
         "total_cases": len(cases),
     }
@@ -275,6 +284,8 @@ async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WI
 
     result = await correlate_alerts(db, hours=hours, limit=500)
     for case in result["cases"]:
+        if case["source"] != str(run.alert_source or UNKNOWN_SOURCE):
+            continue
         if case["entity_host"] == run.entity_host and any(
             alert["run_id"] == str(run.id) for alert in case["alerts"]
         ):

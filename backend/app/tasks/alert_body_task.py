@@ -110,6 +110,15 @@ def run_alert_body_investigation_task(
             "alert_body_chars",
             "analysed_body_chars",
             "alert_body_truncated_for_analysis",
+            # These went the same way the size facts did: written at ingest and
+            # gone the moment the run finished. alert_fields is what a
+            # suppression is built from and what names the sending platform, so
+            # losing it left the Suppress button re-parsing the body and the
+            # source invisible on every completed run.
+            "alert_fields",
+            "entity",
+            "alert_source",
+            "suppressed_by_exclusion",
         ):
             if carried in (run.result_json or {}):
                 payload[carried] = (run.result_json or {})[carried]

@@ -129,6 +129,30 @@ SEVERITY_ONLY_FIELDS = frozenset({"event_priority", "event_severity", "event_log
 MANAGER_AGENT_ID = "000"
 
 
+# When the sender says nothing about where an alert came from.
+UNKNOWN_SOURCE = "unknown"
+
+
+def source_of(fields: dict[str, Any], *, declared: str | None = None) -> str:
+    """
+    Which platform this alert came from.
+
+    Correlation must never join alerts across senders. Two platforms watching
+    the same estate name hosts their own way, and a "chain" assembled from a
+    Siembiot endpoint alert and an unrelated session alert about a similarly
+    named host is a fabrication — the most damaging kind, because it looks
+    exactly like the thing the feature exists to find.
+
+    The sender's own declaration wins; otherwise the manager that forwarded it
+    identifies the platform. Nothing is inferred beyond that: an unknown source
+    stays unknown and correlates only with other unknowns from the same feed.
+    """
+    if str(declared or "").strip():
+        return str(declared).strip()[:120]
+    manager = str(fields.get("manager") or "").strip()
+    return manager[:120] if manager else UNKNOWN_SOURCE
+
+
 def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     """
     The (host, user) this alert is about — the key correlation groups on.
