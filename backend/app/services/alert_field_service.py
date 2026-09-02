@@ -140,6 +140,39 @@ SUPPRESSIBLE_FIELDS: tuple[str, ...] = (
 SEVERITY_ONLY_FIELDS = frozenset({"event_priority", "event_severity", "event_log_level"})
 
 
+
+# Device categories that arrive where a hostname belongs. This feed's CEF puts
+# "dvchost=Personal computer" and "dvchost=Smartphone" in the field the standard
+# reserves for a device hostname, so the value is a class of machine rather than
+# a machine. Correlation groups on the host, so accepting these would file every
+# phone in the estate under one entity called "Smartphone" — 52 alerts were
+# already grouped that way, which is precisely the fabricated chain the source
+# and client partitions exist to prevent.
+_DEVICE_CATEGORIES = frozenset({
+    "unknown", "unknown device", "personal computer", "computer", "desktop",
+    "laptop", "smartphone", "phone", "mobile", "mobile device", "tablet",
+    "workstation", "server", "device", "iphone", "ipad", "android", "windows",
+    "macintosh", "mac", "linux", "n/a", "none", "null",
+})
+
+
+def looks_like_host(value: Any) -> bool:
+    """
+    Whether this could be a machine's name rather than a description of one.
+
+    Two rules, both cheap and both decisive here. A hostname has no whitespace —
+    DNS and NetBIOS names cannot contain it, so "Personal computer" is a
+    sentence about a device, not its name. And a bare category word is a class,
+    however well it is spelled.
+    """
+    candidate = str(value or "").strip()
+    if not candidate or len(candidate) > 255:
+        return False
+    if any(character.isspace() for character in candidate):
+        return False
+    return candidate.casefold() not in _DEVICE_CATEGORIES
+
+
 # Wazuh's own id for the manager. An alert bearing it was forwarded, not
 # observed on an endpoint.
 MANAGER_AGENT_ID = "000"
@@ -207,8 +240,18 @@ def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     would file every forwarded firewall log in the estate under one machine
     that never saw any of them, and a chain built on that is fiction.
     """
-    host = fields.get("entity_id") or fields.get("agent") or fields.get("agent_ip")
+    # In preference order, taking the first that names a machine rather than
+    # describing one. An address is a worse identifier than a name but a real
+    # one; a category is not an identifier at all.
+    host = next(
+        (
+            candidate
+            for candidate in (fields.get("entity_id"), fields.get("agent"), fields.get("agent_ip"))
+            if looks_like_host(candidate)
+        ),
+        None,
+    )
     if str(fields.get("agent_id") or "").strip() == MANAGER_AGENT_ID:
-        host = fields.get("agent_ip") if fields.get("agent_ip") else None
+        host = fields.get("agent_ip") if looks_like_host(fields.get("agent_ip")) else None
     user = fields.get("user")
     return (str(host)[:255] if host else None, str(user)[:255] if user else None)

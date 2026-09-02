@@ -149,3 +149,48 @@ def test_wazuh_alerts_carry_no_client_so_the_sender_must_declare_one():
     fields = extract_alert_fields(WAZUH_HEADER)
     assert client_of(fields) == UNKNOWN_CLIENT
     assert client_of(fields, declared="ACME") == "ACME"
+
+
+# ── A device category is not a hostname ──────────────────────────────────────
+
+from app.services.alert_field_service import looks_like_host
+
+OKTA_CEF = (
+    "deviceNtDomain=Windows 11 dhost=Antwerp dproc=logs dvchost=Personal computer "
+    "duser=tonny@corp.test end=1787643684201"
+)
+
+
+def test_a_device_category_is_not_an_entity():
+    """
+    This feed puts "dvchost=Personal computer" and "dvchost=Smartphone" in the
+    CEF field reserved for a device hostname. Correlation groups on the host, so
+    accepting those filed 52 alerts under one entity called "Smartphone" —
+    exactly the fabricated grouping the partitions exist to prevent.
+    """
+    host, _user = entity_of(extract_alert_fields(OKTA_CEF))
+    assert host is None
+
+
+def test_a_hostname_cannot_contain_whitespace():
+    """DNS and NetBIOS names cannot, so a space means it is a description."""
+    assert looks_like_host("Personal computer") is False
+    assert looks_like_host("EXP-D0MY264") is True
+    assert looks_like_host("wm-c00.siembiot.int") is True
+
+
+def test_bare_category_words_are_rejected():
+    for category in ("Unknown", "Smartphone", "smartphone", "Tablet", "iPhone", "server"):
+        assert looks_like_host(category) is False, category
+
+
+def test_real_names_that_resemble_words_are_kept():
+    """Alpha-UMa is a machine on this estate, not a category."""
+    for name in ("Alpha-UMa", "ExpDC001", "exprevpxy002", "EXPSQL402"):
+        assert looks_like_host(name) is True, name
+
+
+def test_the_user_is_unaffected_by_the_host_rule():
+    """A person's name legitimately contains a space; a machine's does not."""
+    fields = extract_alert_fields(OKTA_CEF)
+    assert entity_of(fields)[1] == "tonny@corp.test"
