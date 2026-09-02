@@ -2110,6 +2110,10 @@ export interface SuppressionCandidate {
 
 /** Alerts on one entity that are probably one event seen from several angles. */
 export interface CorrelatedCase {
+  /** The sending platform. Cases never span senders. */
+  source: string;
+  /** Whose estate. Cases never span clients. */
+  client: string;
   entity_host: string;
   entity_users: string[];
   window_hours: number;
@@ -2139,6 +2143,8 @@ export interface CorrelatedCase {
 export interface CorrelatedCasesResponse {
   window_hours: number;
   entities_seen: number;
+  sources_seen: number;
+  clients_seen: number;
   total_cases: number;
   cases: CorrelatedCase[];
 }

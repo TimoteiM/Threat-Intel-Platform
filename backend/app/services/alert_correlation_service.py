@@ -168,6 +168,7 @@ async def correlate_alerts(
     *,
     hours: int = DEFAULT_WINDOW_HOURS,
     min_rules: int = MIN_DISTINCT_RULES,
+    min_score: int = 0,
     limit: int = 50,
 ) -> dict[str, Any]:
     """Entities carrying more than one independent detection inside the window."""
@@ -274,6 +275,8 @@ async def correlate_alerts(
             }
         )
 
+    if min_score:
+        cases = [case for case in cases if case["score"] >= min_score]
     cases.sort(key=lambda case: (-case["score"], -case["distinct_rules"]))
     return {
         "window_hours": hours,

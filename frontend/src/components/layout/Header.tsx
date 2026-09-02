@@ -3,6 +3,7 @@
 import React from "react";
 import { APP_BRAND, APP_NAV_LINKS, APP_SUBTITLE, APP_VERSION } from "@/lib/constants";
 import BrandMark from "@/components/layout/BrandMark";
+import CorrelationAlerts from "@/components/layout/CorrelationAlerts";
 
 export default function Header() {
   return (
@@ -22,6 +23,7 @@ export default function Header() {
               {link.label}
             </NavLink>
           ))}
+          <CorrelationAlerts />
           <span className="app-nav__badge">{APP_VERSION}</span>
         </nav>
       </div>

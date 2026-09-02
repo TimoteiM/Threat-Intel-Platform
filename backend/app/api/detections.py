@@ -90,10 +90,13 @@ async def get_correlated_cases(
     db: DBSession,
     hours: int = Query(default=48, ge=1, le=720),
     min_rules: int = Query(default=2, ge=1, le=10),
+    min_score: int = Query(default=0, ge=0, le=100),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     """Entities carrying more than one independent detection inside the window."""
-    return await correlate_alerts(db, hours=hours, min_rules=min_rules, limit=limit)
+    return await correlate_alerts(
+        db, hours=hours, min_rules=min_rules, min_score=min_score, limit=limit
+    )
 
 
 @router.post("/feedback", status_code=201)

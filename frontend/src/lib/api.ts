@@ -781,10 +781,15 @@ export function getRunCase(runId: string, hours = 48) {
   );
 }
 
-export function getCorrelatedCases(params?: { hours?: number; min_rules?: number }) {
+export function getCorrelatedCases(params?: {
+  hours?: number;
+  min_rules?: number;
+  min_score?: number;
+}) {
   const qs = new URLSearchParams();
   if (params?.hours) qs.set("hours", String(params.hours));
   if (params?.min_rules) qs.set("min_rules", String(params.min_rules));
+  if (params?.min_score) qs.set("min_score", String(params.min_score));
   const query = qs.toString();
   return request<CorrelatedCasesResponse>(
     `/detections/correlated-cases${query ? `?${query}` : ""}`,

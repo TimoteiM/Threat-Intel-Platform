@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type {
   AttackCoverageResponse,
+  CorrelatedCasesResponse,
   DetectionQualityResponse,
   FeedbackAccuracy,
   MismatchAlertsResponse,
@@ -62,7 +63,7 @@ function pct(rate: number | null): string {
 }
 
 export default function DetectionsPage() {
-  const [tab, setTab] = useState<"rules" | "attack" | "accuracy">("rules");
+  const [tab, setTab] = useState<"rules" | "attack" | "cases" | "accuracy">("rules");
   const [days, setDays] = useState(30);
   const [quality, setQuality] = useState<DetectionQualityResponse | null>(null);
   const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
@@ -91,6 +92,7 @@ export default function DetectionsPage() {
   const tabs = [
     { id: "rules" as const, label: "Rules" },
     { id: "attack" as const, label: "ATT&CK coverage" },
+    { id: "cases" as const, label: "Correlated cases" },
     { id: "accuracy" as const, label: "Platform accuracy" },
   ];
 
@@ -143,6 +145,8 @@ export default function DetectionsPage() {
           <RulesTab data={quality} />
         ) : tab === "attack" ? (
           <AttackTab data={coverage} days={Math.max(days, 90)} />
+        ) : tab === "cases" ? (
+          <CasesTab days={Math.max(days, 30)} />
         ) : (
           <AccuracyTab data={accuracy} />
         )}
@@ -433,6 +437,123 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
                   {spot.techniques_we_could_evidence} technique
                   {spot.techniques_we_could_evidence === 1 ? "" : "s"} we could detect
                 </span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+/* ─── Entities carrying several independent detections ─── */
+
+/**
+ * The estate-wide view of what the header badge counts.
+ *
+ * The badge watches a 48-hour window, which is the right span for "is something
+ * happening now" and the wrong one for "has anything happened". This is where
+ * the window opens up, because a chain that unfolded over a fortnight is still
+ * a chain and the badge will never have shown it.
+ */
+function CasesTab({ days }: { days: number }) {
+  const [hours, setHours] = useState(days * 24);
+  const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .getCorrelatedCases({ hours })
+      .then((result) => !cancelled && setData(result))
+      .catch(() => !cancelled && setData(null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [hours]);
+
+  if (loading && !data) return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>;
+  if (!data) return <EmptyState title="Correlation could not be read" hint="The endpoint did not answer." />;
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-5)" }}>
+      <MetricStrip
+        metrics={[
+          { label: "Cases", value: data.total_cases, status: data.total_cases ? "warning" : "success" },
+          { label: "Entities watched", value: data.entities_seen },
+          { label: "Senders", value: data.sources_seen, hint: "cases never span these" },
+          { label: "Clients", value: data.clients_seen, hint: "cases never span these" },
+        ]}
+      />
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {[48, 168, 720].map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setHours(option)}
+            style={{
+              padding: "5px 11px", borderRadius: 8, fontSize: 11.5,
+              border: `1px solid ${hours === option ? "var(--accent)" : "var(--panel-divider-strong)"}`,
+              background: hours === option ? "rgba(96,165,250,0.12)" : "var(--panel-card-bg)",
+              color: "var(--text)", cursor: "pointer",
+            }}
+          >
+            {option === 48 ? "48 hours" : option === 168 ? "7 days" : "30 days"}
+          </button>
+        ))}
+      </div>
+
+      {data.cases.length === 0 ? (
+        <EmptyState
+          title="Nothing correlated in this window"
+          hint="A case needs two independent detections on one entity. One rule firing repeatedly is not a case — which is the point."
+        />
+      ) : (
+        <Section title="Cases" hint="Newest activity first within each. Select an alert to open it.">
+          <div style={{ display: "grid", gap: "var(--space-4)" }}>
+            {data.cases.map((item) => (
+              <div key={`${item.source}:${item.client}:${item.entity_host}`} style={{ display: "grid", gap: 6 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <strong style={{ color: "var(--text)", fontSize: 13 }}>{item.entity_host}</strong>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", ...MONO }}>
+                    {item.source}
+                    {item.client && item.client !== "unknown" ? ` / ${item.client}` : ""}
+                  </span>
+                  <span
+                    style={{
+                      marginLeft: "auto", ...MONO, fontSize: 12,
+                      color: item.score >= 70 ? "var(--status-danger)" : "var(--status-warning)",
+                    }}
+                  >
+                    {item.score}/100
+                  </span>
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+                  {item.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {item.alerts.slice(-6).map((alert) => (
+                    <a
+                      key={alert.run_id}
+                      href={`/alert-investigations/${alert.run_id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={alert.title || undefined}
+                      style={{
+                        fontSize: 11, color: "var(--accent)", padding: "3px 8px",
+                        borderRadius: 6, border: "1px solid var(--panel-divider)",
+                        background: "var(--bg-elevated)", textDecoration: "none",
+                      }}
+                    >
+                      {(alert.detection_rule_name || alert.title || alert.run_id).slice(0, 46)}
+                    </a>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
