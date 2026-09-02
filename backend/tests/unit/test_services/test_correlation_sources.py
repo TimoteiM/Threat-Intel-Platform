@@ -25,6 +25,8 @@ class _Run:
         self.entity_host = host
         self.entity_user = None
         self.alert_source = source
+        self.alert_client = "unknown"
+        self.alert_kind = "alert"
         self.detection_rule_id = rule
         self.detection_rule_name = rule
         self.overall_verdict = verdict
@@ -82,3 +84,40 @@ async def test_an_absent_source_does_not_pool_every_platform():
     result = await correlate_alerts(_DB(rows), hours=48)
     assert result["total_cases"] == 0
     assert {c for c in result} and result["entities_seen"] == 2
+
+
+@pytest.mark.asyncio
+async def test_two_clients_sharing_a_hostname_are_not_one_case():
+    """
+    Both feeds carry other organisations' alerts, and two customers can each own
+    a host called DC01. Joining them builds a chain across companies — wrong as
+    analysis, and a confidentiality problem besides.
+    """
+    a = _Run("DC01", "Siembiot", "rule-a")
+    a.alert_client = "ACME"
+    b = _Run("DC01", "Siembiot", "rule-b")
+    b.alert_client = "GLOBEX"
+    result = await correlate_alerts(_DB([a, b]), hours=48)
+    assert result["total_cases"] == 0
+    assert result["clients_seen"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_case_forms_within_one_client():
+    a = _Run("DC01", "Siembiot", "rule-a")
+    b = _Run("DC01", "Siembiot", "rule-b")
+    a.alert_client = b.alert_client = "ACME"
+    result = await correlate_alerts(_DB([a, b]), hours=48)
+    assert result["total_cases"] == 1
+    assert result["cases"][0]["client"] == "ACME"
+
+
+@pytest.mark.asyncio
+async def test_an_incident_is_never_a_member_of_a_case():
+    """A payload that is already a session is a case, not one of its own parts."""
+    incident = _Run("mvapsupm01", "tracecat", "AA Session")
+    incident.alert_kind = "incident"
+    other = _Run("mvapsupm01", "tracecat", "another rule")
+    other.alert_kind = "alert"
+    result = await correlate_alerts(_DB([incident, other]), hours=48)
+    assert result["total_cases"] == 0

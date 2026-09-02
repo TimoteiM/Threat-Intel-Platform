@@ -25,7 +25,13 @@ from sqlalchemy.orm import Session
 
 from app.db.session import sync_engine
 from app.models.database import AlertBodyInvestigationRun
-from app.services.alert_field_service import entity_of, extract_alert_fields, source_of
+from app.services.alert_field_service import (
+    client_of,
+    entity_of,
+    extract_alert_fields,
+    is_pre_correlated,
+    source_of,
+)
 
 sync_engine.echo = False
 BATCH = 500
@@ -53,6 +59,7 @@ def main() -> int:
                         AlertBodyInvestigationRun.entity_user.is_(None),
                     ),
                     AlertBodyInvestigationRun.alert_source.is_(None),
+                    AlertBodyInvestigationRun.alert_client.is_(None),
                 )
             )
         ).scalars().all()
@@ -71,6 +78,10 @@ def main() -> int:
             if args.apply and run.alert_source is None:
                 run.alert_source = source
                 stats["source_set"] += 1
+            if args.apply and run.alert_client is None:
+                run.alert_client = client_of(fields)
+                run.alert_kind = "incident" if is_pre_correlated(fields) else "alert"
+                stats["client_set"] += 1
             if not host and not user:
                 stats["no_entity_in_body"] += 1
                 continue
@@ -95,7 +106,7 @@ def main() -> int:
 
     print()
     print("DRY RUN — nothing written." if not args.apply else "APPLIED")
-    for key in ("updated", "with_host", "with_user", "source_set",
+    for key in ("updated", "with_host", "with_user", "source_set", "client_set",
                 "entity_already_set", "no_entity_in_body"):
         print(f"  {key:20} {stats[key]}")
     return 0

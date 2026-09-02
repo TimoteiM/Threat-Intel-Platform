@@ -37,7 +37,7 @@ _HEADER = r"^[ \t]*{label}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
 # the key is preceded by \" and a whitespace-only boundary never matches.
 _KV = r"(?:^|[\s|\"\\]){key}=(?P<value>[^=\n]{{1,200}}?)(?=[\s\\\"]+[A-Za-z_][\w.]*=|[\\\"]|\s*$)"
 # JSON form, including bodies where JSON is embedded mid-line.
-_JSON = r'"{key}"\s*:\s*"?(?P<value>[^",}}\n]{{1,200}})"?'
+_JSON = r'"{key}"\s*:\s*"?(?P<value>[^",}}{{\[\]\n]{{1,200}})"?'
 
 
 def _first(patterns: list[str], text: str) -> str | None:
@@ -45,7 +45,11 @@ def _first(patterns: list[str], text: str) -> str | None:
         match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if match:
             value = (match.group("value") or "").strip().strip('"').strip()
-            if value:
+            # A structural character is not a value. "client":{"userAgent":...}
+            # is an Okta object, not an organisation called "{" — and a bogus
+            # client name is worse than none, because correlation partitions on
+            # it and would quietly file 87 alerts under a punctuation mark.
+            if value and value not in ("{", "[", "}", "]", "null", "None", "-"):
                 return value[:200]
     return None
 
@@ -88,12 +92,24 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         "agent_ip": _field("Agent IP", ["agent_ip", "dvc", "src"], text),
         "agent_id": agent_id,
         "manager": _field("Manager", ["manager"], text),
+        # An incident names its own subject; trust that over a parsed header.
+        "entity_id": _field("entity_id", ["entity_id"], text),
         "event_id": _field("Event ID", ["event_id", "eventid"], text),
         "event_name": _field(None, ["eventName", "event_name", "name"], text),
         "event_priority": _field(None, ["eventPriority", "event_priority", "priority"], text),
         "event_severity": _field(None, ["eventSeverity", "event_severity", "severity"], text),
         "event_log_level": _field(None, ["eventLogLevel", "event_log_level", "log_level", "level"], text),
         "user": _field(None, ["suser", "duser", "user", "userName", "srcuser"], text),
+        # Both feeds carry alerts on behalf of other organisations. TraceCat
+        # incidents name theirs outright ("client: LIN"); Wazuh alerts name none
+        # at all, which is why the sender can declare it.
+        "client": _field("client", ["client", "customer", "tenant", "organisation"], text),
+        # A TraceCat incident is a whole user or asset session already — it
+        # arrives with its own event_count and entity_type. That is a different
+        # object from a single Wazuh alert, and correlating the two kinds
+        # together would be comparing a case to one of its own members.
+        "entity_type": _field("entity_type", ["entity_type"], text),
+        "event_count": _field("event_count", ["event_count"], text),
         "service": _field(None, ["destinationServiceName", "service"], text),
     }
     return {key: value for key, value in fields.items() if value}
@@ -153,6 +169,36 @@ def source_of(fields: dict[str, Any], *, declared: str | None = None) -> str:
     return manager[:120] if manager else UNKNOWN_SOURCE
 
 
+# Alerts arriving without one. Correlation treats it as its own partition
+# rather than a wildcard: pooling every unlabelled client into one bucket is
+# exactly the cross-tenant mixing this is meant to prevent.
+UNKNOWN_CLIENT = "unknown"
+
+
+def client_of(fields: dict[str, Any], *, declared: str | None = None) -> str:
+    """
+    Which organisation this alert is about.
+
+    Both feeds carry other people's alerts, so two customers can each own a host
+    called DC01. Grouping those together would build a chain across companies —
+    wrong, and a confidentiality problem as well as a correctness one.
+    """
+    if str(declared or "").strip():
+        return str(declared).strip()[:120]
+    value = str(fields.get("client") or "").strip()
+    return value[:120] if value else UNKNOWN_CLIENT
+
+
+def is_pre_correlated(fields: dict[str, Any]) -> bool:
+    """
+    True when the payload is already a session rather than a single alert.
+
+    A TraceCat incident arrives carrying fifty events and their triggered rules.
+    It is a case, not a member of one.
+    """
+    return bool(fields.get("entity_type") and fields.get("event_count"))
+
+
 def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     """
     The (host, user) this alert is about — the key correlation groups on.
@@ -161,7 +207,7 @@ def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     would file every forwarded firewall log in the estate under one machine
     that never saw any of them, and a chain built on that is fiction.
     """
-    host = fields.get("agent") or fields.get("agent_ip")
+    host = fields.get("entity_id") or fields.get("agent") or fields.get("agent_ip")
     if str(fields.get("agent_id") or "").strip() == MANAGER_AGENT_ID:
         host = fields.get("agent_ip") if fields.get("agent_ip") else None
     user = fields.get("user")

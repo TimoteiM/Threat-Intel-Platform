@@ -1279,6 +1279,10 @@ class AlertBodyInvestigationCreate(BaseModel):
     # name hosts their own way, and a chain assembled from both is a
     # fabrication. Derived from the forwarding manager when not declared.
     source: Optional[str] = Field(default=None, max_length=120)
+    # Whose estate this alert is about. Wazuh alerts carry no client marker of
+    # their own, so a sender relaying several organisations must declare it —
+    # otherwise two customers' hosts of the same name become one entity.
+    client: Optional[str] = Field(default=None, max_length=120)
     # Where to POST the finished report list (format=report). http(s) only.
     callback_url: Optional[str] = Field(default=None, max_length=1024)
     # Reuse the run this alert already produced — matched on external_ref, or on

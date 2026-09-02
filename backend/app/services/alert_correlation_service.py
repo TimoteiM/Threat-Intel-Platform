@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
-from app.services.alert_field_service import UNKNOWN_SOURCE
+from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,8 @@ async def correlate_alerts(
                 AlertBodyInvestigationRun.entity_host,
                 AlertBodyInvestigationRun.entity_user,
                 AlertBodyInvestigationRun.alert_source,
+                AlertBodyInvestigationRun.alert_client,
+                AlertBodyInvestigationRun.alert_kind,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.overall_verdict,
@@ -201,12 +203,23 @@ async def correlate_alerts(
     # chain out of a Siembiot endpoint alert and an unrelated session alert
     # about a similarly named host — a fabrication that looks exactly like the
     # finding this exists to produce.
-    grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str], list[Any]] = defaultdict(list)
     for row in rows:
-        grouped[(str(row.alert_source or UNKNOWN_SOURCE), str(row.entity_host))].append(row)
+        # A payload that is already a session is a case, not a member of one.
+        # A TraceCat incident arrives carrying fifty events and their triggered
+        # rules; grouping it beside single Wazuh alerts would compare a case to
+        # its own parts and count one platform's summary as corroboration of
+        # another's detail.
+        if str(row.alert_kind or "alert") == "incident":
+            continue
+        grouped[(
+            str(row.alert_source or UNKNOWN_SOURCE),
+            str(row.alert_client or UNKNOWN_CLIENT),
+            str(row.entity_host),
+        )].append(row)
 
     cases: list[dict[str, Any]] = []
-    for (source, entity), members in grouped.items():
+    for (source, client, entity), members in grouped.items():
         rules = {str(m.detection_rule_id or m.detection_rule_name or "") for m in members}
         rules.discard("")
         if len(rules) < min_rules:
@@ -230,6 +243,7 @@ async def correlate_alerts(
         cases.append(
             {
                 "source": source,
+                "client": client,
                 "entity_host": entity,
                 "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
                 "window_hours": hours,
@@ -265,6 +279,7 @@ async def correlate_alerts(
         "window_hours": hours,
         "entities_seen": len(grouped),
         "sources_seen": len({key[0] for key in grouped}),
+        "clients_seen": len({key[1] for key in grouped}),
         "cases": cases[:limit],
         "total_cases": len(cases),
     }
@@ -285,6 +300,8 @@ async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WI
     result = await correlate_alerts(db, hours=hours, limit=500)
     for case in result["cases"]:
         if case["source"] != str(run.alert_source or UNKNOWN_SOURCE):
+            continue
+        if case["client"] != str(run.alert_client or UNKNOWN_CLIENT):
             continue
         if case["entity_host"] == run.entity_host and any(
             alert["run_id"] == str(run.id) for alert in case["alerts"]

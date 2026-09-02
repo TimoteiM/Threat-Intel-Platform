@@ -609,6 +609,12 @@ class AlertBodyInvestigationRun(Base):
     # Which platform sent it. Correlation partitions on this: two senders name
     # hosts their own way, and a chain assembled across them is a fabrication.
     alert_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Whose estate this is. Both feeds carry other organisations' alerts, and two
+    # customers can each own a host called DC01.
+    alert_client: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # "alert" — one detection — or "incident", a payload that already contains a
+    # whole session. The second is a case, not a member of one.
+    alert_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # The parts of result_json the rollups read, lifted out at write time.
     # Detection quality, ATT&CK coverage and the cost dashboard each scan every

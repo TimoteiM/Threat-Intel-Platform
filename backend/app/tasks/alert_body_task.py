@@ -118,6 +118,8 @@ def run_alert_body_investigation_task(
             "alert_fields",
             "entity",
             "alert_source",
+            "alert_client",
+            "alert_kind",
             "suppressed_by_exclusion",
         ):
             if carried in (run.result_json or {}):
