@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
+from app.services.alert_correlation_service import correlate_alerts
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 
@@ -82,6 +83,17 @@ async def get_mismatch_alerts(
     return await mismatch_alerts(
         db, rule_name=rule_name, technique=technique, rule_id=rule_id, days=days, limit=limit
     )
+
+
+@router.get("/correlated-cases")
+async def get_correlated_cases(
+    db: DBSession,
+    hours: int = Query(default=48, ge=1, le=720),
+    min_rules: int = Query(default=2, ge=1, le=10),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    """Entities carrying more than one independent detection inside the window."""
+    return await correlate_alerts(db, hours=hours, min_rules=min_rules, limit=limit)
 
 
 @router.post("/feedback", status_code=201)

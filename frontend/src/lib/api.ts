@@ -18,6 +18,8 @@ import type {
   Exclusion,
   FeedbackAccuracy,
   MismatchAlertsResponse,
+  CorrelatedCase,
+  CorrelatedCasesResponse,
   SuppressionCandidate,
   TacticAlertsResponse,
 } from "./types";
@@ -770,6 +772,22 @@ export function getMismatchAlerts(params: {
   if (params.limit) qs.set("limit", String(params.limit));
   return request<MismatchAlertsResponse>(
     `/detections/attack-coverage/mismatch-alerts?${qs.toString()}`,
+  );
+}
+
+export function getRunCase(runId: string, hours = 48) {
+  return request<{ case: CorrelatedCase | null }>(
+    `/alert-investigations/${runId}/case?hours=${hours}`,
+  );
+}
+
+export function getCorrelatedCases(params?: { hours?: number; min_rules?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.hours) qs.set("hours", String(params.hours));
+  if (params?.min_rules) qs.set("min_rules", String(params.min_rules));
+  const query = qs.toString();
+  return request<CorrelatedCasesResponse>(
+    `/detections/correlated-cases${query ? `?${query}` : ""}`,
   );
 }
 

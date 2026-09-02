@@ -62,6 +62,7 @@ from app.services.exclusion_service import apply_to_indicators, load_matcher
 from app.services.alert_ioc_extraction_service import extract_alert_indicators
 from app.services.alert_payload_service import looks_like_siem_alert, normalize_alert_payload
 from app.services.alert_report_export_service import build_documents, investigation_ids_in
+from app.services.alert_correlation_service import case_for_run
 from app.services.alert_field_service import (
     SEVERITY_ONLY_FIELDS,
     SUPPRESSIBLE_FIELDS,
@@ -515,6 +516,22 @@ async def list_alert_investigations(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/{run_id}/case")
+async def get_run_case(
+    run_id: uuid.UUID,
+    db: DBSession,
+    hours: int = Query(default=48, ge=1, le=720),
+) -> dict[str, Any]:
+    """
+    The correlated case this alert belongs to, or nothing.
+
+    An analyst reading one alert has no way to know it is the third detection on
+    that machine tonight, and that is the fact which changes what they do next.
+    """
+    case = await case_for_run(db, run_id, hours=hours)
+    return {"case": case}
 
 
 @router.get("/{run_id}/suppression-candidate")

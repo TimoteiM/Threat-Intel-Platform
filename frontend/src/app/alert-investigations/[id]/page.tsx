@@ -15,6 +15,7 @@ import {
   createAlertExclusion,
   deleteAlertInvestigation,
   getAlertInvestigation,
+  getRunCase,
   getSuppressionCandidate,
   type AlertExportFormat,
 } from "@/lib/api";
@@ -25,6 +26,7 @@ import type {
   AlertIndicatorReport,
   AlertInvestigationRun,
   AlertReport,
+  CorrelatedCase,
   SuppressionCandidate,
 } from "@/lib/types";
 
@@ -132,8 +134,21 @@ export default function AlertInvestigationDetailPage() {
 
   // Downloads come from the export endpoint, so the file an analyst saves is
   // byte-for-byte what another platform pulls from the API.
+  // "Is this alert part of something bigger" is the question a single alert
+  // cannot answer about itself, and the one that changes what an analyst does.
+  const [runCase, setRunCase] = useState<CorrelatedCase | null>(null);
   const [suppressOpen, setSuppressOpen] = useState(false);
   const [suppressNote, setSuppressNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getRunCase(runId)
+      .then((data) => !cancelled && setRunCase(data.case))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
 
   const handleDownload = (format: AlertExportFormat = "reports") => {
     const link = document.createElement("a");
@@ -210,6 +225,7 @@ export default function AlertInvestigationDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
+      {runCase && <CaseBanner runCase={runCase} currentRunId={runId} />}
       {suppressOpen && (
         <SuppressDialog
           runId={runId}
@@ -1131,6 +1147,107 @@ function SuppressDialog({
         )}
       </div>
     </div>
+  );
+}
+
+/* ─── This alert is not the whole story ─── */
+
+/**
+ * The one thing a single alert cannot tell you about itself.
+ *
+ * Kerberoasting on a domain controller is suspicious; an account being changed
+ * is routine; the two on the same machine within the hour is an intrusion. Both
+ * alerts were investigated here and neither could say that, because each was
+ * judged alone. This is that sentence, at the top of whichever one you opened.
+ */
+function CaseBanner({ runCase, currentRunId }: { runCase: CorrelatedCase; currentRunId: string }) {
+  const [open, setOpen] = useState(false);
+  const tone =
+    runCase.score >= 70 ? "var(--status-danger)"
+      : runCase.score >= 40 ? "var(--status-warning)"
+      : "var(--text-muted)";
+
+  return (
+    <section
+      style={{
+        border: `1px solid ${tone}`,
+        borderLeftWidth: 3,
+        borderRadius: 12,
+        padding: "12px 16px",
+        background: "var(--panel-card-bg)",
+        display: "grid",
+        gap: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <strong style={{ color: tone, fontSize: 13 }}>
+          Part of a wider pattern on {runCase.entity_host}
+        </strong>
+        <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+          {runCase.alert_count} alerts from {runCase.distinct_rules} independent detections in{" "}
+          {runCase.window_hours}h
+        </span>
+        <span style={{ marginLeft: "auto", color: tone, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          {runCase.score}/100
+        </span>
+      </div>
+
+      <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.6 }}>
+        {runCase.reasons.map((reason) => (
+          <li key={reason}>{reason}</li>
+        ))}
+      </ul>
+
+      {runCase.tactics.length > 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          Evidenced tactics: <span style={{ color: "var(--text)" }}>{runCase.tactics.join(" → ")}</span>
+        </div>
+      )}
+
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          justifySelf: "start", background: "none", border: "none", padding: 0,
+          color: "var(--accent)", fontSize: 12, cursor: "pointer",
+        }}
+      >
+        {open ? "Hide the other alerts" : `Show the other ${runCase.alert_count - 1} alert(s)`}
+      </button>
+
+      {open && (
+        <div style={{ display: "grid", gap: 4, paddingLeft: 4 }}>
+          {runCase.alerts.map((alert) => {
+            const isCurrent = alert.run_id === currentRunId;
+            return (
+              <div key={alert.run_id} style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                <span style={{ color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)", minWidth: 132 }}>
+                  {alert.created_at ? new Date(alert.created_at).toLocaleString() : "—"}
+                </span>
+                {isCurrent ? (
+                  <span style={{ fontSize: 12, color: "var(--text)", fontWeight: 700 }}>
+                    {alert.detection_rule_name || alert.title} (this alert)
+                  </span>
+                ) : (
+                  <a
+                    href={`/alert-investigations/${alert.run_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: 12, color: "var(--accent)" }}
+                  >
+                    {alert.detection_rule_name || alert.title}
+                  </a>
+                )}
+                {alert.overall_verdict && (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                    {alert.overall_verdict}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

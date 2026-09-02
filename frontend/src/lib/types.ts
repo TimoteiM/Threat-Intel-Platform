@@ -2106,3 +2106,39 @@ export interface SuppressionCandidate {
   entity: { host: string | null; user: string | null };
   already_suppressed: boolean;
 }
+
+
+/** Alerts on one entity that are probably one event seen from several angles. */
+export interface CorrelatedCase {
+  entity_host: string;
+  entity_users: string[];
+  window_hours: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  alert_count: number;
+  /** Independent detections agreeing — the signal that does not depend on ATT&CK quality. */
+  distinct_rules: number;
+  /** Tactics the investigation established. */
+  tactics: string[];
+  /** Tactics only a rule asserted. Shown, weighted low, never presented as a finding. */
+  tactics_claimed_only: string[];
+  max_risk_score: number;
+  score: number;
+  reasons: string[];
+  alerts: Array<{
+    run_id: string;
+    title: string;
+    created_at: string | null;
+    detection_rule_id: string | null;
+    detection_rule_name: string | null;
+    overall_verdict: string | null;
+    highest_risk_score: number | null;
+  }>;
+}
+
+export interface CorrelatedCasesResponse {
+  window_hours: number;
+  entities_seen: number;
+  total_cases: number;
+  cases: CorrelatedCase[];
+}
