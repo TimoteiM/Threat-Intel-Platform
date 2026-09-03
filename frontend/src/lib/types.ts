@@ -2126,7 +2126,11 @@ export interface CorrelatedCase {
   /** The overall reading of the case, as distinct from the per-alert ones.
    *  Written out of band, so it may lag a case that has just changed. */
   narrative?: {
-    markdown: string | null;
+    /** Extracted server-side so the full report never travels just to have its
+     *  first paragraph read. */
+    verdict: string | null;
+    lead: string | null;
+    has_full: boolean;
     /** completed | running | queued | stale | failed | null */
     status: string | null;
     generated_at: string | null;
@@ -2294,4 +2298,14 @@ export interface TuningResponse {
   recommendations: TuningRecommendation[];
   alerts_silenceable: number;
   alerts_total: number;
+}
+
+
+export interface CaseNarrativeDetail {
+  case_key: string;
+  markdown: string | null;
+  status: string | null;
+  generated_at: string | null;
+  assistant_session_id: string | null;
+  error: string | null;
 }

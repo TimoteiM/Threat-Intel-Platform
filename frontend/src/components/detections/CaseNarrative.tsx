@@ -15,7 +15,8 @@
  * stays scannable.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
+import * as api from "@/lib/api";
 import type { CorrelatedCase } from "@/lib/types";
 
 const MONO: React.CSSProperties = {
@@ -30,34 +31,31 @@ function verdictTone(verdict: string): string {
   return "var(--text-secondary)";
 }
 
-/** The verdict line and the opening prose, pulled out of the report. */
-function lead(markdown: string): { verdict: string | null; summary: string } {
-  const verdictMatch = markdown.match(/\*\*\s*Verdict\s*:\s*([^*\n]+)\*\*/i);
-  const verdict = verdictMatch ? verdictMatch[1].trim() : null;
-
-  const body = markdown
-    .replace(/^#+\s.*$/gm, "")
-    .replace(/\*\*\s*Verdict\s*:\s*[^*\n]+\*\*/i, "")
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter((block) => block && !block.startsWith("|") && !block.startsWith("```"));
-
-  return { verdict, summary: body.slice(0, 2).join("\n\n") };
-}
-
 export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
   const [open, setOpen] = useState(false);
+  const [full, setFull] = useState<string | null>(null);
+  const [loadingFull, setLoadingFull] = useState(false);
   const narrative = item.narrative;
-  const parsed = useMemo(
-    () => (narrative?.markdown ? lead(narrative.markdown) : null),
-    [narrative?.markdown],
-  );
 
   if (!narrative) return null;
 
+  // The list carries the verdict and the opening paragraph; the rest is fetched
+  // only when someone asks for it. Shipping every report to every row made the
+  // response 63% text nobody had opened, on a list that refreshes every 30s.
+  const expand = () => {
+    setOpen(true);
+    if (full || loadingFull) return;
+    setLoadingFull(true);
+    api
+      .getCaseNarrative(item.case_key)
+      .then((detail) => setFull(detail.markdown || ""))
+      .catch(() => setFull("Could not load the full analysis."))
+      .finally(() => setLoadingFull(false));
+  };
+
   // No report yet. Said plainly rather than left blank: the case, its timeline
   // and every per-alert resolution are already correct without this.
-  if (!narrative.markdown) {
+  if (!narrative.has_full) {
     const failed = narrative.status === "failed";
     return (
       <div
@@ -77,7 +75,7 @@ export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
     <div
       style={{
         border: "1px solid var(--panel-divider)",
-        borderLeft: `3px solid ${parsed?.verdict ? verdictTone(parsed.verdict) : "var(--accent)"}`,
+        borderLeft: `3px solid ${narrative.verdict ? verdictTone(narrative.verdict) : "var(--accent)"}`,
         borderRadius: 9,
         background: "var(--panel-card-bg)",
         padding: "12px 14px",
@@ -93,14 +91,14 @@ export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
         >
           CASE ANALYSIS
         </span>
-        {parsed?.verdict && (
+        {narrative.verdict && (
           <strong
             style={{
-              ...MONO, fontSize: 11.5, color: verdictTone(parsed.verdict),
+              ...MONO, fontSize: 11.5, color: verdictTone(narrative.verdict),
               textTransform: "uppercase", letterSpacing: 0.3,
             }}
           >
-            {parsed.verdict}
+            {narrative.verdict}
           </strong>
         )}
         {narrative.status === "stale" && (
@@ -121,7 +119,7 @@ export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
           )}
           <button
             type="button"
-            onClick={() => setOpen((current) => !current)}
+            onClick={() => (open ? setOpen(false) : expand())}
             style={{
               background: "none", border: "none", padding: 0, cursor: "pointer",
               fontSize: 10.5, color: "var(--accent)", fontFamily: "inherit",
@@ -132,14 +130,14 @@ export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
         </span>
       </div>
 
-      {!open && parsed?.summary && (
+      {!open && narrative.lead && (
         <p
           style={{
             margin: 0, fontSize: 12, lineHeight: 1.6, color: "var(--text-secondary)",
             whiteSpace: "pre-wrap",
           }}
         >
-          {parsed.summary}
+          {narrative.lead}
         </p>
       )}
 
@@ -151,7 +149,7 @@ export default function CaseNarrative({ item }: { item: CorrelatedCase }) {
             fontFamily: "inherit", maxHeight: 620, overflowY: "auto",
           }}
         >
-          {narrative.markdown}
+          {loadingFull && !full ? "Loading the full analysis…" : full}
         </pre>
       )}
     </div>

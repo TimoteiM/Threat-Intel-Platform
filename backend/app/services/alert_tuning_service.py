@@ -21,8 +21,10 @@ rule that is noise this quarter gets re-examined rather than disappearing.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -84,6 +86,30 @@ MAX_ALERTS_SAMPLED = 600
 # look identical, and they differ only in what they will match tomorrow.
 MAX_VALUE_PREVALENCE = 0.40
 
+# How many alerts are parsed purely to measure how common a field value is
+# estate-wide. Prevalence only has to separate "true of nearly everything" from
+# "true of a handful" against a 40% threshold, and a sample this size settles
+# that far more precisely than the decision needs. Parsing the whole corpus for
+# it cost ten seconds per request, on an endpoint the rules page calls on mount
+# — and because the parse is CPU-bound it blocked the event loop, so every
+# other request on the page queued behind it.
+# Separating "true of nearly everything" (manager = Siembiot, ~100%) from "true
+# of a handful" (a specific event_id, ~1%) against a 40% line does not need many
+# observations. Three hundred settles it far tighter than the decision requires,
+# and each parse is regex over raw log text — the sample size *is* the cost.
+PREVALENCE_SAMPLE = 300
+
+# The recommendations change when verdicts or rules change — minutes to hours,
+# not seconds — while the rules page asks for them on every mount. Recomputing
+# per request bought nothing but latency.
+CACHE_TTL_SECONDS = 300
+_CACHE: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
+
+
+def clear_tuning_cache() -> None:
+    """Drop the memoised recommendations. Used by tests and after tuning changes."""
+    _CACHE.clear()
+
 
 @dataclass
 class _Alert:
@@ -123,6 +149,22 @@ class Condition:
 
 def _verdict_of(row: Any) -> str:
     return str(row.overall_verdict or "unknown").strip().lower()
+
+
+def _fields_from(
+    result_json: Any, alert_body: str, *, rule_id: Any, rule_name: Any
+) -> dict[str, str]:
+    """The suppressible fields, from values already read out of the database."""
+    stored = (result_json or {}).get("alert_fields")
+    if isinstance(stored, dict) and stored:
+        raw = stored
+    else:
+        raw = extract_alert_fields(alert_body or "", rule_id=rule_id, rule_name=rule_name)
+    return {
+        name: str(raw[name]).strip()
+        for name in CONDITION_FIELDS
+        if raw.get(name) and str(raw[name]).strip()
+    }
 
 
 def _fields_of(row: Any) -> dict[str, str]:
@@ -339,8 +381,16 @@ async def build_tuning_recommendations(
     db: AsyncSession, *, days: int = 90, min_alerts: int = MIN_ALERTS_TO_RECOMMEND
 ) -> dict[str, Any]:
     """Rules whose alerts have never been worth acting on, and how to silence them."""
+    cache_key = (int(days), int(min_alerts))
+    cached = _CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) < CACHE_TTL_SECONDS:
+        return cached[1]
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
 
+    # Columns only. alert_body and result_json are the two largest columns in
+    # the schema, and fetching them for every run to answer a question decided
+    # by verdict counts was most of the ten seconds this endpoint used to take.
     rows = (
         await db.execute(
             select(
@@ -350,8 +400,6 @@ async def build_tuning_recommendations(
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.overall_verdict,
-                AlertBodyInvestigationRun.alert_body,
-                AlertBodyInvestigationRun.result_json,
                 AlertBodyInvestigationRun.entity_host,
             )
             .where(
@@ -367,27 +415,75 @@ async def build_tuning_recommendations(
     for row in rows:
         by_rule[str(row.detection_rule_id)].append(row)
 
-    # Estate-wide field prevalence, computed once. Parsing every body twice
-    # would double the cost of the scan, so the per-rule parse below reuses this
-    # pass through a small cache.
-    parsed_cache: dict[str, dict[str, str]] = {}
-    for row in rows:
-        parsed_cache[str(row.id)] = _fields_of(row)
-    prevalence = _prevalence(parsed_cache.values())
-
-    recommendations: list[dict[str, Any]] = []
+    # Which rules are worth parsing for at all. Decided from columns alone —
+    # verdicts and counts — so the expensive body parse only ever runs on the
+    # handful of rules that could produce a recommendation.
+    candidates: dict[str, list[Any]] = {}
     examined = 0
     for rule_id, rule_rows in by_rule.items():
         if len(rule_rows) < min_alerts:
             continue
         examined += 1
-
         actionable_count = sum(1 for row in rule_rows if _verdict_of(row) in ACTIONABLE_VERDICTS)
         # A rule that mostly matters is not a tuning candidate, however loud it
         # is. Loudness is a cost problem, not a correctness one, and the fix for
         # it is different (see the downgrade note in the response).
         if actionable_count / len(rule_rows) > 0.25:
             continue
+        candidates[rule_id] = rule_rows
+
+    # Prevalence is measured estate-wide but from a sample, spread evenly across
+    # the corpus rather than taken off the front so one loud recent rule cannot
+    # dominate it.
+    step = max(1, len(rows) // PREVALENCE_SAMPLE)
+    sample_rows = rows[::step]
+
+    wanted: dict[Any, Any] = {row.id: row for row in sample_rows}
+    for rule_rows in candidates.values():
+        for row in rule_rows[:MAX_ALERTS_SAMPLED]:
+            wanted[row.id] = row
+
+    bodies: dict[Any, tuple[str, dict]] = {}
+    if wanted:
+        for run_id, alert_body, result_json in (
+            await db.execute(
+                select(
+                    AlertBodyInvestigationRun.id,
+                    AlertBodyInvestigationRun.alert_body,
+                    AlertBodyInvestigationRun.result_json,
+                )
+                .where(AlertBodyInvestigationRun.id.in_(list(wanted)))
+                .execution_options(query_name="tuning_bodies")
+            )
+        ).all():
+            bodies[run_id] = (alert_body or "", result_json or {})
+
+    parsed_cache: dict[str, dict[str, str]] = {}
+
+    def parse(row: Any) -> dict[str, str]:
+        key = str(row.id)
+        found = parsed_cache.get(key)
+        if found is None:
+            body, result_json = bodies.get(row.id, ("", {}))
+            found = _fields_from(
+                result_json,
+                body,
+                rule_id=row.detection_rule_id,
+                rule_name=row.detection_rule_name,
+            )
+            parsed_cache[key] = found
+        return found
+
+    # Field extraction is regex over raw log text and is genuinely CPU-bound.
+    # Left on the event loop it stalled every other request on the page for the
+    # duration — which is what made clicking another tab feel broken.
+    prevalence = await asyncio.to_thread(
+        lambda: _prevalence([parse(row) for row in sample_rows])
+    )
+
+    recommendations: list[dict[str, Any]] = []
+    for rule_id, rule_rows in candidates.items():
+        actionable_count = sum(1 for row in rule_rows if _verdict_of(row) in ACTIONABLE_VERDICTS)
 
         sample = rule_rows[:MAX_ALERTS_SAMPLED]
         parsed = [
@@ -396,7 +492,7 @@ async def build_tuning_recommendations(
                 verdict=_verdict_of(row),
                 actionable=_verdict_of(row) in ACTIONABLE_VERDICTS,
                 when=row.event_time or row.created_at,
-                fields=parsed_cache.get(str(row.id)) or _fields_of(row),
+                fields=parse(row),
             )
             for row in sample
         ]
@@ -473,11 +569,14 @@ async def build_tuning_recommendations(
     silenceable = sum(
         item["proposed"]["covered"] for item in recommendations if item["recommendable"]
     )
-    return {
+    result = {
         "window_days": days,
         "min_alerts": min_alerts,
         "rules_examined": examined,
         "recommendations": recommendations,
         "alerts_silenceable": silenceable,
         "alerts_total": len(rows),
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
+    _CACHE[cache_key] = (time.monotonic(), result)
+    return result

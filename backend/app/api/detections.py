@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
+from app.models.database import AlertCaseSpine
 from app.services.alert_correlation_service import correlate_alerts
 from app.services.alert_entity_profile_service import build_entity_profile
 from app.services.alert_tuning_service import build_tuning_recommendations
@@ -124,6 +125,22 @@ async def get_tuning_recommendations(
     concluding malicious or suspicious is discarded rather than reported.
     """
     return await build_tuning_recommendations(db, days=days, min_alerts=min_alerts)
+
+
+@router.get("/case/{case_key}/narrative")
+async def get_case_narrative(case_key: str, db: DBSession) -> dict[str, Any]:
+    """The full case analysis. Kept out of the list response, which carries the lead."""
+    row = await db.get(AlertCaseSpine, case_key)
+    if row is None:
+        raise HTTPException(404, "No such case")
+    return {
+        "case_key": row.case_key,
+        "markdown": row.narrative_markdown,
+        "status": row.narrative_status,
+        "generated_at": row.narrative_generated_at.isoformat() if row.narrative_generated_at else None,
+        "assistant_session_id": row.narrative_session_id,
+        "error": row.narrative_error,
+    }
 
 
 @router.post("/feedback", status_code=201)

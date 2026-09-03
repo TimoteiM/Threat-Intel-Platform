@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from app.services.alert_tuning_service import (
     CONDITION_FIELDS,
+    clear_tuning_cache,
     MAX_VALUE_PREVALENCE,
     _Alert,
     _best_conditions,
@@ -150,3 +151,27 @@ def test_the_rule_silences_rather_than_drops():
 def test_the_reason_is_escaped_into_the_xml():
     xml = wazuh_rule_xml("1", {"rule_id": "1"}, reason='a & b <c> "d"')
     assert "&amp;" in xml and "&lt;c&gt;" in xml
+
+
+# —— the sampling and caching that made this endpoint usable ——————————————
+
+def test_prevalence_separates_a_constant_from_a_specific_value():
+    """What the sample size actually has to decide.
+
+    The threshold only has to tell `manager = Siembiot` (true of nearly every
+    alert) from a specific event_id (true of a handful). Three hundred
+    observations settle that far more tightly than the 40% line needs, which is
+    why the sample was cut from the whole corpus — each parse is regex over raw
+    log text, so the sample size is the cost.
+    """
+    corpus = [{"manager": "S", "event_id": str(n)} for n in range(300)]
+    result = _prevalence(corpus)
+    assert result[("manager", "S")] > MAX_VALUE_PREVALENCE
+    assert result[("event_id", "7")] < MAX_VALUE_PREVALENCE
+
+
+def test_the_cache_can_be_cleared():
+    """The TTL cache must be droppable, or tests read each other's answers."""
+    clear_tuning_cache()
+    from app.services.alert_tuning_service import _CACHE
+    assert _CACHE == {}

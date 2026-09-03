@@ -36,7 +36,10 @@ from app.services.alert_baseline_service import (
 )
 from app.config import get_settings
 from app.services.alert_case_escalation import decide_emission, record_emission
-from app.services.alert_case_narrative_service import narrative_fingerprint
+from app.services.alert_case_narrative_service import (
+    narrative_fingerprint,
+    narrative_lead,
+)
 from app.services.alert_case_store import (
     absorb_superseded,
     supersession_state,
@@ -809,8 +812,13 @@ async def correlate_alerts(
             )
             if spine.narrative_fingerprint != fingerprint:
                 narrative_jobs.append((case_key, case_payload, fingerprint))
+            # The verdict and opening paragraph only. The full report is
+            # fetched when someone opens it — shipping every word to every row
+            # made this response 63% text nobody had asked to read, on a list
+            # that refreshes every 30 seconds.
             case_payload["narrative"] = {
-                "markdown": spine.narrative_markdown,
+                **narrative_lead(spine.narrative_markdown),
+                "has_full": bool(spine.narrative_markdown),
                 "status": (
                     spine.narrative_status
                     if spine.narrative_fingerprint == fingerprint

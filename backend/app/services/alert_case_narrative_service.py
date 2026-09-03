@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
@@ -179,3 +180,36 @@ def build_case_evidence(case: dict[str, Any], resolutions: dict[str, str]) -> st
         "than a narrative built to justify the score.",
     ]
     return "\n".join(lines)
+
+
+# How much of the report the case list carries. The list shows the verdict and
+# the opening paragraph; the rest is behind a click, so shipping all of it to
+# every row made the response 63% narrative that nobody had asked to read —
+# and the list refreshes every 30 seconds.
+LEAD_CHARS = 700
+
+
+def narrative_lead(markdown: str | None) -> dict[str, Any]:
+    """The verdict and opening prose, extracted once on the server.
+
+    Done here rather than in the browser so the full report never has to travel
+    just to have its first paragraph read.
+    """
+    text = (markdown or "").strip()
+    if not text:
+        return {"verdict": None, "lead": None}
+
+    verdict = None
+    match = re.search(r"\*\*\s*Verdict\s*:\s*([^*\n]+)\*\*", text, re.IGNORECASE)
+    if match:
+        verdict = match.group(1).strip().rstrip(".")
+
+    body = re.sub(r"^#+\s.*$", "", text, flags=re.MULTILINE)
+    body = re.sub(r"\*\*\s*Verdict\s*:\s*[^*\n]+\*\*", "", body, flags=re.IGNORECASE)
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n{2,}", body)
+        if block.strip() and not block.strip().startswith(("|", "```", "-", "*"))
+    ]
+    lead = "\n\n".join(blocks[:2])[:LEAD_CHARS]
+    return {"verdict": verdict, "lead": lead or None}
