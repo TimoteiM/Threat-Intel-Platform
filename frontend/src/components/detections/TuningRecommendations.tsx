@@ -42,13 +42,46 @@ function FieldChips({ fields }: { fields: Record<string, string> }) {
   );
 }
 
-function Recommendation({
+
+/** Recommendations keyed by rule id, so a rule row can find its own. */
+export function useTuningRecommendations(days: number) {
+  const [byRule, setByRule] = useState<Record<string, TuningRecommendation>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .getTuningRecommendations({ days: Math.max(days, 90) })
+      .then((result) => {
+        if (cancelled) return;
+        const map: Record<string, TuningRecommendation> = {};
+        for (const item of result.recommendations) map[item.rule_id] = item;
+        setByRule(map);
+      })
+      .catch(() => !cancelled && setByRule({}))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [days]);
+
+  return { byRule, loading };
+}
+
+export function RuleTuningPanel({
   item,
   onApplied,
+  collapsible = false,
 }: {
   item: TuningRecommendation;
-  onApplied: (ruleId: string) => void;
+  onApplied?: (ruleId: string) => void;
+  /** Rendered as a closed summary line that opens on click. Used on the rule
+   *  list, where the recommendation belongs to a rule the analyst is already
+   *  reading rather than to a separate section they have to go and find. */
+  collapsible?: boolean;
 }) {
+  const [open, setOpen] = useState(!collapsible);
   const [chosen, setChosen] = useState(0);
   const [showWazuh, setShowWazuh] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -92,7 +125,7 @@ function Recommendation({
         expires_at: expires.toISOString(),
       });
       setDone(`Added — expires ${expires.toLocaleDateString()}`);
-      onApplied(item.rule_id);
+      onApplied?.(item.rule_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the exclusion");
     } finally {
@@ -100,18 +133,59 @@ function Recommendation({
     }
   };
 
+  if (collapsible && !open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          width: "100%", textAlign: "left", cursor: "pointer",
+          marginTop: "var(--space-3)", padding: "8px 12px", borderRadius: 8,
+          border: "1px solid var(--panel-divider-strong)",
+          background: "var(--bg-elevated)", color: "var(--text-secondary)",
+          fontSize: 11.5, fontFamily: "inherit",
+          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+        }}
+      >
+        <span style={{ color: "var(--status-warning)" }}>▸ Recommended exclusion</span>
+        <span style={{ ...MONO, fontSize: 11, color: "var(--text)" }}>
+          {condition.scope}
+        </span>
+        <span style={{ marginLeft: "auto", ...MONO, fontSize: 10.5, color: "var(--text-muted)" }}>
+          silences {condition.covered} · 0 actionable
+        </span>
+      </button>
+    );
+  }
+
   return (
     <div
       style={{
         border: "1px solid var(--panel-divider)", borderRadius: 10,
         padding: "13px 15px", display: "grid", gap: 10,
+        marginTop: collapsible ? "var(--space-3)" : 0,
       }}
     >
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-        <span style={{ ...MONO, fontSize: 12, color: "var(--accent)" }}>{item.rule_id}</span>
-        <strong style={{ fontSize: 12.5, color: "var(--text)", fontWeight: 600 }}>
-          {item.rule_name}
-        </strong>
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            style={{
+              background: "none", border: "none", padding: 0, cursor: "pointer",
+              color: "var(--status-warning)", fontSize: 12, fontFamily: "inherit",
+            }}
+          >
+            ▾ Recommended exclusion
+          </button>
+        ) : (
+          <>
+            <span style={{ ...MONO, fontSize: 12, color: "var(--accent)" }}>{item.rule_id}</span>
+            <strong style={{ fontSize: 12.5, color: "var(--text)", fontWeight: 600 }}>
+              {item.rule_name}
+            </strong>
+          </>
+        )}
         <span style={{ marginLeft: "auto", ...MONO, fontSize: 11, color: "var(--text-muted)" }}>
           {item.noise} noise / {item.alerts} alerts
           {item.hosts ? ` · ${item.hosts} host${item.hosts === 1 ? "" : "s"}` : ""}
@@ -284,7 +358,7 @@ export default function TuningRecommendations({ days }: { days: number }) {
         {/* Applied rows stay in place rather than vanishing: the confirmation
             names the expiry date, and removing the row would take that with it. */}
         {data.recommendations.map((item) => (
-          <Recommendation
+          <RuleTuningPanel
             key={item.rule_id}
             item={item}
             onApplied={(ruleId) => setApplied((current) => [...current, ruleId])}

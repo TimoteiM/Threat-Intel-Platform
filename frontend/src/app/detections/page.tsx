@@ -37,7 +37,10 @@ import {
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
-import TuningRecommendations from "@/components/detections/TuningRecommendations";
+import {
+  RuleTuningPanel,
+  useTuningRecommendations,
+} from "@/components/detections/TuningRecommendations";
 
 const WINDOWS = [7, 30, 90];
 
@@ -161,6 +164,8 @@ export default function DetectionsPage() {
 /* ─── Rules ─── */
 
 function RulesTab({ data, days }: { data: DetectionQualityResponse | null; days: number }) {
+  // Fetched once for the whole list; each rule row looks up its own.
+  const tuning = useTuningRecommendations(days);
   if (!data || !data.rules.length) {
     return (
       <EmptyState
@@ -190,12 +195,6 @@ function RulesTab({ data, days }: { data: DetectionQualityResponse | null; days:
           { label: "Scoring floor", value: `${data.min_alerts_to_score} alerts`, hint: "below this, counts only" },
         ]}
       />
-
-      {/* Placed above the rule list rather than beside it: the list reports what
-          each rule is worth, and this is the only thing on the page that can be
-          acted on. Reading the metrics and then having to hunt for the action is
-          how a tuning backlog stays a backlog. */}
-      <TuningRecommendations days={days} />
 
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {data.rules.map((rule) => (
@@ -245,6 +244,15 @@ function RulesTab({ data, days }: { data: DetectionQualityResponse | null; days:
             <div style={{ marginTop: "var(--space-3)", fontSize: "var(--font-meta)", color: "var(--text-secondary)", lineHeight: 1.6 }}>
               {rule.assessment}
             </div>
+
+            {/* The action sits on the rule it belongs to. "A tuning candidate"
+                in the assessment above is a description; this is the thing an
+                analyst can actually do about it, and putting it anywhere else
+                means reading the verdict here and hunting for the action
+                elsewhere — which is how a tuning backlog stays a backlog. */}
+            {tuning.byRule[rule.rule_id] && (
+              <RuleTuningPanel item={tuning.byRule[rule.rule_id]} collapsible />
+            )}
           </Card>
         ))}
       </div>
