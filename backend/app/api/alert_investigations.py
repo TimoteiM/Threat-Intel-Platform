@@ -336,10 +336,22 @@ async def _create_alert_run(
     # What the alert *is*, as opposed to what it contains. Two things read this:
     # an `alert` exclusion matches on these fields, and correlation groups on
     # the entity they yield.
+    #
+    # The submitted values win; the body is only read when they are absent, so
+    # an analyst who names the rule is never overridden by a parse of the text.
+    recovered_rule = rule_from_pasted_body(alert_body)
+    rule_id = (
+        (request.detection_rule_id or "").strip()
+        or (recovered_rule.get("detection_rule_id") or "").strip()
+        or None
+    )
+    rule_name = (
+        (request.detection_rule_name or "").strip()
+        or (recovered_rule.get("detection_rule_name") or "").strip()
+        or None
+    )
     alert_fields = extract_alert_fields(
-        analysed_body,
-        rule_id=(request.detection_rule_id or "").strip() or None,
-        rule_name=(request.detection_rule_name or "").strip() or None,
+        analysed_body, rule_id=rule_id, rule_name=rule_name
     )
     entity_host, entity_user = entity_of(alert_fields)
     alert_source = source_of(alert_fields, declared=(request.source or "").strip() or None)
@@ -391,8 +403,8 @@ async def _create_alert_run(
         indicator_count=extraction["total"],
         alert_body_hash=body_hash,
         external_ref=external_ref,
-        detection_rule_id=(request.detection_rule_id or "").strip()[:120] or None,
-        detection_rule_name=(request.detection_rule_name or "").strip()[:512] or None,
+        detection_rule_id=(rule_id or "")[:120] or None,
+        detection_rule_name=(rule_name or "")[:512] or None,
         entity_host=entity_host,
         entity_user=entity_user,
         alert_source=alert_source,
@@ -1155,6 +1167,45 @@ async def _apply_exclusions(
     if excluded:
         extraction["investigable_total"] = sum(1 for item in indicators if item.get("investigable"))
     return excluded
+
+
+def rule_from_pasted_body(alert_body: str) -> dict[str, str | None]:
+    """Recover the rule from a body that is a raw SIEM document.
+
+    An alert pasted straight out of Wazuh or OpenSearch is nested JSON: the rule
+    lives at `rule.id` and `rule.description`, not in the flat `Rule:` header the
+    field extractor reads. The machine-to-machine ingest endpoint has always
+    normalised that; the paste path did not, so a native Wazuh alert was stored
+    with no rule at all.
+
+    That is not a cosmetic gap. Correlation requires two *distinct* detection
+    rules on an entity, and an empty rule id is discarded before the count — so
+    a whole chain of pasted Wazuh alerts on one host could never form a case
+    however well it scored on every other axis. Eight alerts of a simulated
+    intrusion on EXP-FIN-034 sat in the database with correct hosts, correct
+    event times and correct verdicts, and correlated with nothing.
+    """
+    text = (alert_body or "").strip()
+    if not text.startswith("{"):
+        return {}
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict) or not looks_like_siem_alert(payload):
+        return {}
+    normalized = normalize_alert_payload(payload)
+    # Either a rule or nothing. looks_like_siem_alert is deliberately permissive
+    # — it admits any JSON object with event-ish keys — so returning a dict of
+    # Nones would make "this document had no rule" indistinguishable from "this
+    # document was not an alert" at the call site.
+    recovered_id = (normalized.get("detection_rule_id") or "").strip()
+    if not recovered_id:
+        return {}
+    return {
+        "detection_rule_id": recovered_id,
+        "detection_rule_name": (normalized.get("detection_rule_name") or "").strip() or None,
+    }
 
 
 def _run_title(title: str | None, alert_body: str) -> str:
