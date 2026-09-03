@@ -36,6 +36,7 @@ from app.services.alert_baseline_service import (
 )
 from app.config import get_settings
 from app.services.alert_case_escalation import decide_emission, record_emission
+from app.services.alert_case_narrative_service import narrative_fingerprint
 from app.services.alert_case_store import (
     absorb_superseded,
     supersession_state,
@@ -44,6 +45,7 @@ from app.services.alert_case_store import (
 )
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 from app.tasks.case_event_task import dispatch
+from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 from app.services.alert_session_service import (
     SCORE_VERSION,
     SESSION_GAP,
@@ -592,6 +594,7 @@ async def correlate_alerts(
 
     settings = get_settings()
     emissions: list[dict[str, Any]] = []
+    narrative_jobs: list[tuple[str, dict[str, Any], str]] = []
     cases: list[dict[str, Any]] = []
     for (source, client, entity), group_members in grouped.items():
         in_window = {m.id for m in group_members}
@@ -751,6 +754,7 @@ async def correlate_alerts(
             # only the part that has to survive the read — ownership, status,
             # and how the score moved.
             last_event = _event_time(ordered[-1], cutoff)
+            case_payload = cases[-1]
             await absorb_superseded(
                 db,
                 live_case_key=case_key,
@@ -760,7 +764,7 @@ async def correlate_alerts(
                 session_started_at=session.session_started_at,
                 session_ended_at=last_event,
             )
-            await upsert_spine(
+            spine = await upsert_spine(
                 db,
                 case_key=case_key,
                 source=source,
@@ -782,6 +786,28 @@ async def correlate_alerts(
                 tactics=tactics,
                 score_version=SCORE_VERSION,
             )
+            # The overall reading of the case, written out of band. Queued only
+            # when the case says something different from what the narrative was
+            # written about — analysing on every recompute would spend the token
+            # budget on page loads. The stored narrative is attached either way,
+            # so an unchanged case shows the reading it already has.
+            fingerprint = narrative_fingerprint(
+                score=score, member_count=len(members), tactics=tactics
+            )
+            if spine.narrative_fingerprint != fingerprint:
+                narrative_jobs.append((case_key, case_payload, fingerprint))
+            case_payload["narrative"] = {
+                "markdown": spine.narrative_markdown,
+                "status": (
+                    spine.narrative_status
+                    if spine.narrative_fingerprint == fingerprint
+                    else ("stale" if spine.narrative_markdown else "queued")
+                ),
+                "generated_at": _iso(spine.narrative_generated_at),
+                "assistant_session_id": spine.narrative_session_id,
+                "error": spine.narrative_error,
+            }
+
             emission = await decide_emission(
                 db,
                 case_key=case_key,
@@ -826,6 +852,8 @@ async def correlate_alerts(
     # to anyone outside the process, and it speaks about facts already stored.
     if emissions:
         dispatch(emissions)
+    if narrative_jobs:
+        dispatch_narratives(narrative_jobs)
 
     if min_score:
         cases = [case for case in cases if case["score"] >= min_score]

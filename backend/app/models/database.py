@@ -830,6 +830,17 @@ class AlertCaseSpine(Base):
     peak_score_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     peak_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_by_case_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The overall reading of the case, as distinct from the per-alert ones.
+    narrative_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    narrative_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    narrative_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # score + member count + tactic set the narrative was written from, so a
+    # stale one is detectable and an unchanged case is never re-analysed.
+    narrative_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    narrative_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    narrative_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )

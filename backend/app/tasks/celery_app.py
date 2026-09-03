@@ -89,4 +89,10 @@ celery_app.autodiscover_tasks([
     "app.tasks.alert_body_task",
     "app.tasks.alert_callback_task",
     "app.tasks.vt_pending_task",
+    # Correlated-case work. Both were queued by the API and rejected by the
+    # worker with "Received unregistered task" until they were listed here —
+    # the escalation webhook silently among them, masked only because no
+    # webhook URL was configured to queue anything yet.
+    "app.tasks.case_event_task",
+    "app.tasks.case_narrative_task",
 ])

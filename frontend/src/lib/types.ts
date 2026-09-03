@@ -2123,6 +2123,16 @@ export interface CorrelatedCase {
    *  the reader only — never an input to case_key. */
   session_seq: number;
   session_started_at: string | null;
+  /** The overall reading of the case, as distinct from the per-alert ones.
+   *  Written out of band, so it may lag a case that has just changed. */
+  narrative?: {
+    markdown: string | null;
+    /** completed | running | queued | stale | failed | null */
+    status: string | null;
+    generated_at: string | null;
+    assistant_session_id: string | null;
+    error: string | null;
+  };
   window_hours: number;
   first_seen: string | null;
   last_seen: string | null;

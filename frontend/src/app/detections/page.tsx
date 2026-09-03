@@ -36,6 +36,7 @@ import {
   Section,
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
+import CaseNarrative from "@/components/detections/CaseNarrative";
 import EntityWindow from "@/components/detections/EntityWindow";
 import {
   RuleTuningPanel,
@@ -650,6 +651,12 @@ function CasesTab({ days }: { days: number }) {
                     {item.score}/100
                   </span>
                 </div>
+                {/* The conclusion first. The reasons below explain why the
+                    engine grouped these alerts; this says what they were. An
+                    analyst who reads only one thing on this row should read
+                    this one. */}
+                <CaseNarrative item={item} />
+
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.55 }}>
                   {item.reasons.map((reason) => (
                     <li key={reason}>{reason}</li>
