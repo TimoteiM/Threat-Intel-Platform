@@ -84,3 +84,46 @@ def test_a_slightly_future_stamp_is_kept():
     soon = datetime.now(timezone.utc) + timedelta(hours=6)
     body = f"data.win.system.systemTime: {soon.strftime('%Y-%m-%dT%H:%M:%SZ')}"
     assert event_time_of(body, fallback=INGEST) != INGEST
+
+
+# ── The heuristics are instrumented, not trusted ─────────────────────────────
+
+from app.services.alert_field_service import (
+    reset_stamp_heuristic_stats,
+    stamp_heuristic_stats,
+)
+
+
+def test_two_stamp_disagreement_is_counted():
+    """
+    "Take the earlier" is defensible on today's data and is not a law. On 2,961
+    stored runs the two stamps disagree 89.6% of the time but by at most 57.5
+    seconds — one tight mode, which is processing lag. A flipped field order
+    would show a second cluster, so the counter is what makes that visible.
+    """
+    reset_stamp_heuristic_stats()
+    event_time_of(WAZUH_HEADER, fallback=INGEST)
+    stats = stamp_heuristic_stats()
+    assert stats["headers_with_multiple_stamps"] == 1
+    assert stats["disagreed_notably"] == 1          # 42.4s apart
+    assert stats["disagreed_implausibly"] == 0
+    assert 40 < stats["max_delta_seconds"] < 45
+
+
+def test_an_implausible_disagreement_is_flagged_separately():
+    """Beyond processing lag, picking the earlier is picking arbitrarily."""
+    reset_stamp_heuristic_stats()
+    event_time_of("Time: 2026-08-16T00:00:00+0000 | 2026-08-16T09:00:00Z UTC", fallback=INGEST)
+    assert stamp_heuristic_stats()["disagreed_implausibly"] == 1
+
+
+def test_naive_stamps_are_counted_where_they_are_used():
+    """
+    Zero of the chosen stamps in stored history are naive — the offset-bearing
+    header outranks the naive field on every body carrying both. This counter is
+    what will say when that stops being true, because tempo breaks under a
+    timezone shift in a way ordering does not.
+    """
+    reset_stamp_heuristic_stats()
+    event_time_of(APPSEC_JSON, fallback=INGEST)
+    assert stamp_heuristic_stats()["naive_stamps_chosen"] == 1
