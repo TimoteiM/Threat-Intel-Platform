@@ -28,6 +28,7 @@ from app.models.database import AlertBodyInvestigationRun
 from app.services.alert_field_service import (
     client_of,
     entity_of,
+    event_time_of,
     extract_alert_fields,
     is_pre_correlated,
     source_of,
@@ -60,6 +61,7 @@ def main() -> int:
                     ),
                     AlertBodyInvestigationRun.alert_source.is_(None),
                     AlertBodyInvestigationRun.alert_client.is_(None),
+                    AlertBodyInvestigationRun.event_time.is_(None),
                 )
             )
         ).scalars().all()
@@ -78,6 +80,11 @@ def main() -> int:
             if args.apply and run.alert_source is None:
                 run.alert_source = source
                 stats["source_set"] += 1
+            # Retroactive on purpose: every stored run gets a real event time
+            # rather than the feature waiting for new traffic to become useful.
+            if args.apply and run.event_time is None:
+                run.event_time = event_time_of(run.alert_body or "", fallback=run.created_at)
+                stats["event_time_set"] += 1
             if args.apply and run.alert_client is None:
                 run.alert_client = client_of(fields)
                 run.alert_kind = "incident" if is_pre_correlated(fields) else "alert"
@@ -106,7 +113,7 @@ def main() -> int:
 
     print()
     print("DRY RUN — nothing written." if not args.apply else "APPLIED")
-    for key in ("updated", "with_host", "with_user", "source_set", "client_set",
+    for key in ("updated", "with_host", "with_user", "source_set", "client_set", "event_time_set",
                 "entity_already_set", "no_entity_in_body"):
         print(f"  {key:20} {stats[key]}")
     return 0

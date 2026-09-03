@@ -24,8 +24,12 @@ silence.
 from __future__ import annotations
 
 import json
+import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Header form: "Agent: name | id" or "Agent IP: 1.2.3.4". The pipe is captured
 # rather than used as a terminator, because the id after it is what separates a
@@ -255,3 +259,105 @@ def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
         host = fields.get("agent_ip") if looks_like_host(fields.get("agent_ip")) else None
     user = fields.get("user")
     return (str(host)[:255] if host else None, str(user)[:255] if user else None)
+
+# ── Event time ────────────────────────────────────────────────────────────────
+#
+# When the thing happened on the host, as distinct from when this platform was
+# told about it. They are not close: this deployment receives alerts replayed
+# days after the fact, so ingest order is the order a sender chose to send in
+# and says nothing about the order events occurred. Any sequence reasoning built
+# on created_at measures the pipeline rather than the attack.
+#
+# Sources in descending order of authority. The first two are the host's own
+# clock; the rest are progressively further from it.
+_EVENT_TIME_PATTERNS: tuple[str, ...] = (
+    # Wazuh Windows eventlog, flattened or nested.
+    r"data\.win\.system\.systemTime\s*[:=]\s*\"?([0-9T:\-\.\+Z]{19,40})",
+    r'"systemTime"\s*:\s*"([^"]{19,40})"',
+    # Wazuh FIM.
+    r"syscheck\.mtime\s*[:=]\s*\"?([0-9T:\-\.\+Z ]{19,40})",
+    r'"mtime"\s*:\s*"([^"]{19,40})"',
+    # The alert's own header. Two stamps appear here separated by a pipe; both
+    # are collected and the earliest wins — see _parse_header_times.
+    r"(?:^|\n)[ \t]*Time:[ \t]*([^\n]{19,90})",
+    # Source-provided event time inside a JSON payload.
+    r'"eventTime"\s*:\s*"([^"]{19,40})"',
+    r'"timestamp"\s*:\s*"([^"]{19,40})"',
+)
+
+_TIMESTAMP_IN_TEXT = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+
+
+def _parse_timestamp(raw: str) -> datetime | None:
+    """
+    One timestamp, or nothing. Never raises.
+
+    Normalises the two shapes Python will not take as they arrive: a trailing Z,
+    and the sub-microsecond precision Windows emits (systemTime carries seven
+    fractional digits, which is 100-nanosecond FILETIME resolution).
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+00:00").replace(" ", "T", 1) if text.endswith("Z") else text
+    text = text.replace(" UTC", "").strip()
+
+    fraction = re.search(r"\.(\d{7,9})", text)
+    if fraction:
+        text = text.replace(f".{fraction.group(1)}", f".{fraction.group(1)[:6]}")
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # A naive stamp is the source's local clock with no offset given. Treating
+    # it as UTC is a documented assumption, not a discovery — but it keeps every
+    # stored value on one scale, which ordering needs more than it needs to be
+    # right about a timezone nobody declared.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_header_times(raw: str) -> datetime | None:
+    """
+    The earliest timestamp in one header line.
+
+    Wazuh's header carries two — "2026-08-16T07:29:13.311+0000 |
+    2026-08-16T07:28:30.948Z UTC" — without saying which is which. Taking the
+    earlier one is a rule rather than a guess about field order: an event on a
+    host cannot postdate the processing of that event, so whichever position
+    they occupy, the earlier value is the one nearer the host.
+    """
+    candidates = [
+        parsed
+        for match in _TIMESTAMP_IN_TEXT.findall(str(raw or ""))
+        if (parsed := _parse_timestamp(match)) is not None
+    ]
+    return min(candidates) if candidates else None
+
+
+def event_time_of(alert_body: str, *, fallback: datetime | None = None) -> datetime | None:
+    """
+    When this happened on the host, falling back to when we were told.
+
+    Returns `fallback` (the run's created_at) only when the body carries nothing
+    parseable, so a caller can always order by the result. A value in the far
+    future is refused: a clock-skewed endpoint stamping 2031 would otherwise
+    sort itself to the end of every case it appears in, permanently.
+    """
+    text = str(alert_body or "")[:200_000]
+
+    for pattern in _EVENT_TIME_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        found = _parse_header_times(match.group(1))
+        if found is None:
+            continue
+        if found > datetime.now(timezone.utc) + timedelta(days=2):
+            logger.debug("Ignoring implausible event time %s", found)
+            continue
+        return found
+
+    return fallback

@@ -615,6 +615,11 @@ class AlertBodyInvestigationRun(Base):
     # "alert" — one detection — or "incident", a payload that already contains a
     # whole session. The second is a case, not a member of one.
     alert_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # When it happened on the host, not when we were told. Ingest order is the
+    # order a sender chose to send in — replayed alerts arrive days late — so
+    # every sequence question a case asks reads this instead of created_at.
+    # Null only when the body carried nothing parseable and no fallback was set.
+    event_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # The parts of result_json the rollups read, lifted out at write time.
     # Detection quality, ATT&CK coverage and the cost dashboard each scan every

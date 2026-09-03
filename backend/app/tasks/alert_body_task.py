@@ -120,6 +120,7 @@ def run_alert_body_investigation_task(
             "alert_source",
             "alert_client",
             "alert_kind",
+            "event_time",
             "suppressed_by_exclusion",
         ):
             if carried in (run.result_json or {}):

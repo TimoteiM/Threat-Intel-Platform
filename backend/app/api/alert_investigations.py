@@ -68,6 +68,7 @@ from app.services.alert_field_service import (
     SUPPRESSIBLE_FIELDS,
     client_of,
     entity_of,
+    event_time_of,
     extract_alert_fields,
     is_pre_correlated,
     source_of,
@@ -344,6 +345,9 @@ async def _create_alert_run(
     alert_source = source_of(alert_fields, declared=(request.source or "").strip() or None)
     alert_client = client_of(alert_fields, declared=(request.client or "").strip() or None)
     alert_kind = "incident" if is_pre_correlated(alert_fields) else "alert"
+    # Falls back to now(): the run's own created_at is not assigned until the
+    # row is flushed, and "when we received it" is the same instant.
+    event_time = event_time_of(analysed_body, fallback=datetime.now(timezone.utc))
 
     matcher = await load_matcher(db)
     suppression = matcher.match_alert(alert_fields)
@@ -394,6 +398,7 @@ async def _create_alert_run(
         alert_source=alert_source,
         alert_client=alert_client,
         alert_kind=alert_kind,
+        event_time=event_time,
         callback_url=callback_url,
         result_json={
             "schema_version": ALERT_REPORT_SCHEMA_VERSION,
@@ -419,6 +424,7 @@ async def _create_alert_run(
             "alert_source": alert_source,
             "alert_client": alert_client,
             "alert_kind": alert_kind,
+            "event_time": event_time.isoformat() if event_time else None,
             "alert_body_chars": len(alert_body),
             "analysed_body_chars": len(analysed_body),
             "alert_body_truncated_for_analysis": body_truncated_for_analysis,

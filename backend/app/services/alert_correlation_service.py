@@ -61,6 +61,22 @@ DEFAULT_WINDOW_HOURS = 48
 MIN_DISTINCT_RULES = 2
 
 
+def _event_time(row: Any, fallback: datetime) -> datetime:
+    """
+    When this alert's event happened, with ingest time as the last resort.
+
+    Runs stored before the event_time column existed have none, and a null would
+    sort unpredictably against real timestamps. Falling back to created_at keeps
+    every member on one comparable scale — the backfill then replaces the
+    fallback with the real value wherever the body carries one.
+    """
+    return getattr(row, "event_time", None) or row.created_at or fallback
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
 def _tactics_of(assessment: Any) -> tuple[set[str], set[str]]:
     """
     (evidenced, claimed) tactics — kept apart, because they are not equally true.
@@ -185,6 +201,7 @@ async def correlate_alerts(
                 AlertBodyInvestigationRun.alert_source,
                 AlertBodyInvestigationRun.alert_client,
                 AlertBodyInvestigationRun.alert_kind,
+                AlertBodyInvestigationRun.event_time,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.overall_verdict,
@@ -240,7 +257,12 @@ async def correlate_alerts(
             verdicts=verdicts, claimed_only=claimed,
         )
 
-        ordered = sorted(members, key=lambda m: m.created_at or cutoff)
+        # Ordered by when things happened on the host, not by when this
+        # platform heard about them. Those differ by more than twelve hours on
+        # ordinary traffic here, and by days when a sender replays — so ingest
+        # order would have every sequence question answering about the pipeline
+        # rather than the attack.
+        ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
         cases.append(
             {
                 "source": source,
@@ -248,8 +270,13 @@ async def correlate_alerts(
                 "entity_host": entity,
                 "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
                 "window_hours": hours,
-                "first_seen": ordered[0].created_at.isoformat() if ordered[0].created_at else None,
-                "last_seen": ordered[-1].created_at.isoformat() if ordered[-1].created_at else None,
+                # The span the behaviour occupied on the host. Reported from
+                # event time so a replayed alert does not stretch a case across
+                # days it did not happen in.
+                "first_seen": _iso(_event_time(ordered[0], cutoff)),
+                "last_seen": _iso(_event_time(ordered[-1], cutoff)),
+                "first_ingested": _iso(ordered[0].created_at),
+                "last_ingested": _iso(ordered[-1].created_at),
                 "alert_count": len(members),
                 "distinct_rules": len(rules),
                 "tactics": sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
@@ -264,7 +291,8 @@ async def correlate_alerts(
                     {
                         "run_id": str(m.id),
                         "title": m.title,
-                        "created_at": m.created_at.isoformat() if m.created_at else None,
+                        "event_time": _iso(_event_time(m, cutoff)),
+                        "created_at": _iso(m.created_at),
                         "detection_rule_id": m.detection_rule_id,
                         "detection_rule_name": m.detection_rule_name,
                         "overall_verdict": m.overall_verdict,
