@@ -55,6 +55,10 @@ SURPRISE_BASELINE_DAYS = 30
 # against.
 BASELINE_WINDOW_MULTIPLE = 12
 
+# How many days a rule must have fired on before its never-pairing is a fact
+# about the rule rather than about how little of it has been seen.
+NON_PAIRING_MIN_DAYS = 3
+
 
 def baseline_window_days(query_hours: int) -> int:
     """
@@ -123,6 +127,13 @@ class PairBaseline:
     window_days: int
     runs_considered: int
     observed_days: int
+    # Rules that fire regularly and never once alongside another rule on the
+    # same host and day. They can never contribute to a correlated case — a case
+    # needs two distinct rules — so every investigation they trigger is
+    # collector budget spent on something correlation will never read. Surfaced
+    # because this is the first evidence the platform can produce on its own
+    # about which rules are pure volume, and it costs nothing to compute here.
+    non_pairing_rules: tuple[tuple[str, int], ...] = ()
 
     @property
     def distinct_pairs(self) -> int:
@@ -152,6 +163,9 @@ class PairBaseline:
             "distinct_pairs": self.distinct_pairs,
             "pairs_with_history": self.pairs_with_history,
             "mature": self.is_mature,
+            "non_pairing_rules": [
+                {"rule": rule, "days_seen": days} for rule, days in self.non_pairing_rules
+            ],
             "note": (
                 None
                 if self.is_mature
@@ -220,15 +234,35 @@ async def build_pair_baseline(
         )].add(rule)
 
     baseline: dict[PairKey, set[date]] = defaultdict(set)
+    # Days a rule was seen at all, against days it was seen with company.
+    seen_days: dict[str, set[date]] = defaultdict(set)
+    paired_days: dict[str, set[date]] = defaultdict(set)
+
     for (source, client, host, day), rules in per_day.items():
+        for rule in rules:
+            seen_days[rule].add(day)
+            if len(rules) > 1:
+                paired_days[rule].add(day)
         for rule_a, rule_b in _pairs(rules):
             baseline[(source, client, host, rule_a, rule_b)].add(day)
+
+    # Regular enough to be a habit, never once in company. A rule seen on one or
+    # two days has simply not had the chance yet.
+    solitary = sorted(
+        (
+            (rule, len(days))
+            for rule, days in seen_days.items()
+            if not paired_days[rule] and len(days) >= NON_PAIRING_MIN_DAYS
+        ),
+        key=lambda item: -item[1],
+    )
 
     result = PairBaseline(
         pairs=dict(baseline),
         window_days=days,
         runs_considered=len(rows),
         observed_days=len({day for (_s, _c, _h, day) in per_day}),
+        non_pairing_rules=tuple(solitary[:10]),
     )
     logger.debug(
         "Pair baseline: %d pairs (%d with history) from %d runs over %d days",

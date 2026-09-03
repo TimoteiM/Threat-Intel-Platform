@@ -160,3 +160,20 @@ def test_a_baseline_with_repeat_pairings_is_mature_and_says_nothing():
     )
     assert warm.is_mature is True
     assert warm.as_dict()["note"] is None
+
+
+def test_rules_that_never_pair_are_named():
+    """
+    A rule that fires regularly and never once alongside another on the same
+    host and day can never contribute to a correlated case — a case needs two
+    distinct rules. Every investigation it triggers is collector budget spent on
+    something correlation will never read, which makes it the first candidate
+    for suppression. On this estate that is rule 1002, two-thirds of all volume.
+    """
+    baseline = PairBaseline(
+        pairs={}, window_days=30, runs_considered=500, observed_days=6,
+        non_pairing_rules=(("1002", 6), ("60104", 5)),
+    )
+    named = baseline.as_dict()["non_pairing_rules"]
+    assert named[0] == {"rule": "1002", "days_seen": 6}
+    assert len(named) == 2
