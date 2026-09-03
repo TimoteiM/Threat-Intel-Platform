@@ -198,3 +198,32 @@ def test_stealth_ranks_between_privilege_escalation_and_credential_access():
         < _TACTIC_RANK["stealth"]
         < _TACTIC_RANK["credential access"]
     )
+
+
+def test_an_unranked_tactic_is_counted_and_named():
+    """
+    The alias table patches the past; it does not protect the future. MITRE will
+    revise the taxonomy again and the failure is silent — a new name ranks
+    nowhere and zeroes movement for every case reaching it, which is how the
+    Stealth rename cost a real case 25 points for a month without one error.
+    """
+    from app.services.alert_correlation_service import (
+        _UNRANKED_TACTICS,
+        unranked_tactics_seen,
+    )
+
+    _UNRANKED_TACTICS.clear()
+    score_case(
+        distinct_rules=2, tactics={"Execution", "Tactic MITRE Invents In 2027"},
+        max_risk=0, verdicts=[],
+    )
+    assert unranked_tactics_seen() == {"Tactic MITRE Invents In 2027": 1}
+
+
+def test_known_tactics_are_not_reported_as_unranked():
+    from app.services.alert_correlation_service import _UNRANKED_TACTICS, unranked_tactics_seen
+
+    _UNRANKED_TACTICS.clear()
+    score_case(distinct_rules=2, tactics={"Execution", "Stealth", "Defense Evasion"},
+               max_risk=0, verdicts=[])
+    assert unranked_tactics_seen() == {}

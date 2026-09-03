@@ -78,6 +78,36 @@ _TACTIC_ALIASES = {
 for _old, _new in _TACTIC_ALIASES.items():
     _TACTIC_RANK[_old] = _TACTIC_RANK[_new.casefold()]
 
+# The alias table patches the past; it does not protect the future. MITRE will
+# revise the taxonomy again, a new tactic name will emit, it will rank nowhere,
+# and it will quietly zero the movement of every case that reaches it — which is
+# precisely how the Stealth rename cost EXP-D0MY264 25 points for a month
+# without producing a single error.
+#
+# So an unranked tactic is now loud. A non-zero reading here means the catalogue
+# has outrun this ordering again, and the name in the log says which tactic to
+# add. The same instinct as the naive-stamp counter: this one has already bitten
+# once, and it announced itself only because the pipeline reports its working.
+_UNRANKED_TACTICS: dict[str, int] = {}
+
+
+def unranked_tactics_seen() -> dict[str, int]:
+    """Tactic names scored cases carried that this kill chain does not rank."""
+    return dict(_UNRANKED_TACTICS)
+
+
+def _note_unranked(tactic: str) -> None:
+    name = str(tactic or "").strip()
+    if not name:
+        return
+    first_time = name not in _UNRANKED_TACTICS
+    _UNRANKED_TACTICS[name] = _UNRANKED_TACTICS.get(name, 0) + 1
+    if first_time:
+        logger.warning(
+            "ATT&CK tactic %r is not in TACTIC_ORDER — it contributes nothing to movement "
+            "or progression. The catalogue has outrun this ordering; add it.", name
+        )
+
 DEFAULT_WINDOW_HOURS = 48
 # One rule firing repeatedly is one detection, however loud. A case needs two
 # independent rules to agree before it is worth anyone's attention.
@@ -321,13 +351,27 @@ def score_case(
         score += 30 * min(distinct_rules - 1, 3)
         reasons.append(f"{distinct_rules} independent detections agree on this entity")
 
+    for tactic in tactics:
+        if tactic.casefold() not in _TACTIC_RANK:
+            _note_unranked(tactic)
+
     ranks = sorted({_TACTIC_RANK[t.casefold()] for t in tactics if t.casefold() in _TACTIC_RANK})
     if len(ranks) >= 2:
         # Movement is earned from breadth and distance, then scaled by the
-        # direction and pace it happened at. The scaling multiplies this term
-        # only — never the total — so a burst of two noisy rules with no
-        # movement multiplies zero and stays zero, while a chain that advances
-        # cleanly in minutes is lifted by both of its shape signals at once.
+        # direction and pace it happened at.
+        #
+        # `shape` multiplies THIS TERM ONLY, never the running total, and that is
+        # load-bearing rather than incidental. The noise case falls out of the
+        # algebra instead of needing a rule:
+        #
+        #     any tempo × no movement = 0
+        #
+        # Two rules firing 30 seconds apart with nothing evidenced between them
+        # multiply a movement of zero and stay exactly as boring as they were.
+        # Applying shape to the total instead — the obvious "fix" for making
+        # tempo always count — silently re-admits every single-rule burst this
+        # excludes, and re-admits them at 1.35x. Do not move this multiplication
+        # outward.
         movement = 15 * min(len(ranks) - 1, 3)
         span = TACTIC_ORDER[ranks[-1]]
         reasons.append(
