@@ -28,6 +28,7 @@ from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Inve
 from app.models.schemas import AnalystFeedbackCreate
 from app.services.alert_correlation_service import correlate_alerts
 from app.services.alert_entity_profile_service import build_entity_profile
+from app.services.alert_tuning_service import build_tuning_recommendations
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 
@@ -108,6 +109,21 @@ async def get_entity_profile(
 ) -> dict[str, Any]:
     """Everything stored about one machine, assembled for a single view."""
     return await build_entity_profile(db, host=host, days=days)
+
+
+@router.get("/tuning-recommendations")
+async def get_tuning_recommendations(
+    db: DBSession,
+    days: int = Query(default=90, ge=1, le=365),
+    min_alerts: int = Query(default=5, ge=2, le=50),
+) -> dict[str, Any]:
+    """Rules that have never produced an actionable verdict, and how to silence them.
+
+    Nothing is created here. Every condition is replayed against the rule's whole
+    stored history first, and any candidate that would have silenced an alert
+    concluding malicious or suspicious is discarded rather than reported.
+    """
+    return await build_tuning_recommendations(db, days=days, min_alerts=min_alerts)
 
 
 @router.post("/feedback", status_code=201)

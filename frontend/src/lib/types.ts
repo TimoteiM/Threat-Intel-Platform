@@ -2235,3 +2235,49 @@ export interface EntityProfile {
     risk: number;
   }>;
 }
+
+
+/* ─── Rules that have never been worth investigating ─── */
+
+export interface TuningCondition {
+  match_fields: Record<string, string>;
+  covered: number;
+  leaked: number;
+  coverage: number;
+  scope: string;
+  field_count: number;
+  notes: string[];
+}
+
+export interface TuningRecommendation {
+  rule_id: string;
+  rule_name: string;
+  alerts: number;
+  actionable: number;
+  noise: number;
+  hosts?: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  recommendable: boolean;
+  sampled?: boolean;
+  blocked_reason?: string;
+  conditions: TuningCondition[];
+  proposed?: TuningCondition;
+  reason?: string;
+  expires_in_days?: number;
+  wazuh_rule?: string;
+  replay?: {
+    would_have_silenced: number;
+    of_which_actionable: number;
+    window_days: number;
+  };
+}
+
+export interface TuningResponse {
+  window_days: number;
+  min_alerts: number;
+  rules_examined: number;
+  recommendations: TuningRecommendation[];
+  alerts_silenceable: number;
+  alerts_total: number;
+}

@@ -21,6 +21,7 @@ import type {
   CorrelatedCase,
   CorrelatedCasesResponse,
   EntityProfile,
+  TuningResponse,
   SuppressionCandidate,
   TacticAlertsResponse,
 } from "./types";
@@ -801,6 +802,16 @@ export function getEntityProfile(host: string, days?: number) {
   const query = days ? `?days=${days}` : "";
   return request<EntityProfile>(
     `/detections/entity/${encodeURIComponent(host)}${query}`,
+  );
+}
+
+export function getTuningRecommendations(params?: { days?: number; min_alerts?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  if (params?.min_alerts) qs.set("min_alerts", String(params.min_alerts));
+  const query = qs.toString();
+  return request<TuningResponse>(
+    `/detections/tuning-recommendations${query ? `?${query}` : ""}`,
   );
 }
 

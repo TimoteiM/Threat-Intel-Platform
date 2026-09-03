@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
+import TuningRecommendations from "@/components/detections/TuningRecommendations";
 
 const WINDOWS = [7, 30, 90];
 
@@ -144,7 +145,7 @@ export default function DetectionsPage() {
         {loading ? (
           <LoadingState label="Loading detection data…" />
         ) : tab === "rules" ? (
-          <RulesTab data={quality} />
+          <RulesTab data={quality} days={days} />
         ) : tab === "attack" ? (
           <AttackTab data={coverage} days={Math.max(days, 90)} />
         ) : tab === "cases" ? (
@@ -159,7 +160,7 @@ export default function DetectionsPage() {
 
 /* ─── Rules ─── */
 
-function RulesTab({ data }: { data: DetectionQualityResponse | null }) {
+function RulesTab({ data, days }: { data: DetectionQualityResponse | null; days: number }) {
   if (!data || !data.rules.length) {
     return (
       <EmptyState
@@ -189,6 +190,12 @@ function RulesTab({ data }: { data: DetectionQualityResponse | null }) {
           { label: "Scoring floor", value: `${data.min_alerts_to_score} alerts`, hint: "below this, counts only" },
         ]}
       />
+
+      {/* Placed above the rule list rather than beside it: the list reports what
+          each rule is worth, and this is the only thing on the page that can be
+          acted on. Reading the metrics and then having to hunt for the action is
+          how a tuning backlog stays a backlog. */}
+      <TuningRecommendations days={days} />
 
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
         {data.rules.map((rule) => (

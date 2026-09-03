@@ -280,9 +280,26 @@ async def _get(db: DBSession, exclusion_id: str) -> Exclusion:
     return row
 
 
-def _aware(value: datetime | None) -> datetime | None:
+def _aware(value: datetime | str | None) -> datetime | None:
+    """Normalise an expiry to an aware datetime.
+
+    The typed endpoints hand this a datetime that Pydantic already parsed; the
+    alert endpoint takes a raw dict, so the same field arrives as an ISO string
+    and used to raise AttributeError on `.tzinfo` — which surfaced as a 500 the
+    moment anything set an expiry on an alert exclusion. Both shapes are
+    accepted here rather than in two places.
+    """
     if value is None:
         return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, f"expires_at is not a valid timestamp: {value!r}")
+        value = parsed
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
