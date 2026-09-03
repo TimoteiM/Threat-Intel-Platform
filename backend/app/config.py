@@ -203,8 +203,20 @@ class Settings(BaseSettings):
     # that walks up steadily never trips at all.
     correlation_escalation_delta: int = 20
     # Cases below this never escalate regardless of how far they climbed — a
-    # jump from 5 to 25 is arithmetic, not an incident.
+    # jump from 5 to 25 is arithmetic, not an incident. This gates a delta:
+    # "how bad must a case already be for getting worse to be worth a page".
     correlation_escalation_min_score: int = 50
+    # A separate bar, deliberately not the one above: "how bad must a case be on
+    # arrival, with no climb at all, to be worth interrupting someone". It
+    # answers a different question and will be tuned against different feedback
+    # — a single-recompute 96 with no movement over time is a stronger claim
+    # than a case watched climbing — so it gets its own lever. Defaulted to the
+    # same value so nothing changes today; expect it to drift upward.
+    correlation_opened_high_min_score: int = 50
+    # Where case.escalated and case.opened_high are POSTed. Empty disables both;
+    # the decision logic still runs and records, so turning it on later does not
+    # replay a backlog.
+    correlation_webhook_url: str = ""
 
     alert_spawn_investigations: bool = True
     alert_spawn_observable_types: str = "domain,url"

@@ -34,12 +34,16 @@ from app.services.alert_baseline_service import (
     build_pair_baseline,
     case_surprise,
 )
+from app.config import get_settings
+from app.services.alert_case_escalation import decide_emission, record_emission
 from app.services.alert_case_store import (
     absorb_superseded,
+    supersession_state,
     snapshot_if_changed,
     upsert_spine,
 )
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
+from app.tasks.case_event_task import dispatch
 from app.services.alert_session_service import (
     SCORE_VERSION,
     SESSION_GAP,
@@ -586,6 +590,8 @@ async def correlate_alerts(
             str(row.entity_host),
         )].append(row)
 
+    settings = get_settings()
+    emissions: list[dict[str, Any]] = []
     cases: list[dict[str, Any]] = []
     for (source, client, entity), group_members in grouped.items():
         in_window = {m.id for m in group_members}
@@ -766,7 +772,7 @@ async def correlate_alerts(
                 score=score,
                 score_version=SCORE_VERSION,
             )
-            await snapshot_if_changed(
+            outcome = await snapshot_if_changed(
                 db,
                 case_key=case_key,
                 score=score,
@@ -776,12 +782,50 @@ async def correlate_alerts(
                 tactics=tactics,
                 score_version=SCORE_VERSION,
             )
+            emission = await decide_emission(
+                db,
+                case_key=case_key,
+                outcome=outcome,
+                score=score,
+                score_version=SCORE_VERSION,
+                escalation_delta=settings.correlation_escalation_delta,
+                escalation_min_score=settings.correlation_escalation_min_score,
+                opened_high_min_score=settings.correlation_opened_high_min_score,
+            )
+            if emission is not None:
+                # Recorded now, delivered after the commit below. A receiver
+                # that reacts instantly must not be able to beat the record it
+                # is reacting to.
+                record_emission(outcome, emission)
+                emissions.append(
+                    {
+                        "event": emission.event,
+                        "case_key": emission.case_key,
+                        "entity_host": entity,
+                        "source": source,
+                        "client": client,
+                        "score": emission.score,
+                        "reference_score": emission.reference_score,
+                        "score_version": emission.score_version,
+                        "delta_config": emission.delta_config,
+                        "min_score_config": emission.min_score_config,
+                        "reason": emission.reason,
+                        "session_started_at": _iso(session.session_started_at),
+                        "alert_count": len(members),
+                        "tactics": sorted(tactics),
+                    }
+                )
 
     # The overlay is written for every case that formed, not only the ones this
     # request will display: a case filtered out by min_score is still a case
     # that happened, and its history should not depend on how the page happened
     # to be filtered when it was last opened.
     await db.commit()
+
+    # Only now. Everything above is a record; this is the only line that speaks
+    # to anyone outside the process, and it speaks about facts already stored.
+    if emissions:
+        dispatch(emissions)
 
     if min_score:
         cases = [case for case in cases if case["score"] >= min_score]
@@ -792,6 +836,10 @@ async def correlate_alerts(
         # before" and "nothing has been seen yet" produce the same number and
         # mean opposite things.
         "baseline": baseline.as_dict(),
+        # Watched rather than merely logged: the supersession gate is the one
+        # path real data has not exercised yet, and it activates first on the
+        # noisiest host in the estate.
+        "supersession": await supersession_state(db),
         "entities_seen": len(grouped),
         "sources_seen": len({key[0] for key in grouped}),
         "clients_seen": len({key[1] for key in grouped}),

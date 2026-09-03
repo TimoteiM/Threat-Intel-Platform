@@ -138,6 +138,12 @@ def upgrade() -> None:
         # or silently swallows new legitimate escalations, with no way to tell
         # which one happened.
         sa.Column("escalated", sa.Boolean, nullable=False, server_default=sa.text("false")),
+        # WHICH event was emitted: case.escalated or case.opened_high. They are
+        # different questions a consumer routes differently, so the record has to
+        # name one rather than leave it to be inferred from which of the columns
+        # below happen to be NULL — inferring it here is the same failure as
+        # making a webhook consumer parse the payload to find out what fired.
+        sa.Column("emitted_event", sa.String(32), nullable=True),
         sa.Column("escalated_from_score", sa.Integer, nullable=True),
         sa.Column("escalated_to_score", sa.Integer, nullable=True),
         sa.Column("escalated_delta_config", sa.Integer, nullable=True),

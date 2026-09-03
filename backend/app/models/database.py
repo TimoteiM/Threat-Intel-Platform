@@ -861,6 +861,7 @@ class AlertCaseSnapshot(Base):
     member_count: Mapped[int] = mapped_column(Integer, nullable=False)
     tactics: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    emitted_event: Mapped[str | None] = mapped_column(String(32), nullable=True)
     escalated_from_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     escalated_to_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     escalated_delta_config: Mapped[int | None] = mapped_column(Integer, nullable=True)

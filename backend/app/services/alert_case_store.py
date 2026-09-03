@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertCaseSnapshot, AlertCaseSpine
@@ -45,16 +46,91 @@ def reset_supersession_stats() -> None:
     _SUPERSESSION_STATS.update({"superseded": 0, "chains_collapsed": 0})
 
 
+async def supersession_state(db: AsyncSession) -> dict[str, Any]:
+    """The durable supersession picture, read from the spine.
+
+    supersession_stats() above counts what THIS process did since it started:
+    per-worker, lost on restart, and therefore useless as something to alert on.
+    The spine is the record that survives, so anything watching for the first
+    real re-anchor has to read this instead.
+
+    Reported rather than merely logged because the supersession gate is the one
+    path real data has not yet exercised. Every anchor walk that exhausts
+    history without finding a gap — 46.8% of them, measured — is a latent
+    re-identification waiting for a late-arriving alert, and this deployment has
+    lags up to 323 days. When this count first leaves zero, the case it names is
+    worth reading: it is the intersection where a reborn key could double-page
+    or inherit a stale reference and go quiet.
+    """
+    superseded = (
+        await db.execute(
+            select(func.count())
+            .select_from(AlertCaseSpine)
+            .where(AlertCaseSpine.superseded_by_case_key.isnot(None))
+            .execution_options(query_name="spine_supersession_count")
+        )
+    ).scalar() or 0
+
+    # The collapse-on-write invariant: nothing may point at a key that itself
+    # points somewhere. A violation means a chain was left half-collapsed, which
+    # reads exactly like a complete one.
+    dead = aliased(AlertCaseSpine)
+    target = aliased(AlertCaseSpine)
+    violations = (
+        await db.execute(
+            select(func.count())
+            .select_from(dead)
+            .join(target, dead.superseded_by_case_key == target.case_key)
+            .where(target.superseded_by_case_key.isnot(None))
+            .execution_options(query_name="spine_chain_violations")
+        )
+    ).scalar() or 0
+
+    if violations:
+        logger.error(
+            "%d supersession pointer(s) target a key that is itself superseded "
+            "— collapse-on-write did not hold", violations,
+        )
+
+    return {
+        "cases_superseded": int(superseded),
+        "chain_violations": int(violations),
+        # Zero here is not proof the gate works, only that it has not been
+        # needed yet. The first non-zero reading is the one to look at.
+        "ever_occurred": bool(superseded),
+        "this_process": supersession_stats(),
+    }
+
+
 @dataclass(frozen=True)
 class SnapshotOutcome:
-    """What snapshot_if_changed decided, and why."""
+    """What snapshot_if_changed decided, and everything a firing rule needs.
+
+    Every field here is read from stored rows BEFORE the new snapshot is added
+    to the session. That ordering is deliberate: a pending row is a statement
+    about now, and every question escalation asks is a question about the past.
+    Letting the row being written answer "has this case ever been seen before"
+    is the same class of bug as scoring on ingest order.
+    """
 
     snapshot: AlertCaseSnapshot | None
     # True when this row establishes a comparison point rather than recording a
     # change: a case's first snapshot, or the first under a new score_version.
-    # Escalation must never fire on a baseline — see the note in append below.
+    # Escalation must never fire on a baseline.
     is_baseline: bool
     previous_score: int | None
+    # Whether ANY snapshot existed for this case at ANY score_version. This is
+    # the field that separates a genuinely new case from a case re-baselined by
+    # a formula change — the two are identical under a version-scoped query, and
+    # firing "arrived bad" on the second would page once per existing high case
+    # the moment new weights deploy.
+    had_prior_any_version: bool = False
+    # The earliest score recorded under this score_version, and the score the
+    # last escalation actually emitted at. Escalation measures from the emission
+    # rather than from the previous snapshot, so that lowering the delta later
+    # surfaces a crossing that was missed rather than silently swallowing it.
+    version_baseline_score: int | None = None
+    last_emission_score: int | None = None
 
 
 async def upsert_spine(
@@ -156,6 +232,46 @@ async def snapshot_if_changed(
         )
     ).scalar_one_or_none()
 
+    # Read before anything is added to the session — see SnapshotOutcome.
+    any_version = (
+        await db.execute(
+            select(AlertCaseSnapshot.id)
+            .where(AlertCaseSnapshot.case_key == case_key)
+            .limit(1)
+            .execution_options(query_name="snapshot_any_version")
+        )
+    ).scalar_one_or_none()
+    version_baseline = (
+        await db.execute(
+            select(AlertCaseSnapshot.score)
+            .where(
+                AlertCaseSnapshot.case_key == case_key,
+                AlertCaseSnapshot.score_version == score_version,
+            )
+            .order_by(AlertCaseSnapshot.computed_at.asc())
+            .limit(1)
+            .execution_options(query_name="snapshot_version_baseline")
+        )
+    ).scalar_one_or_none()
+    last_emission = (
+        await db.execute(
+            select(AlertCaseSnapshot.escalated_to_score)
+            .where(
+                AlertCaseSnapshot.case_key == case_key,
+                AlertCaseSnapshot.score_version == score_version,
+                AlertCaseSnapshot.escalated.is_(True),
+            )
+            .order_by(AlertCaseSnapshot.computed_at.desc())
+            .limit(1)
+            .execution_options(query_name="snapshot_last_emission")
+        )
+    ).scalar_one_or_none()
+    facts = {
+        "had_prior_any_version": any_version is not None,
+        "version_baseline_score": version_baseline,
+        "last_emission_score": last_emission,
+    }
+
     if previous is not None:
         unchanged = (
             previous.score == score
@@ -164,7 +280,8 @@ async def snapshot_if_changed(
         )
         if unchanged:
             return SnapshotOutcome(
-                snapshot=None, is_baseline=False, previous_score=previous.score
+                snapshot=None, is_baseline=False, previous_score=previous.score,
+                **facts,
             )
 
     row = AlertCaseSnapshot(
@@ -183,6 +300,7 @@ async def snapshot_if_changed(
         snapshot=row,
         is_baseline=previous is None,
         previous_score=previous.score if previous is not None else None,
+        **facts,
     )
 
 

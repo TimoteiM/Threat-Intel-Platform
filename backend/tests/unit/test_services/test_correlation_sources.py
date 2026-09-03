@@ -51,6 +51,10 @@ class _Result:
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
 
+    def scalar(self):
+        # Count queries against empty tables: zero, not None.
+        return self._rows[0] if self._rows else 0
+
 
 class _DB:
     """A database that answers each of the service's reads differently.
