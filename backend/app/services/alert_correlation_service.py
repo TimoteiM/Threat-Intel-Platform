@@ -49,7 +49,14 @@ TACTIC_ORDER: tuple[str, ...] = (
     "Execution",
     "Persistence",
     "Privilege Escalation",
-    "Defense Evasion",
+    # ATT&CK v19.2 split Defense Evasion into Stealth and Defense Impairment.
+    # The catalogue this platform generates emits the new names; the old one was
+    # still the only ranked spelling here, so every Stealth tactic was unranked
+    # — contributing nothing to movement and invisible to progression, silently.
+    # EXP-D0MY264 reached Execution and Stealth and scored as though it had
+    # reached one tactic.
+    "Stealth",
+    "Defense Impairment",
     "Credential Access",
     "Discovery",
     "Lateral Movement",
@@ -59,6 +66,17 @@ TACTIC_ORDER: tuple[str, ...] = (
     "Impact",
 )
 _TACTIC_RANK = {name.casefold(): index for index, name in enumerate(TACTIC_ORDER)}
+
+# Retired spellings, ranked where their replacement sits. Assessments stored
+# before the rename still carry the old name, and a tactic that stops ranking
+# because ATT&CK renamed it is a silent regression in every case that touches
+# it — the kind that shows as a slightly lower score and never as an error.
+_TACTIC_ALIASES = {
+    "defense evasion": "Stealth",
+    "defence evasion": "Stealth",
+}
+for _old, _new in _TACTIC_ALIASES.items():
+    _TACTIC_RANK[_old] = _TACTIC_RANK[_new.casefold()]
 
 DEFAULT_WINDOW_HOURS = 48
 # One rule firing repeatedly is one detection, however loud. A case needs two
@@ -115,6 +133,164 @@ def _tactics_of(assessment: Any) -> tuple[set[str], set[str]]:
     return evidenced, claimed
 
 
+
+# ── Behavioural shape: direction and pace ─────────────────────────────────────
+
+# Two alerts stamped within a minute of each other are not evidence about which
+# came first. Sensors batch, decoders round, and clocks drift by more than this
+# between hosts — so anything inside the window is treated as unordered and
+# contributes no transition at all, rather than a coin-flip one. A case is a
+# partial order, not a sequence.
+SIMULTANEITY_SECONDS = 60
+
+# Inter-arrival spread on two alerts is one gap, not a distribution. Four
+# members give three intervals, which is the least that can distinguish a burst
+# from a pair that happened to land close together. Below it tempo is unknown —
+# reported as unknown, never as a number.
+MIN_MEMBERS_FOR_TEMPO = 4
+
+# Median gap thresholds. Five minutes is faster than a person works through a
+# host; four hours is slower than an intrusion usually pauses without being
+# deliberate about it.
+BURST_MEDIAN_GAP_SECONDS = 5 * 60
+DWELL_MEDIAN_GAP_SECONDS = 4 * 3600
+
+# Direction and pace modulate the movement the case already earned; they never
+# add points of their own. A flat "burst bonus" would let a fast pair of noisy
+# rules out-score a slow real chain, which is the opposite of what pace means.
+#
+# Progression scales movement between these bounds: a case whose stages run
+# backwards keeps 0.6 of it, one that advances cleanly gets 1.4.
+PROGRESSION_MIN_FACTOR = 0.6
+PROGRESSION_MAX_FACTOR = 1.4
+
+# A burst of *several distinct tactics* is an automated chain. Applied to
+# movement, so a burst of one rule repeating multiplies a movement of zero and
+# stays exactly as boring as it was.
+TEMPO_BURST_FACTOR = 1.35
+# Dwell is neutral, never a penalty. Low and slow is a technique, not an
+# absence of one, and a chain that advances over three days is still a chain.
+TEMPO_DWELL_FACTOR = 1.0
+
+
+def _member_stage(row: Any) -> int | None:
+    """
+    How far along the kill chain one alert reached, or None if it says nothing.
+
+    The furthest evidenced stage, not the earliest: an alert that evidences both
+    Execution and Impact has reached Impact, and taking the minimum would report
+    the case as never advancing past where it started.
+
+    Evidenced tactics only. Claimed ones have never been corroborated on this
+    deployment and the mismatch view shows rules claiming Valid Accounts where
+    the evidence is PowerShell — a direction computed from those would be a
+    direction through the rules' imagination.
+    """
+    evidenced, _claimed = _tactics_of(row.result_attack_assessment)
+    ranks = [_TACTIC_RANK[t.casefold()] for t in evidenced if t.casefold() in _TACTIC_RANK]
+    return max(ranks) if ranks else None
+
+
+def progression_of(ordered: list[Any], fallback: datetime) -> dict[str, Any]:
+    """
+    How much of this case's movement runs forward along the kill chain.
+
+    Walks adjacent staged members in event-time order. A transition counts as
+    forward when the later member is at or beyond the earlier one's stage —
+    ties included, because two alerts in the same tactic are not evidence of
+    going backwards.
+
+    Pairs closer together than SIMULTANEITY_SECONDS are skipped entirely. They
+    are unordered with respect to each other, and scoring them either way would
+    turn clock jitter into a claim about attacker behaviour.
+    """
+    staged = [
+        (_event_time(row, fallback), stage)
+        for row in ordered
+        if (stage := _member_stage(row)) is not None
+    ]
+    if len(staged) < 2:
+        return {"ratio": None, "forward": 0, "transitions": 0, "unordered": 0,
+                "staged_members": len(staged)}
+
+    forward = 0
+    transitions = 0
+    unordered = 0
+    for (t_earlier, stage_earlier), (t_later, stage_later) in zip(staged, staged[1:]):
+        if abs((t_later - t_earlier).total_seconds()) <= SIMULTANEITY_SECONDS:
+            unordered += 1
+            continue
+        transitions += 1
+        if stage_later >= stage_earlier:
+            forward += 1
+
+    return {
+        "ratio": round(forward / transitions, 3) if transitions else None,
+        "forward": forward,
+        "transitions": transitions,
+        "unordered": unordered,
+        "staged_members": len(staged),
+    }
+
+
+def tempo_of(ordered: list[Any], fallback: datetime) -> dict[str, Any]:
+    """
+    The pace of a case: burst, steady, dwell, or honestly unknown.
+
+    Reported from the median gap rather than the mean, so one long overnight
+    pause in an otherwise rapid sequence does not turn a burst into a dwell.
+
+    Under MIN_MEMBERS_FOR_TEMPO the answer is "unknown" and not a number. Two
+    alerts produce a single interval, and a single interval is not a pace — a
+    confident "tight burst" read off one gap is exactly the kind of number that
+    looks like measurement and is not.
+    """
+    if len(ordered) < MIN_MEMBERS_FOR_TEMPO:
+        return {"kind": "unknown", "median_gap_seconds": None, "span_seconds": None,
+                "reason": f"fewer than {MIN_MEMBERS_FOR_TEMPO} alerts — one or two gaps is not a pace"}
+
+    times = sorted(_event_time(row, fallback) for row in ordered)
+    gaps = [(later - earlier).total_seconds() for earlier, later in zip(times, times[1:])]
+    gaps.sort()
+    median = gaps[len(gaps) // 2] if len(gaps) % 2 else (gaps[len(gaps) // 2 - 1] + gaps[len(gaps) // 2]) / 2
+    span = (times[-1] - times[0]).total_seconds()
+
+    if median <= BURST_MEDIAN_GAP_SECONDS:
+        kind = "burst"
+    elif median >= DWELL_MEDIAN_GAP_SECONDS:
+        kind = "dwell"
+    else:
+        kind = "steady"
+
+    return {"kind": kind, "median_gap_seconds": round(median, 1),
+            "span_seconds": round(span, 1), "reason": None}
+
+
+def shape_factor(progression: dict[str, Any], tempo: dict[str, Any]) -> float:
+    """
+    The multiplier applied to a case's movement, from its direction and pace.
+
+    An interaction rather than two addends. Pace alone means nothing — a fast
+    pair of noisy rules is still noise — so it scales movement the case already
+    earned instead of contributing points, and a burst of one repeating rule
+    multiplies a movement of zero and stays exactly as boring as it was.
+    """
+    ratio = progression.get("ratio")
+    if ratio is None:
+        # Not enough staged evidence to say which way it ran. Neutral, not
+        # penalised: an absence of direction is not evidence of a bad one.
+        factor = 1.0
+    else:
+        factor = PROGRESSION_MIN_FACTOR + (PROGRESSION_MAX_FACTOR - PROGRESSION_MIN_FACTOR) * ratio
+
+    kind = tempo.get("kind")
+    if kind == "burst":
+        factor *= TEMPO_BURST_FACTOR
+    elif kind == "dwell":
+        factor *= TEMPO_DWELL_FACTOR
+    return round(factor, 3)
+
+
 def score_case(
     *,
     distinct_rules: int,
@@ -122,6 +298,7 @@ def score_case(
     max_risk: int,
     verdicts: list[str],
     claimed_only: set[str] | None = None,
+    shape: float = 1.0,
 ) -> tuple[int, list[str]]:
     """
     How much this case deserves attention, and why in words.
@@ -146,7 +323,12 @@ def score_case(
 
     ranks = sorted({_TACTIC_RANK[t.casefold()] for t in tactics if t.casefold() in _TACTIC_RANK})
     if len(ranks) >= 2:
-        score += 15 * min(len(ranks) - 1, 3)
+        # Movement is earned from breadth and distance, then scaled by the
+        # direction and pace it happened at. The scaling multiplies this term
+        # only — never the total — so a burst of two noisy rules with no
+        # movement multiplies zero and stays zero, while a chain that advances
+        # cleanly in minutes is lifted by both of its shape signals at once.
+        movement = 15 * min(len(ranks) - 1, 3)
         span = TACTIC_ORDER[ranks[-1]]
         reasons.append(
             f"{len(ranks)} ATT&CK tactics touched, reaching {span}"
@@ -154,10 +336,11 @@ def score_case(
         # Distance travelled, not just breadth: Discovery→Impact is the shape
         # that matters, and two neighbouring tactics is not that.
         if ranks[-1] - ranks[0] >= 4:
-            score += 20
+            movement += 20
             reasons.append(
                 f"the behaviour advances from {TACTIC_ORDER[ranks[0]]} to {TACTIC_ORDER[ranks[-1]]}"
             )
+        score += int(round(movement * shape))
 
     # Said, not scored. Breadth that exists only in rule mappings is worth
     # showing an analyst and worth nothing in the number.
@@ -265,9 +448,17 @@ async def correlate_alerts(
             tactics |= evidenced_t
             claimed |= claimed_t
 
+        # Ordered by when things happened on the host, not by when this
+        # platform heard about them. Everything below reads this order.
+        ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
+        progression = progression_of(ordered, cutoff)
+        tempo = tempo_of(ordered, cutoff)
+        shape = shape_factor(progression, tempo)
+
         verdicts = [str(m.overall_verdict or "") for m in members]
         max_risk = max((int(m.highest_risk_score or 0) for m in members), default=0)
         raw_score, reasons = score_case(
+            shape=shape,
             distinct_rules=len(rules), tactics=tactics, max_risk=max_risk,
             verdicts=verdicts, claimed_only=claimed,
         )
@@ -284,6 +475,20 @@ async def correlate_alerts(
         )
         score = int(round(raw_score * surprise))
 
+        if progression["ratio"] is not None and progression["ratio"] >= 0.8:
+            reasons.append(
+                f"{progression['forward']} of {progression['transitions']} stage transitions "
+                "run forward along the kill chain"
+            )
+        if tempo["kind"] == "burst":
+            reasons.append(
+                f"burst — a median of {tempo['median_gap_seconds']:.0f}s between alerts"
+            )
+        elif tempo["kind"] == "dwell":
+            reasons.append(
+                f"low and slow — a median of {tempo['median_gap_seconds'] / 3600:.1f}h between alerts"
+            )
+
         if surprise_detail:
             familiar = min(surprise_detail, key=lambda item: item["surprise"])
             novel = surprise_detail[0]
@@ -299,12 +504,6 @@ async def correlate_alerts(
                     f"{baseline.window_days} days"
                 )
 
-        # Ordered by when things happened on the host, not by when this
-        # platform heard about them. Those differ by more than twelve hours on
-        # ordinary traffic here, and by days when a sender replays — so ingest
-        # order would have every sequence question answering about the pipeline
-        # rather than the attack.
-        ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
         cases.append(
             {
                 "source": source,
@@ -331,6 +530,12 @@ async def correlate_alerts(
                 # is always whether its shape was unremarkable or its rules were
                 # familiar, and one number cannot answer that.
                 "raw_score": raw_score,
+                # Direction and pace reported as measurements, not folded into
+                # the number they modulated. A case scoring 60 tells you nothing
+                # about whether it ran forwards.
+                "progression": progression,
+                "tempo": tempo,
+                "shape_factor": shape,
                 "surprise": round(surprise, 3),
                 "surprise_detail": surprise_detail[:8],
                 "score": score,
