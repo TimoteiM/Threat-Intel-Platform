@@ -2116,6 +2116,13 @@ export interface CorrelatedCase {
   client: string;
   entity_host: string;
   entity_users: string[];
+  /** Stable identity of this session, derived from its first event time.
+   *  Survives a change of query window; session_seq deliberately does not. */
+  case_key: string;
+  /** Which session this is on the host, counted within the window. A label for
+   *  the reader only — never an input to case_key. */
+  session_seq: number;
+  session_started_at: string | null;
   window_hours: number;
   first_seen: string | null;
   last_seen: string | null;
@@ -2132,6 +2139,8 @@ export interface CorrelatedCase {
   alerts: Array<{
     run_id: string;
     title: string;
+    /** When it happened on the host. created_at is when we were told. */
+    event_time: string | null;
     created_at: string | null;
     detection_rule_id: string | null;
     detection_rule_name: string | null;
@@ -2142,9 +2151,87 @@ export interface CorrelatedCase {
 
 export interface CorrelatedCasesResponse {
   window_hours: number;
+  /** Whether a late-arriving alert has ever re-identified a case. Zero is not
+   *  proof the mechanism works, only that it has not been needed yet. */
+  supersession?: {
+    cases_superseded: number;
+    chain_violations: number;
+    ever_occurred: boolean;
+  };
   entities_seen: number;
   sources_seen: number;
   clients_seen: number;
   total_cases: number;
   cases: CorrelatedCase[];
+}
+
+
+/* ─── One machine, everything stored about it ─── */
+
+export interface EntityIndicator {
+  type: string;
+  value: string;
+  count: number;
+  risk: number;
+  classification: string | null;
+  excluded: boolean;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export interface EntitySession {
+  case_key: string;
+  session_seq: number;
+  started_at: string | null;
+  last_activity_at: string | null;
+  status: string;
+  assignee: string | null;
+  peak_score: number;
+  superseded_by: string | null;
+  history: Array<{
+    computed_at: string | null;
+    score: number;
+    member_count: number;
+    emitted_event: string | null;
+  }>;
+}
+
+export interface EntityProfile {
+  host: string;
+  found: boolean;
+  alert_count: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  sources?: Array<{ name: string; count: number }>;
+  clients?: Array<{ name: string; count: number }>;
+  /** Carried with its own coverage: entity_user is populated on a small
+   *  minority of runs, so the raw list alone would overstate what is known. */
+  users?: {
+    values: Array<{ name: string; count: number }>;
+    runs_with_user: number;
+    runs_total: number;
+  };
+  verdicts?: Array<{ name: string; count: number }>;
+  max_risk?: number;
+  rules?: Array<{
+    id: string | null;
+    name: string;
+    count: number;
+    last_seen: string | null;
+    max_risk: number;
+  }>;
+  rules_total?: number;
+  tactics?: Array<{ name: string; count: number }>;
+  indicators?: Record<string, EntityIndicator[]>;
+  indicator_totals?: Record<string, number>;
+  notable?: Array<{ kind: string; text: string; risk: number }>;
+  sessions?: EntitySession[];
+  timeline?: Array<{
+    run_id: string;
+    event_time: string | null;
+    rule: string;
+    tactics: string[];
+    verdict: string | null;
+    risk: number;
+  }>;
 }

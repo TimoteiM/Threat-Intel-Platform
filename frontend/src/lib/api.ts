@@ -20,6 +20,7 @@ import type {
   MismatchAlertsResponse,
   CorrelatedCase,
   CorrelatedCasesResponse,
+  EntityProfile,
   SuppressionCandidate,
   TacticAlertsResponse,
 } from "./types";
@@ -793,6 +794,13 @@ export function getCorrelatedCases(params?: {
   const query = qs.toString();
   return request<CorrelatedCasesResponse>(
     `/detections/correlated-cases${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getEntityProfile(host: string, days?: number) {
+  const query = days ? `?days=${days}` : "";
+  return request<EntityProfile>(
+    `/detections/entity/${encodeURIComponent(host)}${query}`,
   );
 }
 

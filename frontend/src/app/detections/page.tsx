@@ -13,10 +13,11 @@
  * from two alerts is noise, and presenting it as a score would mislead.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import type {
   AttackCoverageResponse,
+  CorrelatedCase,
   CorrelatedCasesResponse,
   DetectionQualityResponse,
   FeedbackAccuracy,
@@ -35,6 +36,7 @@ import {
   Section,
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
+import EntityWindow from "@/components/detections/EntityWindow";
 
 const WINDOWS = [7, 30, 90];
 
@@ -448,6 +450,93 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
 
 /* ─── Entities carrying several independent detections ─── */
 
+/* ─── One rule firing forty times is one finding ─── */
+
+/**
+ * Collapse repeated firings of the same rule into a single chip carrying its
+ * count.
+ *
+ * The case header says how many *independent* detections agree — the number
+ * that actually drives the score. Listing the same rule name six times beside
+ * it contradicts that at a glance: six chips read as six findings, which is
+ * precisely the volume-as-corroboration mistake the scoring was rebuilt to
+ * avoid. `6x` says the same thing honestly and in one line.
+ */
+function RuleChips({ alerts }: { alerts: CorrelatedCase["alerts"] }) {
+  const groups = useMemo(() => {
+    const byLabel = new Map<
+      string,
+      { label: string; count: number; runId: string; at: string }
+    >();
+    for (const alert of alerts) {
+      const label = alert.detection_rule_name || alert.title || alert.run_id;
+      // Event time, because the chip should open the most recent *firing*, not
+      // whichever copy this platform happened to be told about last.
+      const at = alert.event_time || alert.created_at || "";
+      const seen = byLabel.get(label);
+      if (!seen) {
+        byLabel.set(label, { label, count: 1, runId: alert.run_id, at });
+        continue;
+      }
+      seen.count += 1;
+      if (at > seen.at) {
+        seen.at = at;
+        seen.runId = alert.run_id;
+      }
+    }
+    return Array.from(byLabel.values()).sort(
+      (a, b) => b.count - a.count || b.at.localeCompare(a.at),
+    );
+  }, [alerts]);
+
+  const shown = groups.slice(0, 8);
+  const hidden = groups.length - shown.length;
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      {shown.map((group) => (
+        <a
+          key={group.label}
+          href={`/alert-investigations/${group.runId}`}
+          target="_blank"
+          rel="noreferrer"
+          title={
+            group.count > 1
+              ? `${group.label} — fired ${group.count} times; opens the most recent`
+              : group.label
+          }
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            fontSize: 11, color: "var(--accent)", padding: "3px 8px",
+            borderRadius: 6, border: "1px solid var(--panel-divider)",
+            background: "var(--bg-elevated)", textDecoration: "none",
+          }}
+        >
+          {group.count > 1 && (
+            <span
+              style={{
+                ...MONO, fontSize: 10, fontWeight: 700, color: "var(--text-secondary)",
+                background: "var(--panel-card-bg)", borderRadius: 4, padding: "1px 5px",
+              }}
+            >
+              {group.count}x
+            </span>
+          )}
+          <span>
+            {group.label.length > 64 ? `${group.label.slice(0, 63)}\u2026` : group.label}
+          </span>
+        </a>
+      ))}
+      {hidden > 0 && (
+        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          +{hidden} more rule{hidden === 1 ? "" : "s"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+
 /**
  * The estate-wide view of what the header badge counts.
  *
@@ -458,6 +547,7 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
  */
 function CasesTab({ days }: { days: number }) {
   const [hours, setHours] = useState(days * 24);
+  const [openHost, setOpenHost] = useState<string | null>(null);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -506,6 +596,8 @@ function CasesTab({ days }: { days: number }) {
         ))}
       </div>
 
+      {openHost && <EntityWindow host={openHost} onClose={() => setOpenHost(null)} />}
+
       {data.cases.length === 0 ? (
         <EmptyState
           title="Nothing correlated in this window"
@@ -517,7 +609,19 @@ function CasesTab({ days }: { days: number }) {
             {data.cases.map((item) => (
               <div key={`${item.source}:${item.client}:${item.entity_host}`} style={{ display: "grid", gap: 6 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <strong style={{ color: "var(--text)", fontSize: 13 }}>{item.entity_host}</strong>
+                  <button
+                    type="button"
+                    onClick={() => setOpenHost(item.entity_host)}
+                    title={`Everything collected about ${item.entity_host}`}
+                    style={{
+                      color: "var(--text)", fontSize: 13, fontWeight: 600, padding: 0,
+                      background: "none", border: "none",
+                      borderBottom: "1px dotted var(--panel-divider-strong)",
+                      cursor: "pointer", fontFamily: "inherit",
+                    }}
+                  >
+                    {item.entity_host}
+                  </button>
                   <span style={{ fontSize: 11, color: "var(--text-muted)", ...MONO }}>
                     {item.source}
                     {item.client && item.client !== "unknown" ? ` / ${item.client}` : ""}
@@ -536,24 +640,7 @@ function CasesTab({ days }: { days: number }) {
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {item.alerts.slice(-6).map((alert) => (
-                    <a
-                      key={alert.run_id}
-                      href={`/alert-investigations/${alert.run_id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={alert.title || undefined}
-                      style={{
-                        fontSize: 11, color: "var(--accent)", padding: "3px 8px",
-                        borderRadius: 6, border: "1px solid var(--panel-divider)",
-                        background: "var(--bg-elevated)", textDecoration: "none",
-                      }}
-                    >
-                      {(alert.detection_rule_name || alert.title || alert.run_id).slice(0, 46)}
-                    </a>
-                  ))}
-                </div>
+                <RuleChips alerts={item.alerts} />
               </div>
             ))}
           </div>

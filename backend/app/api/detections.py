@@ -27,6 +27,7 @@ from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
 from app.services.alert_correlation_service import correlate_alerts
+from app.services.alert_entity_profile_service import build_entity_profile
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 
@@ -97,6 +98,16 @@ async def get_correlated_cases(
     return await correlate_alerts(
         db, hours=hours, min_rules=min_rules, min_score=min_score, limit=limit
     )
+
+
+@router.get("/entity/{host}")
+async def get_entity_profile(
+    host: str,
+    db: DBSession,
+    days: int = Query(default=30, ge=1, le=365),
+) -> dict[str, Any]:
+    """Everything stored about one machine, assembled for a single view."""
+    return await build_entity_profile(db, host=host, days=days)
 
 
 @router.post("/feedback", status_code=201)
