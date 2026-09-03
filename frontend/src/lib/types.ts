@@ -2137,6 +2137,10 @@ export interface CorrelatedCase {
   first_seen: string | null;
   last_seen: string | null;
   alert_count: number;
+  /** Members whose investigation has not finished yet. A case is visible about
+   *  a second after its second alert arrives, so a fresh one is legitimately
+   *  incomplete rather than empty. */
+  members_investigating?: number;
   /** Independent detections agreeing — the signal that does not depend on ATT&CK quality. */
   distinct_rules: number;
   /** Tactics the investigation established. */

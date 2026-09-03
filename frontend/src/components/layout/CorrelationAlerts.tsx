@@ -19,7 +19,10 @@ const WINDOW_HOURS = 48;
 // anyone. The scores this produces run 45-95, so the bar sits just under the
 // lowest real case rather than being a round number for its own sake.
 const NOTIFY_ABOVE = 40;
-const POLL_MS = 60_000;
+// A case forms within a second of its second alert and is fully scored in
+// about 90 seconds. A 60s poll meant the badge could be a minute behind an
+// intrusion that had already finished correlating.
+const POLL_MS = 30_000;
 
 export default function CorrelationAlerts() {
   const [cases, setCases] = useState<CorrelatedCase[]>([]);

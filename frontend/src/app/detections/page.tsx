@@ -561,22 +561,52 @@ function RuleChips({ alerts }: { alerts: CorrelatedCase["alerts"] }) {
  * the window opens up, because a chain that unfolded over a fortnight is still
  * a chain and the badge will never have shown it.
  */
+// Alerts are processed in real time and a case exists within a second of its
+// second alert. The engine's own latency to a *fully scored* case is the
+// investigation time behind it — a measured 86s median, 95s at p90, running
+// concurrently across members rather than in series. A refresh slower than that
+// would make the platform look slower than it is.
+const CASES_REFRESH_MS = 30_000;
+
 function CasesTab({ days }: { days: number }) {
   const [hours, setHours] = useState(days * 24);
   const [openHost, setOpenHost] = useState<string | null>(null);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Alerts arrive in real time and a case forms within a second of its second
+  // alert, so a view that only loaded on mount would hide a live intrusion
+  // behind a page the analyst had already opened. Refreshed quietly: the
+  // spinner shows on the first load only, so a background refresh never blanks
+  // the list someone is reading.
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    api
-      .getCorrelatedCases({ hours })
-      .then((result) => !cancelled && setData(result))
-      .catch(() => !cancelled && setData(null))
-      .finally(() => !cancelled && setLoading(false));
+    let first = true;
+
+    const load = () => {
+      if (first) setLoading(true);
+      api
+        .getCorrelatedCases({ hours })
+        .then((result) => {
+          if (cancelled) return;
+          setData(result);
+          setRefreshedAt(new Date());
+        })
+        .catch(() => !cancelled && first && setData(null))
+        .finally(() => {
+          if (cancelled) return;
+          setLoading(false);
+          first = false;
+        });
+    };
+
+    load();
+    const timer = setInterval(load, CASES_REFRESH_MS);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [hours]);
 
@@ -610,6 +640,11 @@ function CasesTab({ days }: { days: number }) {
             {option === 48 ? "48 hours" : option === 168 ? "7 days" : "30 days"}
           </button>
         ))}
+        {refreshedAt && (
+          <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-muted)", ...MONO }}>
+            updated {refreshedAt.toLocaleTimeString()} · refreshes every {CASES_REFRESH_MS / 1000}s
+          </span>
+        )}
       </div>
 
       {openHost && <EntityWindow host={openHost} onClose={() => setOpenHost(null)} />}
@@ -655,6 +690,13 @@ function CasesTab({ days }: { days: number }) {
                     engine grouped these alerts; this says what they were. An
                     analyst who reads only one thing on this row should read
                     this one. */}
+                {(item.members_investigating ?? 0) > 0 && (
+                  <div style={{ fontSize: 11, color: "var(--status-warning)" }}>
+                    {item.members_investigating} of {item.alert_count} alerts still
+                    investigating — tactics, verdicts and the score will rise as they finish
+                  </div>
+                )}
+
                 <CaseNarrative item={item} />
 
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.55 }}>

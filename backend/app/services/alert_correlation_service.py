@@ -432,6 +432,7 @@ def score_case(
 _RUN_COLUMNS = (
     AlertBodyInvestigationRun.id,
     AlertBodyInvestigationRun.title,
+    AlertBodyInvestigationRun.status,
     AlertBodyInvestigationRun.created_at,
     AlertBodyInvestigationRun.entity_host,
     AlertBodyInvestigationRun.entity_user,
@@ -712,6 +713,18 @@ async def correlate_alerts(
                     "first_ingested": _iso(ordered[0].created_at),
                     "last_ingested": _iso(ordered[-1].created_at),
                     "alert_count": len(members),
+                    # A run joins its case the moment it is created — the host, the rule
+                    # and the event time are all set before the investigation starts, so
+                    # a case is visible about a second after its second alert arrives.
+                    # This says how much of it is still being worked out: without it an
+                    # analyst reading a brand-new case sees a low score and no tactics
+                    # and cannot tell "nothing here" from "not yet".
+                    "members_investigating": sum(
+                        1
+                        for m in members
+                        if str(getattr(m, "status", "") or "")
+                        not in ("completed", "failed")
+                    ),
                     "distinct_rules": len(rules),
                     "tactics": sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
                     "tactics_claimed_only": sorted(
