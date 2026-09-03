@@ -14,6 +14,7 @@ from sqlalchemy import (
     Boolean,
     Computed,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -799,3 +800,68 @@ class AssistantEntry(Base):
         Index("idx_assistant_entries_session", "session_id"),
         Index("idx_assistant_entries_session_order", "session_id", "entry_index"),
     )
+
+
+class AlertCaseSpine(Base):
+    """The part of a correlated case that outlives the read that computed it.
+
+    Membership is not stored: which alerts belong together is recomputed from
+    event time on every read. What lives here is the human overlay — who owns
+    it, whether it is still open, and the worst it ever got.
+    """
+    __tablename__ = "alert_case_spine"
+
+    case_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    alert_source: Mapped[str] = mapped_column(String(128), nullable=False)
+    alert_client: Mapped[str] = mapped_column(String(255), nullable=False)
+    entity_host: Mapped[str] = mapped_column(String(255), nullable=False)
+    session_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # Display only. Never an input to case_key — see alert_session_service.
+    session_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    assignee: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    peak_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    peak_score_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    peak_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_by_case_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AlertCaseSnapshot(Base):
+    """What a case looked like the last time it changed.
+
+    Appended only when score, member count, or tactic set actually moved — a
+    row per recompute would record page loads rather than history.
+    """
+    __tablename__ = "alert_case_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_key: Mapped[str] = mapped_column(
+        String(64), ForeignKey("alert_case_spine.case_key", ondelete="CASCADE"),
+        nullable=False,
+    )
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    surprise: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    member_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    tactics: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    escalated_from_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalated_to_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalated_delta_config: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    escalated_min_score_config: Mapped[int | None] = mapped_column(Integer, nullable=True)

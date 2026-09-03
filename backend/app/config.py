@@ -196,6 +196,16 @@ class Settings(BaseSettings):
     # are allowed because the receiving platform usually lives on the same LAN.
     alert_callback_allow_private: bool = True
 
+    # —— Correlated cases ———
+    # How much a case's score must climb above its last recorded snapshot before
+    # that counts as an escalation worth telling someone about. Too low and a
+    # case re-notifies on every routine alert it absorbs; too high and a case
+    # that walks up steadily never trips at all.
+    correlation_escalation_delta: int = 20
+    # Cases below this never escalate regardless of how far they climbed — a
+    # jump from 5 to 25 is arithmetic, not an incident.
+    correlation_escalation_min_score: int = 50
+
     alert_spawn_investigations: bool = True
     alert_spawn_observable_types: str = "domain,url"
     alert_investigation_wait_seconds: int = 1500  # < the task's 1740s soft limit

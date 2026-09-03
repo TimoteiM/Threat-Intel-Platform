@@ -25,7 +25,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
@@ -34,7 +34,19 @@ from app.services.alert_baseline_service import (
     build_pair_baseline,
     case_surprise,
 )
+from app.services.alert_case_store import (
+    absorb_superseded,
+    snapshot_if_changed,
+    upsert_spine,
+)
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
+from app.services.alert_session_service import (
+    SCORE_VERSION,
+    SESSION_GAP,
+    SESSION_LOOKBACK_CHUNK,
+    anchor_index,
+    assign_sessions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +423,98 @@ def score_case(
     return min(score, 100), reasons
 
 
+_RUN_COLUMNS = (
+    AlertBodyInvestigationRun.id,
+    AlertBodyInvestigationRun.title,
+    AlertBodyInvestigationRun.created_at,
+    AlertBodyInvestigationRun.entity_host,
+    AlertBodyInvestigationRun.entity_user,
+    AlertBodyInvestigationRun.alert_source,
+    AlertBodyInvestigationRun.alert_client,
+    AlertBodyInvestigationRun.alert_kind,
+    AlertBodyInvestigationRun.event_time,
+    AlertBodyInvestigationRun.detection_rule_id,
+    AlertBodyInvestigationRun.detection_rule_name,
+    AlertBodyInvestigationRun.overall_verdict,
+    AlertBodyInvestigationRun.highest_risk_score,
+    AlertBodyInvestigationRun.result_attack_assessment,
+)
+
+# When the alert happened, falling back to when we were told. Runs predating the
+# event_time backfill still have to be placeable, and dropping them would hide
+# exactly the oldest history the anchor walk needs.
+_EVT = func.coalesce(
+    AlertBodyInvestigationRun.event_time, AlertBodyInvestigationRun.created_at
+)
+
+# The anchor walk pages backwards; this bounds how many pages before it gives up
+# and treats what it holds as the session start. Hit only by a chain of unbroken
+# sub-6h activity longer than 4 x 72h, which is worth a warning rather than an
+# unbounded read.
+MAX_ANCHOR_PAGES = 4
+
+
+async def _extend_to_anchor(
+    db: AsyncSession,
+    *,
+    source: str,
+    client: str,
+    host: str,
+    members: list[Any],
+    cutoff: datetime,
+) -> list[Any]:
+    """Prepend whatever history is needed to place the first member correctly.
+
+    A window boundary landing mid-session invents a session start that never
+    happened, and with it a case_key nothing else will ever compute — measured
+    at 66.5% of keys disagreeing with the full-history answer. Walking back to a
+    gap wider than SESSION_GAP takes that to zero, because a gap that wide splits
+    regardless of anything before it.
+
+    The walk cannot stop at SESSION_MAX. Gap-splits are local, but cap-splits are
+    not: a chain of unbroken sub-6h activity has a boundary whose position
+    depends on where the chain began, arbitrarily far back. Measured on stored
+    runs, 46.8% of walks exhaust history without finding a gap at all, so this
+    pages rather than assuming a bound.
+    """
+    ordered = members
+    for page in range(MAX_ANCHOR_PAGES):
+        earliest = _event_time(ordered[0], cutoff)
+        older = (
+            await db.execute(
+                select(*_RUN_COLUMNS, _EVT.label("evt"))
+                .where(
+                    AlertBodyInvestigationRun.entity_host == host,
+                    _EVT < earliest,
+                    _EVT >= earliest - SESSION_LOOKBACK_CHUNK,
+                )
+                .order_by(_EVT.asc())
+                .execution_options(query_name="anchor_walk")
+            )
+        ).all()
+        older = [
+            row
+            for row in older
+            if str(row.alert_source or UNKNOWN_SOURCE) == source
+            and str(row.alert_client or UNKNOWN_CLIENT) == client
+            and str(row.alert_kind or "alert") != "incident"
+        ]
+        if not older:
+            return ordered
+        combined = older + ordered
+        times = [_event_time(row, cutoff) for row in combined]
+        index = anchor_index(times, len(older))
+        if index > 0:
+            return combined[index:]
+        ordered = combined
+    logger.warning(
+        "anchor walk for %s gave up after %d pages — unbroken activity longer "
+        "than the lookback, so this session start is the earliest event read, "
+        "not a measured boundary", host, MAX_ANCHOR_PAGES,
+    )
+    return ordered
+
+
 async def correlate_alerts(
     db: AsyncSession,
     *,
@@ -421,30 +525,34 @@ async def correlate_alerts(
 ) -> dict[str, Any]:
     """Entities carrying more than one independent detection inside the window."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+    window = timedelta(hours=max(1, hours))
 
+    # The window is measured from the newest event on each entity, not from the
+    # clock. Alerts arrive here replayed — one lagged 323 days — so "the last 48
+    # hours" measured against now would empty a host's case the moment ingestion
+    # caught up, while the behaviour it described sat unexamined. Relative to the
+    # entity means a case stays computable for as long as its own evidence is
+    # coherent, whenever we happened to be told about it.
+    entity_latest = func.max(_EVT).over(
+        partition_by=(
+            AlertBodyInvestigationRun.alert_source,
+            AlertBodyInvestigationRun.alert_client,
+            AlertBodyInvestigationRun.entity_host,
+        )
+    )
+    scoped = (
+        select(*_RUN_COLUMNS, _EVT.label("evt"), entity_latest.label("entity_latest"))
+        .where(AlertBodyInvestigationRun.entity_host.isnot(None))
+        .subquery()
+    )
     rows = (
         await db.execute(
-            select(
-                AlertBodyInvestigationRun.id,
-                AlertBodyInvestigationRun.title,
-                AlertBodyInvestigationRun.created_at,
-                AlertBodyInvestigationRun.entity_host,
-                AlertBodyInvestigationRun.entity_user,
-                AlertBodyInvestigationRun.alert_source,
-                AlertBodyInvestigationRun.alert_client,
-                AlertBodyInvestigationRun.alert_kind,
-                AlertBodyInvestigationRun.event_time,
-                AlertBodyInvestigationRun.detection_rule_id,
-                AlertBodyInvestigationRun.detection_rule_name,
-                AlertBodyInvestigationRun.overall_verdict,
-                AlertBodyInvestigationRun.highest_risk_score,
-                AlertBodyInvestigationRun.result_attack_assessment,
-            )
-            .where(
-                AlertBodyInvestigationRun.created_at >= cutoff,
-                AlertBodyInvestigationRun.entity_host.isnot(None),
-            )
-            .order_by(AlertBodyInvestigationRun.created_at.desc())
+            select(scoped)
+            .where(scoped.c.evt >= scoped.c.entity_latest - window)
+            .order_by(scoped.c.evt.desc())
+            # Named so a reader — a log line, a test double — can tell the
+            # three reads this function makes apart without parsing SQL.
+            .execution_options(query_name="correlation_window")
         )
     ).all()
 
@@ -479,126 +587,201 @@ async def correlate_alerts(
         )].append(row)
 
     cases: list[dict[str, Any]] = []
-    for (source, client, entity), members in grouped.items():
-        rules = {str(m.detection_rule_id or m.detection_rule_name or "") for m in members}
-        rules.discard("")
-        if len(rules) < min_rules:
-            continue
-
-        tactics: set[str] = set()
-        claimed: set[str] = set()
-        for member in members:
-            evidenced_t, claimed_t = _tactics_of(member.result_attack_assessment)
-            tactics |= evidenced_t
-            claimed |= claimed_t
-
-        # Ordered by when things happened on the host, not by when this
-        # platform heard about them. Everything below reads this order.
-        ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
-        progression = progression_of(ordered, cutoff)
-        tempo = tempo_of(ordered, cutoff)
-        shape = shape_factor(progression, tempo)
-
-        verdicts = [str(m.overall_verdict or "") for m in members]
-        max_risk = max((int(m.highest_risk_score or 0) for m in members), default=0)
-        raw_score, reasons = score_case(
-            shape=shape,
-            distinct_rules=len(rules), tactics=tactics, max_risk=max_risk,
-            verdicts=verdicts, claimed_only=claimed,
+    for (source, client, entity), group_members in grouped.items():
+        in_window = {m.id for m in group_members}
+        # The window framed these members; the session they belong to may start
+        # before it. Walk back to a real boundary before deciding where sessions
+        # begin, or the first session's start is an artefact of the query.
+        history = await _extend_to_anchor(
+            db, source=source, client=client, host=entity,
+            members=sorted(group_members, key=lambda m: _event_time(m, cutoff)),
+            cutoff=cutoff,
         )
-
-        # How ordinary this combination is on this host, applied as a multiplier
-        # rather than a subtraction. A penalty can be out-voted by enough
-        # kill-chain shape; a multiplier cannot, which is the point — a pairing
-        # that happens here every day should not become interesting merely by
-        # happening in an interesting order.
-        own_days = {_event_time(m, cutoff).date() for m in members}
-        surprise, surprise_detail = case_surprise(
-            baseline.pairs, source=source, client=client, host=entity,
-            rules=rules, own_days=own_days,
+        assignments = assign_sessions(
+            [(row.id, _event_time(row, cutoff)) for row in history],
+            source=source, client=client, host=entity,
         )
-        score = int(round(raw_score * surprise))
+        sessions: dict[str, list[Any]] = defaultdict(list)
+        session_of: dict[str, Any] = {}
+        for assignment, row in zip(assignments, history):
+            sessions[assignment.case_key].append(row)
+            session_of.setdefault(assignment.case_key, assignment)
 
-        if progression["ratio"] is not None and progression["ratio"] >= 0.8:
-            reasons.append(
-                f"{progression['forward']} of {progression['transitions']} stage transitions "
-                "run forward along the kill chain"
-            )
-        if tempo["kind"] == "burst":
-            reasons.append(
-                f"burst — a median of {tempo['median_gap_seconds']:.0f}s between alerts"
-            )
-        elif tempo["kind"] == "dwell":
-            reasons.append(
-                f"low and slow — a median of {tempo['median_gap_seconds'] / 3600:.1f}h between alerts"
+        for case_key, members in sessions.items():
+            # A session is shown when the window reaches any part of it, and is
+            # then shown whole. The case is the session; showing only the slice
+            # the window framed would report a fragment of an intrusion as its
+            # extent, and would give it a start that never happened.
+            if not any(m.id in in_window for m in members):
+                continue
+            session = session_of[case_key]
+            rules = {str(m.detection_rule_id or m.detection_rule_name or "") for m in members}
+            rules.discard("")
+            if len(rules) < min_rules:
+                continue
+
+            tactics: set[str] = set()
+            claimed: set[str] = set()
+            for member in members:
+                evidenced_t, claimed_t = _tactics_of(member.result_attack_assessment)
+                tactics |= evidenced_t
+                claimed |= claimed_t
+
+            # Ordered by when things happened on the host, not by when this
+            # platform heard about them. Everything below reads this order.
+            ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
+            progression = progression_of(ordered, cutoff)
+            tempo = tempo_of(ordered, cutoff)
+            shape = shape_factor(progression, tempo)
+
+            verdicts = [str(m.overall_verdict or "") for m in members]
+            max_risk = max((int(m.highest_risk_score or 0) for m in members), default=0)
+            raw_score, reasons = score_case(
+                shape=shape,
+                distinct_rules=len(rules), tactics=tactics, max_risk=max_risk,
+                verdicts=verdicts, claimed_only=claimed,
             )
 
-        if surprise_detail:
-            familiar = min(surprise_detail, key=lambda item: item["surprise"])
-            novel = surprise_detail[0]
-            if novel["cooccurrence_days"] == 0:
+            # How ordinary this combination is on this host, applied as a multiplier
+            # rather than a subtraction. A penalty can be out-voted by enough
+            # kill-chain shape; a multiplier cannot, which is the point — a pairing
+            # that happens here every day should not become interesting merely by
+            # happening in an interesting order.
+            own_days = {_event_time(m, cutoff).date() for m in members}
+            surprise, surprise_detail = case_surprise(
+                baseline.pairs, source=source, client=client, host=entity,
+                rules=rules, own_days=own_days,
+            )
+            score = int(round(raw_score * surprise))
+
+            if progression["ratio"] is not None and progression["ratio"] >= 0.8:
                 reasons.append(
-                    f"{novel['rules'][0]} + {novel['rules'][1]} have not co-fired on this "
-                    "host before"
+                    f"{progression['forward']} of {progression['transitions']} stage transitions "
+                    "run forward along the kill chain"
                 )
-            elif surprise <= 0.25:
+            if tempo["kind"] == "burst":
                 reasons.append(
-                    f"routine for this host — {familiar['rules'][0]} + {familiar['rules'][1]} "
-                    f"co-fire on {familiar['cooccurrence_days']} of the last "
-                    f"{baseline.window_days} days"
+                    f"burst — a median of {tempo['median_gap_seconds']:.0f}s between alerts"
+                )
+            elif tempo["kind"] == "dwell":
+                reasons.append(
+                    f"low and slow — a median of {tempo['median_gap_seconds'] / 3600:.1f}h between alerts"
                 )
 
-        cases.append(
-            {
-                "source": source,
-                "client": client,
-                "entity_host": entity,
-                "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
-                "window_hours": hours,
-                # The span the behaviour occupied on the host. Reported from
-                # event time so a replayed alert does not stretch a case across
-                # days it did not happen in.
-                "first_seen": _iso(_event_time(ordered[0], cutoff)),
-                "last_seen": _iso(_event_time(ordered[-1], cutoff)),
-                "first_ingested": _iso(ordered[0].created_at),
-                "last_ingested": _iso(ordered[-1].created_at),
-                "alert_count": len(members),
-                "distinct_rules": len(rules),
-                "tactics": sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
-                "tactics_claimed_only": sorted(
-                    {t for t in claimed if t not in tactics},
-                    key=lambda t: _TACTIC_RANK.get(t.casefold(), 99),
-                ),
-                "max_risk_score": max_risk,
-                # All three kept apart. When a case scores low the next question
-                # is always whether its shape was unremarkable or its rules were
-                # familiar, and one number cannot answer that.
-                "raw_score": raw_score,
-                # Direction and pace reported as measurements, not folded into
-                # the number they modulated. A case scoring 60 tells you nothing
-                # about whether it ran forwards.
-                "progression": progression,
-                "tempo": tempo,
-                "shape_factor": shape,
-                "surprise": round(surprise, 3),
-                "surprise_detail": surprise_detail[:8],
-                "score": score,
-                "reasons": reasons,
-                "alerts": [
-                    {
-                        "run_id": str(m.id),
-                        "title": m.title,
-                        "event_time": _iso(_event_time(m, cutoff)),
-                        "created_at": _iso(m.created_at),
-                        "detection_rule_id": m.detection_rule_id,
-                        "detection_rule_name": m.detection_rule_name,
-                        "overall_verdict": m.overall_verdict,
-                        "highest_risk_score": m.highest_risk_score,
-                    }
-                    for m in ordered
-                ][:100],
-            }
-        )
+            if surprise_detail:
+                familiar = min(surprise_detail, key=lambda item: item["surprise"])
+                novel = surprise_detail[0]
+                if novel["cooccurrence_days"] == 0:
+                    reasons.append(
+                        f"{novel['rules'][0]} + {novel['rules'][1]} have not co-fired on this "
+                        "host before"
+                    )
+                elif surprise <= 0.25:
+                    reasons.append(
+                        f"routine for this host — {familiar['rules'][0]} + {familiar['rules'][1]} "
+                        f"co-fire on {familiar['cooccurrence_days']} of the last "
+                        f"{baseline.window_days} days"
+                    )
+
+            cases.append(
+                {
+                    # The session's identity, stable across query windows.
+                    # session_seq rides along as a label only.
+                    "case_key": case_key,
+                    "session_seq": session.session_seq,
+                    "session_started_at": _iso(session.session_started_at),
+                    "source": source,
+                    "client": client,
+                    "entity_host": entity,
+                    "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
+                    "window_hours": hours,
+                    # The span the behaviour occupied on the host. Reported from
+                    # event time so a replayed alert does not stretch a case across
+                    # days it did not happen in.
+                    "first_seen": _iso(_event_time(ordered[0], cutoff)),
+                    "last_seen": _iso(_event_time(ordered[-1], cutoff)),
+                    "first_ingested": _iso(ordered[0].created_at),
+                    "last_ingested": _iso(ordered[-1].created_at),
+                    "alert_count": len(members),
+                    "distinct_rules": len(rules),
+                    "tactics": sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
+                    "tactics_claimed_only": sorted(
+                        {t for t in claimed if t not in tactics},
+                        key=lambda t: _TACTIC_RANK.get(t.casefold(), 99),
+                    ),
+                    "max_risk_score": max_risk,
+                    # All three kept apart. When a case scores low the next question
+                    # is always whether its shape was unremarkable or its rules were
+                    # familiar, and one number cannot answer that.
+                    "raw_score": raw_score,
+                    # Direction and pace reported as measurements, not folded into
+                    # the number they modulated. A case scoring 60 tells you nothing
+                    # about whether it ran forwards.
+                    "progression": progression,
+                    "tempo": tempo,
+                    "shape_factor": shape,
+                    "surprise": round(surprise, 3),
+                    "surprise_detail": surprise_detail[:8],
+                    "score": score,
+                    "reasons": reasons,
+                    "alerts": [
+                        {
+                            "run_id": str(m.id),
+                            "title": m.title,
+                            "event_time": _iso(_event_time(m, cutoff)),
+                            "created_at": _iso(m.created_at),
+                            "detection_rule_id": m.detection_rule_id,
+                            "detection_rule_name": m.detection_rule_name,
+                            "overall_verdict": m.overall_verdict,
+                            "highest_risk_score": m.highest_risk_score,
+                        }
+                        for m in ordered
+                    ][:100],
+                }
+            )
+
+            # Persistence is an overlay. Membership was computed above from
+            # event time and is deliberately not written down; what is stored is
+            # only the part that has to survive the read — ownership, status,
+            # and how the score moved.
+            last_event = _event_time(ordered[-1], cutoff)
+            await absorb_superseded(
+                db,
+                live_case_key=case_key,
+                source=source,
+                client=client,
+                host=entity,
+                session_started_at=session.session_started_at,
+                session_ended_at=last_event,
+            )
+            await upsert_spine(
+                db,
+                case_key=case_key,
+                source=source,
+                client=client,
+                host=entity,
+                session_started_at=session.session_started_at,
+                session_seq=session.session_seq,
+                last_activity_at=last_event,
+                score=score,
+                score_version=SCORE_VERSION,
+            )
+            await snapshot_if_changed(
+                db,
+                case_key=case_key,
+                score=score,
+                raw_score=raw_score,
+                surprise=surprise,
+                member_count=len(members),
+                tactics=tactics,
+                score_version=SCORE_VERSION,
+            )
+
+    # The overlay is written for every case that formed, not only the ones this
+    # request will display: a case filtered out by min_score is still a case
+    # that happened, and its history should not depend on how the page happened
+    # to be filtered when it was last opened.
+    await db.commit()
 
     if min_score:
         cases = [case for case in cases if case["score"] >= min_score]

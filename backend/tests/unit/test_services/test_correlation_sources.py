@@ -38,19 +38,59 @@ class _Run:
         self.result_attack_assessment = None
 
 
-class _DB:
+class _Result:
     def __init__(self, rows):
         self._rows = rows
 
-    async def execute(self, _query):
-        class _R:
-            def __init__(self, rows):
-                self._rows = rows
+    def all(self):
+        return self._rows
 
-            def all(self):
-                return self._rows
+    def scalars(self):
+        return self
 
-        return _R(self._rows)
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+
+class _DB:
+    """A database that answers each of the service's reads differently.
+
+    A stub that returns the same rows for every query is not a simplification,
+    it is a different database: the anchor walk asks for history *older* than
+    what it holds, and a stub that hands back the same rows again makes the walk
+    page until it gives up. `history` models that older data — empty by default,
+    because these fixtures describe a single burst of activity with nothing
+    before it.
+    """
+
+    def __init__(self, rows, history=None):
+        self._rows = rows
+        self._history = list(history or [])
+        self.added = []
+        self.commits = 0
+
+    # Every read the service makes is named, so this answers by name rather
+    # than by guessing from SQL text. An unnamed query getting alert rows by
+    # default is how the spine lookup ended up being handed detection runs.
+    _ALERT_READS = {"correlation_window", "pair_baseline"}
+
+    async def execute(self, query):
+        name = (query.get_execution_options() or {}).get("query_name")
+        if name in self._ALERT_READS:
+            return _Result(self._rows)
+        if name == "anchor_walk":
+            return _Result(self._history)
+        # Spine and snapshot reads: nothing persisted in these fixtures.
+        return _Result([])
+
+    async def get(self, _model, _pk):
+        return None
+
+    def add(self, row):
+        self.added.append(row)
+
+    async def commit(self):
+        self.commits += 1
 
 
 @pytest.mark.asyncio

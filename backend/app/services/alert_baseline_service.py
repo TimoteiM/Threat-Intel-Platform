@@ -210,6 +210,7 @@ async def build_pair_baseline(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.entity_host.isnot(None),
             )
+            .execution_options(query_name="pair_baseline")
         )
     ).all()
 
