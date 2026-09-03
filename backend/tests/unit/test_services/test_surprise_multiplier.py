@@ -103,3 +103,60 @@ def test_every_pair_in_a_multi_rule_case_is_considered():
         baseline, **SCOPE, rules=["a", "b", "c"], own_days=set()
     )
     assert len(detail) == 3      # ab, ac, bc
+
+
+# ── The baseline must always dwarf the window it judges ──────────────────────
+
+from app.services.alert_baseline_service import (
+    BASELINE_WINDOW_MULTIPLE,
+    SURPRISE_BASELINE_DAYS,
+    PairBaseline,
+    baseline_window_days,
+)
+
+
+def test_the_baseline_widens_with_the_query_window():
+    """
+    A case is excluded from its own history, so it eats a slice of its baseline
+    sized by the query window. Fixed at 30 days that is fine at 48h and inert at
+    30d — and it degrades continuously between, so the failure is silent.
+    """
+    assert baseline_window_days(48) == SURPRISE_BASELINE_DAYS
+    assert baseline_window_days(24 * 7) == 7 * BASELINE_WINDOW_MULTIPLE
+    assert baseline_window_days(24 * 30) == 30 * BASELINE_WINDOW_MULTIPLE
+
+
+def test_a_case_never_owns_much_of_its_own_baseline():
+    """The invariant, asserted at every window someone might query."""
+    for hours in (1, 24, 48, 24 * 7, 24 * 30, 24 * 90):
+        query_days = max(1, -(-hours // 24))
+        assert query_days / baseline_window_days(hours) <= 1 / 10
+
+
+def test_the_floor_still_applies_at_short_windows():
+    assert baseline_window_days(1) == SURPRISE_BASELINE_DAYS
+
+
+# ── A cold baseline says so ──────────────────────────────────────────────────
+
+def test_a_baseline_of_single_day_pairs_is_not_mature():
+    """
+    A pair seen on exactly one day discounts nothing once that day is excluded
+    as the case's own — so however many such pairs exist, no score can fall.
+    """
+    cold = PairBaseline(
+        pairs={("s", "c", "h", "a", "b"): {DAY}},
+        window_days=30, runs_considered=100, observed_days=12,
+    )
+    assert cold.pairs_with_history == 0
+    assert cold.is_mature is False
+    assert "young baseline" in cold.as_dict()["note"]
+
+
+def test_a_baseline_with_repeat_pairings_is_mature_and_says_nothing():
+    warm = PairBaseline(
+        pairs={("s", "c", "h", "a", "b"): {DAY, date(2026, 8, 1)}},
+        window_days=30, runs_considered=100, observed_days=12,
+    )
+    assert warm.is_mature is True
+    assert warm.as_dict()["note"] is None

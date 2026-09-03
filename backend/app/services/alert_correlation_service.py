@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
 from app.services.alert_baseline_service import (
-    SURPRISE_BASELINE_DAYS,
+    baseline_window_days,
     build_pair_baseline,
     case_surprise,
 )
@@ -222,9 +222,14 @@ async def correlate_alerts(
     ).all()
 
     # Learned once for the whole request. Familiarity is a property of the
-    # estate, not of any one case, and rebuilding it per case would re-read a
-    # month of history for every host.
-    baseline = await build_pair_baseline(db)
+    # estate, not of any one case, and rebuilding it per case would re-read
+    # months of history for every host.
+    #
+    # The lookback is derived from the window being scored, never fixed: a case
+    # is excluded from its own history, so it eats a slice of its baseline sized
+    # by the query window, and the multiplier degrades continuously as the two
+    # converge. See baseline_window_days.
+    baseline = await build_pair_baseline(db, days=baseline_window_days(hours))
 
     # Keyed on (source, entity), never entity alone. Two platforms watching the
     # same estate name hosts their own way, so joining across them would build a
@@ -274,7 +279,7 @@ async def correlate_alerts(
         # happening in an interesting order.
         own_days = {_event_time(m, cutoff).date() for m in members}
         surprise, surprise_detail = case_surprise(
-            baseline, source=source, client=client, host=entity,
+            baseline.pairs, source=source, client=client, host=entity,
             rules=rules, own_days=own_days,
         )
         score = int(round(raw_score * surprise))
@@ -290,8 +295,8 @@ async def correlate_alerts(
             elif surprise <= 0.25:
                 reasons.append(
                     f"routine for this host — {familiar['rules'][0]} + {familiar['rules'][1]} "
-                    f"co-fire on {familiar['cooccurrence_days']} day(s) in the last "
-                    f"{SURPRISE_BASELINE_DAYS}"
+                    f"co-fire on {familiar['cooccurrence_days']} of the last "
+                    f"{baseline.window_days} days"
                 )
 
         # Ordered by when things happened on the host, not by when this
@@ -351,6 +356,10 @@ async def correlate_alerts(
     cases.sort(key=lambda case: (-case["score"], -case["distinct_rules"]))
     return {
         "window_hours": hours,
+        # Reported so a multiplier of 1.0 can be read correctly. "Never seen
+        # before" and "nothing has been seen yet" produce the same number and
+        # mean opposite things.
+        "baseline": baseline.as_dict(),
         "entities_seen": len(grouped),
         "sources_seen": len({key[0] for key in grouped}),
         "clients_seen": len({key[1] for key in grouped}),

@@ -19,6 +19,8 @@ because the history it reads has been accumulating since long before it existed.
 from __future__ import annotations
 
 import logging
+import math
+from dataclasses import dataclass
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -31,10 +33,38 @@ from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 
 logger = logging.getLogger(__name__)
 
-# How far back familiarity is learned from. Long enough that a weekly job is
-# seen four times and reads as routine; short enough that an estate which
-# changed two months ago is not still being judged against its old self.
+# The floor on how far back familiarity is learned from. Long enough that a
+# weekly job is seen four times and reads as routine; short enough that an
+# estate which changed two months ago is not still being judged against its old
+# self.
 SURPRISE_BASELINE_DAYS = 30
+
+# The baseline must always be much wider than the window being scored, because
+# a case's own days are excluded from its own history. That exclusion is what
+# stops a case measuring itself — and it means the case eats a slice of its own
+# baseline, sized by the query window. At 48h against 30 days a case owns one
+# day in thirty and the multiplier works; at a 30-day query against a 30-day
+# baseline it owns all of it, every pair reads as never-seen, and surprise goes
+# to 1.0 everywhere.
+#
+# That is a slope, not a cliff: the multiplier degrades continuously as the two
+# windows converge, so a fixed 30 days is not a safe default but an
+# operating-point assumption that fails silently the first time somebody opens a
+# 7-day view. The window is therefore derived, never fixed, and the invariant it
+# holds is: a case never owns more than about 1/k of the history it is judged
+# against.
+BASELINE_WINDOW_MULTIPLE = 12
+
+
+def baseline_window_days(query_hours: int) -> int:
+    """
+    How far back to learn familiarity when scoring a window of `query_hours`.
+
+    Derived rather than configured, so the invariant survives someone changing
+    the query window without knowing this exists.
+    """
+    query_days = max(1, math.ceil(max(1, int(query_hours)) / 24))
+    return max(SURPRISE_BASELINE_DAYS, query_days * BASELINE_WINDOW_MULTIPLE)
 
 # The multiplier can never reach zero. A pure 1/(1+n) drives a pair seen fifty
 # times to 0.02 and would erase any case built on familiar rules — but "boring
@@ -44,10 +74,25 @@ SURPRISE_BASELINE_DAYS = 30
 SURPRISE_FLOOR = 0.10
 
 # Generalised mean exponent, sitting between the arithmetic mean (1) and the
-# maximum (infinity). At 3, one never-before-seen pair among three routine ones
-# lifts the case to 0.63 rather than being averaged to 0.29 — the novel pair may
-# be the entire signal — while still not reaching the 1.0 that `max` would give,
-# which would let a single new pairing wipe out everything known about the rest.
+# maximum (infinity).
+#
+# Measured on the shapes that matter, this is why it is 3 and not 1:
+#
+#     case shape                        mean    p=2    p=3    p=4     max
+#     one novel pair among 3 routine   0.287  0.502  0.630  0.707   1.000
+#     two novel, two routine           0.525  0.708  0.794  0.841   1.000
+#     all routine                      0.047  0.047  0.047  0.047   0.050
+#     all novel                        1.000  1.000  1.000  1.000   1.000
+#
+# The arithmetic mean buries a never-before-seen pair among three routine ones
+# at 0.29, and that pair may be the entire reason the case is worth reading.
+# `max` fails the other way: any single new pairing declares the whole case
+# novel at 1.0, and the multiplier then never discounts anything. Powers 2 and 4
+# both work; 3 was chosen for sitting nearest the middle of the useful range.
+#
+# This is a tuned choice that reads like an arbitrary one, and the obvious
+# "simplification" back to a plain mean silently removes the behaviour the
+# aggregation exists for. The reasoning is more fragile than the code.
 SURPRISE_AGGREGATION_POWER = 3.0
 
 # Key: (source, client, host, rule_a, rule_b) with the rules sorted. Scoped to
@@ -62,9 +107,67 @@ def _pairs(rules: Iterable[str]) -> list[tuple[str, str]]:
     return [(a, b) for index, a in enumerate(unique) for b in unique[index + 1 :]]
 
 
+@dataclass(frozen=True)
+class PairBaseline:
+    """
+    What the platform has learned, and how much it has had to learn from.
+
+    The maturity fields are not diagnostics — they are the difference between
+    "this pairing is genuinely novel" and "nothing has been observed yet", which
+    produce the identical multiplier of 1.0. Without them a cold baseline reads
+    as a feature that does nothing, and the first person to look concludes the
+    multiplier is broken rather than young.
+    """
+
+    pairs: dict[PairKey, set[date]]
+    window_days: int
+    runs_considered: int
+    observed_days: int
+
+    @property
+    def distinct_pairs(self) -> int:
+        return len(self.pairs)
+
+    @property
+    def pairs_with_history(self) -> int:
+        """Pairs seen on more than one day — the only ones that can discount."""
+        return sum(1 for days in self.pairs.values() if len(days) > 1)
+
+    @property
+    def is_mature(self) -> bool:
+        """
+        Whether any case could be discounted at all.
+
+        A pair seen on exactly one day discounts nothing once that day is
+        excluded as the case's own, so a baseline of only single-day pairs
+        cannot lower any score however many pairs it holds.
+        """
+        return self.pairs_with_history > 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "window_days": self.window_days,
+            "runs_considered": self.runs_considered,
+            "observed_days": self.observed_days,
+            "distinct_pairs": self.distinct_pairs,
+            "pairs_with_history": self.pairs_with_history,
+            "mature": self.is_mature,
+            "note": (
+                None
+                if self.is_mature
+                else (
+                    "No rule pairing has yet been seen on more than one day, so every "
+                    "pairing reads as novel and the familiarity multiplier is 1.0 "
+                    "everywhere. That is a young baseline, not a disabled one — it "
+                    "discounts as repeat pairings accumulate."
+                )
+            ),
+        }
+
+
 async def build_pair_baseline(
     db: AsyncSession, *, days: int = SURPRISE_BASELINE_DAYS
-) -> dict[PairKey, set[date]]:
+) -> PairBaseline:
     """
     For each rule pair on each host, the days both rules fired there.
 
@@ -121,8 +224,17 @@ async def build_pair_baseline(
         for rule_a, rule_b in _pairs(rules):
             baseline[(source, client, host, rule_a, rule_b)].add(day)
 
-    logger.debug("Pair baseline: %d pairs over %d days", len(baseline), days)
-    return baseline
+    result = PairBaseline(
+        pairs=dict(baseline),
+        window_days=days,
+        runs_considered=len(rows),
+        observed_days=len({day for (_s, _c, _h, day) in per_day}),
+    )
+    logger.debug(
+        "Pair baseline: %d pairs (%d with history) from %d runs over %d days",
+        result.distinct_pairs, result.pairs_with_history, result.runs_considered, days,
+    )
+    return result
 
 
 def pair_surprise(cooccurrence_days: int) -> float:
