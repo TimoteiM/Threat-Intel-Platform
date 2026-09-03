@@ -18,10 +18,14 @@ from app.services.alert_correlation_service import correlate_alerts
 
 
 class _Run:
-    def __init__(self, host, source, rule, verdict="suspicious"):
+    def __init__(self, host, source, rule, verdict="suspicious", event_time=None):
         self.id = uuid4()
         self.title = f"{rule} on {host}"
         self.created_at = datetime.now(timezone.utc)
+        # Modelled explicitly rather than defaulted: the service orders and
+        # builds its baseline from event time, so a stub without one tests a
+        # different function than the one that runs.
+        self.event_time = event_time or self.created_at
         self.entity_host = host
         self.entity_user = None
         self.alert_source = source

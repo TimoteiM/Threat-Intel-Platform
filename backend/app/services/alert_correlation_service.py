@@ -29,6 +29,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
+from app.services.alert_baseline_service import (
+    SURPRISE_BASELINE_DAYS,
+    build_pair_baseline,
+    case_surprise,
+)
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 
 logger = logging.getLogger(__name__)
@@ -216,6 +221,11 @@ async def correlate_alerts(
         )
     ).all()
 
+    # Learned once for the whole request. Familiarity is a property of the
+    # estate, not of any one case, and rebuilding it per case would re-read a
+    # month of history for every host.
+    baseline = await build_pair_baseline(db)
+
     # Keyed on (source, entity), never entity alone. Two platforms watching the
     # same estate name hosts their own way, so joining across them would build a
     # chain out of a Siembiot endpoint alert and an unrelated session alert
@@ -252,10 +262,37 @@ async def correlate_alerts(
 
         verdicts = [str(m.overall_verdict or "") for m in members]
         max_risk = max((int(m.highest_risk_score or 0) for m in members), default=0)
-        score, reasons = score_case(
+        raw_score, reasons = score_case(
             distinct_rules=len(rules), tactics=tactics, max_risk=max_risk,
             verdicts=verdicts, claimed_only=claimed,
         )
+
+        # How ordinary this combination is on this host, applied as a multiplier
+        # rather than a subtraction. A penalty can be out-voted by enough
+        # kill-chain shape; a multiplier cannot, which is the point — a pairing
+        # that happens here every day should not become interesting merely by
+        # happening in an interesting order.
+        own_days = {_event_time(m, cutoff).date() for m in members}
+        surprise, surprise_detail = case_surprise(
+            baseline, source=source, client=client, host=entity,
+            rules=rules, own_days=own_days,
+        )
+        score = int(round(raw_score * surprise))
+
+        if surprise_detail:
+            familiar = min(surprise_detail, key=lambda item: item["surprise"])
+            novel = surprise_detail[0]
+            if novel["cooccurrence_days"] == 0:
+                reasons.append(
+                    f"{novel['rules'][0]} + {novel['rules'][1]} have not co-fired on this "
+                    "host before"
+                )
+            elif surprise <= 0.25:
+                reasons.append(
+                    f"routine for this host — {familiar['rules'][0]} + {familiar['rules'][1]} "
+                    f"co-fire on {familiar['cooccurrence_days']} day(s) in the last "
+                    f"{SURPRISE_BASELINE_DAYS}"
+                )
 
         # Ordered by when things happened on the host, not by when this
         # platform heard about them. Those differ by more than twelve hours on
@@ -285,6 +322,12 @@ async def correlate_alerts(
                     key=lambda t: _TACTIC_RANK.get(t.casefold(), 99),
                 ),
                 "max_risk_score": max_risk,
+                # All three kept apart. When a case scores low the next question
+                # is always whether its shape was unremarkable or its rules were
+                # familiar, and one number cannot answer that.
+                "raw_score": raw_score,
+                "surprise": round(surprise, 3),
+                "surprise_detail": surprise_detail[:8],
                 "score": score,
                 "reasons": reasons,
                 "alerts": [
