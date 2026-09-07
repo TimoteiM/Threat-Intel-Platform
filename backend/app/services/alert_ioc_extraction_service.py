@@ -105,6 +105,43 @@ _TYPE_ORDER = {"url": 0, "domain": 1, "ip": 2, "hash": 3, "cve": 4, "email": 5}
 DEFAULT_MAX_INDICATORS = 30
 
 
+# Percent-encoding is another spelling of the same indicator, and one that turns
+# a real one into a fabricated one when it is left alone. A Cloudflare log line
+# carrying `cf_user_email=herve.jarosinski%40lineas.net` produced the domain
+# `40lineas.net` — the matcher split on the literal `%40`, took the `40` as the
+# first label, and invented a host that does not exist. The real indicators, the
+# address and lineas.net, were both missed.
+#
+# Decoded before anything is matched, for the same reason defanged spellings are
+# refanged: what the log means is what should be extracted, not how it happened
+# to be escaped in transit.
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+def percent_decode(text: str) -> str:
+    """Decode %XX escapes, leaving anything that is not one untouched.
+
+    Deliberately not urllib.parse.unquote over the whole body: that also treats
+    `+` as a space, which mangles filenames and base64 in log lines that were
+    never form-encoded. Only true escapes are decoded, one at a time, and a
+    sequence that does not decode cleanly is left exactly as it was.
+    """
+    body = str(text or "")
+    if "%" not in body:
+        return body
+
+    def one(match: re.Match[str]) -> str:
+        try:
+            char = bytes.fromhex(match.group(0)[1:]).decode("utf-8", errors="strict")
+        except (ValueError, UnicodeDecodeError):
+            return match.group(0)
+        # Control characters would corrupt the line rather than reveal anything;
+        # a %00 in a log is not an indicator, it is noise.
+        return char if char.isprintable() else match.group(0)
+
+    return _PERCENT_ESCAPE.sub(one, body)
+
+
 def refang(text: str) -> str:
     """Return `text` with common defanging notation converted back to live form."""
     out = str(text or "")
@@ -137,11 +174,16 @@ def extract_alert_indicators(
     """
     raw_text = str(alert_body or "")
     raw_lower = raw_text.lower()
+    # Everything downstream matches against the decoded body. Offsets are into
+    # this copy and are used only to order the results, so the length change is
+    # harmless; `raw_lower` stays the original, which is what makes an indicator
+    # that was encoded in transit report itself as defanged_in_source.
+    decoded_text = percent_decode(raw_text)
     # Blank out object keys before anything is matched. A key is a field name and
     # can never be an indicator, so the reliable fix is structural — stop the
     # matcher from seeing keys at all — rather than judging each dotted token by
     # its spelling. Masking preserves every offset, so positions stay accurate.
-    text = mask_structured_keys(refang(raw_text))
+    text = mask_structured_keys(refang(decoded_text))
 
     found: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -325,7 +367,7 @@ def extract_alert_indicators(
     # validation as our own matches, because it has no notion of a flattened
     # field name, a Windows path, or a digest set belonging to one file.
     _merge_ioc_finder_candidates(
-        raw_text,
+        decoded_text,
         text,
         add=add,
         add_domain=add_domain,
