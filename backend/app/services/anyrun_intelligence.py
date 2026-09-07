@@ -280,9 +280,33 @@ def build_anyrun_sandbox_intelligence(result: dict[str, Any] | None) -> dict[str
         "dropped_files": dropped_files[:200],
         "suspicious_commands": suspicious_commands[:100],
         "screenshot_thumbnails": screenshots[:12],
+        # The sandbox screencast, when ANY.RUN recorded one. Passed through as
+        # the task id rather than the vendor URL: the page plays it from this
+        # platform, which caches it for a day so a report opened four times
+        # fetches sixteen megabytes once.
+        "video": _extract_video_reference(result),
         "extracted_iocs": extracted_iocs[:500],
         "informational_events": informational_events[:100],
     }
+
+
+def _extract_video_reference(result: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The task whose recording can be played, if there is one.
+
+    ANY.RUN states it — `video: {present, permanentUrl}` — so this reads the
+    answer rather than assuming every task has one. Measured across stored
+    tasks it is present on 1 of 99: the recording comes from interactive VM
+    sessions, and nearly everything submitted here is a URL analysed headless.
+    """
+    if not isinstance(result, dict):
+        return None
+    for block in (result, result.get("report_excerpt") or {}):
+        if not isinstance(block, dict):
+            continue
+        video = block.get("video")
+        if isinstance(video, dict) and video.get("task_id"):
+            return {"task_id": str(video["task_id"])}
+    return None
 
 
 def _build_process_tree_summary(processes: list[Any], graph: dict[str, Any]) -> dict[str, Any]:

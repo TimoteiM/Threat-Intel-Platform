@@ -919,6 +919,7 @@ def _lookup_intelligence(
                             "html_report_bytes": len(html_report) if isinstance(html_report, str) else None,
                             "html_threat_labels": html_threat_labels,
                             "screenshots": _extract_screenshot_thumbnails(report_data, html_report),
+                            "video": _extract_anyrun_video(report_data),
                         }
             except Exception as exc:
                 report_excerpt = {"report_error": str(exc)}
@@ -962,6 +963,7 @@ def _lookup_intelligence(
                 "iocs": ioc_items[:500],
                 "report_excerpt": report_excerpt,
                 "screenshots": (report_excerpt.get("screenshots") or [])[:12],
+                "video": (report_excerpt or {}).get("video"),
                 "behavior_details": behavior_details,
                 "behavior_graph": _build_behavior_graph(
                     processes=_ensure_list((behavior_details or {}).get("processes")),
@@ -1901,6 +1903,37 @@ def _extract_iocs(ioc_report: Any) -> list[dict[str, Any]]:
                 if isinstance(v, list):
                     return [x for x in v if isinstance(x, dict)]
     return []
+
+
+# The sandbox screencast, when ANY.RUN recorded one.
+#
+# It reports the fact itself — `video: {present, permanentUrl}` — so this reads
+# the answer rather than guessing a URL. Measured across stored tasks it is
+# present on 1 of 99: the recording comes from interactive VM sessions, and
+# almost everything this platform submits is a URL or domain pulled out of an
+# alert body, analysed headless on a short budget. So the caller must treat its
+# absence as the normal case and show nothing, not an empty player.
+def _extract_anyrun_video(report_data: Any) -> dict[str, Any] | None:
+    """`{task_id, url}` when a screencast exists, otherwise None."""
+    if not isinstance(report_data, dict):
+        return None
+    blocks = [report_data]
+    data = report_data.get("data")
+    if isinstance(data, dict):
+        blocks.append(data)
+        analysis = data.get("analysis")
+        if isinstance(analysis, dict):
+            blocks.append(analysis)
+    for block in blocks:
+        video = block.get("video")
+        if not isinstance(video, dict) or not video.get("present"):
+            continue
+        url = str(video.get("permanentUrl") or video.get("permanent_url") or "").strip()
+        if not url.startswith("https://content.any.run/tasks/"):
+            continue
+        task_id = url.split("/tasks/", 1)[1].split("/", 1)[0]
+        return {"task_id": task_id, "url": url}
+    return None
 
 
 def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[dict[str, Any]]:

@@ -27,6 +27,7 @@ from app.api.email_investigations import router as email_investigations_router
 from app.api.alert_investigations import router as alert_investigations_router
 from app.api.assistant import router as assistant_router
 from app.api.admin import router as admin_router
+from app.api.anyrun import router as anyrun_router
 
 api_router = APIRouter()
 
@@ -44,6 +45,7 @@ api_router.include_router(iocs_router)
 api_router.include_router(watchlist_router)
 api_router.include_router(exclusions_router)
 api_router.include_router(detections_router)
+api_router.include_router(anyrun_router)
 api_router.include_router(cost_router)
 api_router.include_router(whois_history_router)
 api_router.include_router(geo_router)

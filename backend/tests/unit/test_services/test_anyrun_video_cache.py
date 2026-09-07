@@ -1,0 +1,103 @@
+"""The sandbox recording cache: what it will fetch, and what it will not.
+
+The endpoint in front of this builds a vendor URL from a caller-supplied id, so
+the validation here is the thing standing between "play our own sandbox
+recording" and "fetch anything, at our bandwidth, from a path we were handed".
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import pytest
+
+from app.services import anyrun_video_cache as cache
+
+TASK = "6ab38a57-bb61-4790-a74c-031a83a293ad"
+
+
+# —— what counts as a task id ——————————————————————————————————————————————
+
+def test_a_uuid_is_a_task_id():
+    assert cache.is_task_id(TASK)
+    assert cache.is_task_id(TASK.upper())
+
+
+@pytest.mark.parametrize("value", [
+    "", "   ", "not-a-uuid", "../../etc/passwd", "6ab38a57", None,
+    f"{TASK}/../../../etc/passwd", f"{TASK} ", "%2e%2e%2f",
+])
+def test_anything_else_is_refused(value):
+    assert cache.is_task_id(value) is False
+
+
+def test_the_url_is_built_from_a_fixed_host():
+    """The caller supplies an id, never an address."""
+    url = cache.video_url(TASK)
+    assert url == f"https://content.any.run/tasks/{TASK}/download/mp4"
+    assert url.startswith("https://content.any.run/")
+
+
+def test_a_refused_id_never_reaches_the_network(monkeypatch):
+    def explode(*_a, **_k):
+        raise AssertionError("validation should have stopped this before any request")
+    monkeypatch.setattr(cache.requests, "get", explode)
+    assert cache.fetch("../../etc/passwd") is None
+
+
+# —— expiry ————————————————————————————————————————————————————————————————
+
+def test_a_fresh_file_is_served_from_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    path = tmp_path / f"{TASK}.mp4"
+    path.write_bytes(b"video")
+    assert cache.cached_if_fresh(TASK) == path
+
+
+def test_a_file_past_its_day_is_not_fresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    path = tmp_path / f"{TASK}.mp4"
+    path.write_bytes(b"video")
+    stale = time.time() - (cache.VIDEO_TTL_HOURS + 1) * 3600
+    import os
+    os.utime(path, (stale, stale))
+    assert cache.cached_if_fresh(TASK) is None
+
+
+def test_a_missing_file_is_not_fresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    assert cache.cached_if_fresh(TASK) is None
+
+
+def test_purge_removes_only_what_expired(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    fresh = tmp_path / "fresh.mp4"
+    old = tmp_path / "old.mp4"
+    fresh.write_bytes(b"a" * 10)
+    old.write_bytes(b"b" * 20)
+    stale = time.time() - (cache.VIDEO_TTL_HOURS + 2) * 3600
+    os.utime(old, (stale, stale))
+
+    result = cache.purge_expired()
+    assert result["removed"] == 1
+    assert result["bytes_freed"] == 20
+    assert fresh.exists() and not old.exists()
+
+
+def test_a_dead_partial_download_is_swept(tmp_path, monkeypatch):
+    """A request that died mid-download must not leave a file that looks cached."""
+    import os
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    partial = tmp_path / f"{TASK}.mp4.part"
+    partial.write_bytes(b"truncated")
+    dead = time.time() - cache.DOWNLOAD_TIMEOUT_SECONDS * 3
+    os.utime(partial, (dead, dead))
+    assert cache.purge_expired()["removed"] == 1
+    assert not partial.exists()
+
+
+def test_purge_on_a_directory_that_does_not_exist_is_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path / "nope")
+    assert cache.purge_expired() == {"removed": 0, "bytes_freed": 0}

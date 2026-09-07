@@ -69,6 +69,13 @@ celery_app.conf.update(
         # redeliver the message eventually, but not before the visibility
         # timeout, which has to stay above the task's own 30-minute limit. This
         # closes that gap to minutes instead of up to an hour.
+        # Cached ANY.RUN recordings live 24 hours. Swept hourly rather than
+        # daily so a burst of large files is reclaimed within the hour after it
+        # expires, not at some fixed time of day.
+        "purge-anyrun-videos": {
+            "task": "tasks.purge_anyrun_videos",
+            "schedule": crontab(minute=17),
+        },
         "recover-stuck-alert-runs": {
             "task": "tasks.recover_stuck_alert_runs",
             "schedule": crontab(minute="*/3"),
@@ -95,4 +102,5 @@ celery_app.autodiscover_tasks([
     # webhook URL was configured to queue anything yet.
     "app.tasks.case_event_task",
     "app.tasks.case_narrative_task",
+    "app.tasks.anyrun_video_task",
 ])

@@ -82,6 +82,10 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
     intelligence.flatMap((i) => arr(i.extracted_iocs)),
     (row) => `${text(row?.type)}:${text(row?.value)}`
   );
+  // At most one recording matters: they are all of the same submission, and a
+  // page with two players is a page asking which one to watch.
+  const videoTaskId: string | null =
+    intelligence.map((i) => text((i as any)?.video?.task_id)).find(Boolean) || null;
   const screenshots = uniqueRows(
     intelligence.flatMap((i) => arr(i.screenshot_thumbnails)).filter((row) => Boolean(row?.artifact_id)),
     (row) => text(row?.artifact_id || row?.url)
@@ -161,6 +165,45 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
               {screenshot?.final_url ? `Final URL: ${String(screenshot.final_url)}` : "Local browser capture"}
             </span>
           </a>
+        </div>
+      )}
+
+      {videoTaskId && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={tableTitleStyle}>ANY.RUN Sandbox Recording</div>
+          <div style={screenshotHintStyle}>
+            The screencast of the detonation. Served from this platform and kept
+            for 24 hours, then fetched again from ANY.RUN if anyone asks for it.
+          </div>
+          <video
+            controls
+            /* Not `auto`: the recording is tens of megabytes and most reports
+               are read without anyone watching it. Metadata is enough to draw
+               the controls and the duration. */
+            preload="metadata"
+            style={{
+              width: "100%",
+              maxWidth: 900,
+              borderRadius: 8,
+              border: "1px solid var(--panel-divider)",
+              background: "#000",
+            }}
+            src={`/api/anyrun/video/${videoTaskId}`}
+          >
+            Your browser cannot play this recording.
+          </video>
+          <div style={{ marginTop: 8 }}>
+            <a
+              href={`/api/anyrun/video/${videoTaskId}?download=true`}
+              style={{
+                fontSize: 12, color: "var(--accent)", textDecoration: "none",
+                border: "1px solid var(--panel-divider)", borderRadius: 7,
+                padding: "5px 12px", display: "inline-block",
+              }}
+            >
+              Download the recording
+            </a>
+          </div>
         </div>
       )}
 
