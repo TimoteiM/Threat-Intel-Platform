@@ -27,7 +27,7 @@ from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
 from app.models.schemas import AnalystFeedbackCreate
 from app.models.database import AlertCaseSpine
-from app.services.alert_correlation_service import correlate_alerts
+from app.services.alert_correlation_service import case_by_key, correlate_alerts
 from app.services.alert_entity_profile_service import build_entity_profile
 from app.services.alert_tuning_service import build_tuning_recommendations
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
@@ -125,6 +125,53 @@ async def get_tuning_recommendations(
     concluding malicious or suspicious is discarded rather than reported.
     """
     return await build_tuning_recommendations(db, days=days, min_alerts=min_alerts)
+
+
+@router.get("/case/{case_key}")
+async def get_case(
+    case_key: str,
+    db: DBSession,
+    hours: int = Query(default=720, ge=1, le=8760),
+) -> dict[str, Any]:
+    """Everything one case page needs, in a single call.
+
+    The case itself, the full analysis, and the profile of the machine it
+    happened on — assembled here rather than left to the page to fetch in three
+    round trips, because they are read together every time.
+    """
+    case = await case_by_key(db, case_key, hours=hours)
+    spine = await db.get(AlertCaseSpine, case_key)
+    if case is None and spine is None:
+        raise HTTPException(404, "No such case")
+
+    host = (case or {}).get("entity_host") or (spine.entity_host if spine else None)
+    profile = await build_entity_profile(db, host=host) if host else None
+
+    return {
+        "case_key": case_key,
+        # None when the case no longer forms — its alerts may have aged out of
+        # the window, or a late arrival may have re-anchored it under a new key.
+        # The spine still answers who owned it and what it reached.
+        "case": case,
+        "spine": {
+            "status": spine.status,
+            "assignee": spine.assignee,
+            "peak_score": spine.peak_score,
+            "opened_at": spine.opened_at.isoformat() if spine.opened_at else None,
+            "last_activity_at": spine.last_activity_at.isoformat() if spine.last_activity_at else None,
+            "superseded_by": spine.superseded_by_case_key,
+        } if spine else None,
+        "narrative": {
+            "markdown": spine.narrative_markdown if spine else None,
+            "status": spine.narrative_status if spine else None,
+            "generated_at": (
+                spine.narrative_generated_at.isoformat()
+                if spine and spine.narrative_generated_at else None
+            ),
+            "assistant_session_id": spine.narrative_session_id if spine else None,
+        },
+        "profile": profile,
+    }
 
 
 @router.get("/case/{case_key}/narrative")

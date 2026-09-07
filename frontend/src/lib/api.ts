@@ -20,6 +20,7 @@ import type {
   MismatchAlertsResponse,
   CorrelatedCase,
   CorrelatedCasesResponse,
+  CaseDetail,
   CaseNarrativeDetail,
   EntityProfile,
   TuningResponse,
@@ -796,6 +797,13 @@ export function getCorrelatedCases(params?: {
   const query = qs.toString();
   return request<CorrelatedCasesResponse>(
     `/detections/correlated-cases${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getCase(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
+  return request<CaseDetail>(
+    `/detections/case/${encodeURIComponent(caseKey)}${query}`,
   );
 }
 

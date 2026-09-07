@@ -1187,8 +1187,25 @@ function CaseBanner({ runCase, currentRunId }: { runCase: CorrelatedCase; curren
           {runCase.alert_count} alerts from {runCase.distinct_rules} independent detections in{" "}
           {runCase.window_hours}h
         </span>
-        <span style={{ marginLeft: "auto", color: tone, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-          {runCase.score}/100
+        <span style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "baseline" }}>
+          <span style={{ color: tone, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+            {runCase.score}/100
+          </span>
+          {/* The alert answers "what was this one thing". The case answers what
+              it was part of, which is the question an analyst reading this
+              banner has already started asking. */}
+          {runCase.case_key && (
+            <a
+              href={`/detections/cases/${runCase.case_key}`}
+              style={{
+                fontSize: 11.5, padding: "4px 11px", borderRadius: 7,
+                border: `1px solid ${tone}`, color: tone,
+                textDecoration: "none", whiteSpace: "nowrap",
+              }}
+            >
+              Open case →
+            </a>
+          )}
         </span>
       </div>
 

@@ -920,3 +920,23 @@ async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WI
         ):
             return case
     return None
+
+
+async def case_by_key(
+    db: AsyncSession, case_key: str, *, hours: int = 720
+) -> dict[str, Any] | None:
+    """One case, found by the identity that survives a change of window.
+
+    Recomputed rather than read back from the spine, because membership is not
+    stored: the spine carries who owns the case and how its score moved, and the
+    alerts in it are always derived from event time. Looking the case up by key
+    is exactly what the stable identity was built to make possible — the same
+    key resolves to the same case whether the caller asks over 48 hours or 30
+    days, so a bookmarked case page does not depend on the window it was opened
+    with.
+    """
+    result = await correlate_alerts(db, hours=hours, limit=500)
+    for case in result["cases"]:
+        if case.get("case_key") == case_key:
+            return case
+    return None

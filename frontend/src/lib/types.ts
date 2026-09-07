@@ -2309,3 +2309,27 @@ export interface CaseNarrativeDetail {
   assistant_session_id: string | null;
   error: string | null;
 }
+
+
+export interface CaseDetail {
+  case_key: string;
+  /** Null when the case no longer forms — its alerts may have aged out, or a
+   *  late arrival may have re-anchored it under a new key. The spine still
+   *  answers who owned it and what it reached. */
+  case: CorrelatedCase | null;
+  spine: {
+    status: string;
+    assignee: string | null;
+    peak_score: number;
+    opened_at: string | null;
+    last_activity_at: string | null;
+    superseded_by: string | null;
+  } | null;
+  narrative: {
+    markdown: string | null;
+    status: string | null;
+    generated_at: string | null;
+    assistant_session_id: string | null;
+  };
+  profile: EntityProfile | null;
+}
