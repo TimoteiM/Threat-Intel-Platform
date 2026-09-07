@@ -72,6 +72,8 @@ function pct(rate: number | null): string {
 export default function DetectionsPage() {
   const [tab, setTab] = useState<"rules" | "attack" | "cases" | "accuracy">("rules");
   const [days, setDays] = useState(30);
+  // Lives on the page, not inside the tab, so the single header control owns it.
+  const [caseHours, setCaseHours] = useState<number>(720);
   const [quality, setQuality] = useState<DetectionQualityResponse | null>(null);
   const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
   const [accuracy, setAccuracy] = useState<FeedbackAccuracy | null>(null);
@@ -109,18 +111,37 @@ export default function DetectionsPage() {
         title="Detection quality"
         subtitle="What each rule is worth, measured from what its alerts turned out to be."
         actions={
-          <div className="ds-toolbar" role="group" aria-label="Time window">
-            {WINDOWS.map((value) => (
-              <Button
-                key={value}
-                variant={days === value ? "primary" : "secondary"}
-                aria-pressed={days === value}
-                onClick={() => setDays(value)}
-              >
-                {value}d
-              </Button>
-            ))}
-          </div>
+          /* One control for the page. The cases view needs a 48-hour option and
+             cannot answer 90 days — the endpoint refuses it — so the choices
+             follow the tab rather than a second selector appearing underneath
+             the first and disagreeing with it. */
+          tab === "cases" ? (
+            <div className="ds-toolbar" role="group" aria-label="Time window">
+              {CASE_WINDOWS.map((value) => (
+                <Button
+                  key={value}
+                  variant={caseHours === value ? "primary" : "secondary"}
+                  aria-pressed={caseHours === value}
+                  onClick={() => setCaseHours(value)}
+                >
+                  {value === 48 ? "48h" : `${value / 24}d`}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            <div className="ds-toolbar" role="group" aria-label="Time window">
+              {WINDOWS.map((value) => (
+                <Button
+                  key={value}
+                  variant={days === value ? "primary" : "secondary"}
+                  aria-pressed={days === value}
+                  onClick={() => setDays(value)}
+                >
+                  {value}d
+                </Button>
+              ))}
+            </div>
+          )
         }
       />
 
@@ -156,7 +177,7 @@ export default function DetectionsPage() {
           // Passed straight through: forcing a minimum of 30 days here meant the
           // tab always opened on a different window than the header said, and at
           // 90d it asked for one the endpoint refuses.
-          <CasesTab days={days} />
+          <CasesTab hours={caseHours} />
         ) : (
           <AccuracyTab data={accuracy} />
         )}
@@ -492,10 +513,7 @@ const CASES_REFRESH_MS = 30_000;
 const CASE_WINDOWS = [48, 168, 720] as const;
 const MAX_WINDOW_HOURS = 720;
 
-function CasesTab({ days }: { days: number }) {
-  const [hours, setHours] = useState(() =>
-    Math.min(Math.max(24, days * 24), MAX_WINDOW_HOURS),
-  );
+function CasesTab({ hours }: { hours: number }) {
   const [openHost, setOpenHost] = useState<string | null>(null);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -562,22 +580,9 @@ function CasesTab({ days }: { days: number }) {
         ]}
       />
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {CASE_WINDOWS.map((option) => (
-          <button
-            key={option}
-            type="button"
-            onClick={() => setHours(option)}
-            style={{
-              padding: "5px 11px", borderRadius: 8, fontSize: 11.5,
-              border: `1px solid ${hours === option ? "var(--accent)" : "var(--panel-divider-strong)"}`,
-              background: hours === option ? "rgba(96,165,250,0.12)" : "var(--panel-card-bg)",
-              color: "var(--text)", cursor: "pointer",
-            }}
-          >
-            {option === 48 ? "48 hours" : option === 168 ? "7 days" : "30 days"}
-          </button>
-        ))}
+      {/* No window buttons here: the page header carries the only one, so a
+          reader is never asked which of two controls is in effect. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {staleSince && (
           <span style={{ fontSize: 10.5, color: "var(--status-warning)" }}>
             not refreshing since {staleSince.toLocaleTimeString()}
@@ -602,7 +607,13 @@ function CasesTab({ days }: { days: number }) {
         <Section title="Cases" hint="Newest activity first within each. Select an alert to open it.">
           <div style={{ display: "grid", gap: "var(--space-4)" }}>
             {data.cases.map((item) => (
-              <div key={`${item.source}:${item.client}:${item.entity_host}`} style={{ display: "grid", gap: 6 }}>
+              // Keyed on the case, not on its host. A host can hold several
+              // sessions now, so source:client:host collided — 20 cases shared
+              // 13 keys — and React kept stale rows from the previous window
+              // alongside the new ones. That is why the list could be counted
+              // as thirty while the header, reading the same response, said
+              // twenty.
+              <div key={item.case_key} style={{ display: "grid", gap: 6 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
                   <a
                     href={`/detections/cases/${item.case_key}`}
