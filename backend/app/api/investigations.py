@@ -101,6 +101,9 @@ async def list_investigations(
                 "id": str(inv.id),
                 "domain": inv.domain,
                 "observable_type": getattr(inv, "observable_type", "domain"),
+        # Carried on the detail as well as the list, so the report page can
+        # render the player from the same fact the list badges the row with.
+        "sandbox_video_task_id": getattr(inv, "sandbox_video_task_id", None),
                 "sandbox_video_task_id": getattr(inv, "sandbox_video_task_id", None),
                 "state": inv.state,
                 "classification": inv.classification,
@@ -139,6 +142,9 @@ async def get_investigation(investigation_id: str, session: DBSession):
         "id": str(inv.id),
         "domain": inv.domain,
         "observable_type": getattr(inv, "observable_type", "domain"),
+        # Carried on the detail as well as the list, so the report page can
+        # render the player from the same fact the list badges the row with.
+        "sandbox_video_task_id": getattr(inv, "sandbox_video_task_id", None),
         "state": inv.state,
         "classification": inv.classification,
         "confidence": inv.confidence,

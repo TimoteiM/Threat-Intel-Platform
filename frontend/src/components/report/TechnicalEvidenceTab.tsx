@@ -18,6 +18,8 @@ import RedirectDestinationGraph from "@/components/report/RedirectDestinationGra
 import { ContentMLSummary, URLBehaviorSummary } from "@/components/report/EvidenceScoreSummaries";
 
 interface Props {
+  /** ANY.RUN task whose screencast can be played, from the investigation row. */
+  videoTaskId?: string | null;
   evidence: CollectedEvidence;
   domain?: string;
   observableType?: string;
@@ -74,7 +76,7 @@ function CollectorRerunButton({ investigationId, collector, onRefresh, label }: 
   );
 }
 
-export default function TechnicalEvidenceTab({ evidence, domain, observableType, investigationId, onRefresh }: Props) {
+export default function TechnicalEvidenceTab({ evidence, domain, observableType, investigationId, videoTaskId, onRefresh }: Props) {
   const dns = evidence?.dns || ({} as any);
   const tls = evidence?.tls || ({} as any);
   const http = evidence?.http || ({} as any);
@@ -2022,7 +2024,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           onRefresh={onRefresh}
           sensitiveFormDetection={sensitiveFormDetection}
         />
-        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} screenshot={evidence?.screenshot} />
+        <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} videoTaskId={videoTaskId} screenshot={evidence?.screenshot} />
       </Section>
 
       <Section title="Final Risk Aggregation">

@@ -6,6 +6,14 @@ import { getArtifactUrl } from "@/lib/api";
 
 type Props = {
   hybridAnalysis: any;
+  /** The investigation's stored task id, when it has one.
+   *
+   *  Preferred over anything derived from the evidence blob. sandbox_intelligence
+   *  is computed at analysis time, so every investigation concluded before the
+   *  video field existed has no trace of it there — which is exactly the case
+   *  that has a recording. The column is the fact; the blob is a snapshot of
+   *  what the parser knew on the day. */
+  videoTaskId?: string | null;
   screenshot?: any;
 };
 
@@ -60,7 +68,7 @@ function collectIntelligence(hybridAnalysis: any): Intelligence[] {
     });
 }
 
-export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }: Props) {
+export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot, videoTaskId}: Props) {
   const intelligence = React.useMemo(() => collectIntelligence(hybridAnalysis), [hybridAnalysis]);
   if (!intelligence.length) return null;
 
@@ -84,8 +92,10 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
   );
   // At most one recording matters: they are all of the same submission, and a
   // page with two players is a page asking which one to watch.
-  const videoTaskId: string | null =
-    intelligence.map((i) => text((i as any)?.video?.task_id)).find(Boolean) || null;
+  const resolvedVideoTaskId: string | null =
+    text(videoTaskId) ||
+    intelligence.map((i) => text((i as any)?.video?.task_id)).find(Boolean) ||
+    null;
   const screenshots = uniqueRows(
     intelligence.flatMap((i) => arr(i.screenshot_thumbnails)).filter((row) => Boolean(row?.artifact_id)),
     (row) => text(row?.artifact_id || row?.url)
@@ -168,7 +178,7 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
         </div>
       )}
 
-      {videoTaskId && (
+      {resolvedVideoTaskId && (
         <div style={{ marginBottom: 16 }}>
           <div style={tableTitleStyle}>ANY.RUN Sandbox Recording</div>
           <div style={screenshotHintStyle}>
@@ -188,13 +198,13 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot }
               border: "1px solid var(--panel-divider)",
               background: "#000",
             }}
-            src={`/api/anyrun/video/${videoTaskId}`}
+            src={`/api/anyrun/video/${resolvedVideoTaskId}`}
           >
             Your browser cannot play this recording.
           </video>
           <div style={{ marginTop: 8 }}>
             <a
-              href={`/api/anyrun/video/${videoTaskId}?download=true`}
+              href={`/api/anyrun/video/${resolvedVideoTaskId}?download=true`}
               style={{
                 fontSize: 12, color: "var(--accent)", textDecoration: "none",
                 border: "1px solid var(--panel-divider)", borderRadius: 7,

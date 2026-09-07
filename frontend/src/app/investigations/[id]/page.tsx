@@ -726,7 +726,7 @@ export default function InvestigationPage() {
         case "intelligence":
           return <SocIntelligenceTab intelligence={intelligence} report={report} evidence={evidence} detail={detail} loading={!intelligence && !evidence && !report} />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} videoTaskId={detail?.sandbox_video_task_id} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":
           return report ? <FindingsTab report={report} evidence={evidence} /> : <NoData label="report" />;
         case "indicators":
