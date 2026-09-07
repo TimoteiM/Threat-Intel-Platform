@@ -127,6 +127,7 @@ async def test_list_all_with_dedupe_keeps_newest_and_applies_pagination():
         search=None,
         observable_type=None,
         classification=None,
+        has_video=None,
     )
 
 
