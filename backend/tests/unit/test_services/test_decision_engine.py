@@ -408,8 +408,28 @@ def test_real_signals_still_reach_suspicious_and_malicious():
     )
     assert build_decision_report(flagged, "domain")["classification"] == "malicious"
 
+    # OpenPhish alone, on a host 91 VirusTotal engines were asked about and
+    # cleared, no longer reaches malicious. It used to, and that is how
+    # https://www.google.com/ came back malicious at 74/100: a community feed
+    # with no verification step outvoting every source that disagreed. It still
+    # raises the case for an analyst.
     listed = _clean_business_site(threat_feeds={"openphish_listed": True})
-    assert build_decision_report(listed, "domain")["classification"] == "malicious"
+    assert build_decision_report(listed, "domain")["classification"] == "suspicious"
+
+    # With anything corroborating it, it is decisive again.
+    corroborated = _clean_business_site(
+        threat_feeds={"openphish_listed": True},
+        vt={"found": True, "malicious_count": 2, "suspicious_count": 0, "total_vendors": 91},
+    )
+    assert build_decision_report(corroborated, "domain")["classification"] == "malicious"
+
+    # And where nothing authoritative answered at all, the listing stands on its
+    # own: absence of evidence is not evidence of absence.
+    unchecked = _clean_business_site(
+        threat_feeds={"openphish_listed": True},
+        vt={"found": False, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 0},
+    )
+    assert build_decision_report(unchecked, "domain")["classification"] == "malicious"
 
     weak_but_real = _clean_business_site(
         url_lexical_ml={"label": "high", "score": 0.82, "top_features": ["has_sensitive_keyword"]},

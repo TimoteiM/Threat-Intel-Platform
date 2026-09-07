@@ -208,6 +208,61 @@ def apply_decision_to_report(report_data: dict[str, Any], decision_report: dict[
     return merged
 
 
+
+def community_listing_weight(
+    threat_feeds: dict[str, Any],
+    *,
+    vt_found: bool,
+    vt_total: int,
+    vt_malicious: int,
+    vt_suspicious: int,
+    corroborated: bool,
+) -> tuple[bool, bool, bool]:
+    """How much an unverified community listing is allowed to decide.
+
+    Returns (openphish_decisive, phishtank_decisive, authoritative_clean).
+
+    OpenPhish is a community submission feed with no verification step, and an
+    unverified PhishTank entry is a report nobody confirmed — this deployment
+    holds one against google.com submitted in 2020 and never verified. Either
+    alone was enough to return malicious at high confidence, which is how
+    https://www.google.com/ came back malicious 74/100 while VirusTotal reported
+    0 of 91 and Safe Browsing reported not-listed.
+
+    They still count. They just no longer outvote every other source on their
+    own: something else has to agree before a single unverified listing is
+    treated as proof.
+
+    `authoritative_clean` is the other half of that. A source that was actually
+    asked and said no is not the same as a source that said nothing, and the
+    difference is the whole point — silence is absence of evidence, this is
+    evidence of absence. A three-engine VirusTotal panel returning nothing is
+    silence; ninety-one returning nothing is a clearance.
+
+    Lives here and is called from both classification paths, because there are
+    two copies of this ladder in the codebase and a rule about what counts as
+    proof must not be able to differ between them.
+    """
+    openphish_listed = bool(threat_feeds.get("openphish_listed"))
+    phishtank = threat_feeds.get("phishtank") or {}
+    phishtank_positive = bool(phishtank.get("in_database"))
+    phishtank_verified = bool(phishtank.get("verified"))
+
+    gsb = threat_feeds.get("google_safe_browsing") or {}
+    gsb_checked = bool(gsb.get("checked"))
+    gsb_listed = bool(gsb.get("listed"))
+
+    agreed = bool(corroborated or gsb_listed or phishtank_verified)
+    authoritative_clean = bool(
+        (gsb_checked and not gsb_listed)
+        or (vt_found and vt_total >= 20 and vt_malicious == 0 and vt_suspicious == 0)
+    )
+    openphish_decisive = openphish_listed and (agreed or not authoritative_clean)
+    phishtank_decisive = phishtank_positive and (agreed or not authoritative_clean)
+    return openphish_decisive, phishtank_decisive, authoritative_clean
+
+
+
 def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, str, list[str], list[dict[str, Any]], list[str]]:
     vt = evidence_data.get("vt") or {}
     threat_feeds = evidence_data.get("threat_feeds") or {}
@@ -245,6 +300,13 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     phishtank = threat_feeds.get("phishtank") or {}
     phishtank_positive = bool(phishtank.get("in_database"))
     phishtank_verified = bool(phishtank.get("verified"))
+
+    # Google Safe Browsing answering "not listed" is a real negative, not a
+    # missing answer: it is Google's own blocklist, queried and returned.
+    gsb = threat_feeds.get("google_safe_browsing") or {}
+    gsb_checked = bool(gsb.get("checked"))
+    gsb_listed = bool(gsb.get("listed"))
+
 
     http_phishing = list(http.get("phishing_indicators") or [])
     http_has_login = bool(http.get("has_login_form"))
@@ -342,15 +404,73 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         or bool(intel_hits)
     )
 
+
+    # OpenPhish is a community submission feed with no verification step, and
+    # an unverified PhishTank entry is a report nobody confirmed — this
+    # deployment holds one from 2020 against google.com. Either alone was enough
+    # to return malicious at high confidence, which is how https://www.google.com/
+    # came back malicious 74/100 while VirusTotal reported 0 of 91 and Safe
+    # Browsing reported not-listed.
+    #
+    # They still count. They just no longer outvote every other source on their
+    # own: something else has to agree before a single unverified community
+    # listing is treated as proof.
+    community_corroborated = bool(
+        vt_malicious > 0
+        or vt_suspicious > 0
+        or tf_matches
+        or intel_hits
+        or anyrun_malicious
+        or anyrun_suspicious
+        or urlscan_malicious
+        or gsb_listed
+        or phishtank_verified
+    )
+    # An authoritative source that was actually asked and said no. Not the same
+    # as no answer, and the difference is the whole point: silence is absence of
+    # evidence, this is evidence of absence.
+    authoritative_clean = bool(
+        (gsb_checked and not gsb_listed)
+        or (vt_found and vt_total >= 20 and vt_malicious == 0 and vt_suspicious == 0)
+    )
+    openphish_decisive = openphish_listed and (
+        community_corroborated or not authoritative_clean
+    )
+
+    # One rule, computed once and shared with the other ladder — see
+    # community_listing_weight.
+    community_corroborated = bool(
+        vt_malicious > 0
+        or vt_suspicious > 0
+        or tf_matches
+        or intel_hits
+        or anyrun_malicious
+        or anyrun_suspicious
+        or urlscan_malicious
+    )
+    openphish_decisive, phishtank_decisive, authoritative_clean = community_listing_weight(
+        threat_feeds,
+        vt_found=vt_found,
+        vt_total=vt_total,
+        vt_malicious=vt_malicious,
+        vt_suspicious=vt_suspicious,
+        corroborated=community_corroborated,
+    )
+
+
     if (
         vt_malicious >= 5
         or phishtank_verified
         or tf_matches
-        or openphish_listed
+        or openphish_decisive
         or anyrun_malicious
         or urlscan_malicious
     ):
         classification, confidence, risk_score, action = "malicious", "high", 90, "block"
+    elif openphish_listed:
+        # Listed, but by a community feed alone and against sources that were
+        # asked and disagreed. Worth an analyst's eyes, not a block.
+        classification, confidence, risk_score, action = "suspicious", "medium", 55, "investigate"
     elif high_conf_http and (http_has_login or len(http_phishing) >= 2):
         classification, confidence, risk_score, action = "malicious", "medium", 82, "block"
     elif (
@@ -363,7 +483,12 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         classification, confidence, risk_score, action = "suspicious", "medium", 60, "investigate"
     elif http_score >= 3 or (strong_http and http_has_login):
         classification, confidence, risk_score, action = "suspicious", "medium", 65, "investigate"
-    elif phishtank_positive:
+    elif phishtank_decisive:
+        # An unverified PhishTank entry is a report nobody confirmed. Held
+        # against a host that Safe Browsing and 91 VirusTotal engines were asked
+        # about and cleared, it is the weaker claim — and left as a verdict of
+        # its own it made every stale community submission permanently
+        # unresolvable. It still shows in the findings; it no longer decides.
         classification, confidence, risk_score, action = "inconclusive", "low", 30, "investigate"
     elif http_score >= 1:
         classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"

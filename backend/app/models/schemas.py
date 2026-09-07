@@ -451,7 +451,12 @@ class ThreatFeedEvidence(BaseModel):
     abuseipdb: Optional[AbuseIPDBResult] = None
     phishtank: Optional[PhishTankResult] = None
     threatfox_matches: list[ThreatFoxResult] = []
+    # True only when the feed carries this exact hostname. A phishing URL that
+    # merely *mentions* the host — in a redirect parameter, or as a page hosted
+    # on a shared subdomain — is recorded below instead, because it says nothing
+    # about the host being asked about.
     openphish_listed: bool = False
+    openphish_related_hosts: list[str] = []
     google_safe_browsing: Optional[GoogleSafeBrowsingResult] = None
     otx: Optional[OTXResult] = None
     feeds_checked: list[str] = []

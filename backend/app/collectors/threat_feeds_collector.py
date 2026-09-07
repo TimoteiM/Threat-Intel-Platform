@@ -193,7 +193,8 @@ class ThreatFeedsCollector(BaseCollector):
                         evidence.threatfox_matches = result
                         evidence.feeds_checked.append("threatfox")
                     elif feed_name == "openphish":
-                        evidence.openphish_listed = result
+                        evidence.openphish_listed = bool(result.get("listed"))
+                        evidence.openphish_related_hosts = list(result.get("related_hosts") or [])
                         evidence.feeds_checked.append("openphish")
                     elif feed_name == "google_safe_browsing":
                         evidence.google_safe_browsing = result
@@ -325,8 +326,23 @@ class ThreatFeedsCollector(BaseCollector):
 
         return matches
 
-    def _query_openphish(self, domain: str) -> bool:
-        """Check domain against OpenPhish community feed."""
+    def _query_openphish(self, domain: str) -> dict:
+        """Check a host against the OpenPhish community feed.
+
+        Matched on hostname, never as a substring of the URL. The substring form
+        this replaced reported https://www.google.com/ as listed on the strength
+        of two unrelated entries: a phishing page hosted at sites.google.com,
+        and a phishing URL on another domain entirely that carried
+        accounts.google.com inside a redirect query parameter. Neither is a
+        statement about www.google.com, and between them they drove a
+        malicious/high verdict on Google.
+
+        Entries on *other* hosts under the same registrable domain are returned
+        separately rather than as a listing. A phishing page on a shared hosting
+        subdomain says something about that page, not about the parent — and on
+        platforms like Google Sites, Blogspot or Azure Websites the parent is a
+        household name.
+        """
         try:
             record_provider_request("openphish")
             resp = requests.get(
@@ -334,15 +350,30 @@ class ThreatFeedsCollector(BaseCollector):
                 timeout=self.timeout,
             )
             resp.raise_for_status()
-            feed_lines = resp.text.lower().splitlines()
-            domain_lower = domain.lower()
-            for line in feed_lines:
-                if domain_lower in line:
-                    return True
-            return False
+            wanted = (domain or "").strip().lower().rstrip(".")
+            if not wanted:
+                return {"listed": False, "related_hosts": []}
+
+            exact = False
+            related: list[str] = []
+            for line in resp.text.splitlines():
+                entry = line.strip()
+                if not entry:
+                    continue
+                try:
+                    host = (urlparse(entry).hostname or "").lower().rstrip(".")
+                except ValueError:
+                    continue
+                if not host:
+                    continue
+                if host == wanted:
+                    exact = True
+                elif host.endswith("." + wanted) and host not in related:
+                    related.append(host)
+            return {"listed": exact, "related_hosts": related[:10]}
         except Exception as e:
             logger.debug(f"[{self.name}] OpenPhish query failed: {e}")
-            return False
+            return {"listed": False, "related_hosts": []}
 
     def _query_google_safe_browsing(self, url: str, api_key: str) -> GoogleSafeBrowsingResult:
         try:

@@ -28,7 +28,7 @@ from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
 from app.config import get_settings
-from app.services.decision_engine import apply_decision_to_report, build_decision_report
+from app.services.decision_engine import community_listing_weight, apply_decision_to_report, build_decision_report
 from app.services.proxy_profiles import selected_proxy_summary
 from app.services.provider_branding import normalize_anyrun_branding
 from app.utils.domain_utils import extract_registered_domain
@@ -1231,7 +1231,26 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
         anyrun_malicious = anyrun_verdict == "malicious"
         anyrun_suspicious = anyrun_verdict == "suspicious"
 
-        if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_listed or anyrun_malicious:
+        # The same rule as the decision engine, called rather than restated:
+        # an unverified community listing does not outvote sources that were
+        # asked and disagreed. See community_listing_weight.
+        openphish_decisive, phishtank_decisive, authoritative_clean = community_listing_weight(
+            threat_feeds,
+            vt_found=vt_found,
+            vt_total=int(vt_total or 0),
+            vt_malicious=int(vt_malicious or 0),
+            vt_suspicious=int(vt_suspicious or 0),
+            corroborated=bool(
+                int(vt_malicious or 0) > 0
+                or int(vt_suspicious or 0) > 0
+                or tf_matches
+                or intel_hits
+                or anyrun_malicious
+                or anyrun_suspicious
+            ),
+        )
+
+        if vt_malicious >= 5 or phishtank_verified or tf_matches or openphish_decisive or anyrun_malicious:
             classification = "malicious"
             confidence = "high"
             risk_score = 90
@@ -1253,7 +1272,7 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             confidence = "medium"
             risk_score = 65
             recommended_action = "investigate"
-        elif phishtank_positive:
+        elif phishtank_decisive:
             classification = "inconclusive"
             confidence = "low"
             risk_score = 30
