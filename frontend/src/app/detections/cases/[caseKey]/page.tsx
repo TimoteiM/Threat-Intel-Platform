@@ -122,6 +122,17 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
         )}
       </div>
 
+      {data.spine && (
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 11.5, color: "var(--text-muted)" }}>
+          {/* Three different clocks, kept apart on purpose. When the activity
+              happened, when it stopped, and when this platform first knew about
+              it — on a replayed chain those sat 18 days apart. */}
+          <span>Activity began <strong style={{ color: "var(--text-secondary)" }}>{shortDate(data.spine.opened_at)}</strong></span>
+          <span>Last activity <strong style={{ color: "var(--text-secondary)" }}>{shortDate(data.spine.last_activity_at)}</strong></span>
+          <span>Case first recorded <strong style={{ color: "var(--text-secondary)" }}>{shortDate(data.spine.first_recorded_at)}</strong></span>
+        </div>
+      )}
+
       {data.spine?.superseded_by && (
         <div style={{ fontSize: 11.5, color: "var(--status-warning)" }}>
           A later alert re-anchored this session. Its history continues under{" "}

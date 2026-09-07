@@ -633,6 +633,23 @@ function CasesTab({ days }: { days: number }) {
                     {(item.tactics || []).length} tactic(s)
                     {item.tactics?.length ? ` reaching ${item.tactics[item.tactics.length - 1]}` : ""}
                   </span>
+                  {/* Dated on event time, and separately on when we were told.
+                      Alerts here arrive replayed — this deployment has an
+                      18-day gap on a live case — so "when did this happen" and
+                      "when did we find out" are different questions and a row
+                      showing only one of them invites the wrong answer. */}
+                  <span
+                    style={{ fontSize: 11, color: "var(--text-muted)" }}
+                    title={
+                      item.first_ingested
+                        ? `Reported to this platform ${new Date(item.first_ingested).toLocaleString()}`
+                        : undefined
+                    }
+                  >
+                    began {item.first_seen ? new Date(item.first_seen).toLocaleString() : "—"}
+                    {" · last activity "}
+                    {item.last_seen ? new Date(item.last_seen).toLocaleString() : "—"}
+                  </span>
                   <a
                     href={`/detections/cases/${item.case_key}`}
                     style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}

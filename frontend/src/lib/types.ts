@@ -2138,8 +2138,13 @@ export interface CorrelatedCase {
     error: string | null;
   };
   window_hours: number;
+  /** Event time — when it happened on the host. */
   first_seen: string | null;
   last_seen: string | null;
+  /** Ingest time — when this platform was told. Replay makes these differ;
+   *  this deployment has an 18-day gap on a live case. */
+  first_ingested?: string | null;
+  last_ingested?: string | null;
   alert_count: number;
   /** Members whose investigation has not finished yet. A case is visible about
    *  a second after its second alert arrives, so a fresh one is legitimately
@@ -2321,7 +2326,11 @@ export interface CaseDetail {
     status: string;
     assignee: string | null;
     peak_score: number;
+    /** When the activity began (the session's first event). */
     opened_at: string | null;
+    /** When this platform first recorded the case. Differs from opened_at
+     *  whenever alerts arrive replayed, which here is most of the time. */
+    first_recorded_at: string | null;
     last_activity_at: string | null;
     superseded_by: string | null;
   } | null;

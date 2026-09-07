@@ -157,7 +157,11 @@ async def get_case(
             "status": spine.status,
             "assignee": spine.assignee,
             "peak_score": spine.peak_score,
+            # When the activity began, and separately when this platform first
+            # recorded the case. They differ whenever alerts arrive replayed,
+            # which here is most of the time.
             "opened_at": spine.opened_at.isoformat() if spine.opened_at else None,
+            "first_recorded_at": spine.created_at.isoformat() if spine.created_at else None,
             "last_activity_at": spine.last_activity_at.isoformat() if spine.last_activity_at else None,
             "superseded_by": spine.superseded_by_case_key,
         } if spine else None,

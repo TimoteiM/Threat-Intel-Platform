@@ -876,6 +876,30 @@ async def correlate_alerts(
     if narrative_jobs:
         dispatch_narratives(narrative_jobs)
 
+    # The window does two jobs, and they are not the same job.
+    #
+    # Membership is measured from the entity's own newest event, which is what
+    # lets a chain replayed weeks late still form a case at all. Listing is
+    # measured from now, because "48 hours" on a control an analyst clicks means
+    # "what has been happening lately" — and without this it did not: a case
+    # whose alerts were three weeks old appeared under 48 hours because they sat
+    # within 48 hours of each other, so every window showed the same cases at
+    # the top and the control looked broken.
+    horizon = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+    def within_window(case: dict[str, Any]) -> bool:
+        last_seen = case.get("last_seen")
+        if not last_seen:
+            return True
+        try:
+            when = datetime.fromisoformat(str(last_seen))
+        except ValueError:
+            return True
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return when >= horizon
+
+    cases = [case for case in cases if within_window(case)]
+
     if min_score:
         cases = [case for case in cases if case["score"] >= min_score]
     cases.sort(key=lambda case: (-case["score"], -case["distinct_rules"]))
