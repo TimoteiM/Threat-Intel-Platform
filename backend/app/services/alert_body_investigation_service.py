@@ -341,7 +341,7 @@ def run_alert_body_investigation(
             "investigable_total": extraction["investigable_total"],
             "excluded_total": excluded_total,
             "truncated": extraction["truncated"],
-            "dropped": extraction["dropped"],
+            "dropped": extraction["truncated_count"],
             "characters": extraction["characters"],
             "max_indicators": max_indicators,
         },

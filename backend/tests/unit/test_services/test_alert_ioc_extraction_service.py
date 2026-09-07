@@ -116,7 +116,11 @@ def test_max_indicators_truncates_investigable_indicators():
     result = extract_alert_indicators(alert, max_indicators=4)
     assert result["investigable_total"] == 4
     assert result["truncated"] is True
-    assert result["dropped"] == 6
+    # `dropped` is now the list of rejected candidates with their reasons; the
+    # count of indicators cut by the cap moved to `truncated_count`.
+    assert result["truncated_count"] == 6
+    assert result["dropped_counts"]["capped"] == 6
+    assert all(row["pass"] == "cap" for row in result["dropped"] if row["reason"] == "capped")
 
 
 def test_empty_alert_body_returns_empty_bundle():

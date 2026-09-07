@@ -446,7 +446,7 @@ async def _create_alert_run(
                 "investigable_total": extraction["investigable_total"],
                 "excluded_total": excluded_total,
                 "truncated": extraction["truncated"],
-                "dropped": extraction["dropped"],
+                "dropped": extraction["truncated_count"],
                 "characters": extraction["characters"],
                 "max_indicators": request.max_indicators,
             },

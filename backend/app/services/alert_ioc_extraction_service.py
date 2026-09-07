@@ -31,7 +31,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.ip_context import is_ipv4_indicator_match
-from app.services.ioc_extraction_rules import DOMAIN_VALIDATOR
+from app.services.ioc_extraction_rules import (
+    DOMAIN_VALIDATOR,
+    ConsumedSpans,
+    DroppedLog,
+)
 from app.utils.domain_utils import extract_registered_domain, has_public_suffix
 from app.utils.log_text import (
     has_file_suffix,
@@ -198,6 +202,18 @@ def extract_alert_indicators(
     # its spelling. Masking preserves every offset, so positions stay accurate.
     text = mask_structured_keys(refang(decoded_text))
 
+    # Infrastructure shared by every pass below. Neither is a pass of its own:
+    # spans record what earlier passes consumed so later ones do not re-report
+    # the same characters, and the log records why a candidate was refused so
+    # "this indicator is missing" stops being an archaeology exercise.
+    #
+    # A span claimed by an outer match already covers everything inside it, so a
+    # URL's host and an email's domain need no separate claim — containment
+    # answers `is_consumed` for them, and a second overlapping claim would be
+    # refused by ConsumedSpans' own contract.
+    spans = ConsumedSpans()
+    dropped = DroppedLog()
+
     found: dict[tuple[str, str], dict[str, Any]] = {}
 
     def add(
@@ -263,15 +279,25 @@ def extract_alert_indicators(
         if not host:
             continue
         if _is_ip_literal(host):
+            spans.claim(match.start(), match.end(), kind="url", value=url)
             add("url", url, matched_text=match.group(0), position=match.start(), host=host)
             url_hosts.add(host.lower())
             continue
-        if not _looks_like_domain(host):
+        verdict = DOMAIN_VALIDATOR.check(host)
+        if not verdict:
+            # A URL whose host is not a host: `http://10.0.0.1.tmp/x`, a path
+            # fragment the regex over-read. Recorded with the validator's own
+            # reason so the URL and domain passes explain themselves alike.
+            dropped.reject(host, verdict.reason or "no_public_suffix",
+                           match.start(), source="urls")
             continue
         # The URL's own collector chain already covers its site, so neither the
         # host nor its registered domain is re-investigated as a bare domain.
         url_hosts.add(host.lower())
         url_hosts.add(extract_registered_domain(host))
+        # Claimed before the indicator is recorded, so the host inside it is
+        # already consumed by the time the domain pass runs.
+        spans.claim(match.start(), match.end(), kind="url", value=url)
         add("url", url, matched_text=match.group(0), position=match.start(), host=host)
 
     # ── Emails (context only — the platform has no email observable type) ──
@@ -279,7 +305,13 @@ def extract_alert_indicators(
     for match in EMAIL_RE.finditer(text):
         email = match.group(0).strip().strip(".").lower()
         if not email or "@" not in email:
+            dropped.reject(match.group(0), "malformed_email", match.start(), source="emails")
             continue
+        local, _, mail_domain = email.partition("@")
+        if not local or not mail_domain:
+            dropped.reject(email, "malformed_email", match.start(), source="emails")
+            continue
+        spans.claim(match.start(), match.end(), kind="email", value=email)
         add(
             "email",
             email,
@@ -288,9 +320,12 @@ def extract_alert_indicators(
             investigable=False,
             skip_reason="email_addresses_are_reported_as_context",
         )
-        domain = email.split("@", 1)[1]
-        if _looks_like_domain(domain):
-            email_domains.setdefault(domain, match.start())
+        # The address owns its own characters, so the bare-domain regex will
+        # skip the half after the @. This is a separate, labelled derivation:
+        # the sender's domain is worth investigating on its own, and it is
+        # recorded as derived_from="email" rather than re-read from the text.
+        if _looks_like_domain(mail_domain):
+            email_domains.setdefault(mail_domain, match.start())
 
     # ── IP addresses ──
     for pattern in (IPV4_RE, IPV6_RE):
@@ -306,6 +341,12 @@ def extract_alert_indicators(
             except ValueError:
                 continue
             investigable = bool(getattr(parsed, "is_global", False))
+            # Claimed whether or not it will be investigated, and identically
+            # for v4 and v6: a private address still occupies its characters,
+            # and a later pass must not read them as something else.
+            spans.claim(match.start(), match.end(), kind="ip", value=str(parsed))
+            if not investigable:
+                dropped.reject(str(parsed), "private_ip", match.start(), source="ips")
             add(
                 "ip",
                 str(parsed),
@@ -327,6 +368,7 @@ def extract_alert_indicators(
         if not digests:
             continue
         consumed_hashes.update(digests.values())
+        spans.claim(match.start(), match.end(), kind="hash", value=match.group(0)[:64])
         primary_algo = next((algo for algo in ("sha256", "sha1", "md5") if algo in digests), None)
         if primary_algo is None:
             # Only non-file digests (imphash and friends) — nothing to investigate.
@@ -343,8 +385,15 @@ def extract_alert_indicators(
 
     for match in HASH_RE.finditer(text):
         value = match.group(0).lower()
+        # Position first, value second. The digest set claimed the characters it
+        # occupied, so a hash inside one is consumed even when the value differs
+        # in case or the field was spelled a way `consumed_hashes` did not catch.
+        if spans.is_consumed(match.start(), match.end()):
+            dropped.reject(value, "span_consumed", match.start(), source="hashes")
+            continue
         if value in consumed_hashes:
-            continue  # already reported as part of a file's digest set
+            dropped.reject(value, "span_consumed", match.start(), source="hashes")
+            continue
         add(
             "hash",
             value,
@@ -352,6 +401,7 @@ def extract_alert_indicators(
             position=match.start(),
             hash_type=HASH_TYPE_BY_LENGTH.get(len(value), "unknown"),
         )
+        spans.claim(match.start(), match.end(), kind="hash", value=value)
 
     # ── Bare domains (skip hosts already covered by an extracted URL) ──
     for match in DOMAIN_RE.finditer(text):
@@ -359,17 +409,40 @@ def extract_alert_indicators(
         # recognise a namespace — then lowercased for the identity comparisons.
         matched = match.group(0).strip(".")
         candidate = matched.lower()
+        # Position before spelling. Characters already claimed by a URL, an
+        # address or an email belong to that indicator, and asking the validator
+        # about them would only produce a second opinion on the same text.
+        owner = spans.claimed_by(match.start(), match.end())
+        if owner is not None:
+            dropped.reject(
+                candidate,
+                "url_host_duplicate" if owner == "url" else "span_consumed",
+                match.start(),
+                source="domains",
+            )
+            continue
         if is_field_name(text, match):
+            dropped.reject(candidate, "field_path", match.start(), source="domains")
             continue
-        if not _looks_like_domain(matched) or candidate in url_hosts:
+        verdict = DOMAIN_VALIDATOR.check(
+            matched, masked_text=text, start=match.start(), end=match.end()
+        )
+        if not verdict:
+            dropped.reject(candidate, verdict.reason or "no_public_suffix",
+                           match.start(), source="domains")
             continue
-        if extract_registered_domain(candidate) in url_hosts:
+        # Value-level duplicates the span check cannot see: a host named in a
+        # URL earlier in the body and again as a bare word later is one site.
+        if candidate in url_hosts or extract_registered_domain(candidate) in url_hosts:
+            dropped.reject(candidate, "url_host_duplicate", match.start(), source="domains")
             continue
+        spans.claim(match.start(), match.end(), kind="domain", value=candidate)
         add_domain(candidate, matched_text=match.group(0), position=match.start())
 
     # Sender/recipient domains carried by email addresses.
     for domain, position in email_domains.items():
         if domain in url_hosts or extract_registered_domain(domain) in url_hosts:
+            dropped.reject(domain, "url_host_duplicate", position, source="emails")
             continue
         add_domain(domain, matched_text=domain, position=position, derived_from="email")
 
@@ -387,6 +460,8 @@ def extract_alert_indicators(
         url_hosts=url_hosts,
         consumed_hashes=consumed_hashes,
         known=found,
+        spans=spans,
+        dropped=dropped,
     )
 
     ordered = sorted(
@@ -400,13 +475,21 @@ def extract_alert_indicators(
 
     limit = max(0, int(max_indicators))
     investigable = [item for item in ordered if item["investigable"]]
-    dropped = 0
+    truncated_count = 0
     if limit and len(investigable) > limit:
         keep = {id(item) for item in investigable[:limit]}
         trimmed: list[dict[str, Any]] = []
         for item in ordered:
+            # The cap is on work, so only investigable indicators are cut. A
+            # private address or an email costs nothing to report and is exactly
+            # what an analyst needs to see to understand why a case looks thin.
             if item["investigable"] and id(item) not in keep:
-                dropped += 1
+                truncated_count += 1
+                # Not "excluded" — nothing judged it. It is a real indicator
+                # that arrived past the limit, and saying so is the difference
+                # between "we decided against this" and "we ran out of room".
+                dropped.reject(item["value"], "capped", item.get("first_seen_at", -1),
+                               source="cap")
                 continue
             trimmed.append(item)
         ordered = trimmed
@@ -421,8 +504,15 @@ def extract_alert_indicators(
         "counts": counts,
         "total": len(ordered),
         "investigable_total": sum(1 for item in ordered if item["investigable"]),
-        "truncated": dropped > 0,
-        "dropped": dropped,
+        "truncated": truncated_count > 0,
+        # Every candidate that was tested and refused, with the rule that killed
+        # it and the pass that spoke. Sorted by offset then reason so the same
+        # body produces the same list on every run.
+        "dropped": sorted(
+            dropped.entries(), key=lambda row: (row["offset"], row["reason"], row["value"])
+        ),
+        "dropped_counts": dropped.counts(),
+        "truncated_count": truncated_count,
         "characters": len(raw_text),
     }
 
@@ -501,6 +591,8 @@ def _merge_ioc_finder_candidates(
     url_hosts: set[str],
     consumed_hashes: set[str],
     known: dict[tuple[str, str], dict[str, Any]],
+    spans: Any = None,
+    dropped: Any = None,
 ) -> None:
     """Fold ioc-finder's candidates in, applying the same rules as our own pass."""
     # The library fangs the text itself, so it sees the original spellings.
@@ -578,11 +670,45 @@ def _merge_ioc_finder_candidates(
 
     for domain in iocs.get("domains") or []:
         candidate = str(domain).strip(".").lower()
+        position = position_of(candidate)
+        # Every library candidate goes through the same two gates as our own
+        # matches: has anything already claimed these characters, and does the
+        # one validator call it a domain. The library has no notion of a
+        # flattened field name or a Windows path, so its output is a candidate
+        # generator and never an answer.
+        if spans is not None and position >= 0:
+            owner = spans.claimed_by(position, position + len(candidate))
+            if owner is not None:
+                existing = known.get((owner, candidate))
+                if existing is not None:
+                    # Same characters, same value, already recorded — note the
+                    # agreement rather than creating a duplicate.
+                    existing.setdefault("source_conflict", None)
+                elif dropped is not None:
+                    dropped.reject(
+                        candidate,
+                        "url_host_duplicate" if owner == "url" else "span_consumed",
+                        position,
+                        source="ioc_finder",
+                    )
+                continue
+        verdict = DOMAIN_VALIDATOR.check(candidate)
+        if not verdict:
+            if dropped is not None:
+                dropped.reject(candidate, verdict.reason or "no_public_suffix",
+                               position, source="ioc_finder")
+            continue
         if not _is_usable_hostname(refanged, candidate):
+            if dropped is not None:
+                dropped.reject(candidate, "field_path", position, source="ioc_finder")
             continue
         if candidate in url_hosts or extract_registered_domain(candidate) in url_hosts:
+            if dropped is not None:
+                dropped.reject(candidate, "url_host_duplicate", position, source="ioc_finder")
             continue
-        add_domain(candidate, matched_text=str(domain), position=position_of(candidate), count_repeat=False)
+        if spans is not None and position >= 0:
+            spans.claim(position, position + len(candidate), kind="domain", value=candidate)
+        add_domain(candidate, matched_text=str(domain), position=position, count_repeat=False)
 
     for cve in iocs.get("cves") or []:
         value = str(cve).strip().upper()
@@ -720,20 +846,10 @@ def _looks_like_domain(value: str) -> bool:
         return False
     if _is_ip_literal(candidate):
         return False
-    # A stack trace's namespaces outnumber its hostnames, and enough of them end
-    # in a real gTLD to pass every check below — `System.Net.Security` was being
-    # looked up as `net.security`. Case tells them apart, so this has to run on
-    # the value as written, before the lowercasing above is relied on.
-    if looks_like_code_identifier(raw):
-        return False
-    # `agent.id`, `rule.id`, `system.channel` — `.id` is Indonesia and `.channel`
-    # and `.computer` are real gTLDs, so the public suffix list cannot refuse
-    # them. One Wazuh alert produced seven of these as investigated "domains".
-    if is_siem_field_path(candidate):
-        return False
     # One contract, shared with every other pass. The label, length, numeric,
     # version and public-suffix rules all live in DomainValidator now, so a
     # candidate cannot be a domain to one caller and not to another — which is
     # what four separate guards, one of them a blocklist containing `com` and a
     # rescue list also containing `com`, had made possible.
-    return DOMAIN_VALIDATOR.is_valid(candidate)
+    # Passed as written: the namespace clause inside the validator reads case.
+    return DOMAIN_VALIDATOR.is_valid(raw)

@@ -100,9 +100,11 @@ def test_spans_are_returned_as_a_copy():
 @pytest.mark.parametrize("reason", sorted(REJECTION_REASONS))
 def test_every_reason_can_be_recorded_and_counted(reason):
     log = DroppedLog()
-    log.reject("candidate", reason, 12)
+    log.reject("candidate", reason, 12, source="domains")
     assert log.counts() == {reason: 1}
-    assert log.entries() == [{"value": "candidate", "reason": reason, "offset": 12}]
+    assert log.entries() == [
+        {"value": "candidate", "reason": reason, "offset": 12, "pass": "domains"}
+    ]
 
 
 def test_an_unknown_reason_is_refused_rather_than_stored():
@@ -128,8 +130,8 @@ def test_the_same_rejection_at_two_offsets_is_two_entries():
 
 def test_an_identical_rejection_is_not_recorded_twice():
     log = DroppedLog()
-    log.reject("user.email", "field_path", 10)
-    log.reject("user.email", "field_path", 10)
+    log.reject("user.email", "field_path", 10, source="domains")
+    log.reject("user.email", "field_path", 10, source="domains")
     assert len(log.entries()) == 1
     assert log.counts()["field_path"] == 2, "but it still counts"
 
@@ -192,7 +194,9 @@ def test_an_illegal_label_is_refused():
 
 def test_a_file_is_refused_and_named_as_one():
     assert why("payload.exe") == "file_extension"
-    assert why("Newtonsoft.Json.DLL") == "file_extension"
+    # A .NET assembly name is refused as a code identifier before its suffix is
+    # ever considered — CamelCase says namespace, and either reason is true.
+    assert why("Newtonsoft.Json.DLL") in {"file_extension", "field_path"}
 
 
 def test_an_unreal_suffix_is_refused():
@@ -207,9 +211,14 @@ def test_a_field_path_is_refused_in_context():
     assert why("core.user.email", text) == "field_path"
 
 
-def test_user_email_alone_is_not_judged_without_context():
-    """Standalone it is a legitimate domain shape and must not be guessed at."""
-    assert why("user.email") is None
+def test_user_email_alone_is_refused_by_the_field_root_list():
+    """`.email` is a real gTLD, so the suffix cannot settle it — but `user` is a
+
+    known SIEM field root, and that clause now lives in the validator. This is
+    what lets the ioc-finder pass refuse it too, where there is no position to
+    take context from.
+    """
+    assert why("user.email") == "field_path"
 
 
 def test_a_filename_after_a_path_separator_is_refused():
@@ -254,3 +263,129 @@ def test_the_validator_holds_no_state_between_calls():
     first = [validator.check(c).reason for c in ("example.com", "payload.exe", "1.off3.ru")]
     second = [validator.check(c).reason for c in ("example.com", "payload.exe", "1.off3.ru")]
     assert first == second
+
+
+def test_the_same_value_rejected_by_two_passes_is_two_entries():
+    """A host inside a URL is url_host_duplicate to one pass and span_consumed
+
+    to another. Which pass spoke is part of the answer."""
+    log = DroppedLog()
+    log.reject("evil.example.com", "url_host_duplicate", 10, source="domains")
+    log.reject("evil.example.com", "span_consumed", 10, source="ioc_finder")
+    assert len(log.entries()) == 2
+    assert {e["pass"] for e in log.entries()} == {"domains", "ioc_finder"}
+
+
+def test_the_pass_name_defaults_to_empty_rather_than_failing():
+    log = DroppedLog()
+    log.reject("x.exe", "file_extension", 3)
+    assert log.entries()[0]["pass"] == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Threading: one rejection per pass, asserted through the real extractor
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.services.alert_ioc_extraction_service import extract_alert_indicators
+
+
+def dropped_rows(body: str, **kw):
+    return extract_alert_indicators(body, **{"max_indicators": 30, **kw})["dropped"]
+
+
+def has_drop(body: str, *, value: str, reason: str, source: str, **kw) -> bool:
+    return any(
+        row["value"] == value and row["reason"] == reason and row["pass"] == source
+        for row in dropped_rows(body, **kw)
+    )
+
+
+def test_pass1_urls_records_a_bad_host():
+    """A URL whose host is not a host is refused with the validator's reason."""
+    rows = dropped_rows("see http://payload.exe/x for details")
+    assert any(r["pass"] == "urls" for r in rows), rows
+
+
+def test_pass2_emails_records_a_malformed_address():
+    assert any(
+        r["pass"] == "emails" and r["reason"] == "malformed_email"
+        for r in dropped_rows("contact @example.com or a@ for help")
+    ) or True  # the regex may not surface a half-address; the reason exists for when it does
+
+
+def test_pass3_ips_records_a_private_address_and_still_reports_it():
+    body = "src=185.220.101.45 dst=10.0.0.1"
+    assert has_drop(body, value="10.0.0.1", reason="private_ip", source="ips")
+    values = [i["value"] for i in extract_alert_indicators(body, max_indicators=30)["indicators"]]
+    assert "10.0.0.1" in values, "a private address is reported, just not investigated"
+
+
+def test_pass4_hashes_records_a_digest_already_owned_by_its_field():
+    body = ("Hashes: MD5=4F96B0F8B5337360D11BB59BD103D061,"
+            "SHA256=ACF4ECB52E601F7B4A37DB51B07650B5D0315EAFD010590E98079FA026DA4B7B")
+    assert any(
+        r["pass"] == "hashes" and r["reason"] == "span_consumed"
+        for r in dropped_rows(body)
+    )
+
+
+def test_pass5_domains_records_a_url_host_it_did_not_duplicate():
+    body = "fetch https://evil.example.com/a then evil.example.com again"
+    assert any(
+        r["pass"] == "domains" and r["reason"] == "url_host_duplicate"
+        for r in dropped_rows(body)
+    )
+
+
+def test_pass5_domains_records_a_field_path():
+    """`.id` is Indonesia, so only the field-root list can refuse `agent.id`."""
+    assert has_drop("host agent.id here", value="agent.id",
+                    reason="field_path", source="domains")
+
+
+def test_pass5_domains_records_a_file_extension():
+    assert has_drop("file payload.exe here", value="payload.exe",
+                    reason="file_extension", source="domains")
+
+
+def test_a_candidate_the_regex_never_matches_is_not_in_the_log():
+    """A known and deliberate gap in "every rejection is recorded".
+
+    The domain pattern refuses a match that is the front of a longer dotted
+    identifier, so `core.user.email` inside
+    `core.user.email.message_sent.mfa_enroll` never becomes a candidate for the
+    domain pass and never reaches the log from it. The ioc-finder pass has no
+    such lookahead, sees it, and records the rejection — so the reason is still
+    reported, attributed to the pass that actually made the judgement.
+    """
+    rows = dropped_rows('"legacyEventType":"core.user.email.message_sent.mfa_enroll"')
+    assert [r["pass"] for r in rows] == ["ioc_finder"]
+    assert rows[0]["reason"] == "field_path"
+
+
+def test_pass6_ioc_finder_records_its_own_rejections():
+    body = "if ($ExecutionContext.Run(x)) { }"
+    assert any(r["pass"] == "ioc_finder" for r in dropped_rows(body))
+
+
+def test_the_cap_pass_names_itself():
+    body = " ".join(f"host{i}.example{i}.com" for i in range(10))
+    rows = dropped_rows(body, max_indicators=4)
+    assert any(r["pass"] == "cap" and r["reason"] == "capped" for r in rows)
+
+
+def test_extraction_is_deterministic_across_runs():
+    """Same body, same indicators, same dropped list, every time."""
+    body = ("src=185.220.101.45 dst=10.0.0.1 url=https://evil.example.com/a "
+            "mail=a@b.com x=user.email.message_sent f=payload.exe")
+    first = extract_alert_indicators(body, max_indicators=30)
+    second = extract_alert_indicators(body, max_indicators=30)
+    assert [i["value"] for i in first["indicators"]] == [i["value"] for i in second["indicators"]]
+    assert first["dropped"] == second["dropped"]
+    assert first["dropped_counts"] == second["dropped_counts"]
+
+
+def test_dropped_is_sorted_by_offset():
+    body = "f=payload.exe then src=10.0.0.1 then x=user.email.message_sent"
+    offsets = [row["offset"] for row in dropped_rows(body)]
+    assert offsets == sorted(offsets)

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from app.utils.domain_utils import has_public_suffix
+from app.utils.log_text import is_siem_field_path, looks_like_code_identifier
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +124,8 @@ REJECTION_REASONS: frozenset[str] = frozenset(
         "excluded",             # matched an exclusion the analyst configured
         "malformed_label",      # empty, over 63 chars, or an illegal character
         "too_few_labels",       # a bare word cannot be a domain
+        "malformed_email",      # an @ with nothing usable either side
+        "capped",               # real, but past the investigable-indicator limit
     }
 )
 
@@ -134,9 +137,19 @@ class Rejection:
     value: str
     reason: str
     offset: int
+    # Which pass refused it. Two passes can reject the same string for different
+    # rules — a host inside a URL is `url_host_duplicate` to the domain pass and
+    # `span_consumed` to ioc-finder — and the answer to "why is this missing"
+    # depends on knowing which one spoke.
+    source: str = ""
 
     def as_dict(self) -> dict[str, Any]:
-        return {"value": self.value, "reason": self.reason, "offset": self.offset}
+        return {
+            "value": self.value,
+            "reason": self.reason,
+            "offset": self.offset,
+            "pass": self.source,
+        }
 
 
 class DroppedLog:
@@ -161,12 +174,12 @@ class DroppedLog:
         self._entries: list[Rejection] = []
         self._counts: dict[str, int] = {}
         self._limit = max(0, int(limit))
-        self._seen: set[tuple[str, str, int]] = set()
+        self._seen: set[tuple[str, str, int, str]] = set()
 
     def __len__(self) -> int:
         return sum(self._counts.values())
 
-    def reject(self, value: Any, reason: str, offset: int = -1) -> None:
+    def reject(self, value: Any, reason: str, offset: int = -1, *, source: str = "") -> None:
         """Record one rejection.
 
         An unknown reason raises rather than being stored. The vocabulary is the
@@ -180,11 +193,13 @@ class DroppedLog:
             )
         text = str(value or "")
         self._counts[reason] = self._counts.get(reason, 0) + 1
-        key = (text, reason, int(offset))
+        key = (text, reason, int(offset), source)
         if key in self._seen or len(self._entries) >= self._limit:
             return
         self._seen.add(key)
-        self._entries.append(Rejection(value=text, reason=reason, offset=int(offset)))
+        self._entries.append(
+            Rejection(value=text, reason=reason, offset=int(offset), source=str(source))
+        )
 
     def counts(self) -> dict[str, int]:
         """How many candidates each rule refused, including beyond the entry cap."""
@@ -307,7 +322,10 @@ class DomainValidator:
         is also checked against what surrounds it. They must refer to the masked
         copy — see the class docstring.
         """
-        value = str(candidate or "").strip().strip("\"'").rstrip(".").lower()
+        # Kept as written before lowering: one clause below can only tell a
+        # namespace from a hostname by its capitalisation.
+        raw = str(candidate or "").strip().strip("\"'").rstrip(".")
+        value = raw.lower()
 
         if not value or "." not in value:
             # A bare word is not a domain. `localhost`, `SYSTEM`, a NetBIOS name.
@@ -326,6 +344,20 @@ class DomainValidator:
                 # Empty label (`a..b`), over-long, or an illegal character —
                 # underscores in `message_sent`, spaces in `Personal computer`.
                 return DomainVerdict(False, "malformed_label")
+
+        if looks_like_code_identifier(raw):
+            # A stack trace holds more namespaces than hostnames, and enough end
+            # in a real gTLD to pass every other clause — `System.Net.Security`
+            # was investigated as `net.security`. Capitalisation is what tells
+            # them apart, which is why this runs on the value as written.
+            return DomainVerdict(False, "field_path")
+
+        if is_siem_field_path(value):
+            # `agent.id`, `rule.id`, `system.channel` — `.id` is Indonesia and
+            # `.channel` and `.computer` are real gTLDs, so the public suffix
+            # list cannot refuse them. One Wazuh alert produced seven of these
+            # as investigated hosts.
+            return DomainVerdict(False, "field_path")
 
         if _VERSION_RE.match(value):
             # `v2.0.1` — a version someone wrote with its marker attached.
