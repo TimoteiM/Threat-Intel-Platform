@@ -88,3 +88,40 @@ def test_a_powershell_property_is_still_not_a_domain():
     assert ("domain", "executioncontext.run") not in extracted(
         "if ($ExecutionContext.Run(x)) { }"
     )
+
+
+# —— a dotted identifier is not a domain ——————————————————————————————————
+
+def test_an_okta_event_type_is_not_a_domain():
+    """`core.user.email.message_sent.mfa_enroll_notification`.
+
+    The matcher stopped at `core.user.email`, which passed validation because
+    `.email` is a real gTLD, and the registrable-domain collapse turned it into
+    `user.email` — a field path sent for investigation as a host.
+    """
+    found = extracted('"legacyEventType":"core.user.email.message_sent.mfa_enroll_notification"')
+    assert not [v for t, v in found if t == "domain"]
+
+
+def test_a_cef_field_value_is_not_a_domain():
+    found = extracted("flexString1=system.email.mfa_enroll_notification.sent_message")
+    assert ("domain", "system.email") not in found
+
+
+def test_an_oauth_scope_is_not_a_domain():
+    assert not [v for t, v in extracted("scopes=Authenticators.Read.All") if t == "domain"]
+
+
+def test_a_real_domain_still_extracts():
+    assert ("domain", "example.com") in extracted("connect to evil-host.example.com now")
+
+
+def test_a_domain_at_the_end_of_a_sentence_still_extracts():
+    """A dot followed by a space is punctuation, not another label."""
+    assert ("domain", "example.com") in extracted("see example.com. Next line")
+
+
+def test_a_multi_label_suffix_still_extracts():
+    assert ("url", "https://sub.example.co.uk/path?a=1") in extracted(
+        "https://sub.example.co.uk/path?a=1"
+    )

@@ -64,7 +64,19 @@ DOMAIN_RE = re.compile(
     r"(?<![\w.@/-])"
     r"(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+"
     r"[A-Z]{2,24}"
-    r"(?![\w-])",
+    # Not merely "not followed by a word character" — also not followed by a dot
+    # that starts another label. Without the second half, a domain could match
+    # the *front* of a longer dotted identifier and be kept because the piece it
+    # stopped on happened to be a real suffix. Okta's
+    # `core.user.email.message_sent.mfa_enroll_notification` matched as far as
+    # `core.user.email`, passed validation because `.email` is a gTLD, and was
+    # collapsed to the registrable domain `user.email`, which was then sent for
+    # investigation as a host. `system.email` and `authenticators.read` arrived
+    # the same way.
+    #
+    # A sentence still ends normally: `see example.com. Next` is followed by a
+    # dot and a space, not a dot and a label.
+    r"(?![\w-]|\.[A-Za-z0-9])",
     re.IGNORECASE,
 )
 
