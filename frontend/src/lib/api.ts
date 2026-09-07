@@ -451,6 +451,8 @@ export function listInvestigations(params?: {
   search?: string;
   observable_type?: string;
   classification?: string;
+  /** Only investigations whose ANY.RUN task recorded a screencast. */
+  has_video?: boolean;
   dedupe?: boolean;
 }) {
   const qs = new URLSearchParams();
@@ -459,6 +461,7 @@ export function listInvestigations(params?: {
   if (params?.state) qs.set("state", params.state);
   if (params?.search) qs.set("search", params.search);
   if (params?.observable_type) qs.set("observable_type", params.observable_type);
+  if (params?.has_video) qs.set("has_video", "true");
   if (params?.classification) qs.set("classification", params.classification);
   if (params?.dedupe) qs.set("dedupe", "true");
   const query = qs.toString();

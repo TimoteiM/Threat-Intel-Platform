@@ -21,6 +21,8 @@ export default function InvestigationsListPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [classificationFilter, setClassificationFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [videoOnly, setVideoOnly] = useState(false);
   const [hideDuplicates, setHideDuplicates] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -50,6 +52,8 @@ export default function InvestigationsListPage() {
     const params: any = { limit: pageSize, offset: page * pageSize };
     if (filter !== "all") params.state = filter;
     if (classificationFilter !== "all") params.classification = classificationFilter;
+    if (typeFilter !== "all") params.observable_type = typeFilter;
+    if (videoOnly) params.has_video = true;
     if (debouncedSearch) params.search = debouncedSearch;
     if (hideDuplicates) params.dedupe = true;
 
@@ -60,7 +64,7 @@ export default function InvestigationsListPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [filter, classificationFilter, hideDuplicates, debouncedSearch, page, pageSize]);
+  }, [filter, classificationFilter, typeFilter, videoOnly, hideDuplicates, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
     loadInvestigations();
@@ -175,6 +179,30 @@ export default function InvestigationsListPage() {
           })}
 
           <div className="page-size-wrap">
+            {/* The observable types this platform actually stores. There is no
+                `ip` type — an address is investigated as a URL or reached
+                through IP Lookup — and a submitted file is stored as its hash,
+                which is what the collectors work from. Offering types the data
+                cannot contain would return an empty list and look broken. */}
+            <div className="select-wrap">
+              <span className="console-label" style={{ marginBottom: 0 }}>
+                Type
+              </span>
+              <select
+                value={typeFilter}
+                onChange={(e) => {
+                  setTypeFilter(e.target.value);
+                  setPage(0);
+                }}
+                style={selectStyle()}
+              >
+                <option value="all">All types</option>
+                <option value="domain">Domain</option>
+                <option value="url">URL</option>
+                <option value="hash">File / hash</option>
+              </select>
+            </div>
+
             <div className="select-wrap">
               <span className="console-label" style={{ marginBottom: 0 }}>
                 Classification
@@ -194,6 +222,18 @@ export default function InvestigationsListPage() {
                 ))}
               </select>
             </div>
+
+            <button
+              type="button"
+              title="Only investigations whose ANY.RUN task recorded a screencast. Rare — the recording comes from interactive sessions, and most submissions here are URLs analysed headless."
+              onClick={() => {
+                setVideoOnly((prev) => !prev);
+                setPage(0);
+              }}
+              style={filterButtonStyle(videoOnly, "neutral")}
+            >
+              Has recording
+            </button>
 
             <button
               type="button"
@@ -290,6 +330,14 @@ export default function InvestigationsListPage() {
                   >
                     <div className="row-domain">
                       <div className="row-domain__value">{inv.domain}</div>
+                      {/* Shown so the filter's effect is visible without opening a
+                          row — and because on this corpus a recording is rare
+                          enough that finding one is itself the point. */}
+                      {inv.sandbox_video_task_id ? (
+                        <StatusPill tone="info" size="sm" outline mono>
+                          ▶ recording
+                        </StatusPill>
+                      ) : null}
                       {inv.observable_type && inv.observable_type !== "domain" ? (
                         <StatusPill tone="info" size="sm" outline mono>
                           {inv.observable_type}

@@ -407,6 +407,7 @@ class InvestigationService:
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
         classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
         dedupe: bool = False,
     ) -> Sequence[Investigation]:
         """List investigations with optional filtering."""
@@ -418,6 +419,7 @@ class InvestigationService:
                 search=search,
                 observable_type=observable_type,
                 classification=classification,
+                has_video=has_video,
             )
 
         rows = await self.repo.list_all(
@@ -427,6 +429,7 @@ class InvestigationService:
             search=search,
             observable_type=observable_type,
             classification=classification,
+            has_video=has_video,
         )
         deduped = _dedupe_investigations(
             _filter_investigations_by_classification(rows, classification)
@@ -439,6 +442,7 @@ class InvestigationService:
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
         classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
         dedupe: bool = False,
     ) -> int:
         """Count investigations matching filters."""
@@ -448,6 +452,7 @@ class InvestigationService:
                 search=search,
                 observable_type=observable_type,
                 classification=classification,
+                has_video=has_video,
             )
 
         rows = await self.repo.list_all(

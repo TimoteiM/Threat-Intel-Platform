@@ -75,6 +75,7 @@ class InvestigationRepository:
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
         classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
     ) -> Sequence[Investigation]:
         query = select(Investigation).order_by(Investigation.created_at.desc())
         if state:
@@ -85,6 +86,11 @@ class InvestigationRepository:
             query = query.where(Investigation.observable_type == observable_type)
         if classification:
             query = query.where(Investigation.classification == classification)
+        if has_video is not None:
+            query = query.where(
+                Investigation.sandbox_video_task_id.isnot(None) if has_video
+                else Investigation.sandbox_video_task_id.is_(None)
+            )
         if limit is not None:
             query = query.limit(limit).offset(offset)
         result = await self.session.execute(query)
@@ -96,6 +102,7 @@ class InvestigationRepository:
         search: Optional[str] = None,
         observable_type: Optional[str] = None,
         classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
     ) -> int:
         query = select(func.count(Investigation.id))
         if state:
@@ -106,6 +113,11 @@ class InvestigationRepository:
             query = query.where(Investigation.observable_type == observable_type)
         if classification:
             query = query.where(Investigation.classification == classification)
+        if has_video is not None:
+            query = query.where(
+                Investigation.sandbox_video_task_id.isnot(None) if has_video
+                else Investigation.sandbox_video_task_id.is_(None)
+            )
         result = await self.session.execute(query)
         return result.scalar() or 0
 

@@ -100,6 +100,10 @@ class Investigation(Base):
     confidence: Mapped[str | None] = mapped_column(String(20), nullable=True)
     risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     recommended_action: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # The ANY.RUN task whose screencast can be played, when one exists.
+    # Derived at conclusion rather than searched for per request: the fact
+    # sits six levels inside a collector's stored JSON.
+    sandbox_video_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     anyrun_use_residential_proxy: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

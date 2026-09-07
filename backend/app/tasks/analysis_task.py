@@ -32,6 +32,7 @@ from app.services.decision_engine import community_listing_weight, apply_decisio
 from app.services.proxy_profiles import selected_proxy_summary
 from app.services.provider_branding import normalize_anyrun_branding
 from app.utils.domain_utils import extract_registered_domain
+from app.services.anyrun_video_cache import find_video_reference
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -2301,6 +2302,9 @@ def _persist_results(
             inv.confidence = report_data.get("confidence")
             inv.risk_score = report_data.get("risk_score")
             inv.recommended_action = report_data.get("recommended_action")
+            # Derived once here rather than searched for on every list request.
+            _video = find_video_reference(evidence_data)
+            inv.sandbox_video_task_id = _video["task_id"] if _video else None
 
             # Save or update evidence (one row per investigation_id).
             ev = session.execute(
@@ -2640,6 +2644,9 @@ def recompute_report_for_existing_investigation(
             inv.confidence = report_data.get("confidence")
             inv.risk_score = report_data.get("risk_score")
             inv.recommended_action = report_data.get("recommended_action")
+            # Derived once here rather than searched for on every list request.
+            _video = find_video_reference(evidence_data)
+            inv.sandbox_video_task_id = _video["task_id"] if _video else None
             inv.updated_at = datetime.now(timezone.utc)
             if str(inv.state or "").lower() not in {"cancelled", "failed"}:
                 inv.state = "concluded"

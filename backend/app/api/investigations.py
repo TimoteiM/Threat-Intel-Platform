@@ -70,14 +70,21 @@ async def list_investigations(
     search: str | None = None,
     observable_type: str | None = None,
     classification: str | None = None,
+    has_video: bool | None = None,
     dedupe: bool = False,
 ):
-    """List investigations with pagination and optional search/filter."""
+    """List investigations with pagination and optional search/filter.
+
+    `has_video` selects investigations whose ANY.RUN task recorded a screencast.
+    Answered from a column set when the analysis concluded, not by searching the
+    stored evidence — the fact sits six levels inside a collector's JSON.
+    """
     service = InvestigationService(session)
     investigations = await service.list_all(
         limit=limit, offset=offset, state=state, search=search,
         observable_type=observable_type,
         classification=classification,
+        has_video=has_video,
         dedupe=dedupe,
     )
     total = await service.count(
@@ -85,6 +92,7 @@ async def list_investigations(
         search=search,
         observable_type=observable_type,
         classification=classification,
+        has_video=has_video,
         dedupe=dedupe,
     )
     return {
@@ -93,6 +101,7 @@ async def list_investigations(
                 "id": str(inv.id),
                 "domain": inv.domain,
                 "observable_type": getattr(inv, "observable_type", "domain"),
+                "sandbox_video_task_id": getattr(inv, "sandbox_video_task_id", None),
                 "state": inv.state,
                 "classification": inv.classification,
                 "risk_score": inv.risk_score,
