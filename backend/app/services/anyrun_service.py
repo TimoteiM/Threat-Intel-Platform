@@ -133,7 +133,11 @@ def lookup_anyrun(
 ) -> dict[str, Any]:
     record_provider_request("anyrun")
     settings = get_settings()
-    api_keys = _configured_anyrun_api_keys(settings)
+    # Ordered before the primary is picked, not just the fallbacks. Otherwise
+    # the first attempt of every investigation still lands on a key that has
+    # spent its allowance, spends a round trip earning a 402, and only then
+    # tries an account that could have answered.
+    api_keys = _order_keys_by_headroom(_configured_anyrun_api_keys(settings))
     api_key = api_keys[0] if api_keys else ""
     # Rotated once per investigation, so consecutive runs that fall back do
     # not both land on the same spare account.
@@ -707,6 +711,47 @@ _FALLBACK_CURSOR_LOCK = threading.Lock()
 _FALLBACK_CURSOR = {"next": 0}
 
 
+# A key that has already spent its own licence allowance this month will answer
+# 402 to the next request. Asking anyway costs a round trip and produces the
+# error the analyst then reports as a bug, so the exhausted key is moved to the
+# back of the rotation rather than tried first.
+#
+# The allowance is per key even though the pool is shared: measured on this
+# deployment the team pool showed 1,141 of 1,500 remaining while the primary
+# key had spent 531 requests against a 300/month per-key cap, and keys 2 and 3
+# had spent nothing. The number on the dashboard was healthy and the key was
+# finished.
+def _anyrun_key_month_usage(api_key: str) -> tuple[int, float | None]:
+    """(requests this month on this key, its own monthly cap if known)."""
+    try:
+        from app.services.api_health_service import anyrun_per_key_month_limit
+        from app.services.provider_usage_metrics import get_provider_usage
+
+        usage = get_provider_usage("anyrun", scope=_anyrun_key_scope(api_key))
+        return int(usage.get("requests_this_month") or 0), anyrun_per_key_month_limit()
+    except Exception:  # noqa: BLE001 — ordering is an optimisation, never a gate
+        return 0, None
+
+
+def _anyrun_key_is_spent(api_key: str) -> bool:
+    used, limit = _anyrun_key_month_usage(api_key)
+    return bool(limit and used >= limit)
+
+
+def _order_keys_by_headroom(api_keys: list[str]) -> list[str]:
+    """Keys with allowance left first, preserving their order within each group.
+
+    Never drops a key: the usage counter is this platform's own tally and can
+    drift from the provider's, so a key it believes is spent is still worth
+    trying once everything else has failed.
+    """
+    if len(api_keys) < 2:
+        return list(api_keys)
+    live = [key for key in api_keys if not _anyrun_key_is_spent(key)]
+    spent = [key for key in api_keys if _anyrun_key_is_spent(key)]
+    return live + spent
+
+
 def _fallback_keys_in_rotation(api_keys: list[str]) -> list[str]:
     """
     The fallback accounts, rotated so consecutive investigations start on
@@ -716,7 +761,7 @@ def _fallback_keys_in_rotation(api_keys: list[str]) -> list[str]:
     out of quota there is no reason to stop, and walking the remainder costs
     nothing when the first one works.
     """
-    fallbacks = api_keys[1:]
+    fallbacks = _order_keys_by_headroom(api_keys[1:])
     if len(fallbacks) < 2:
         return fallbacks
     with _FALLBACK_CURSOR_LOCK:
@@ -1774,6 +1819,29 @@ def _is_deferred_anyrun_sandbox_error(value: Any) -> bool:
         or "unknown error" in text
         or "task is still running" in text
         or "report is not ready" in text
+        # A key that has spent its own licence allowance is exhausted for the
+        # month, but the other accounts are not — they are separate licences
+        # drawing on a shared team pool. Without this the 402 fell straight
+        # through as a fatal error and the fallback keys were never tried: the
+        # primary had spent 531 requests against a 300/month per-key cap while
+        # keys 2 and 3 sat at zero, and the platform reported "limit exceeded"
+        # with 1,141 of the team's 1,500 still available.
+        or _is_anyrun_quota_exhausted(text)
+    )
+
+
+def _is_anyrun_quota_exhausted(text: str) -> bool:
+    """Has this specific key run out of its own licence allowance?
+
+    Matched on the provider's own wording as well as the status code, because
+    the SDK does not always surface `status_code` in the message it raises.
+    """
+    lowered = str(text or "").lower()
+    return (
+        "status code: 402" in lowered
+        or "exceeded the request limit" in lowered
+        or "request limit for your license" in lowered
+        or "acquire more limit" in lowered
     )
 
 

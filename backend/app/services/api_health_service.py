@@ -650,3 +650,25 @@ def _unavailable(provider: str, display_name: str, error: str) -> APIProviderHea
         source="probe_error",
         error=error,
     )
+
+
+def anyrun_per_key_month_limit() -> float | None:
+    """Each ANY.RUN key's own monthly allowance, as the provider reports it.
+
+    Distinct from the team pool. The pool is what the dashboard shows and what
+    an operator reads as "how much is left"; this is the number that produces a
+    402 when one key exceeds it while the pool still has room.
+    """
+    try:
+        settings = get_settings()
+        keys = _configured_anyrun_api_keys(settings)
+        if not keys:
+            return None
+        probes = _probe_anyrun_providers(settings=settings, configured_keys=keys)
+        for probe in probes:
+            limit = getattr(probe, "per_key_month_limit", None)
+            if limit:
+                return float(limit)
+    except Exception:  # noqa: BLE001 — advisory only
+        return None
+    return None
