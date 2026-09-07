@@ -153,7 +153,10 @@ export default function DetectionsPage() {
         ) : tab === "attack" ? (
           <AttackTab data={coverage} days={Math.max(days, 90)} />
         ) : tab === "cases" ? (
-          <CasesTab days={Math.max(days, 30)} />
+          // Passed straight through: forcing a minimum of 30 days here meant the
+          // tab always opened on a different window than the header said, and at
+          // 90d it asked for one the endpoint refuses.
+          <CasesTab days={days} />
         ) : (
           <AccuracyTab data={accuracy} />
         )}
@@ -481,8 +484,18 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
 // would make the platform look slower than it is.
 const CASES_REFRESH_MS = 30_000;
 
+// The windows this tab offers, and the largest the endpoint accepts. The page
+// header's own 7d/30d/90d control used to seed this: at 90d it asked for 2,160
+// hours, the API refused it with a 422, and because a failed refresh was
+// swallowed the tab went on showing whatever it had last succeeded with — a
+// count from one window beside a list from another.
+const CASE_WINDOWS = [48, 168, 720] as const;
+const MAX_WINDOW_HOURS = 720;
+
 function CasesTab({ days }: { days: number }) {
-  const [hours, setHours] = useState(days * 24);
+  const [hours, setHours] = useState(() =>
+    Math.min(Math.max(24, days * 24), MAX_WINDOW_HOURS),
+  );
   const [openHost, setOpenHost] = useState<string | null>(null);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -493,6 +506,8 @@ function CasesTab({ days }: { days: number }) {
   // spinner shows on the first load only, so a background refresh never blanks
   // the list someone is reading.
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+  const [staleSince, setStaleSince] = useState<Date | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -506,8 +521,18 @@ function CasesTab({ days }: { days: number }) {
           if (cancelled) return;
           setData(result);
           setRefreshedAt(new Date());
+          setStaleSince(null);
+          setLoadError(null);
         })
-        .catch(() => !cancelled && first && setData(null))
+        .catch((err) => {
+          if (cancelled) return;
+          // Never silently keep stale rows. A refresh that fails while the page
+          // stays open is exactly how a count and a list end up describing
+          // different windows.
+          if (first) setData(null);
+          setStaleSince((current) => current ?? new Date());
+          setLoadError(err instanceof Error ? err.message : "refresh failed");
+        })
         .finally(() => {
           if (cancelled) return;
           setLoading(false);
@@ -538,7 +563,7 @@ function CasesTab({ days }: { days: number }) {
       />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[48, 168, 720].map((option) => (
+        {CASE_WINDOWS.map((option) => (
           <button
             key={option}
             type="button"
@@ -553,6 +578,12 @@ function CasesTab({ days }: { days: number }) {
             {option === 48 ? "48 hours" : option === 168 ? "7 days" : "30 days"}
           </button>
         ))}
+        {staleSince && (
+          <span style={{ fontSize: 10.5, color: "var(--status-warning)" }}>
+            not refreshing since {staleSince.toLocaleTimeString()}
+            {loadError ? ` — ${loadError}` : ""}
+          </span>
+        )}
         {refreshedAt && (
           <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--text-muted)", ...MONO }}>
             updated {refreshedAt.toLocaleTimeString()} · refreshes every {CASES_REFRESH_MS / 1000}s
