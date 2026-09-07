@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.ip_context import is_ipv4_indicator_match
+from app.services.ioc_extraction_rules import DOMAIN_VALIDATOR
 from app.utils.domain_utils import extract_registered_domain, has_public_suffix
 from app.utils.log_text import (
     has_file_suffix,
@@ -730,20 +731,9 @@ def _looks_like_domain(value: str) -> bool:
     # them. One Wazuh alert produced seven of these as investigated "domains".
     if is_siem_field_path(candidate):
         return False
-    labels = candidate.split(".")
-    if len(labels) < 2:
-        return False
-    if any(not label or len(label) > 63 for label in labels):
-        return False
-    if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) for label in labels):
-        return False
-    tld = labels[-1]
-    if len(tld) < 2 or not tld.isalpha():
-        return False
-    if tld in _NON_TLD_SUFFIXES and tld not in _ALWAYS_TLD:
-        return False
-    # The suffix must be a real one. A blacklist of file extensions can never
-    # keep up with what a log line contains — `bootx64.efi`, `snapshot.sh`,
-    # `alert.category` all look like domains until you ask the public suffix
-    # list, which is the same source the registrable-domain collapse uses.
-    return has_public_suffix(candidate)
+    # One contract, shared with every other pass. The label, length, numeric,
+    # version and public-suffix rules all live in DomainValidator now, so a
+    # candidate cannot be a domain to one caller and not to another — which is
+    # what four separate guards, one of them a blocklist containing `com` and a
+    # rescue list also containing `com`, had made possible.
+    return DOMAIN_VALIDATOR.is_valid(candidate)
