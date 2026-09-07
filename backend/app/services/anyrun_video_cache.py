@@ -23,6 +23,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -160,3 +161,49 @@ def purge_expired(ttl_hours: int = VIDEO_TTL_HOURS) -> dict[str, int]:
     if removed:
         logger.info("purged %d ANY.RUN video(s), freed %.1f MB", removed, freed / 1048576)
     return {"removed": removed, "bytes_freed": freed}
+
+
+# How deep to look for the video object, and how much of a list to scan. The
+# report nests it differently depending on how the task was submitted — the one
+# recording in this deployment sits at
+# items[].domain_intelligence.raw_summary.report_excerpt.analysis.content.video
+# — so a fixed set of paths finds it in some shapes and silently misses it in
+# others. Bounded rather than unbounded because this walks vendor JSON that has
+# no contract about its own depth.
+MAX_SEARCH_DEPTH = 14
+MAX_SEARCH_BREADTH = 200
+
+
+def find_video_reference(payload: Any) -> dict[str, str] | None:
+    """The first recorded screencast anywhere in an ANY.RUN payload.
+
+    Returns `{"task_id": ..., "url": ...}` or None. The URL must be on
+    content.any.run and must carry a task id, so a `video` key from anywhere
+    else in the document cannot become something this platform will fetch.
+    """
+
+    def walk(node: Any, depth: int) -> dict[str, str] | None:
+        if depth > MAX_SEARCH_DEPTH:
+            return None
+        if isinstance(node, dict):
+            video = node.get("video")
+            if isinstance(video, dict) and video.get("present"):
+                url = str(
+                    video.get("permanentUrl") or video.get("permanent_url") or ""
+                ).strip()
+                if url.startswith("https://content.any.run/tasks/"):
+                    task_id = url.split("/tasks/", 1)[1].split("/", 1)[0]
+                    if is_task_id(task_id):
+                        return {"task_id": task_id, "url": url}
+            for value in node.values():
+                found = walk(value, depth + 1)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for value in node[:MAX_SEARCH_BREADTH]:
+                found = walk(value, depth + 1)
+                if found:
+                    return found
+        return None
+
+    return walk(payload, 0)

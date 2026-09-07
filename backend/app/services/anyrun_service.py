@@ -28,6 +28,7 @@ _ANYRUN_AUTOMATED_INTERACTIVITY = True
 from app.config import get_settings
 from app.services.provider_usage_metrics import record_provider_request
 from app.services.anyrun_scope import scope_anyrun_lookup_item, task_matches_domain
+from app.services.anyrun_video_cache import find_video_reference
 
 # ── AnyRun sandbox scheduling ─────────────────────────────────────────────────
 #
@@ -1915,25 +1916,7 @@ def _extract_iocs(ioc_report: Any) -> list[dict[str, Any]]:
 # absence as the normal case and show nothing, not an empty player.
 def _extract_anyrun_video(report_data: Any) -> dict[str, Any] | None:
     """`{task_id, url}` when a screencast exists, otherwise None."""
-    if not isinstance(report_data, dict):
-        return None
-    blocks = [report_data]
-    data = report_data.get("data")
-    if isinstance(data, dict):
-        blocks.append(data)
-        analysis = data.get("analysis")
-        if isinstance(analysis, dict):
-            blocks.append(analysis)
-    for block in blocks:
-        video = block.get("video")
-        if not isinstance(video, dict) or not video.get("present"):
-            continue
-        url = str(video.get("permanentUrl") or video.get("permanent_url") or "").strip()
-        if not url.startswith("https://content.any.run/tasks/"):
-            continue
-        task_id = url.split("/tasks/", 1)[1].split("/", 1)[0]
-        return {"task_id": task_id, "url": url}
-    return None
+    return find_video_reference(report_data)
 
 
 def _extract_screenshot_thumbnails(report_data: Any, html_report: Any) -> list[dict[str, Any]]:

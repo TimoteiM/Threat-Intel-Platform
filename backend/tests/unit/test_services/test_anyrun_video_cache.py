@@ -101,3 +101,57 @@ def test_a_dead_partial_download_is_swept(tmp_path, monkeypatch):
 def test_purge_on_a_directory_that_does_not_exist_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path / "nope")
     assert cache.purge_expired() == {"removed": 0, "bytes_freed": 0}
+
+
+# —— finding the video wherever the report happens to nest it ——————————————
+
+def test_the_real_nesting_is_found():
+    """Where the one recording in this deployment actually sits.
+
+    items[].domain_intelligence.raw_summary.report_excerpt.analysis.content.video
+    — six levels below anything a fixed path was checking, which is why the
+    player never appeared for the investigation that had one.
+    """
+    payload = {"items": [{"domain_intelligence": {"raw_summary": {"report_excerpt": {
+        "analysis": {"content": {"video": {
+            "present": True,
+            "permanentUrl": f"https://content.any.run/tasks/{TASK}/download/mp4",
+        }}}}}}}]}
+    assert cache.find_video_reference(payload) == {
+        "task_id": TASK,
+        "url": f"https://content.any.run/tasks/{TASK}/download/mp4",
+    }
+
+
+def test_a_shallow_nesting_is_found_too():
+    payload = {"video": {"present": True,
+                         "permanentUrl": f"https://content.any.run/tasks/{TASK}/download/mp4"}}
+    assert cache.find_video_reference(payload)["task_id"] == TASK
+
+
+def test_absent_means_none():
+    assert cache.find_video_reference({"video": {"present": False}}) is None
+    assert cache.find_video_reference({}) is None
+    assert cache.find_video_reference(None) is None
+
+
+def test_a_video_url_on_another_host_is_refused():
+    """A `video` key elsewhere in the document must not become a fetch target."""
+    assert cache.find_video_reference(
+        {"video": {"present": True, "permanentUrl": "https://evil.example/x.mp4"}}
+    ) is None
+
+
+def test_a_content_url_without_a_valid_task_id_is_refused():
+    assert cache.find_video_reference(
+        {"video": {"present": True, "permanentUrl": "https://content.any.run/tasks/../download/mp4"}}
+    ) is None
+
+
+def test_the_search_is_bounded():
+    """Vendor JSON has no contract about its own depth."""
+    deep: dict = {"video": {"present": True,
+                            "permanentUrl": f"https://content.any.run/tasks/{TASK}/download/mp4"}}
+    for _ in range(cache.MAX_SEARCH_DEPTH + 5):
+        deep = {"nest": deep}
+    assert cache.find_video_reference(deep) is None

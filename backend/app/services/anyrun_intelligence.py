@@ -12,6 +12,7 @@ import ipaddress
 import re
 from typing import Any
 from urllib.parse import urlparse
+from app.services.anyrun_video_cache import find_video_reference
 
 
 _DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(?:\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")
@@ -293,20 +294,18 @@ def build_anyrun_sandbox_intelligence(result: dict[str, Any] | None) -> dict[str
 def _extract_video_reference(result: dict[str, Any] | None) -> dict[str, Any] | None:
     """The task whose recording can be played, if there is one.
 
-    ANY.RUN states it — `video: {present, permanentUrl}` — so this reads the
-    answer rather than assuming every task has one. Measured across stored
-    tasks it is present on 1 of 99: the recording comes from interactive VM
-    sessions, and nearly everything submitted here is a URL analysed headless.
+    Delegated to one bounded search rather than a list of paths: the report
+    nests `video` differently depending on submission shape, and a fixed path
+    that misses it fails silently — the player simply never appears and nothing
+    says why.
+
+    ANY.RUN states the fact itself, so this reads the answer rather than
+    assuming every task has one. Measured across stored tasks it is present on
+    1 of 99: the recording comes from interactive VM sessions, and nearly
+    everything submitted here is a URL analysed headless.
     """
-    if not isinstance(result, dict):
-        return None
-    for block in (result, result.get("report_excerpt") or {}):
-        if not isinstance(block, dict):
-            continue
-        video = block.get("video")
-        if isinstance(video, dict) and video.get("task_id"):
-            return {"task_id": str(video["task_id"])}
-    return None
+    found = find_video_reference(result)
+    return {"task_id": found["task_id"]} if found else None
 
 
 def _build_process_tree_summary(processes: list[Any], graph: dict[str, Any]) -> dict[str, Any]:
