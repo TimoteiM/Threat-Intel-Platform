@@ -5,6 +5,14 @@ const apiProxyTarget =
 
 const nextConfig = {
   reactStrictMode: true,
+  // Cost moved into Settings. A real server redirect rather than a redirect()
+  // page: statically prerendered, that returned a 307 carrying no Location
+  // header at all, which browsers follow but nothing else does.
+  async redirects() {
+    return [
+      { source: "/cost", destination: "/settings#cost", permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       {

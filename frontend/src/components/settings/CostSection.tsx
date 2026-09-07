@@ -3,6 +3,11 @@
 /**
  * Provider spend, and what the avoidance machinery saved.
  *
+ * Rendered inside Settings rather than as a page of its own. Spend and quota
+ * are configuration facts an operator checks occasionally, not something an
+ * analyst navigates to during an investigation, and a top-level nav slot is
+ * the most expensive place in the app to put something read once a month.
+ *
  * Every layer built to skip redundant work — alert-id dedupe, the exclusion
  * list, prior-investigation reuse — records what it skipped on the run that
  * skipped it. Those records were never read back, so the saving was real but
@@ -25,8 +30,6 @@ import {
   ErrorState,
   LoadingState,
   MetricStrip,
-  Page,
-  PageHeader,
   Section,
 } from "@/components/ui/Primitives";
 
@@ -39,7 +42,7 @@ function usageColor(percent: number | null): string {
   return "var(--status-success)";
 }
 
-export default function CostPage() {
+export default function CostSection() {
   const [data, setData] = useState<CostDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
@@ -65,25 +68,19 @@ export default function CostPage() {
   );
 
   return (
-    <Page>
-      <PageHeader
-        title="Cost and quota"
-        subtitle="What we spent on providers, and what we avoided spending."
-        actions={
-          <div className="ds-toolbar" role="group" aria-label="Time window">
-            {[7, 30, 90].map((value) => (
-              <Button
-                key={value}
-                variant={days === value ? "primary" : "secondary"}
-                aria-pressed={days === value}
-                onClick={() => setDays(value)}
-              >
-                {value}d
-              </Button>
-            ))}
-          </div>
-        }
-      />
+    <div style={{ display: "grid", gap: "var(--space-4)" }}>
+      <div className="ds-toolbar" role="group" aria-label="Time window" style={{ justifySelf: "start" }}>
+        {[7, 30, 90].map((value) => (
+          <Button
+            key={value}
+            variant={days === value ? "primary" : "secondary"}
+            aria-pressed={days === value}
+            onClick={() => setDays(value)}
+          >
+            {value}d
+          </Button>
+        ))}
+      </div>
 
       {loading ? (
         <LoadingState label="Loading usage…" />
@@ -212,6 +209,6 @@ export default function CostPage() {
           </Section>
         </>
       )}
-    </Page>
+    </div>
   );
 }

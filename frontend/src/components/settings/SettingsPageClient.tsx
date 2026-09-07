@@ -7,6 +7,7 @@ import { APP_VERSION } from "@/lib/constants";
 import { type ListDensity, type ThemePreference } from "@/lib/settings";
 import type { APIHealthResponse, APIProviderHealth, APIHealthStatus } from "@/lib/types";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
+import CostSection from "@/components/settings/CostSection";
 
 const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
   healthy: { label: "Healthy", color: "#38d9a9", bg: "rgba(56,217,169,0.12)" },
@@ -375,6 +376,18 @@ export default function SettingsPageClient() {
           </div>
         )}
       </SectionCard>
+
+      {/* Directly after API Health, because they answer halves of one question:
+          how close a provider is to its limit, and what the avoidance
+          machinery kept us from spending against it. */}
+      <div id="cost" style={{ scrollMarginTop: 80 }}>
+        <SectionCard
+          title="Cost and quota"
+          description="What we spent on providers, and what we avoided spending."
+        >
+          <CostSection />
+        </SectionCard>
+      </div>
 
       <SectionCard title="Workspace" description="These preferences are saved only in this browser.">
         <div style={{ display: "grid", gap: 18 }}>
