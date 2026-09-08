@@ -652,6 +652,22 @@ def _unavailable(provider: str, display_name: str, error: str) -> APIProviderHea
     )
 
 
+# The per-key allowance is a property of the plan, not of the request. Reading
+# it means a live call to the provider, and it was being read once per key on
+# every key-ordering decision — three probes, about 3.3 seconds, in front of
+# every sandbox submission and every video fetch. Cached for a quarter of an
+# hour, which is far shorter than a plan change and far longer than a burst of
+# requests.
+_PER_KEY_LIMIT_TTL_SECONDS = 900
+_per_key_limit_cache: tuple[float, float | None] | None = None
+
+
+def clear_anyrun_limit_cache() -> None:
+    """Drop the memoised allowance. For tests and after a plan change."""
+    global _per_key_limit_cache
+    _per_key_limit_cache = None
+
+
 def anyrun_per_key_month_limit() -> float | None:
     """Each ANY.RUN key's own monthly allowance, as the provider reports it.
 
@@ -659,16 +675,27 @@ def anyrun_per_key_month_limit() -> float | None:
     an operator reads as "how much is left"; this is the number that produces a
     402 when one key exceeds it while the pool still has room.
     """
+    global _per_key_limit_cache
+    import time as _time
+
+    if _per_key_limit_cache is not None:
+        cached_at, cached_value = _per_key_limit_cache
+        if (_time.monotonic() - cached_at) < _PER_KEY_LIMIT_TTL_SECONDS:
+            return cached_value
+
     try:
         settings = get_settings()
         keys = _configured_anyrun_api_keys(settings)
         if not keys:
+            _per_key_limit_cache = (_time.monotonic(), None)
             return None
         probes = _probe_anyrun_providers(settings=settings, configured_keys=keys)
         for probe in probes:
             limit = getattr(probe, "per_key_month_limit", None)
             if limit:
+                _per_key_limit_cache = (_time.monotonic(), float(limit))
                 return float(limit)
     except Exception:  # noqa: BLE001 — advisory only
         return None
+    _per_key_limit_cache = (_time.monotonic(), None)
     return None

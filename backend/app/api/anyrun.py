@@ -18,10 +18,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import Text, func, select
+from sqlalchemy import select
 
 from app.dependencies import DBSession
-from app.models.database import CollectorResult
+from app.models.database import Investigation
 from app.services import anyrun_video_cache as cache
 
 logger = logging.getLogger(__name__)
@@ -32,18 +32,25 @@ router = APIRouter(prefix="/api/anyrun", tags=["anyrun"])
 async def _is_known_task(db: DBSession, task_id: str) -> bool:
     """Did this platform analyse this task?
 
-    Checked against stored collector evidence rather than trusted from the
-    request, so the endpoint serves our own investigations and nothing else.
+    Answered from the indexed column, not by searching evidence documents. The
+    first version ran `evidence_json::text LIKE '%<id>%'` across every collector
+    result — an unindexable scan over the largest column in the schema, on every
+    request. It cost about seven seconds before a single byte of video moved,
+    which is most of why the player felt slow: a one-megabyte range request took
+    as long as the whole file, because the time was not in the transfer.
+
+    `sandbox_video_task_id` is set at conclusion only after a recording is
+    confirmed, and is partially indexed, so this is the same question asked of
+    the answer rather than of the haystack.
     """
     found = (
         await db.execute(
-            select(func.count())
-            .select_from(CollectorResult)
-            .where(CollectorResult.evidence_json.cast(Text).like(f"%{task_id}%"))
+            select(Investigation.id)
+            .where(Investigation.sandbox_video_task_id == task_id)
             .limit(1)
         )
-    ).scalar()
-    return bool(found)
+    ).scalar_one_or_none()
+    return found is not None
 
 
 @router.get("/video/{task_id}")
