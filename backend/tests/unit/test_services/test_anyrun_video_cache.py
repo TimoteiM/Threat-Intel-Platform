@@ -208,3 +208,55 @@ def test_a_task_id_alone_is_a_candidate():
 
 def test_a_non_uuid_analysis_id_is_not_a_candidate():
     assert cache.find_video_reference({"items": [{"analysis_id": "not-a-task"}]}) is None
+
+
+# —— one download per task, however many readers ——————————————————————————
+
+def test_concurrent_fetches_download_once(tmp_path, monkeypatch):
+    """Changing playback speed makes a browser issue several range requests.
+
+    Each one used to fetch the whole file — four times the vendor traffic — and
+    all of them wrote to the same `.part` path, which is a corrupt file waiting
+    to happen.
+    """
+    import threading
+
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(cache, "_candidate_auth_headers", lambda: [{}])
+    downloads: list[int] = []
+    started = threading.Barrier(4)
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "video/mp4"}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def iter_content(self, _n): yield b"x" * 2048
+
+    def fake_get(url, headers=None, timeout=None, stream=None):
+        downloads.append(1)
+        return _Resp()
+
+    monkeypatch.setattr(cache.requests, "get", fake_get)
+
+    results: list = []
+    def worker():
+        started.wait(timeout=5)
+        results.append(cache.fetch(TASK))
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=10)
+
+    assert len(downloads) == 1, "the vendor is fetched once, not once per reader"
+    assert all(r is not None for r in results), "every reader still gets the file"
+    assert len(list(tmp_path.glob("*.part"))) == 0, "no partial file left behind"
+
+
+def test_the_partial_name_is_unique_per_attempt(tmp_path, monkeypatch):
+    """Two processes must not interleave writes into one partial file."""
+    monkeypatch.setattr(cache, "cache_dir", lambda: tmp_path)
+    target = cache.cached_path(TASK)
+    import os, threading
+    expected = f"{target.name}.{os.getpid()}.{threading.get_ident()}.part"
+    assert expected.endswith(".part") and str(os.getpid()) in expected

@@ -20,7 +20,9 @@ so expiring the file loses nothing that cannot be fetched again.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,24 @@ CACHE_DIRNAME = "anyrun-video"
 MAX_VIDEO_BYTES = 512 * 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 180
 CHUNK_BYTES = 1024 * 256
+
+# One download per task at a time. Four concurrent range requests against an
+# uncached video each fetched the whole file — four times the vendor traffic —
+# and all four wrote to the same `.part` path, which is a corrupt file waiting
+# to happen. Changing playback speed is exactly what makes a browser issue
+# several range requests at once, which is how this surfaced.
+_DOWNLOAD_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _download_lock(task_id: str) -> threading.Lock:
+    with _LOCKS_GUARD:
+        lock = _DOWNLOAD_LOCKS.get(task_id)
+        if lock is None:
+            lock = threading.Lock()
+            _DOWNLOAD_LOCKS[task_id] = lock
+        return lock
+
 
 _TASK_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
@@ -179,7 +199,22 @@ def fetch(task_id: str) -> Path | None:
     directory = cache_dir()
     directory.mkdir(parents=True, exist_ok=True)
     target = cached_path(task_id)
-    partial = target.with_suffix(".mp4.part")
+
+    with _download_lock(task_id):
+        # Re-checked inside the lock: while this request waited, the one holding
+        # it may have finished the download, and a second fetch of the same file
+        # is the thing the lock exists to prevent.
+        fresh = cached_if_fresh(task_id)
+        if fresh is not None:
+            return fresh
+        return _download(task_id, target)
+
+
+def _download(task_id: str, target: Path) -> Path | None:
+    """Fetch one recording to disk. Callers hold that task's lock."""
+    # Unique per attempt, so even two processes cannot interleave writes into one
+    # partial file and rename a corrupt result into place.
+    partial = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.part")
 
     for headers in _candidate_auth_headers():
       try:

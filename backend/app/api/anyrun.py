@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
@@ -65,7 +66,11 @@ async def get_anyrun_video(
     if not await _is_known_task(db, task_id):
         raise HTTPException(404, "No investigation on this platform references that task")
 
-    path = cache.fetch(task_id)
+    # Off the event loop: the fetch is blocking I/O, and an `async def` endpoint
+    # doing it inline stalls every other request in the process for the length
+    # of the download — which is felt as the whole app hanging, not just the
+    # video.
+    path = await run_in_threadpool(cache.fetch, task_id)
     if path is None:
         raise HTTPException(
             404,
