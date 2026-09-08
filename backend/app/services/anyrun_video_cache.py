@@ -55,6 +55,83 @@ def is_task_id(value: str) -> bool:
     return bool(_TASK_ID.match(str(value or "")))
 
 
+def _candidate_auth_headers() -> list[dict[str, str]]:
+    """Every key worth trying, in order, for a private task's content.
+
+    A private task is visible only to the account that submitted it: measured
+    on our own task, key_2 answers 200 and key_1 and key_3 both answer 403. We
+    do not record which key ran which submission — the rotation picks by
+    remaining allowance — so the honest approach is to try each and stop at the
+    one that owns it.
+
+    Ordered by headroom so the first attempt is usually a live key, and an
+    unauthenticated attempt is kept last for the public community tasks that
+    need no key at all.
+    """
+    try:
+        from app.services.anyrun_service import (
+            _configured_anyrun_api_keys,
+            _order_keys_by_headroom,
+        )
+
+        keys = _order_keys_by_headroom(_configured_anyrun_api_keys(get_settings()))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not read ANY.RUN keys: %s", exc)
+        keys = []
+    return [{"Authorization": f"API-Key {key}"} for key in keys] + [{}]
+
+
+def _auth_headers() -> dict[str, str]:
+    """Credentials for content.any.run.
+
+    Our own submissions are private — `anyrun_privacy_type` is `owner` — so the
+    public content URL answers 403 to a browser and to an unauthenticated
+    fetch. The recording is there: with `Authorization: API-Key` it returns 200
+    video/mp4. That is why this cache exists in front of the vendor rather than
+    the page linking straight to it.
+
+    The key is chosen by remaining allowance, for the same reason submissions
+    are: an exhausted key answers 403 here rather than 402, which reads as
+    "no recording" and is the wrong conclusion entirely.
+    """
+    try:
+        from app.services.anyrun_service import (
+            _configured_anyrun_api_keys,
+            _order_keys_by_headroom,
+        )
+
+        keys = _order_keys_by_headroom(_configured_anyrun_api_keys(get_settings()))
+        if keys:
+            return {"Authorization": f"API-Key {keys[0]}"}
+    except Exception as exc:  # noqa: BLE001 — an unauthenticated try is still worth making
+        logger.debug("could not build ANY.RUN auth headers: %s", exc)
+    return {}
+
+
+def recording_exists(task_id: str) -> bool:
+    """Whether ANY.RUN actually holds a screencast for this task.
+
+    Asked once, when an investigation concludes, rather than trusted from the
+    report: the summary stored for our own submissions carries the task id but
+    not the vendor's `video` block, so the only honest way to know is to ask.
+    Storing an id without asking would put a player on the page that 404s.
+    """
+    if not is_task_id(task_id):
+        return False
+    for headers in _candidate_auth_headers():
+        try:
+            with requests.get(
+                video_url(task_id), headers=headers, timeout=30, stream=True
+            ) as response:
+                if response.status_code == 200 and "video" in (
+                    response.headers.get("content-type") or ""
+                ):
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("could not probe ANY.RUN video for %s: %s", task_id, exc)
+    return False
+
+
 def video_url(task_id: str) -> str:
     """The vendor URL for a task's recording.
 
@@ -104,15 +181,18 @@ def fetch(task_id: str) -> Path | None:
     target = cached_path(task_id)
     partial = target.with_suffix(".mp4.part")
 
-    try:
+    for headers in _candidate_auth_headers():
+      try:
         with requests.get(
-            video_url(task_id), timeout=DOWNLOAD_TIMEOUT_SECONDS, stream=True
+            video_url(task_id),
+            headers=headers,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            stream=True,
         ) as response:
             if response.status_code != 200:
-                logger.info(
-                    "ANY.RUN has no video for task %s (HTTP %s)", task_id, response.status_code
-                )
-                return None
+                # 403 here means "not this account's task", not "no recording".
+                # The next key may own it.
+                continue
             written = 0
             with partial.open("wb") as handle:
                 for chunk in response.iter_content(CHUNK_BYTES):
@@ -127,10 +207,11 @@ def fetch(task_id: str) -> Path | None:
         partial.replace(target)
         logger.info("cached ANY.RUN video for %s (%.1f MB)", task_id, written / 1048576)
         return target
-    except Exception as exc:  # noqa: BLE001 — a missing video is not an error
+      except Exception as exc:  # noqa: BLE001 — a missing video is not an error
         logger.warning("could not cache ANY.RUN video for %s: %s", task_id, exc)
         partial.unlink(missing_ok=True)
-        return None
+    logger.info("no ANY.RUN recording available for task %s", task_id)
+    return None
 
 
 def purge_expired(ttl_hours: int = VIDEO_TTL_HOURS) -> dict[str, int]:
@@ -206,4 +287,30 @@ def find_video_reference(payload: Any) -> dict[str, str] | None:
                     return found
         return None
 
-    return walk(payload, 0)
+    found = walk(payload, 0)
+    if found:
+        return found
+
+    # Our own submissions come back as a trimmed summary: it carries
+    # `analysis_id` but not the vendor's `video` block, so the walk above finds
+    # nothing even when a recording was made. The task id is enough to ask.
+    def walk_ids(node: Any, depth: int) -> str | None:
+        if depth > MAX_SEARCH_DEPTH:
+            return None
+        if isinstance(node, dict):
+            candidate = str(node.get("analysis_id") or "").strip()
+            if is_task_id(candidate):
+                return candidate
+            for value in node.values():
+                got = walk_ids(value, depth + 1)
+                if got:
+                    return got
+        elif isinstance(node, list):
+            for value in node[:MAX_SEARCH_BREADTH]:
+                got = walk_ids(value, depth + 1)
+                if got:
+                    return got
+        return None
+
+    task_id = walk_ids(payload, 0)
+    return {"task_id": task_id, "url": video_url(task_id)} if task_id else None

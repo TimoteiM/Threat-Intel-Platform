@@ -32,7 +32,7 @@ from app.services.decision_engine import community_listing_weight, apply_decisio
 from app.services.proxy_profiles import selected_proxy_summary
 from app.services.provider_branding import normalize_anyrun_branding
 from app.utils.domain_utils import extract_registered_domain
-from app.services.anyrun_video_cache import find_video_reference
+from app.services.anyrun_video_cache import find_video_reference, recording_exists
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -2303,8 +2303,18 @@ def _persist_results(
             inv.risk_score = report_data.get("risk_score")
             inv.recommended_action = report_data.get("recommended_action")
             # Derived once here rather than searched for on every list request.
+            #
+            # Confirmed rather than assumed: the summary stored for our own
+            # submissions carries the task id but not the vendor's video block,
+            # so the id alone does not mean a recording was made. One probe at
+            # conclusion is the difference between a player that works and one
+            # that 404s on the page.
             _video = find_video_reference(evidence_data)
-            inv.sandbox_video_task_id = _video["task_id"] if _video else None
+            inv.sandbox_video_task_id = (
+                _video["task_id"]
+                if _video and recording_exists(_video["task_id"])
+                else None
+            )
 
             # Save or update evidence (one row per investigation_id).
             ev = session.execute(
@@ -2645,8 +2655,18 @@ def recompute_report_for_existing_investigation(
             inv.risk_score = report_data.get("risk_score")
             inv.recommended_action = report_data.get("recommended_action")
             # Derived once here rather than searched for on every list request.
+            #
+            # Confirmed rather than assumed: the summary stored for our own
+            # submissions carries the task id but not the vendor's video block,
+            # so the id alone does not mean a recording was made. One probe at
+            # conclusion is the difference between a player that works and one
+            # that 404s on the page.
             _video = find_video_reference(evidence_data)
-            inv.sandbox_video_task_id = _video["task_id"] if _video else None
+            inv.sandbox_video_task_id = (
+                _video["task_id"]
+                if _video and recording_exists(_video["task_id"])
+                else None
+            )
             inv.updated_at = datetime.now(timezone.utc)
             if str(inv.state or "").lower() not in {"cancelled", "failed"}:
                 inv.state = "concluded"

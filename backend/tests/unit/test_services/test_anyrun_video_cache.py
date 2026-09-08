@@ -155,3 +155,56 @@ def test_the_search_is_bounded():
     for _ in range(cache.MAX_SEARCH_DEPTH + 5):
         deep = {"nest": deep}
     assert cache.find_video_reference(deep) is None
+
+
+# —— private tasks need the key that owns them ——————————————————————————————
+
+def test_every_key_is_tried_before_giving_up(monkeypatch):
+    """A private task is visible only to the account that submitted it.
+
+    Measured on a real task: key_2 answers 200 while key_1 and key_3 answer
+    403. We do not record which key ran which submission — the rotation picks
+    by remaining allowance — so each is tried until one owns it.
+    """
+    monkeypatch.setattr(cache, "_candidate_auth_headers",
+                        lambda: [{"Authorization": "API-Key a"},
+                                 {"Authorization": "API-Key b"}, {}])
+    seen: list = []
+
+    class _Resp:
+        def __init__(self, code):
+            self.status_code = code
+            self.headers = {"content-type": "video/mp4" if code == 200 else "text/plain"}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_get(url, headers=None, timeout=None, stream=None):
+        seen.append((headers or {}).get("Authorization"))
+        return _Resp(200 if (headers or {}).get("Authorization") == "API-Key b" else 403)
+
+    monkeypatch.setattr(cache.requests, "get", fake_get)
+    assert cache.recording_exists(TASK) is True
+    assert seen == ["API-Key a", "API-Key b"], "stops at the key that owns it"
+
+
+def test_an_unauthenticated_attempt_is_kept_last():
+    """Public community tasks need no key at all."""
+    assert _candidate_last_is_anonymous()
+
+
+def _candidate_last_is_anonymous() -> bool:
+    return cache._candidate_auth_headers()[-1] == {}
+
+
+def test_a_task_id_alone_is_a_candidate():
+    """Our own submissions are stored as a summary with no vendor video block.
+
+    The task id is enough to ask about; whether a recording exists is then
+    confirmed by probing rather than assumed.
+    """
+    found = cache.find_video_reference({"items": [{"analysis_id": TASK}]})
+    assert found == {"task_id": TASK, "url": cache.video_url(TASK)}
+
+
+def test_a_non_uuid_analysis_id_is_not_a_candidate():
+    assert cache.find_video_reference({"items": [{"analysis_id": "not-a-task"}]}) is None
