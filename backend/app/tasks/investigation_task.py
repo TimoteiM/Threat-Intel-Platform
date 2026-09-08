@@ -405,7 +405,11 @@ def _run_collectors_inline(
         # The gate judges a subdomain on its own merits rather than its parent's
         # registration, so it needs to know which host this is.
         fast_evidence["target_domain"] = domain
-        decision = should_detonate(fast_evidence, observable_type=observable_type)
+        decision = should_detonate(
+            fast_evidence,
+            observable_type=observable_type,
+            manual=bool((external_context or {}).get("requested_manually")),
+        )
         if decision.run:
             anyrun_executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=1,

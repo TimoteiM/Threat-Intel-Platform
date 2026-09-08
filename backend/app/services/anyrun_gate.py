@@ -65,14 +65,27 @@ def should_detonate(
     *,
     observable_type: str,
     excluded: bool = False,
+    manual: bool = False,
 ) -> SandboxDecision:
     """Is a sandbox run worth its cost for this observable?
 
     `evidence` is what the fast collectors have already produced. The caller
     must not invoke this before they have finished — the whole point is to
     decide with their answers in hand.
+
+    `manual` says an analyst asked for this investigation by hand. The gate
+    exists to stop automated volume spending a licence budget on questions
+    nothing was asking; a person typing a domain into the box *is* the question,
+    and answering it with "we decided not to look" is the wrong answer. Batches
+    and alert-spawned investigations are not manual — they are the volume.
     """
     kind = str(observable_type or "").strip().lower()
+
+    if manual:
+        # First, ahead of every other clause including the exclusion list: if
+        # someone explicitly investigated their own corporate domain, they want
+        # the sandbox, not a reminder that it is on the allowlist.
+        return SandboxDecision(True, "requested_by_analyst")
 
     if excluded:
         # The analyst has already said this is theirs and benign. Detonating it

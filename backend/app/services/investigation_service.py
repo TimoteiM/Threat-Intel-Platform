@@ -167,6 +167,12 @@ class InvestigationService:
             request.external_context.model_dump()
             if request.external_context else {}
         )
+        # This path is only reached when a person asks for one investigation:
+        # batches build their rows in batch_task, and alert-spawned ones in the
+        # spawn service. So it is the honest place to say the request was made
+        # by hand — which is what tells the sandbox gate to detonate regardless
+        # of how settled the reputation looks.
+        external_context["requested_manually"] = True
         use_anyrun_residential_proxy = bool(
             request.network_profile and request.network_profile.use_residential_proxy
         )

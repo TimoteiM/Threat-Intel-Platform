@@ -126,3 +126,42 @@ def test_a_clean_reputation_does_not_prevent_a_detonation():
 def test_the_decision_is_stable():
     evidence = {"vt": CLEAN_PANEL, "whois": {"domain_age_days": 45}}
     assert decide(evidence).as_dict() == decide(evidence).as_dict()
+
+
+# —— a person asking is itself the reason ————————————————————————————————
+
+SETTLED_CLEAN = {
+    "vt": CLEAN_PANEL,
+    "whois": {"domain_age_days": ESTABLISHED_DOMAIN_DAYS + 1000},
+    "http": {},
+    "target_domain": "iana.org",
+}
+
+
+def test_a_manual_investigation_always_detonates():
+    """The gate stops automated volume, not an analyst.
+
+    Someone typing a domain into the box is the question; answering it with
+    "we decided not to look" is the wrong answer.
+    """
+    assert should_detonate(SETTLED_CLEAN, observable_type="domain").run is False
+    manual = should_detonate(SETTLED_CLEAN, observable_type="domain", manual=True)
+    assert manual.run is True and manual.reason == "requested_by_analyst"
+
+
+def test_manual_outranks_an_already_condemned_verdict():
+    d = should_detonate(
+        {"vt": {"found": True, "malicious_count": 9, "total_vendors": 91}},
+        observable_type="domain", manual=True,
+    )
+    assert d.run is True and d.reason == "requested_by_analyst"
+
+
+def test_manual_outranks_the_exclusion_list():
+    """Investigating your own corporate domain by hand should still detonate."""
+    d = should_detonate({}, observable_type="domain", excluded=True, manual=True)
+    assert d.run is True and d.reason == "requested_by_analyst"
+
+
+def test_automated_runs_are_unaffected_by_the_flag_being_absent():
+    assert should_detonate(SETTLED_CLEAN, observable_type="domain").reason == "established_and_clean"
