@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import redis as redis_lib
 from sqlalchemy.orm import Session
@@ -33,6 +33,7 @@ from app.models.enums import InvestigationState
 from app.collectors.registry import available_collectors, get_collector, get_collectors_for_type
 from app.db.session import sync_engine
 from app.tasks.celery_app import celery_app
+from app.services.anyrun_gate import should_detonate
 from app.tasks.analysis_task import (
     _attach_artifact_ids,
     _guess_content_type,
@@ -329,16 +330,13 @@ def _run_collectors_inline(
 
     anyrun_background_future: Optional[concurrent.futures.Future] = None
 
-    # ── Submit AnyRun to a separate long-lived executor (not joined on exit) ──
+    # AnyRun is submitted *after* the fast collectors, not alongside them — see
+    # the gate below. It used to start here, which made it the only collector
+    # that could not see what the others found.
     anyrun_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
     anyrun_future:   Optional[concurrent.futures.Future] = None
-    if run_anyrun:
-        anyrun_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix=f"anyrun-{investigation_id[:8]}",
-        )
-        anyrun_future = anyrun_executor.submit(_run_one, ANYRUN_COLLECTOR_NAME)
-        anyrun_executor.shutdown(wait=False)  # don't block on exit
+    anyrun_started_at: float = start_ts
+    anyrun_skip_reason: Optional[str] = None
 
     # ── Run all fast collectors ───────────────────────────────────────────────
     with concurrent.futures.ThreadPoolExecutor(
@@ -392,9 +390,56 @@ def _run_collectors_inline(
                     total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
                 )
 
+    # ── Is a detonation worth its cost for this observable? ──────────────────
+    #
+    # Asked here because this is the first moment it can be answered: the gate
+    # reads VirusTotal, the threat feeds, WHOIS and the static HTTP signals, and
+    # none of them exist until the fast collectors return. The cost of asking
+    # late is that the sandbox no longer overlaps them — about twenty seconds
+    # added to the runs that do detonate, against not detonating at all on a
+    # quarter of them.
+    if run_anyrun:
+        fast_evidence: dict[str, Any] = {
+            str(item.get("collector")): (item.get("evidence") or {}) for item in results
+        }
+        # The gate judges a subdomain on its own merits rather than its parent's
+        # registration, so it needs to know which host this is.
+        fast_evidence["target_domain"] = domain
+        decision = should_detonate(fast_evidence, observable_type=observable_type)
+        if decision.run:
+            anyrun_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"anyrun-{investigation_id[:8]}",
+            )
+            anyrun_future = anyrun_executor.submit(_run_one, ANYRUN_COLLECTOR_NAME)
+            anyrun_executor.shutdown(wait=False)  # don't block on exit
+            anyrun_started_at = time.monotonic()
+            logger.info(
+                "[%s] sandbox detonation queued (%s)", investigation_id, decision.reason
+            )
+        else:
+            anyrun_skip_reason = decision.reason
+            run_anyrun = False
+            collector_statuses[ANYRUN_COLLECTOR_NAME] = "skipped"
+            results.append(_build_sandbox_skipped_result(decision.reason))
+            logger.info(
+                "[%s] sandbox skipped (%s)", investigation_id, decision.reason
+            )
+            _publish_progress(
+                investigation_id,
+                InvestigationState.GATHERING,
+                f"Sandbox skipped — {decision.reason.replace('_', ' ')}",
+                55,
+                collectors=collector_statuses,
+                total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+            )
+
     # ── Check AnyRun soft deadline ────────────────────────────────────────────
     if run_anyrun and anyrun_future is not None:
-        elapsed = time.monotonic() - start_ts
+        # Measured from when the sandbox actually started, not from the start of
+        # the investigation — it no longer runs alongside the fast collectors,
+        # so their time is not its time.
+        elapsed = time.monotonic() - anyrun_started_at
         blocking_anyrun = _requires_blocking_anyrun(observable_type)
         anyrun_wait_budget = (
             _collector_timeout(ANYRUN_COLLECTOR_NAME, timeout)
@@ -473,6 +518,43 @@ def _run_collectors_inline(
                 anyrun_background_future = anyrun_future
 
     return results, collector_statuses, anyrun_background_future
+
+
+def _build_sandbox_skipped_result(reason: str) -> dict:
+    """A sandbox that was not run, recorded as a decision rather than a gap.
+
+    Status is `skipped`, never `failed`: nothing went wrong, and a report that
+    says the sandbox failed invites an analyst to distrust the rest of it. The
+    reason travels with the result so the report can say which clause decided.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "collector": ANYRUN_COLLECTOR_NAME,
+        "status": "skipped",
+        "evidence": {
+            "meta": {
+                "collector": ANYRUN_COLLECTOR_NAME,
+                "version": "1.0.0",
+                "status": "skipped",
+                "started_at": now,
+                "completed_at": now,
+                "duration_ms": 0,
+                "error": None,
+            },
+            "sandbox_skipped": {"reason": reason},
+        },
+        "meta": {
+            "collector": ANYRUN_COLLECTOR_NAME,
+            "version": "1.0.0",
+            "status": "skipped",
+            "started_at": now,
+            "completed_at": now,
+            "duration_ms": 0,
+            "error": None,
+        },
+        "artifacts": {},
+        "duration_ms": 0,
+    }
 
 
 def _build_timeout_result(name: str) -> dict:

@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.decision_engine import _is_high_confidence_http_signal
 from app.utils.domain_utils import extract_registered_domain
 
 logger = logging.getLogger(__name__)
@@ -112,10 +113,19 @@ def should_detonate(
 
     http = evidence.get("http") or {}
     has_login = bool(http.get("has_login_form"))
-    phishing_signals = list(http.get("phishing_indicators") or [])
-    if has_login or phishing_signals:
-        # A page asking for credentials is the case a sandbox exists for: what
-        # it does *after* submission is invisible to every static source.
+    # Only the signals the decision engine already treats as high confidence.
+    # "Any phishing indicator" is far too loose to gate on: a third-party brand
+    # reference is present on ordinary sites, and live testing detonated
+    # iana.org on it. Reusing that distinction rather than inventing a second
+    # one keeps the gate and the verdict reading the same evidence the same way.
+    strong_signals = [
+        signal for signal in (http.get("phishing_indicators") or [])
+        if _is_high_confidence_http_signal(signal)
+    ]
+    if has_login or strong_signals:
+        # A page asking for credentials, or posting them somewhere, is the case
+        # a sandbox exists for: what it does *after* submission is invisible to
+        # every static source.
         return SandboxDecision(True, "credential_or_brand_signals")
 
     if not vt_found or vt_total < AUTHORITATIVE_PANEL:
