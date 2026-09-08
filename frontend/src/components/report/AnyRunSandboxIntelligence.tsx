@@ -92,10 +92,25 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot, 
   );
   // At most one recording matters: they are all of the same submission, and a
   // page with two players is a page asking which one to watch.
+  //
+  // Deliberately not `text()` here. That is a display helper — it returns "-"
+  // for null — so an investigation with no recording produced the truthy string
+  // "-", rendered a player on every report, and asked the API for
+  // /api/anyrun/video/- which answered "Not an ANY.RUN task id".
+  //
+  // The shape is checked against the same UUID the endpoint requires, so the
+  // player only appears when the id can actually be served and the API's 400 is
+  // unreachable from this page.
+  const videoCandidate =
+    String(videoTaskId ?? "").trim() ||
+    intelligence
+      .map((i) => String((i as any)?.video?.task_id ?? "").trim())
+      .find((value) => value.length > 0) ||
+    "";
   const resolvedVideoTaskId: string | null =
-    text(videoTaskId) ||
-    intelligence.map((i) => text((i as any)?.video?.task_id)).find(Boolean) ||
-    null;
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(videoCandidate)
+      ? videoCandidate
+      : null;
   const screenshots = uniqueRows(
     intelligence.flatMap((i) => arr(i.screenshot_thumbnails)).filter((row) => Boolean(row?.artifact_id)),
     (row) => text(row?.artifact_id || row?.url)
