@@ -763,6 +763,24 @@ export default function AlertInvestigationDetailPage() {
                       )}
 
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {(report as any).sandboxed_on_request_at && (
+                          <span
+                            title={`Sandbox run requested by an analyst — ${new Date(
+                              (report as any).sandboxed_on_request_at,
+                            ).toLocaleString()}`}
+                            style={{
+                              fontSize: 10,
+                              fontFamily: "var(--font-mono)",
+                              padding: "2px 8px",
+                              borderRadius: 20,
+                              border: "1px solid rgba(79,110,247,0.32)",
+                              background: "rgba(79,110,247,0.12)",
+                              color: "var(--accent)",
+                            }}
+                          >
+                            sandboxed on request
+                          </span>
+                        )}
                         {report.collector_runs.map((collectorRun) => (
                           <span
                             key={collectorRun.collector}

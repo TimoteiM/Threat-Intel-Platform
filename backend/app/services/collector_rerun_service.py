@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.collectors.registry import get_collector
 from app.config import get_settings
 from app.db.session import sync_engine
-from app.models.database import Evidence, Investigation
+from app.models.database import CollectorResult, Evidence, Investigation
 from app.services.hybrid_analysis_service import evict_anyrun_cache
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,7 @@ def rerun_collector_sync(investigation_id: str, collector_name: str) -> dict[str
             "error": f"unsupported_type:{observable_type}",
         }
 
+    started = datetime.now(timezone.utc)
     try:
         collector = collector_cls(
             domain=domain,
@@ -83,10 +84,13 @@ def rerun_collector_sync(investigation_id: str, collector_name: str) -> dict[str
         evidence, meta, _ = collector.run()
         result_evidence = evidence.model_dump(mode="json")
         status = meta.status.value
+        error = None
     except Exception as exc:
         logger.exception("rerun %s for %s failed: %s", collector_name, investigation_id, exc)
         result_evidence = {}
         status = "failed"
+        error = str(exc)
+    finished = datetime.now(timezone.utc)
 
     try:
         with Session(sync_engine) as db:
@@ -106,7 +110,30 @@ def rerun_collector_sync(investigation_id: str, collector_name: str) -> dict[str
                 inv_row = db.get(Investigation, inv_id)
                 if inv_row:
                     inv_row.updated_at = datetime.now(timezone.utc)
-                db.commit()
+
+            # collector_results is a separate table from evidence_json, and it
+            # is the one anything downstream reads to answer "which collectors
+            # ran" — the alert-body indicator reports among them. Writing only
+            # the evidence blob left a re-run invisible to every one of them.
+            row = db.execute(
+                select(CollectorResult).where(
+                    CollectorResult.investigation_id == inv_id,
+                    CollectorResult.collector_name == collector_name,
+                )
+            ).scalars().first()
+            if row is None:
+                row = CollectorResult(
+                    investigation_id=inv_id,
+                    collector_name=collector_name,
+                )
+                db.add(row)
+            row.status = status
+            row.evidence_json = result_evidence
+            row.error = error
+            row.started_at = started
+            row.completed_at = finished
+            row.duration_ms = int((finished - started).total_seconds() * 1000)
+            db.commit()
     except Exception as exc:
         logger.error("rerun %s: could not persist for %s: %s", collector_name, investigation_id, exc)
         return {"investigation_id": investigation_id, "status": "failed", "error": "persist_failed"}

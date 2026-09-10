@@ -76,7 +76,11 @@ const PATHS: Record<NavIcon, React.ReactNode> = {
   ),
   assistant: (
     <>
-      <path d="m12 3 1.9 4.9L19 9.8l-4.2 3.3.6 5.3L12 15.8 8.6 18.4l.6-5.3L5 9.8l5.1-1.9Z" />
+      <rect x="3.5" y="8" width="17" height="12" rx="3.2" />
+      <path d="M12 3.2v4.8" />
+      <circle cx="12" cy="2.6" r="1.3" />
+      <path d="M8.6 12.6v1.9M15.4 12.6v1.9" />
+      <path d="M1.6 12.8v2.6M22.4 12.8v2.6" />
     </>
   ),
   clients: (

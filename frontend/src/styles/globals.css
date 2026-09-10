@@ -505,7 +505,6 @@ body.process-graph-fullscreen .app-shell__main {
   font-weight: 500;
   font-family: var(--font-sans);
   text-decoration: none;
-  white-space: nowrap;
 }
 
 .app-sidebar--collapsed .app-sidebar__link {
@@ -549,11 +548,14 @@ body.process-graph-fullscreen .app-shell__main {
   stroke-linejoin: round;
 }
 
+/* Wrapping beats an ellipsis here. "Alert Body Investigation" is about 150px
+   of text in a ~152px slot, so a nowrap label truncates to "Alert Body
+   Investiga…" — which is worse than two tidy lines. */
 .app-sidebar__label {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
+  overflow-wrap: break-word;
 }
 
 .app-sidebar--collapsed .app-sidebar__label {

@@ -52,7 +52,7 @@ export const APP_NAV_LINKS = [
   { href: "/email-investigations", label: "Email Analysis", group: "tools", icon: "email" },
   // Alert Body is a first-class intake path, not a variant of Email Analysis:
   // it takes a pasted alert body and runs every indicator inside it.
-  { href: "/alert-investigations", label: "Alert Body", group: "tools", icon: "alertBody" },
+  { href: "/alert-investigations", label: "Alert Body Investigation", group: "tools", icon: "alertBody" },
   { href: "/ip-lookup", label: "IP Lookup", group: "tools", icon: "ip" },
   { href: "/assistant", label: "AI Assistant", group: "tools", icon: "assistant" },
   { href: "/clients", label: "Clients", group: "tools", icon: "clients" },

@@ -830,7 +830,7 @@ async def sandbox_selected_indicators(
             detail="None of the selected indicators can be sandboxed right now.",
         )
 
-    task = run_sandbox_batch.delay([a["investigation_id"] for a in accepted])
+    task = run_sandbox_batch.delay([a["investigation_id"] for a in accepted], run_id=str(run.id))
 
     return {
         "run_id": str(run.id),
