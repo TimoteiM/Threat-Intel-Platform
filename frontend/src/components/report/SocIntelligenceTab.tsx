@@ -56,9 +56,9 @@ function asNumber(value: any): number {
 function toneFromVerdict(verdict: string): { color: string; bg: string; border: string } {
   const normalized = String(verdict || "").toLowerCase();
   if (normalized === "malicious") return { color: "var(--red)", bg: "rgba(251,113,133,0.10)", border: "rgba(251,113,133,0.28)" };
-  if (normalized === "suspicious") return { color: "var(--yellow)", bg: "rgba(251,191,36,0.10)", border: "rgba(251,191,36,0.28)" };
-  if (normalized === "benign") return { color: "var(--green)", bg: "rgba(56,217,169,0.10)", border: "rgba(56,217,169,0.28)" };
-  return { color: "var(--accent)", bg: "rgba(102,168,255,0.08)", border: "rgba(102,168,255,0.24)" };
+  if (normalized === "suspicious") return { color: "var(--yellow)", bg: "rgba(242,169,60,0.10)", border: "rgba(242,169,60,0.28)" };
+  if (normalized === "benign") return { color: "var(--green)", bg: "rgba(43,212,160,0.10)", border: "rgba(43,212,160,0.28)" };
+  return { color: "var(--accent)", bg: "rgba(139,123,255,0.08)", border: "rgba(139,123,255,0.24)" };
 }
 
 function severityColor(severity: string) {
@@ -145,8 +145,8 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
             style={{
               ...segmentButtonStyle,
               color: active === tab.id ? "var(--text-strong)" : "var(--text-secondary)",
-              background: active === tab.id ? "rgba(102,168,255,0.14)" : "transparent",
-              borderColor: active === tab.id ? "rgba(102,168,255,0.38)" : "transparent",
+              background: active === tab.id ? "rgba(139,123,255,0.14)" : "transparent",
+              borderColor: active === tab.id ? "rgba(139,123,255,0.38)" : "transparent",
             }}
           >
             {tab.label}
@@ -735,8 +735,8 @@ function ReportPreviewPanel({
           style={{
             ...segmentButtonStyle,
             color: audience === "analyst" ? "var(--text-strong)" : "var(--text-secondary)",
-            background: audience === "analyst" ? "rgba(102,168,255,0.14)" : "transparent",
-            borderColor: audience === "analyst" ? "rgba(102,168,255,0.38)" : "transparent",
+            background: audience === "analyst" ? "rgba(139,123,255,0.14)" : "transparent",
+            borderColor: audience === "analyst" ? "rgba(139,123,255,0.38)" : "transparent",
           }}
         >
           Analyst Report
@@ -747,8 +747,8 @@ function ReportPreviewPanel({
           style={{
             ...segmentButtonStyle,
             color: audience === "executive" ? "var(--text-strong)" : "var(--text-secondary)",
-            background: audience === "executive" ? "rgba(102,168,255,0.14)" : "transparent",
-            borderColor: audience === "executive" ? "rgba(102,168,255,0.38)" : "transparent",
+            background: audience === "executive" ? "rgba(139,123,255,0.14)" : "transparent",
+            borderColor: audience === "executive" ? "rgba(139,123,255,0.38)" : "transparent",
           }}
         >
           Executive Brief
@@ -1433,7 +1433,7 @@ function nodeColor(node: any) {
   const type = String(node?.type || "").toLowerCase();
   const score = asNumber(node?.score);
   if (score >= 70) return "var(--red)";
-  if (type.includes("opencti") || type.includes("attack") || type.includes("malware")) return "#a78bfa";
+  if (type.includes("opencti") || type.includes("attack") || type.includes("malware")) return "#8b7bff";
   if (type.includes("process") || type.includes("sandbox")) return "var(--yellow)";
   if (type.includes("ip") || type.includes("domain") || type.includes("url")) return "var(--accent)";
   if (type.includes("file") || type.includes("hash")) return "var(--green)";
@@ -1669,9 +1669,9 @@ const noteInfoStyle: React.CSSProperties = {
 
 const changeSummaryStyle: React.CSSProperties = {
   padding: "11px 13px",
-  border: "1px solid rgba(102,168,255,0.24)",
+  border: "1px solid rgba(139,123,255,0.24)",
   borderRadius: "var(--radius-sm)",
-  background: "rgba(102,168,255,0.08)",
+  background: "rgba(139,123,255,0.08)",
   color: "var(--text-secondary)",
   fontSize: 12,
   lineHeight: 1.6,
@@ -1740,7 +1740,7 @@ const timelineDotStyle: React.CSSProperties = {
   width: 11,
   height: 11,
   borderRadius: "50%",
-  boxShadow: "0 0 0 5px rgba(102,168,255,0.12)",
+  boxShadow: "0 0 0 5px rgba(139,123,255,0.12)",
 };
 
 const timelineTimeStyle: React.CSSProperties = {
@@ -1753,8 +1753,8 @@ const sourcePillStyle: React.CSSProperties = {
   padding: "2px 7px",
   borderRadius: 999,
   color: "var(--accent)",
-  border: "1px solid rgba(102,168,255,0.24)",
-  background: "rgba(102,168,255,0.08)",
+  border: "1px solid rgba(139,123,255,0.24)",
+  background: "rgba(139,123,255,0.08)",
   fontSize: 10,
   fontWeight: 800,
   letterSpacing: "0.06em",
@@ -1830,9 +1830,9 @@ const graphInspectorTitleStyle: React.CSSProperties = {
 
 const graphFullValueStyle: React.CSSProperties = {
   padding: 10,
-  border: "1px solid rgba(102,168,255,0.22)",
+  border: "1px solid rgba(139,123,255,0.22)",
   borderRadius: "var(--radius-sm)",
-  background: "rgba(102,168,255,0.07)",
+  background: "rgba(139,123,255,0.07)",
   color: "var(--text-primary)",
   fontFamily: "var(--font-mono)",
   fontSize: 11,
@@ -1844,8 +1844,8 @@ const graphScorePillStyle: React.CSSProperties = {
   padding: "2px 7px",
   borderRadius: 999,
   color: "var(--yellow)",
-  border: "1px solid rgba(251,191,36,0.28)",
-  background: "rgba(251,191,36,0.10)",
+  border: "1px solid rgba(242,169,60,0.28)",
+  background: "rgba(242,169,60,0.10)",
   fontSize: 10,
   fontWeight: 800,
 };

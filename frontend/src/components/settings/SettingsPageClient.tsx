@@ -10,8 +10,8 @@ import { useSettingsPreferences } from "@/components/settings/SettingsPreference
 import CostSection from "@/components/settings/CostSection";
 
 const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
-  healthy: { label: "Healthy", color: "#38d9a9", bg: "rgba(56,217,169,0.12)" },
-  low_quota: { label: "Low Quota", color: "#fbbf24", bg: "rgba(251,191,36,0.14)" },
+  healthy: { label: "Healthy", color: "#2bd4a0", bg: "rgba(43,212,160,0.12)" },
+  low_quota: { label: "Low Quota", color: "#f2a93c", bg: "rgba(242,169,60,0.14)" },
   rate_limited: { label: "Rate Limited", color: "#fb7185", bg: "rgba(251,113,133,0.14)" },
   unavailable: { label: "Unavailable", color: "#fb923c", bg: "rgba(251,146,60,0.14)" },
   not_configured: { label: "Not Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },

@@ -314,7 +314,7 @@ export function ErrorState({
         justifyItems: "start",
         padding: "var(--space-3) var(--space-4)",
         borderLeft: `3px solid ${color}`,
-        background: partial ? "rgba(251, 191, 36, 0.07)" : "rgba(251, 113, 133, 0.07)",
+        background: partial ? "rgba(242, 169, 60, 0.07)" : "rgba(251, 113, 133, 0.07)",
         borderRadius: "0 var(--shell-radius-sm) var(--shell-radius-sm) 0",
       }}
     >

@@ -10,10 +10,10 @@ interface Props {
 }
 
 const INFRA_TYPE_COLORS: Record<string, string> = {
-  ip: "#60a5fa",
-  certificate: "#fbbf24",
-  asn: "#34d399",
-  registrar: "#a78bfa",
+  ip: "#8b7bff",
+  certificate: "#f2a93c",
+  asn: "#2bd4a0",
+  registrar: "#8b7bff",
   nameserver: "#94a3b8",
 };
 
@@ -44,7 +44,7 @@ export default function CampaignView({ data }: Props) {
           {/* Campaign header */}
           <div style={{
             padding: "12px 16px",
-            background: "rgba(239,68,68,0.06)",
+            background: "rgba(251,113,133,0.06)",
             borderBottom: "1px solid var(--border)",
             display: "flex", justifyContent: "space-between", alignItems: "center",
           }}>

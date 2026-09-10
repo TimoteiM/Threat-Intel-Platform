@@ -70,8 +70,8 @@ function CollectorRerunButton({ investigationId, collector, onRefresh, label }: 
       >
         {running ? "Running…" : `↺ Re-run ${label}`}
       </button>
-      {done && !running && <span style={{ fontSize: 10, color: "#16a34a" }}>Updated</span>}
-      {error && <span style={{ fontSize: 10, color: "#ef4444" }}>{error}</span>}
+      {done && !running && <span style={{ fontSize: 10, color: "#2bd4a0" }}>Updated</span>}
+      {error && <span style={{ fontSize: 10, color: "#fb7185" }}>{error}</span>}
     </span>
   );
 }
@@ -373,14 +373,14 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 padding: "8px 10px",
                 borderRadius: "var(--radius-sm)",
                 border: activeSectionTitle === title
-                  ? "1px solid rgba(96,165,250,0.45)"
+                  ? "1px solid rgba(139,123,255,0.45)"
                   : hasData
-                  ? "1px solid rgba(52,211,153,0.25)"
+                  ? "1px solid rgba(43,212,160,0.25)"
                   : "1px solid var(--border)",
                 background: activeSectionTitle === title
-                  ? "rgba(96,165,250,0.12)"
+                  ? "rgba(139,123,255,0.12)"
                   : hasData
-                  ? "rgba(52,211,153,0.08)"
+                  ? "rgba(43,212,160,0.08)"
                   : "var(--bg-elevated)",
                 color: activeSectionTitle === title ? "var(--accent)" : hasData ? "var(--green)" : "var(--text-secondary)",
                 cursor: "pointer",
@@ -615,7 +615,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 {dkimCount === 0 && (
                   <div style={{
                     padding: "10px 14px", fontSize: 12, color: "var(--yellow)",
-                    background: "rgba(251,191,36,0.06)", borderRadius: "var(--radius-sm)",
+                    background: "rgba(242,169,60,0.06)", borderRadius: "var(--radius-sm)",
                     borderLeft: "3px solid var(--yellow)", marginBottom: 16,
                   }}>
                     No DKIM selectors found (checked 10 common selectors)
@@ -784,7 +784,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                   padding: "12px 16px", fontSize: 12, marginBottom: 16,
                   borderRadius: "var(--radius-sm)",
                   borderLeft: `3px solid ${cloaking ? "var(--red)" : "var(--green)"}`,
-                  background: cloaking ? "rgba(248,113,113,0.06)" : "rgba(52,211,153,0.06)",
+                  background: cloaking ? "rgba(251,113,133,0.06)" : "rgba(43,212,160,0.06)",
                   color: cloaking ? "var(--red)" : "var(--green)",
                   fontWeight: 600,
                 }}>
@@ -799,7 +799,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                     {arr(ra.cloaking_details).map((detail: string, i: number) => (
                       <div key={i} style={{
                         padding: "8px 12px", marginBottom: 4,
-                        background: "rgba(248,113,113,0.06)",
+                        background: "rgba(251,113,133,0.06)",
                         borderLeft: "3px solid var(--red)",
                         borderRadius: "var(--radius-sm)",
                         fontSize: 12, color: "var(--text-secondary)",
@@ -849,7 +849,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                       {arr(ra.evasion_techniques).map((tech: string, i: number) => (
                         <div key={i} style={{
                           padding: "8px 12px",
-                          background: "rgba(251,191,36,0.06)",
+                          background: "rgba(242,169,60,0.06)",
                           borderLeft: "3px solid var(--yellow)",
                           borderRadius: "var(--radius-sm)",
                           fontSize: 12, color: "var(--text-secondary)",
@@ -907,7 +907,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 {httpPhishingIndicators.map((indicator: string, i: number) => (
                   <div key={i} style={{
                     padding: "8px 12px",
-                    background: "rgba(248,113,113,0.06)",
+                    background: "rgba(251,113,133,0.06)",
                     borderLeft: "3px solid var(--red)",
                     borderRadius: "var(--radius-sm)",
                     fontSize: 12, color: "var(--text-secondary)",
@@ -935,8 +935,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 {arr(http.brand_indicators).map((phrase: string, i: number) => (
                   <span key={i} style={{
                     padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                    background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
-                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
+                    background: "rgba(242,169,60,0.10)", color: "var(--yellow)",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(242,169,60,0.2)",
                     fontFamily: "var(--font-mono)",
                   }}>
                     {phrase}
@@ -1006,9 +1006,9 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                     marginBottom: 16,
                     padding: "12px 14px",
                     borderRadius: "var(--radius)",
-                    border: "1px solid rgba(245, 158, 11, 0.35)",
+                    border: "1px solid rgba(242, 169, 60, 0.35)",
                     borderLeft: "3px solid var(--yellow)",
-                    background: "rgba(245, 158, 11, 0.08)",
+                    background: "rgba(242, 169, 60, 0.08)",
                   }}>
                     <div style={{ color: "var(--yellow)", fontWeight: 700, fontSize: 12 }}>
                       Sensitive/data-entry form detected
@@ -1078,7 +1078,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                             {arr(ja.captured_requests).map((req: any, i: number) => (
                               <div key={i} style={{
                                 padding: "5px 10px", fontSize: 11,
-                                background: req.is_external ? "rgba(251,191,36,0.04)" : "rgba(52,211,153,0.04)",
+                                background: req.is_external ? "rgba(242,169,60,0.04)" : "rgba(43,212,160,0.04)",
                                 borderLeft: `3px solid ${req.is_external ? "var(--yellow)" : "var(--green)"}`,
                                 borderRadius: "var(--radius-sm)",
                                 color: "var(--text-secondary)", fontFamily: "var(--font-mono)",
@@ -1086,7 +1086,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                               }}>
                                 <span style={{
                                   padding: "1px 5px", fontSize: 9, fontWeight: 700,
-                                  background: req.method === "POST" ? "rgba(248,113,113,0.15)" : "rgba(96,165,250,0.12)",
+                                  background: req.method === "POST" ? "rgba(251,113,133,0.15)" : "rgba(139,123,255,0.12)",
                                   color: req.method === "POST" ? "var(--red)" : "var(--accent)",
                                   borderRadius: 3, minWidth: 32, textAlign: "center",
                                 }}>
@@ -1121,10 +1121,10 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                                 return (
                                   <span key={i} style={{
                                     padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                                    background: isExt ? "rgba(251,191,36,0.10)" : "rgba(52,211,153,0.10)",
+                                    background: isExt ? "rgba(242,169,60,0.10)" : "rgba(43,212,160,0.10)",
                                     color: isExt ? "var(--yellow)" : "var(--green)",
                                     borderRadius: "var(--radius-sm)",
-                                    border: `1px solid ${isExt ? "rgba(251,191,36,0.2)" : "rgba(52,211,153,0.2)"}`,
+                                    border: `1px solid ${isExt ? "rgba(242,169,60,0.2)" : "rgba(43,212,160,0.2)"}`,
                                     fontFamily: "var(--font-mono)",
                                   }}>
                                     {domain}
@@ -1157,7 +1157,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                               {extReqs.map((req: any, i: number) => (
                                 <div key={i} style={{
                                   padding: "5px 10px", fontSize: 11,
-                                  background: "rgba(251,191,36,0.04)",
+                                  background: "rgba(242,169,60,0.04)",
                                   borderLeft: "3px solid var(--yellow)",
                                   borderRadius: "var(--radius-sm)",
                                   color: "var(--text-secondary)", fontFamily: "var(--font-mono)",
@@ -1165,7 +1165,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                                 }}>
                                   <span style={{
                                     padding: "1px 5px", fontSize: 9, fontWeight: 700,
-                                    background: req.method === "POST" ? "rgba(248,113,113,0.15)" : "rgba(96,165,250,0.12)",
+                                    background: req.method === "POST" ? "rgba(251,113,133,0.15)" : "rgba(139,123,255,0.12)",
                                     color: req.method === "POST" ? "var(--red)" : "var(--accent)",
                                     borderRadius: 3, minWidth: 32, textAlign: "center",
                                   }}>
@@ -1189,8 +1189,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                               {externalDomains.map((domain: string, i: number) => (
                                 <span key={i} style={{
                                   padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                                  background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
-                                  borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
+                                  background: "rgba(242,169,60,0.10)", color: "var(--yellow)",
+                                  borderRadius: "var(--radius-sm)", border: "1px solid rgba(242,169,60,0.2)",
                                   fontFamily: "var(--font-mono)",
                                 }}>
                                   {domain}
@@ -1218,7 +1218,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                             {arr(ja.post_endpoints).map((p: any, i: number) => (
                               <div key={i} style={{
                                 padding: "8px 12px",
-                                background: p.is_credential_form ? "rgba(248,113,113,0.06)" : "rgba(96,165,250,0.04)",
+                                background: p.is_credential_form ? "rgba(251,113,133,0.06)" : "rgba(139,123,255,0.04)",
                                 borderLeft: `3px solid ${p.is_credential_form ? "var(--red)" : p.is_external ? "var(--yellow)" : "var(--border)"}`,
                                 borderRadius: "var(--radius-sm)",
                                 fontSize: 12, color: "var(--text-secondary)",
@@ -1230,13 +1230,13 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                                   {p.is_external && (
                                     <span style={{
                                       padding: "2px 6px", fontSize: 9, fontWeight: 600,
-                                      background: "rgba(251,191,36,0.15)", color: "var(--yellow)", borderRadius: 3,
+                                      background: "rgba(242,169,60,0.15)", color: "var(--yellow)", borderRadius: 3,
                                     }}>EXTERNAL</span>
                                   )}
                                   {p.is_credential_form && (
                                     <span style={{
                                       padding: "2px 6px", fontSize: 9, fontWeight: 600,
-                                      background: "rgba(248,113,113,0.15)", color: "var(--red)", borderRadius: 3,
+                                      background: "rgba(251,113,133,0.15)", color: "var(--red)", borderRadius: 3,
                                     }}>CREDENTIAL</span>
                                   )}
                                 </span>
@@ -1264,7 +1264,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                               return (
                                 <div key={i} style={{
                                   padding: "6px 12px", fontSize: 11,
-                                  background: isExt ? "rgba(251,191,36,0.04)" : "rgba(52,211,153,0.04)",
+                                  background: isExt ? "rgba(242,169,60,0.04)" : "rgba(43,212,160,0.04)",
                                   borderLeft: `3px solid ${isExt ? "var(--yellow)" : "var(--green)"}`,
                                   borderRadius: "var(--radius-sm)",
                                   color: "var(--text-secondary)", fontFamily: "var(--font-mono)",
@@ -1273,7 +1273,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                                   <span>{domain}</span>
                                   <span style={{
                                     padding: "1px 5px", fontSize: 9, fontWeight: 600,
-                                    background: isExt ? "rgba(251,191,36,0.12)" : "rgba(52,211,153,0.12)",
+                                    background: isExt ? "rgba(242,169,60,0.12)" : "rgba(43,212,160,0.12)",
                                     color: isExt ? "var(--yellow)" : "var(--green)", borderRadius: 3,
                                   }}>
                                     {isExt ? "EXTERNAL" : "INTERNAL"}
@@ -1305,7 +1305,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                       {credPosts.map((p: any, i: number) => (
                         <div key={i} style={{
                           padding: "8px 12px",
-                          background: "rgba(248,113,113,0.06)",
+                          background: "rgba(251,113,133,0.06)",
                           borderLeft: "3px solid var(--red)",
                           borderRadius: "var(--radius-sm)",
                           fontSize: 12, color: "var(--text-secondary)",
@@ -1325,7 +1325,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                     {arr(ja.data_exfil_indicators).map((ind: string, i: number) => (
                       <div key={i} style={{
                         padding: "8px 12px", marginBottom: 4,
-                        background: "rgba(248,113,113,0.06)",
+                        background: "rgba(251,113,133,0.06)",
                         borderLeft: "3px solid var(--red)",
                         borderRadius: "var(--radius-sm)",
                         fontSize: 12, color: "var(--text-secondary)",
@@ -1352,8 +1352,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                       {arr(ja.fingerprinting_apis).map((api: string, i: number) => (
                         <span key={i} style={{
                           padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                          background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
-                          borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
+                          background: "rgba(242,169,60,0.10)", color: "var(--yellow)",
+                          borderRadius: "var(--radius-sm)", border: "1px solid rgba(242,169,60,0.2)",
                           fontFamily: "var(--font-mono)",
                         }}>
                           {api}
@@ -1610,7 +1610,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 {evidence.subdomains.interesting_subdomains.map((entry, i) => (
                   <div key={i} style={{
                     padding: "8px 12px",
-                    background: "rgba(251,191,36,0.06)",
+                    background: "rgba(242,169,60,0.06)",
                     borderLeft: "3px solid var(--yellow)",
                     borderRadius: "var(--radius-sm)",
                     display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -1799,8 +1799,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                   {arr(vt.flagged_malicious_by).map((vendor: string, i: number) => (
                     <span key={i} style={{
                       padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                      background: "rgba(248,113,113,0.10)", color: "var(--red)",
-                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(248,113,113,0.2)",
+                      background: "rgba(251,113,133,0.10)", color: "var(--red)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,113,133,0.2)",
                       fontFamily: "var(--font-mono)",
                     }}>
                       {vendor}
@@ -1823,8 +1823,8 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                   {arr(vt.flagged_suspicious_by).map((vendor: string, i: number) => (
                     <span key={i} style={{
                       padding: "4px 10px", fontSize: 11, fontWeight: 500,
-                      background: "rgba(251,191,36,0.10)", color: "var(--yellow)",
-                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,191,36,0.2)",
+                      background: "rgba(242,169,60,0.10)", color: "var(--yellow)",
+                      borderRadius: "var(--radius-sm)", border: "1px solid rgba(242,169,60,0.2)",
                       fontFamily: "var(--font-mono)",
                     }}>
                       {vendor}
@@ -2068,7 +2068,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
                 {arr(intel.blocklist_hits).map((hit: any, i: number) => (
                   <div key={i} style={{
                     padding: "8px 12px",
-                    background: "rgba(248,113,113,0.06)",
+                    background: "rgba(251,113,133,0.06)",
                     borderLeft: "3px solid var(--red)",
                     borderRadius: "var(--radius-sm)",
                     marginBottom: 4,
@@ -2083,7 +2083,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
             ) : (
               <div style={{
                 padding: "10px 14px", fontSize: 12, color: "var(--green)",
-                background: "rgba(52,211,153,0.06)", borderRadius: "var(--radius-sm)",
+                background: "rgba(43,212,160,0.06)", borderRadius: "var(--radius-sm)",
                 borderLeft: "3px solid var(--green)", marginBottom: 16,
               }}>
                 No blocklist hits detected
@@ -2426,13 +2426,13 @@ function FloatingEvidenceNavigator({
         style={{
           width: "100%", display: "grid", gridTemplateColumns: "32px minmax(0,1fr) 20px",
           alignItems: "center", gap: 9, padding: "9px 11px",
-          border: "1px solid rgba(102,168,255,.38)", borderRadius: 13,
+          border: "1px solid rgba(139,123,255,.38)", borderRadius: 13,
           background: "rgba(7,18,33,.92)", color: "var(--text-secondary)",
           boxShadow: "0 14px 36px rgba(0,0,0,.38), 0 0 20px rgba(55,125,210,.1)",
           backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", cursor: "pointer", textAlign: "left",
         }}
       >
-        <span aria-hidden="true" style={{ width: 30, height: 30, display: "grid", placeContent: "center", borderRadius: 9, background: "rgba(102,168,255,.12)", color: "var(--accent)", fontSize: 15 }}>☷</span>
+        <span aria-hidden="true" style={{ width: 30, height: 30, display: "grid", placeContent: "center", borderRadius: 9, background: "rgba(139,123,255,.12)", color: "var(--accent)", fontSize: 15 }}>☷</span>
         <span style={{ minWidth: 0, display: "grid" }}>
           <small style={{ color: "var(--accent)", fontSize: 7, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase" }}>Evidence section</small>
           <strong style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }}>{active || "Choose section"}</strong>
@@ -2443,7 +2443,7 @@ function FloatingEvidenceNavigator({
       {open && (
         <div role="menu" aria-label="Technical Evidence sections" style={{
           marginTop: 7, maxHeight: "calc(100vh - 160px)", overflowY: "auto", padding: 7,
-          border: "1px solid rgba(102,168,255,.3)", borderRadius: 13,
+          border: "1px solid rgba(139,123,255,.3)", borderRadius: 13,
           background: "rgba(7,18,33,.97)", boxShadow: "0 20px 50px rgba(0,0,0,.46)",
           backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
         }}>
@@ -2455,8 +2455,8 @@ function FloatingEvidenceNavigator({
               onClick={() => { onChange(section.title); setOpen(false); }}
               style={{
                 width: "100%", display: "flex", alignItems: "center", gap: 8,
-                padding: "8px 9px", border: active === section.title ? "1px solid rgba(102,168,255,.34)" : "1px solid transparent",
-                borderRadius: 8, background: active === section.title ? "rgba(102,168,255,.12)" : "transparent",
+                padding: "8px 9px", border: active === section.title ? "1px solid rgba(139,123,255,.34)" : "1px solid transparent",
+                borderRadius: 8, background: active === section.title ? "rgba(139,123,255,.12)" : "transparent",
                 color: active === section.title ? "var(--accent)" : section.hasData ? "var(--text-secondary)" : "var(--text-muted)",
                 cursor: "pointer", textAlign: "left", fontSize: 10, fontWeight: active === section.title ? 750 : 550,
               }}
@@ -2602,23 +2602,23 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
 function openCtiTone(score: number | undefined) {
   if ((score || 0) >= 85) {
     return {
-      accent: "#ef4444",
-      border: "rgba(239,68,68,0.35)",
+      accent: "#fb7185",
+      border: "rgba(251,113,133,0.35)",
       panel: "linear-gradient(180deg, rgba(61,15,23,0.92), rgba(35,12,18,0.96))",
       card: "rgba(127,29,29,0.24)",
     };
   }
   if ((score || 0) >= 50) {
     return {
-      accent: "#f59e0b",
-      border: "rgba(245,158,11,0.3)",
+      accent: "#f2a93c",
+      border: "rgba(242,169,60,0.3)",
       panel: "linear-gradient(180deg, rgba(56,35,10,0.92), rgba(31,22,11,0.96))",
       card: "rgba(120,80,10,0.22)",
     };
   }
   return {
-    accent: "#38bdf8",
-    border: "rgba(56,189,248,0.24)",
+    accent: "#5b9dff",
+    border: "rgba(91,157,255,0.24)",
     panel: "linear-gradient(180deg, rgba(8,33,52,0.92), rgba(8,21,35,0.96))",
     card: "rgba(8,55,88,0.2)",
   };
@@ -2683,7 +2683,7 @@ function OpenCtiEmptyState({ openCti }: { openCti: any }) {
   return (
     <div
       style={{
-        border: "1px solid rgba(96,165,250,0.22)",
+        border: "1px solid rgba(139,123,255,0.22)",
         background: "linear-gradient(180deg, rgba(12,26,42,0.92), rgba(8,19,33,0.96))",
         borderRadius: "var(--radius)",
         padding: 18,
@@ -2742,7 +2742,7 @@ function OpenCtiConsole({ openCti }: { openCti: any }) {
             <OpenCtiModule
               title="Reporting"
               eyebrow="Research and referenced reporting"
-              accent="#60a5fa"
+              accent="#8b7bff"
             >
               <div style={{ display: "grid", gap: 12 }}>
                 {reports.map((report: any, index: number) => (
@@ -2757,7 +2757,7 @@ function OpenCtiConsole({ openCti }: { openCti: any }) {
           <OpenCtiModule
             title="Threat Context"
             eyebrow="Operational relationships"
-            accent="#a78bfa"
+            accent="#8b7bff"
           >
             <div style={{ display: "grid", gap: 14 }}>
               <OpenCtiKeyValueGrid
@@ -2823,7 +2823,7 @@ function OpenCtiConsole({ openCti }: { openCti: any }) {
             <OpenCtiModule
               title="Analyst Notes"
               eyebrow="Search traces and collector caveats"
-              accent="#38bdf8"
+              accent="#5b9dff"
             >
               <div style={{ display: "grid", gap: 10 }}>
                 {notes.map((note: string, index: number) => (
@@ -2907,7 +2907,7 @@ function OpenCtiHero({ openCti }: { openCti: any }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
             <OpenCtiPill label={openCtiSeverityLabel(openCti?.score)} color={tone.accent} />
-            <OpenCtiPill label="Trusted CTI Source" color="#7dd3fc" />
+            <OpenCtiPill label="Trusted CTI Source" color="#a9cbff" />
             <OpenCtiPill label={String(openCti?.observable_entity_type || "Unknown").toUpperCase()} color="#c4b5fd" />
           </div>
           <div style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>
@@ -2984,11 +2984,11 @@ function OpenCtiSignalStrip({ openCti }: { openCti: any }) {
   const tone = openCtiTone(openCti?.score);
   const signals = [
     { label: "Indicators", value: arr(openCti?.indicators).length, color: tone.accent },
-    { label: "Reports", value: arr(openCti?.reports).length, color: "#60a5fa" },
+    { label: "Reports", value: arr(openCti?.reports).length, color: "#8b7bff" },
     { label: "Actors", value: arr(openCti?.threat_actors).length, color: "#f472b6" },
     { label: "Malware", value: arr(openCti?.malware_families).length, color: "#fb7185" },
-    { label: "ATT&CK", value: arr(openCti?.attack_patterns).length, color: "#a78bfa" },
-    { label: "Campaigns", value: arr(openCti?.campaigns).length + arr(openCti?.intrusion_sets).length, color: "#34d399" },
+    { label: "ATT&CK", value: arr(openCti?.attack_patterns).length, color: "#8b7bff" },
+    { label: "Campaigns", value: arr(openCti?.campaigns).length + arr(openCti?.intrusion_sets).length, color: "#2bd4a0" },
   ];
 
   return (
@@ -3093,7 +3093,7 @@ function OpenCtiIndicatorCard({ indicator }: { indicator: any }) {
               padding: "10px 12px",
               borderRadius: 12,
               background: "rgba(15,23,42,0.9)",
-              border: "1px solid rgba(96,165,250,0.18)",
+              border: "1px solid rgba(139,123,255,0.18)",
               fontSize: 12,
               lineHeight: 1.65,
               color: "#dbeafe",
@@ -3189,8 +3189,8 @@ function OpenCtiReportCard({ report }: { report: any }) {
             textTransform: "uppercase",
             padding: "6px 8px",
             borderRadius: 999,
-            border: "1px solid rgba(96,165,250,0.2)",
-            background: "rgba(59,130,246,0.10)",
+            border: "1px solid rgba(139,123,255,0.2)",
+            background: "rgba(124,92,255,0.10)",
           }}
         >
           {formatDateShort(report?.published)}
@@ -3242,8 +3242,8 @@ function OpenCtiNoteRow({ note }: { note: string }) {
           height: 8,
           borderRadius: "50%",
           marginTop: 5,
-          background: "#38bdf8",
-          boxShadow: "0 0 0 4px rgba(56,189,248,0.12)",
+          background: "#5b9dff",
+          boxShadow: "0 0 0 4px rgba(91,157,255,0.12)",
         }}
       />
       <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>{note}</div>

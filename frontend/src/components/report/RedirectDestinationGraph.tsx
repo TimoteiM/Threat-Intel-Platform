@@ -86,7 +86,7 @@ export default function RedirectDestinationGraph({ intelligence, redirectChain =
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 250px), 1fr))", gap: 10 }}>
         {whois && (
-          <IntelCard eyebrow="Identity" title="Registration" status={whois.status} accent="#60a5fa">
+          <IntelCard eyebrow="Identity" title="Registration" status={whois.status} accent="#8b7bff">
             <Fact label="Registrar" value={whois.registrar} />
             <Fact label="Domain age" value={formatAge(whois.domain_age_days)} />
             <Fact label="Created" value={formatDate(whois.created_date)} />
@@ -114,7 +114,7 @@ export default function RedirectDestinationGraph({ intelligence, redirectChain =
         )}
 
         {(dns || hosting) && (
-          <IntelCard eyebrow="Infrastructure" title="Network context" status={hosting?.status || dns?.status} accent="#a78bfa">
+          <IntelCard eyebrow="Infrastructure" title="Network context" status={hosting?.status || dns?.status} accent="#8b7bff">
             <Fact label="IP address" value={hosting?.ip || resolvedIps[0]} mono />
             <Fact label="ASN" value={hosting?.asn ? `AS${hosting.asn}` : undefined} />
             <Fact label="Network" value={hosting?.asn_org} />
@@ -173,7 +173,7 @@ export default function RedirectDestinationGraph({ intelligence, redirectChain =
 }
 
 function GraphNode({ step, destinationColor }: { step: RedirectStep; destinationColor: string }) {
-  const accent = step.role === "source" ? "#60a5fa" : step.role === "destination" ? destinationColor : "#a78bfa";
+  const accent = step.role === "source" ? "#8b7bff" : step.role === "destination" ? destinationColor : "#8b7bff";
   const label = step.role === "source" ? "Investigated host" : step.role === "destination" ? "Final destination" : "Redirect hop";
   return (
     <div style={{ width: 190, border: `1px solid color-mix(in srgb, ${accent} 48%, transparent)`, borderRadius: 8, background: "rgba(11,24,42,.96)", boxShadow: `0 8px 24px rgba(0,0,0,.22), inset 3px 0 0 ${accent}` }}>
@@ -194,7 +194,7 @@ function GraphNode({ step, destinationColor }: { step: RedirectStep; destination
 function GraphEdge({ status }: { status?: number | string }) {
   return (
     <div style={{ width: 72, position: "relative", height: 30, flex: "0 0 72px" }}>
-      <div style={{ position: "absolute", left: 0, right: 8, top: 15, height: 1, background: "#4b759f", boxShadow: "0 0 6px rgba(96,165,250,.3)" }} />
+      <div style={{ position: "absolute", left: 0, right: 8, top: 15, height: 1, background: "#4b759f", boxShadow: "0 0 6px rgba(139,123,255,.3)" }} />
       <div style={{ position: "absolute", right: 3, top: 11, width: 8, height: 8, borderTop: "1px solid #6ea1d3", borderRight: "1px solid #6ea1d3", transform: "rotate(45deg)" }} />
       {status != null && <span style={{ position: "absolute", top: -1, left: "50%", transform: "translateX(-50%)", padding: "1px 5px", borderRadius: 8, background: "#142b45", border: "1px solid #294969", color: "#8fb8df", fontSize: 8, fontFamily: "var(--font-mono)" }}>{status}</span>}
     </div>

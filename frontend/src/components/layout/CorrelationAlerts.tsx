@@ -130,6 +130,7 @@ export default function CorrelationAlerts() {
     setOpen(true);
   };
   const tone = worst >= 70 ? "var(--status-danger)" : "var(--status-warning)";
+  const toneBg = worst >= 70 ? "rgba(251, 113, 133, 0.1)" : "rgba(242, 169, 60, 0.1)";
 
   return (
     <div ref={panel} style={{ position: "relative" }}>
@@ -157,7 +158,7 @@ export default function CorrelationAlerts() {
           padding: "4px 10px",
           borderRadius: 8,
           border: `1px solid ${count ? tone : "var(--panel-divider)"}`,
-          background: count ? "rgba(251, 191, 36, 0.10)" : "transparent",
+          background: count ? toneBg : "transparent",
           color: count ? tone : "var(--text-muted)",
           fontSize: 11.5,
           fontWeight: count ? 700 : 500,

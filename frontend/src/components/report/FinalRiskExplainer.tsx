@@ -5,19 +5,19 @@ import { FinalRiskEvidence } from "@/lib/types";
 import styles from "./FinalRiskExplainer.module.css";
 
 const COMPONENTS: Record<string, { label: string; short: string; description: string; color: string }> = {
-  lexical_score: { label: "URL structure", short: "Lexical", description: "Suspicious patterns in the written URL.", color: "#60a5fa" },
-  behavior_score: { label: "Observed behavior", short: "Behavior", description: "Redirects, cloaking, forms, and destination changes.", color: "#a78bfa" },
-  content_ml_score: { label: "Content signals", short: "Content ML", description: "Social engineering, urgency, impersonation, and BEC language.", color: "#f59e0b" },
+  lexical_score: { label: "URL structure", short: "Lexical", description: "Suspicious patterns in the written URL.", color: "#8b7bff" },
+  behavior_score: { label: "Observed behavior", short: "Behavior", description: "Redirects, cloaking, forms, and destination changes.", color: "#8b7bff" },
+  content_ml_score: { label: "Content signals", short: "Content ML", description: "Social engineering, urgency, impersonation, and BEC language.", color: "#f2a93c" },
   attachment_score: { label: "Attachment analysis", short: "Attachment", description: "Static file characteristics such as macros and suspicious structure.", color: "#fb923c" },
   sandbox_score: { label: "Sandbox behavior", short: "Sandbox", description: "Behavior observed during dynamic AnyRun analysis.", color: "#fb7185" },
-  infrastructure_score: { label: "Infrastructure & reputation", short: "Infrastructure", description: "Threat vendors, feeds, domain age, IP, and hosting context.", color: "#38bdf8" },
+  infrastructure_score: { label: "Infrastructure & reputation", short: "Infrastructure", description: "Threat vendors, feeds, domain age, IP, and hosting context.", color: "#5b9dff" },
   opencti_score: { label: "OpenCTI intelligence", short: "OpenCTI", description: "Known intelligence relationships, reports, indicators, and campaigns.", color: "#2dd4bf" },
 };
 
 function clamp(value: number, min = 0, max = 1) { return Math.min(max, Math.max(min, value)); }
 function riskTone(score: number) {
-  if (score < 35) return { label: "Low", color: "#38d9a9", summary: "Technical signals currently indicate limited risk." };
-  if (score < 70) return { label: "Medium", color: "#fbbf24", summary: "Technical signals warrant analyst review and corroboration." };
+  if (score < 35) return { label: "Low", color: "#2bd4a0", summary: "Technical signals currently indicate limited risk." };
+  if (score < 70) return { label: "Medium", color: "#f2a93c", summary: "Technical signals warrant analyst review and corroboration." };
   return { label: "High", color: "#fb7185", summary: "Multiple or authoritative technical signals indicate elevated risk." };
 }
 

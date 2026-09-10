@@ -750,22 +750,22 @@ function severityScore(value: any) {
 
 function entityStyle(type: string) {
   const map: Record<string, { icon: string; color: string }> = {
-    alert: { icon: "!", color: "#67e8f9" },
-    incident: { icon: "!", color: "#67e8f9" },
-    detection: { icon: "#", color: "#93c5fd" },
-    ip: { icon: "IP", color: "#38bdf8" },
-    domain: { icon: "D", color: "#22c55e" },
+    alert: { icon: "!", color: "#a9cbff" },
+    incident: { icon: "!", color: "#a9cbff" },
+    detection: { icon: "#", color: "#a9cbff" },
+    ip: { icon: "IP", color: "#5b9dff" },
+    domain: { icon: "D", color: "#2bd4a0" },
     url: { icon: "/", color: "#2dd4bf" },
-    hash: { icon: "H", color: "#a78bfa" },
+    hash: { icon: "H", color: "#8b7bff" },
     user: { icon: "@", color: "#facc15" },
-    host: { icon: "H", color: "#f59e0b" },
+    host: { icon: "H", color: "#f2a93c" },
     process: { icon: "P", color: "#fb923c" },
     file: { icon: "F", color: "#c084fc" },
-    command: { icon: "$", color: "#f97316" },
-    network: { icon: "N", color: "#60a5fa" },
+    command: { icon: "$", color: "#fb923c" },
+    network: { icon: "N", color: "#8b7bff" },
     mitre: { icon: "T", color: "#fb7185" },
     email: { icon: "M", color: "#e879f9" },
-    cloud: { icon: "C", color: "#7dd3fc" },
+    cloud: { icon: "C", color: "#a9cbff" },
   };
   return map[type] || { icon: "O", color: "#94a3b8" };
 }
@@ -778,10 +778,10 @@ function severityColor(severity: string) {
 }
 
 function edgeColor(edge: SocGraphEdge) {
-  if (edge.type.includes("blocked") || edge.type.includes("quarantined")) return "#22c55e";
+  if (edge.type.includes("blocked") || edge.type.includes("quarantined")) return "#2bd4a0";
   if (edge.type.includes("executed") || edge.type.includes("downloaded")) return "#fb923c";
   if (edge.type.includes("mitre")) return "#fb7185";
-  return "#67e8f9";
+  return "#a9cbff";
 }
 
 function riskTone(value: any): "neutral" | "info" | "success" | "warning" | "danger" {
@@ -821,7 +821,7 @@ function exportGraphPng(nodes: Node[], edges: Edge[]) {
     const from = nodes.find((node) => node.id === edge.source);
     const to = nodes.find((node) => node.id === edge.target);
     if (!from || !to) return;
-    ctx.strokeStyle = "rgba(103,232,249,0.46)";
+    ctx.strokeStyle = "rgba(169,203,255,0.46)";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo((from.position.x + NODE_WIDTH / 2) * scale + ox, (from.position.y + NODE_HEIGHT / 2) * scale + oy);
@@ -856,7 +856,7 @@ function buildExportSvg(nodes: Node[], edges: Edge[]) {
     const from = nodes.find((node) => node.id === edge.source);
     const to = nodes.find((node) => node.id === edge.target);
     if (!from || !to) return "";
-    return `<line x1="${from.position.x + ox + NODE_WIDTH / 2}" y1="${from.position.y + oy + NODE_HEIGHT / 2}" x2="${to.position.x + ox + NODE_WIDTH / 2}" y2="${to.position.y + oy + NODE_HEIGHT / 2}" stroke="#67e8f9" stroke-opacity="0.48" stroke-width="2"/>`;
+    return `<line x1="${from.position.x + ox + NODE_WIDTH / 2}" y1="${from.position.y + oy + NODE_HEIGHT / 2}" x2="${to.position.x + ox + NODE_WIDTH / 2}" y2="${to.position.y + oy + NODE_HEIGHT / 2}" stroke="#a9cbff" stroke-opacity="0.48" stroke-width="2"/>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#08111f"/>${edgeMarkup}${nodeMarkup}</svg>`;
 }

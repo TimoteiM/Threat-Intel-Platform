@@ -126,12 +126,12 @@ export default function AssistantDailyActivity({ refreshKey = 0 }: AssistantDail
                   axisLine={false}
                 />
                 <Tooltip
-                  cursor={{ fill: "rgba(102, 168, 255, 0.08)" }}
+                  cursor={{ fill: "rgba(139, 123, 255, 0.08)" }}
                   contentStyle={tooltipStyle}
                   itemStyle={{ color: "var(--text-strong)" }}
                   formatter={(value) => [`${Number(value)} alert${Number(value) === 1 ? "" : "s"}`, "Completed"]}
                 />
-                <Bar dataKey="count" fill="#66a8ff" radius={[6, 6, 2, 2]} maxBarSize={24} />
+                <Bar dataKey="count" fill="#8b7bff" radius={[6, 6, 2, 2]} maxBarSize={24} />
               </BarChart>
             </ResponsiveContainer>
           </div>

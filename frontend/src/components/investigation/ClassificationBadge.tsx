@@ -12,58 +12,84 @@ interface Props {
 
 export default function ClassificationBadge({ classification, confidence, riskScore }: Props) {
   const config = CLASSIFICATION_CONFIG[classification] || CLASSIFICATION_CONFIG.inconclusive;
+  const pct = riskScore != null ? Math.max(0, Math.min(100, riskScore)) : null;
 
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 16,
-        padding: "20px 24px",
+        gap: 20,
+        padding: "18px 22px",
         background: config.bg,
-        border: `1px solid ${config.color}33`,
-        borderRadius: "var(--radius-lg)",
+        border: `1px solid ${config.color}30`,
+        borderLeft: `3px solid ${config.color}`,
+        borderRadius: "var(--shell-radius-lg)",
         marginBottom: 24,
       }}
       className="animate-in"
     >
       <div
         style={{
-          width: 60,
-          height: 60,
-          borderRadius: "var(--radius-lg)",
-          background: `${config.color}12`,
-          border: `2px solid ${config.color}`,
+          width: 56,
+          height: 56,
+          flexShrink: 0,
+          borderRadius: "var(--shell-radius-md)",
+          background: `${config.color}14`,
+          border: `1px solid ${config.color}45`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 22,
-          fontWeight: 800,
+          fontSize: 20,
+          fontWeight: 700,
           color: config.color,
           fontFamily: "var(--font-mono)",
+          letterSpacing: "-0.02em",
         }}
       >
         {riskScore ?? "?"}
       </div>
-      <div>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div
           style={{
-            fontSize: 18,
+            fontSize: 16,
             fontWeight: 700,
             color: config.color,
-            letterSpacing: "0.02em",
+            letterSpacing: "0.03em",
             fontFamily: "var(--font-sans)",
           }}
         >
           {config.label}
         </div>
         <div style={{
-          fontSize: 12, color: "var(--text-dim)", marginTop: 2,
+          fontSize: 12, color: "var(--text-dim)", marginTop: 3,
           fontFamily: "var(--font-sans)",
         }}>
           Confidence: <span style={{ color: "var(--text)", fontWeight: 500 }}>{confidence}</span>
-          {riskScore != null && <> · Risk Score: {riskScore}/100</>}
+          {riskScore != null && <> · Risk score {riskScore}/100</>}
         </div>
+        {pct != null && (
+          <div
+            aria-hidden="true"
+            style={{
+              marginTop: 8,
+              height: 3,
+              borderRadius: 999,
+              background: "rgba(150, 145, 190, 0.16)",
+              overflow: "hidden",
+              maxWidth: 220,
+            }}
+          >
+            <div
+              style={{
+                width: `${pct}%`,
+                height: "100%",
+                background: config.color,
+                borderRadius: 999,
+              }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

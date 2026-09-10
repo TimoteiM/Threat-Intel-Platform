@@ -34,8 +34,8 @@ function clamp(value: number, min = 0, max = 1) {
 }
 
 function scoreTone(score: number) {
-  if (score < .3) return { label: "Low", color: "#38d9a9", summary: "The URL structure looks mostly typical." };
-  if (score <= .65) return { label: "Medium", color: "#fbbf24", summary: "The URL contains structural patterns worth reviewing." };
+  if (score < .3) return { label: "Low", color: "#2bd4a0", summary: "The URL structure looks mostly typical." };
+  if (score <= .65) return { label: "Medium", color: "#f2a93c", summary: "The URL contains structural patterns worth reviewing." };
   return { label: "High", color: "#fb7185", summary: "The URL structure resembles patterns often seen in phishing links." };
 }
 

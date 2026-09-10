@@ -13,16 +13,16 @@ import React, { useState } from "react";
 import type { AlertEndpointEventReport } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#f87171",
-  suspicious: "#fbbf24",
-  benign: "#34d399",
+  malicious: "#fb7185",
+  suspicious: "#f2a93c",
+  benign: "#2bd4a0",
   inconclusive: "#94a3b8",
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
-  high: "#f87171",
-  medium: "#fbbf24",
-  low: "#60a5fa",
+  high: "#fb7185",
+  medium: "#f2a93c",
+  low: "#8b7bff",
   info: "#94a3b8",
 };
 
@@ -66,7 +66,7 @@ export default function EndpointEventCard({
             padding: "3px 8px",
             borderRadius: 6,
             background: "rgba(139,92,246,0.14)",
-            color: "#a78bfa",
+            color: "#8b7bff",
             fontFamily: "var(--font-sans)",
           }}
         >

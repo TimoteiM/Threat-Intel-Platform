@@ -141,7 +141,7 @@ const titleInputStyle: React.CSSProperties = {
 const addButtonStyle: React.CSSProperties = {
   padding: "11px 14px",
   borderRadius: 14,
-  border: "1px solid rgba(102, 168, 255, 0.34)",
+  border: "1px solid rgba(139, 123, 255, 0.34)",
   background: "var(--panel-card-bg)",
   color: "var(--text-strong)",
   cursor: "pointer",

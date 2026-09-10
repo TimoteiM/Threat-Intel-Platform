@@ -148,7 +148,7 @@ function AnyRunLabelEscalationNotice({ items }: { items: any[] }) {
       role="note"
       style={{
         borderLeft: "3px solid var(--status-warning)",
-        background: "rgba(251, 191, 36, 0.07)",
+        background: "rgba(242, 169, 60, 0.07)",
         borderRadius: "0 var(--shell-radius-sm) var(--shell-radius-sm) 0",
         padding: "var(--space-3) var(--space-4)",
         margin: "var(--space-2) 0 var(--space-3)",
@@ -1015,16 +1015,16 @@ const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: 
     statusText = threatNames[0] || (directThreatCount > 0
       ? `${directThreatCount} network threat${directThreatCount === 1 ? "" : "s"}`
       : "malicious");
-    statusColor = "#ef4444";
+    statusColor = "#fb7185";
   } else if (suspicious) {
     statusText = threatNames[0] || "suspicious";
-    statusColor = "#f59e0b";
+    statusColor = "#f2a93c";
   } else if (isEntry) {
     statusText = "analysis start";
-    statusColor = "#22d3ee";
+    statusColor = "#5b9dff";
   }
 
-  const iconColor = malicious ? "#ef4444" : isEntry ? "#22d3ee" : suspicious ? "#f59e0b" : "#4ea8cc";
+  const iconColor = malicious ? "#fb7185" : isEntry ? "#5b9dff" : suspicious ? "#f2a93c" : "#4ea8cc";
   const iconBg = malicious
     ? "rgba(127,29,29,0.65)"
     : isEntry
@@ -1033,13 +1033,13 @@ const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: 
     ? "rgba(120,80,10,0.55)"
     : "rgba(13,55,84,0.75)";
   const borderColor = selected
-    ? "#22d3ee"
+    ? "#5b9dff"
     : malicious
-    ? "rgba(239,68,68,0.7)"
+    ? "rgba(251,113,133,0.7)"
     : isEntry
-    ? "rgba(34,211,238,0.5)"
+    ? "rgba(91,157,255,0.5)"
     : suspicious
-    ? "rgba(245,158,11,0.55)"
+    ? "rgba(242,169,60,0.55)"
     : "rgba(56,140,190,0.25)";
 
   return (
@@ -1056,9 +1056,9 @@ const ProcessGraphNode = React.memo(function ProcessGraphNode({ data }: { data: 
         borderRadius: 7,
         boxSizing: "border-box",
         boxShadow: selected
-          ? "0 0 0 2px rgba(34,211,238,0.22)"
+          ? "0 0 0 2px rgba(91,157,255,0.22)"
           : malicious
-          ? "0 0 8px rgba(239,68,68,0.18)"
+          ? "0 0 8px rgba(251,113,133,0.18)"
           : "none",
         cursor: "pointer",
         userSelect: "none",
@@ -1958,7 +1958,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
           target: String(e?.target || ""),
           label: "",
           style: {
-            stroke: e?.suspicious ? "rgba(239,68,68,0.75)" : "rgba(56,180,240,0.45)",
+            stroke: e?.suspicious ? "rgba(251,113,133,0.75)" : "rgba(56,180,240,0.45)",
             strokeWidth: e?.suspicious ? 1.8 : 1.2,
           },
           labelStyle: { fill: "#94a3b8", fontSize: 10 },
@@ -1967,7 +1967,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
             type: MarkerType.ArrowClosed,
             width: 12,
             height: 12,
-            color: e?.suspicious ? "rgba(239,68,68,0.85)" : "rgba(56,180,240,0.6)",
+            color: e?.suspicious ? "rgba(251,113,133,0.85)" : "rgba(56,180,240,0.6)",
           },
         }))
         .filter((e: any) => e.source && e.target),
@@ -2022,25 +2022,25 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
     selectedProcessThreatLevel >= 2 || selectedProcessScore >= 70
       ? {
           label: "Malicious",
-          color: "#fca5a5",
-          strong: "#ef4444",
-          border: "rgba(239,68,68,0.7)",
+          color: "#fda4af",
+          strong: "#fb7185",
+          border: "rgba(251,113,133,0.7)",
           bg: "rgba(127,29,29,0.20)",
           panel: "rgba(61,18,30,0.97)",
         }
       : selectedNodeSuspicious || selectedProcessThreatLevel >= 1 || selectedProcessScore >= 35
         ? {
             label: "Suspicious",
-            color: "#fde68a",
-            strong: "#f59e0b",
-            border: "rgba(245,158,11,0.65)",
+            color: "#ffcf8a",
+            strong: "#f2a93c",
+            border: "rgba(242,169,60,0.65)",
             bg: "rgba(120,80,10,0.18)",
             panel: "rgba(50,43,20,0.97)",
           }
         : {
             label: "No process verdict",
-            color: "#67e8f9",
-            strong: "#38bdf8",
+            color: "#a9cbff",
+            strong: "#5b9dff",
             border: "#1b4d6b",
             bg: "rgba(14,116,144,0.10)",
             panel: "rgba(4,39,61,0.97)",
@@ -2197,15 +2197,15 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
           style={{
             marginBottom: 10,
             padding: "9px 12px",
-            border: "1px solid rgba(239,68,68,0.35)",
-            background: "rgba(239,68,68,0.08)",
+            border: "1px solid rgba(251,113,133,0.35)",
+            background: "rgba(251,113,133,0.08)",
             borderRadius: 6,
             color: "var(--text-secondary)",
             fontSize: 12,
             lineHeight: 1.5,
           }}
         >
-          <strong style={{ color: "var(--red, #ef4444)" }}>AnyRun intelligence verdict:</strong>{" "}
+          <strong style={{ color: "var(--red, #fb7185)" }}>AnyRun intelligence verdict:</strong>{" "}
           {_lookupContextLabel(maliciousLookupContext)}. Process scores below are sandbox process telemetry only, so a clean
           or zero process score means AnyRun did not assign malicious behavior to that specific process in this run.
         </div>
@@ -2289,7 +2289,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                borderBottom: "1px solid rgba(59,130,246,0.25)",
+                borderBottom: "1px solid rgba(124,92,255,0.25)",
                 padding: "8px 10px",
                 fontSize: 12,
               }}
@@ -2375,8 +2375,8 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                 </div>
               ) : null}
               {selectedThreatCount === 0 && directDetectionTargets.length > 0 && (
-                <div style={{ marginBottom: 10, padding: "9px 10px", border: "1px solid rgba(251,191,36,.3)", borderRadius: 7, background: "rgba(120,80,10,.12)", color: "var(--text-secondary)", fontSize: 10, lineHeight: 1.5 }}>
-                  <strong style={{ color: "#fde68a" }}>No direct detection rows are attached to this PID.</strong>{" "}
+                <div style={{ marginBottom: 10, padding: "9px 10px", border: "1px solid rgba(242,169,60,.3)", borderRadius: 7, background: "rgba(120,80,10,.12)", color: "var(--text-secondary)", fontSize: 10, lineHeight: 1.5 }}>
+                  <strong style={{ color: "#ffcf8a" }}>No direct detection rows are attached to this PID.</strong>{" "}
                   Its red state comes from ANY.RUN process/chain scoring. Use the directly attributed process buttons above to inspect the signatures and network events that support the task verdict.
                 </div>
               )}
@@ -2403,7 +2403,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                   onClick={() => setShowAdvanced(true)}
                   style={{
                     padding: "6px 10px",
-                    border: "1px solid rgba(56,189,248,0.45)",
+                    border: "1px solid rgba(91,157,255,0.45)",
                     borderRadius: 6,
                     background: "rgba(8,47,73,0.7)",
                     color: "var(--accent)",
@@ -2469,9 +2469,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                   const pSuspicious = Boolean(p?.suspicious_flag) || pThreatLevel >= 1 || pScore >= 35;
                   const pMalicious = pThreatLevel >= 2 || pScore >= 70;
                   const pTone = pMalicious
-                    ? { label: "Malicious", color: "#fca5a5", border: "rgba(239,68,68,0.65)", bg: "rgba(127,29,29,0.20)" }
+                    ? { label: "Malicious", color: "#fda4af", border: "rgba(251,113,133,0.65)", bg: "rgba(127,29,29,0.20)" }
                     : pSuspicious
-                      ? { label: "Suspicious", color: "#fde68a", border: "rgba(245,158,11,0.55)", bg: "rgba(120,80,10,0.18)" }
+                      ? { label: "Suspicious", color: "#ffcf8a", border: "rgba(242,169,60,0.55)", bg: "rgba(120,80,10,0.18)" }
                       : null;
                   const active = Boolean(selected && [selected?.uuid, selected?.guid, selected?.pid, selected?.name, selected?.fileName, selected?.image].filter(Boolean).map(String).includes(key));
                   return (
@@ -2498,7 +2498,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                         textAlign: "left",
                         padding: "8px 9px",
                         border: active
-                          ? "1px solid rgba(56,189,248,0.7)"
+                          ? "1px solid rgba(91,157,255,0.7)"
                           : pTone
                             ? `1px solid ${pTone.border}`
                             : "1px solid var(--border-dim)",
@@ -2536,9 +2536,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               fontWeight: 700,
                               letterSpacing: 0.3,
                               textTransform: "uppercase",
-                              color: "#93c5fd",
-                              background: "rgba(59,130,246,0.14)",
-                              border: "1px solid rgba(96,165,250,0.32)",
+                              color: "#a9cbff",
+                              background: "rgba(124,92,255,0.14)",
+                              border: "1px solid rgba(139,123,255,0.32)",
                               borderRadius: 999,
                               padding: "2px 6px",
                               whiteSpace: "nowrap",
@@ -2598,9 +2598,9 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                           onClick={() => setProcessViewMode(mode)}
                           style={{
                             padding: "6px 10px",
-                            border: "1px solid rgba(96,165,250,0.28)",
+                            border: "1px solid rgba(139,123,255,0.28)",
                             borderRadius: 6,
-                            background: processViewMode === mode ? "rgba(59,130,246,0.18)" : "rgba(2,23,39,0.5)",
+                            background: processViewMode === mode ? "rgba(124,92,255,0.18)" : "rgba(2,23,39,0.5)",
                             color: processViewMode === mode ? "#dbeafe" : "var(--text-muted)",
                             cursor: "pointer",
                             fontWeight: 700,
@@ -2652,14 +2652,14 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               justifyContent: "center",
                               color: "var(--text-primary)",
                               background: selectedRiskTone.label === "No process verdict"
-                                ? "radial-gradient(circle at 35% 30%, rgba(59,130,246,0.18), rgba(6,49,74,0.9) 70%)"
+                                ? "radial-gradient(circle at 35% 30%, rgba(124,92,255,0.18), rgba(6,49,74,0.9) 70%)"
                                 : `radial-gradient(circle at 35% 30%, ${selectedRiskTone.bg}, rgba(6,49,74,0.9) 70%)`,
                             }}
                           >
                             <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1 }}>
                               {selectedProcessScore}
                             </div>
-                            <div style={{ fontSize: 11, color: "#93c5fd", marginTop: 6 }}>OUT OF 100</div>
+                            <div style={{ fontSize: 11, color: "#a9cbff", marginTop: 6 }}>OUT OF 100</div>
                           </div>
                           <div>
                             <div
@@ -2676,11 +2676,11 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               This graph score is scoped to the selected process and combines sandbox telemetry, linked threat indicators, and graph-level suspicious flags. The raw sandbox process score is shown separately when AnyRun provides it.
                             </div>
                             {maliciousLookupContext && selectedProcessThreatLevel < 1 && _num(selectedProcessScore) === 0 && (
-                              <div style={{ marginTop: 8, color: "#fca5a5", fontSize: 12, lineHeight: 1.4 }}>
+                              <div style={{ marginTop: 8, color: "#fda4af", fontSize: 12, lineHeight: 1.4 }}>
                                 Indicator-level AnyRun intelligence is malicious, but this process has no assigned sandbox threat score.
                               </div>
                             )}
-                            <div style={{ marginTop: 10, color: "#93c5fd", fontSize: 12 }}>
+                            <div style={{ marginTop: 10, color: "#a9cbff", fontSize: 12 }}>
                               Indicators: {selectedThreatCount} | Sandbox process score: {selectedSandboxScore}/100
                             </div>
                           </div>
@@ -2710,7 +2710,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                       <AnalystCard title="Command line">
                         <div
                           style={{
-                            color: "#93c5fd",
+                            color: "#a9cbff",
                             fontSize: 12,
                             lineHeight: 1.45,
                             wordBreak: "break-word",
@@ -2739,7 +2739,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                                   padding: "8px 10px",
                                   border: "none",
                                   borderRadius: 6,
-                                  background: active ? "rgba(59,130,246,0.2)" : "transparent",
+                                  background: active ? "rgba(124,92,255,0.2)" : "transparent",
                                   color: active ? "#dbeafe" : "var(--text-secondary)",
                                   cursor: "pointer",
                                   textAlign: "left",
@@ -2747,7 +2747,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                                 title={item.description}
                               >
                                 <span style={{ fontWeight: active ? 700 : 500 }}>{item.label}</span>
-                                <span style={{ color: active ? "#93c5fd" : "var(--text-muted)", fontWeight: 700 }}>{count}</span>
+                                <span style={{ color: active ? "#a9cbff" : "var(--text-muted)", fontWeight: 700 }}>{count}</span>
                               </button>
                             );
                           })}
@@ -2758,7 +2758,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                     <div style={{ minHeight: 0, display: "flex", flexDirection: "column", gap: 12, overflowY: "auto", paddingRight: 4 }}>
                       <AnalystCard title="Timeline of the process" bodyStyle={{ padding: 0 }}>
                         <div style={{ padding: "12px 12px 6px 12px" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", color: "#93c5fd", fontSize: 12, marginBottom: 8 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", color: "#a9cbff", fontSize: 12, marginBottom: 8 }}>
                             <span>0 s</span>
                             <span>
                               {selectedEventTimeline.length
@@ -2771,12 +2771,12 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                               position: "relative",
                               height: 10,
                               borderRadius: 999,
-                              background: "rgba(96,165,250,0.18)",
+                              background: "rgba(139,123,255,0.18)",
                               overflow: "hidden",
                               marginBottom: 18,
                             }}
                           >
-                            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, rgba(96,165,250,0.88), rgba(103,232,249,0.72))" }} />
+                            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, rgba(139,123,255,0.88), rgba(169,203,255,0.72))" }} />
                             {selectedEventTimeline.map((point) => (
                               <div
                                 key={`timeline-${point.index}`}
@@ -2788,10 +2788,10 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                                   height: 24,
                                   background:
                                     point.severity === "danger"
-                                      ? "#f87171"
+                                      ? "#fb7185"
                                       : point.severity === "warning"
                                         ? "#facc15"
-                                        : "#93c5fd",
+                                        : "#a9cbff",
                                 }}
                               />
                             ))}
@@ -2800,7 +2800,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                             Active category: <span style={{ color: "#dbeafe", fontWeight: 700 }}>{activeEventMeta.label}</span>
                           </div>
                         </div>
-                        <div style={{ borderTop: "1px solid rgba(59,130,246,0.18)", padding: "10px 12px 12px 12px" }}>
+                        <div style={{ borderTop: "1px solid rgba(124,92,255,0.18)", padding: "10px 12px 12px 12px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 18, marginBottom: 10, color: "var(--text-muted)", fontSize: 12 }}>
                             <span><span style={{ color: "var(--red)" }}>●</span> Danger</span>
                             <span><span style={{ color: "var(--yellow)" }}>●</span> Warning</span>
@@ -2833,7 +2833,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                                   <div
                                     key={`overview-row-${index}`}
                                     style={{
-                                      border: "1px solid rgba(96,165,250,0.18)",
+                                      border: "1px solid rgba(139,123,255,0.18)",
                                       borderRadius: 8,
                                       background: "rgba(7,47,70,0.72)",
                                       padding: "10px 12px",
@@ -2843,7 +2843,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                                       <div style={{ color: "var(--text-primary)", fontWeight: 700 }}>
                                         {event?.title || _extractEventTitle(row, activeEventCategory)}
                                       </div>
-                                      <div style={{ color: "#93c5fd", fontSize: 12, whiteSpace: "nowrap" }}>
+                                      <div style={{ color: "#a9cbff", fontSize: 12, whiteSpace: "nowrap" }}>
                                         {event?.timeshift || _extractTimeshift(row)}
                                       </div>
                                     </div>
@@ -3007,7 +3007,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                       padding: "6px 10px",
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      background: processViewMode === "view" ? "rgba(56,189,248,0.2)" : "rgba(2,23,39,0.5)",
+                      background: processViewMode === "view" ? "rgba(91,157,255,0.2)" : "rgba(2,23,39,0.5)",
                       color: processViewMode === "view" ? "var(--accent)" : "var(--text-muted)",
                       cursor: "pointer",
                     }}
@@ -3021,7 +3021,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                       padding: "6px 10px",
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      background: processViewMode === "group" ? "rgba(56,189,248,0.2)" : "rgba(2,23,39,0.5)",
+                      background: processViewMode === "group" ? "rgba(91,157,255,0.2)" : "rgba(2,23,39,0.5)",
                       color: processViewMode === "group" ? "var(--accent)" : "var(--text-muted)",
                       cursor: "pointer",
                     }}
@@ -3035,7 +3035,7 @@ export function AnyRunGraph({ raw, height = 520, analysisContext }: { raw?: any;
                       padding: "6px 10px",
                       border: "1px solid var(--border)",
                       borderRadius: 6,
-                      background: processViewMode === "deep" ? "rgba(56,189,248,0.2)" : "rgba(2,23,39,0.5)",
+                      background: processViewMode === "deep" ? "rgba(91,157,255,0.2)" : "rgba(2,23,39,0.5)",
                       color: processViewMode === "deep" ? "var(--accent)" : "var(--text-muted)",
                       cursor: "pointer",
                     }}
@@ -3344,9 +3344,9 @@ function DataGrid({
                         verticalAlign: "top",
                         background: (() => {
                           const sev = severityFromValue(c.getValue(), String(c.column.id));
-                          if (sev === "malicious") return "rgba(239,68,68,0.10)";
-                          if (sev === "suspicious") return "rgba(245,158,11,0.10)";
-                          if (sev === "legit") return "rgba(52,211,153,0.10)";
+                          if (sev === "malicious") return "rgba(251,113,133,0.10)";
+                          if (sev === "suspicious") return "rgba(242,169,60,0.10)";
+                          if (sev === "legit") return "rgba(43,212,160,0.10)";
                           return "transparent";
                         })(),
                       }}
@@ -3487,10 +3487,10 @@ export default function AnyRunInteractiveEvidence({
         <div style={{
           marginTop: 10,
           padding: "10px 12px",
-          border: "1px solid rgba(245, 158, 11, 0.35)",
+          border: "1px solid rgba(242, 169, 60, 0.35)",
           borderLeft: "3px solid var(--yellow)",
           borderRadius: 6,
-          background: "rgba(245, 158, 11, 0.08)",
+          background: "rgba(242, 169, 60, 0.08)",
           color: "var(--text-secondary)",
           fontSize: 12,
           lineHeight: 1.55,
@@ -3514,7 +3514,7 @@ export default function AnyRunInteractiveEvidence({
                 onClick={() => { setRerunConfirm(true); setRerunError(null); }}
                 style={{
                   fontSize: 11, padding: "4px 12px", borderRadius: 4, cursor: "pointer",
-                  background: "var(--color-accent, #2563eb)", color: "#fff", border: "none",
+                  background: "var(--color-accent, #6a4fe0)", color: "#fff", border: "none",
                 }}
               >
                 Re-run live sandbox (bypass cache)
@@ -3531,7 +3531,7 @@ export default function AnyRunInteractiveEvidence({
                   disabled={rerunning}
                   style={{
                     padding: "3px 10px", borderRadius: 4, cursor: rerunning ? "wait" : "pointer",
-                    background: "#16a34a", color: "#fff", border: "none", fontSize: 11,
+                    background: "#2bd4a0", color: "#fff", border: "none", fontSize: 11,
                   }}
                 >
                   {rerunning ? "Submitting…" : "Confirm"}
@@ -3546,7 +3546,7 @@ export default function AnyRunInteractiveEvidence({
                 >
                   Cancel
                 </button>
-                {rerunError && <span style={{ color: "#ef4444" }}>{rerunError}</span>}
+                {rerunError && <span style={{ color: "#fb7185" }}>{rerunError}</span>}
               </div>
             )
           ) : (
@@ -3562,7 +3562,7 @@ export default function AnyRunInteractiveEvidence({
               }}>
                 <div style={{
                   height: "100%", borderRadius: 2,
-                  background: rerunElapsed >= RERUN_TIMEOUT ? "#ef4444" : "#2563eb",
+                  background: rerunElapsed >= RERUN_TIMEOUT ? "#fb7185" : "#6a4fe0",
                   width: `${Math.min(100, (rerunElapsed / RERUN_TIMEOUT) * 100)}%`,
                   transition: "width 1s linear",
                 }} />
@@ -3649,9 +3649,9 @@ export default function AnyRunInteractiveEvidence({
               <div style={{
                 marginBottom: 10,
                 padding: "10px 12px",
-                border: "1px solid rgba(56,217,169,.28)",
-                borderLeft: "3px solid #38d9a9",
-                background: "rgba(56,217,169,.07)",
+                border: "1px solid rgba(43,212,160,.28)",
+                borderLeft: "3px solid #2bd4a0",
+                background: "rgba(43,212,160,.07)",
                 borderRadius: 8,
               }}>
                 <div style={{ color: "#5ee7c0", fontSize: 11, fontWeight: 800, marginBottom: 4 }}>
@@ -3669,8 +3669,8 @@ export default function AnyRunInteractiveEvidence({
                 style={{
                   marginBottom: 10,
                   padding: "8px 10px",
-                  border: "1px solid rgba(245,158,11,0.45)",
-                  background: "rgba(245,158,11,0.08)",
+                  border: "1px solid rgba(242,169,60,0.45)",
+                  background: "rgba(242,169,60,0.08)",
                   color: "var(--yellow)",
                   borderRadius: 8,
                   fontSize: 12,
@@ -3707,9 +3707,9 @@ export default function AnyRunInteractiveEvidence({
                         borderRadius: 4,
                         fontSize: 11,
                         fontWeight: 600,
-                        background: "rgba(239,68,68,0.12)",
-                        color: "#ef4444",
-                        border: "1px solid rgba(239,68,68,0.30)",
+                        background: "rgba(251,113,133,0.12)",
+                        color: "#fb7185",
+                        border: "1px solid rgba(251,113,133,0.30)",
                         letterSpacing: "0.02em",
                       }}
                     >
@@ -3730,9 +3730,9 @@ export default function AnyRunInteractiveEvidence({
                           padding: "2px 8px",
                           borderRadius: 4,
                           fontSize: 11,
-                          background: "rgba(245,158,11,0.10)",
-                          color: "#f59e0b",
-                          border: "1px solid rgba(245,158,11,0.25)",
+                          background: "rgba(242,169,60,0.10)",
+                          color: "#f2a93c",
+                          border: "1px solid rgba(242,169,60,0.25)",
                         }}
                       >
                         {title}
@@ -3771,15 +3771,15 @@ export default function AnyRunInteractiveEvidence({
               const domainIntelMalicious = domainIntel?.checked && domainIntelVerdict === "malicious";
               const domainIntelHostname = String(domainIntel?.hostname || "").trim();
               const borderColor = isMaliciousLookup || domainIntelMalicious
-                ? "1px solid rgba(239,68,68,0.30)"
+                ? "1px solid rgba(251,113,133,0.30)"
                 : isSandboxFailure
-                  ? "1px solid rgba(245,158,11,0.30)"
-                  : "1px solid rgba(96,165,250,0.20)";
+                  ? "1px solid rgba(242,169,60,0.30)"
+                  : "1px solid rgba(139,123,255,0.20)";
               const bgColor = isMaliciousLookup || domainIntelMalicious
-                ? "rgba(239,68,68,0.07)"
+                ? "rgba(251,113,133,0.07)"
                 : isSandboxFailure
-                  ? "rgba(245,158,11,0.07)"
-                  : "rgba(96,165,250,0.07)";
+                  ? "rgba(242,169,60,0.07)"
+                  : "rgba(139,123,255,0.07)";
               return (
                 <div
                   style={{
@@ -3795,14 +3795,14 @@ export default function AnyRunInteractiveEvidence({
                 >
                   {isMaliciousLookup ? (
                     <>
-                      <strong style={{ color: "var(--red, #ef4444)" }}>MALICIOUS</strong> verdict confirmed by AnyRun
+                      <strong style={{ color: "var(--red, #fb7185)" }}>MALICIOUS</strong> verdict confirmed by AnyRun
                       threat intelligence community. This indicator was previously analysed and classified as malicious
                       by community sandbox submissions. Live behavioral data (process tree, DNS, HTTP) is not available
                       in this lookup-only result — submit to sandbox for execution details.
                     </>
                   ) : isSandboxFailure ? (
                     <>
-                      <strong style={{ color: "#f59e0b" }}>Sandbox attempt failed.</strong>{" "}
+                      <strong style={{ color: "#f2a93c" }}>Sandbox attempt failed.</strong>{" "}
                       AnyRun submitted this indicator to the sandbox but did not receive a completed report.
                       {sandboxError && (
                         <span style={{ display: "block", marginTop: 4, fontStyle: "italic", opacity: 0.85 }}>
@@ -3810,7 +3810,7 @@ export default function AnyRunInteractiveEvidence({
                         </span>
                       )}
                       {domainIntelMalicious && domainIntelHostname && (
-                        <span style={{ display: "block", marginTop: 6, color: "#ef4444", fontWeight: 600 }}>
+                        <span style={{ display: "block", marginTop: 6, color: "#fb7185", fontWeight: 600 }}>
                           Domain intelligence for {domainIntelHostname} shows MALICIOUS — see the Domain Intelligence section below.
                         </span>
                       )}
@@ -3818,7 +3818,7 @@ export default function AnyRunInteractiveEvidence({
                   ) : domainIntelMalicious ? (
                     <>
                       URL lookup returned a <strong>CLEAN</strong> verdict from AnyRun intelligence. However,{" "}
-                      <strong style={{ color: "#ef4444" }}>domain intelligence
+                      <strong style={{ color: "#fb7185" }}>domain intelligence
                       {domainIntelHostname ? ` for ${domainIntelHostname}` : ""} shows MALICIOUS</strong> — see the
                       Domain Intelligence section below. Phishing pages that evade automated URL scanning are commonly
                       flagged at the domain level rather than the URL level.
@@ -3834,8 +3834,8 @@ export default function AnyRunInteractiveEvidence({
                   <div style={{
                     marginTop: 10,
                     paddingTop: 8,
-                    borderTop: "1px solid rgba(245,158,11,0.20)",
-                    color: "rgba(245,158,11,0.85)",
+                    borderTop: "1px solid rgba(242,169,60,0.20)",
+                    color: "rgba(242,169,60,0.85)",
                     fontSize: 11,
                     display: "flex",
                     alignItems: "flex-start",
@@ -3865,15 +3865,15 @@ export default function AnyRunInteractiveEvidence({
                     : `https://app.any.run/tasks/${di.analysis_id}`)
                 : null;
               const domainLabel = String(di?.hostname || "domain lookup");
-              const verdictColor = diVerdict === "MALICIOUS" ? "var(--red, #ef4444)"
-                : diVerdict === "SUSPICIOUS" ? "var(--yellow, #f59e0b)"
+              const verdictColor = diVerdict === "MALICIOUS" ? "var(--red, #fb7185)"
+                : diVerdict === "SUSPICIOUS" ? "var(--yellow, #f2a93c)"
                 : "var(--text-secondary)";
               return (
                 <div style={{
                   marginBottom: 12,
                   padding: "10px 14px",
-                  border: `1px solid ${diVerdict === "MALICIOUS" ? "rgba(239,68,68,0.35)" : "rgba(96,165,250,0.20)"}`,
-                  background: diVerdict === "MALICIOUS" ? "rgba(239,68,68,0.06)" : "rgba(96,165,250,0.05)",
+                  border: `1px solid ${diVerdict === "MALICIOUS" ? "rgba(251,113,133,0.35)" : "rgba(139,123,255,0.20)"}`,
+                  background: diVerdict === "MALICIOUS" ? "rgba(251,113,133,0.06)" : "rgba(139,123,255,0.05)",
                   borderRadius: 8,
                   fontSize: 12,
                 }}>
@@ -3941,9 +3941,9 @@ export default function AnyRunInteractiveEvidence({
                   }}
                   style={{
                     padding: "7px 12px",
-                    border: "1px solid rgba(96,165,250,0.35)",
+                    border: "1px solid rgba(139,123,255,0.35)",
                     borderRadius: 6,
-                    background: "rgba(96,165,250,0.12)",
+                    background: "rgba(139,123,255,0.12)",
                     color: "var(--accent)",
                     cursor: "pointer",
                     fontSize: 12,
@@ -4081,9 +4081,9 @@ export default function AnyRunInteractiveEvidence({
                 marginTop: 10,
                 padding: "8px 10px",
                 borderRadius: 6,
-                border: "1px solid rgba(245,158,11,0.22)",
-                background: "rgba(245,158,11,0.05)",
-                color: "rgba(245,158,11,0.80)",
+                border: "1px solid rgba(242,169,60,0.22)",
+                background: "rgba(242,169,60,0.05)",
+                color: "rgba(242,169,60,0.80)",
                 fontSize: 11,
                 display: "flex",
                 alignItems: "flex-start",
@@ -4127,7 +4127,7 @@ function AnalystCard({
       <div
         style={{
           padding: "10px 12px",
-          borderBottom: "1px solid rgba(59,130,246,0.18)",
+          borderBottom: "1px solid rgba(124,92,255,0.18)",
           color: "#c7f0ff",
           fontWeight: 700,
           fontSize: 14,
@@ -4153,10 +4153,10 @@ function ProcessSuspicionFindingsCard({
       <div style={{ display: "grid", gap: compact ? 7 : 10 }}>
         {findings.map((finding, index) => {
           const color = finding.severity === "danger"
-            ? "var(--red, #ef4444)"
+            ? "var(--red, #fb7185)"
             : finding.severity === "warning"
-              ? "var(--yellow, #f59e0b)"
-              : "var(--accent, #38bdf8)";
+              ? "var(--yellow, #f2a93c)"
+              : "var(--accent, #5b9dff)";
           return (
             <div
               key={`${finding.title}-${index}`}
@@ -4183,7 +4183,7 @@ function ProcessSuspicionFindingsCard({
                 <div
                   style={{
                     marginTop: 6,
-                    color: "#93c5fd",
+                    color: "#a9cbff",
                     fontFamily: "var(--font-mono)",
                     fontSize: compact ? 10 : 11,
                     lineHeight: 1.45,
@@ -4220,7 +4220,7 @@ function AnalystPair({
         alignItems: "start",
       }}
     >
-      <div style={{ color: "#67e8f9", fontWeight: 700, fontSize: 12 }}>{label}:</div>
+      <div style={{ color: "#a9cbff", fontWeight: 700, fontSize: 12 }}>{label}:</div>
       <div
         style={{
           color: "var(--text-secondary)",
@@ -4240,7 +4240,7 @@ function AnalystStatChip({ label, value }: { label: string; value: React.ReactNo
   return (
     <div
       style={{
-        border: "1px solid rgba(96,165,250,0.24)",
+        border: "1px solid rgba(139,123,255,0.24)",
         background: "rgba(15,23,42,0.22)",
         borderRadius: 999,
         padding: "4px 10px",
@@ -4248,7 +4248,7 @@ function AnalystStatChip({ label, value }: { label: string; value: React.ReactNo
         fontSize: 12,
       }}
     >
-      <span style={{ color: "#67e8f9", fontWeight: 700 }}>{label}:</span> {value}
+      <span style={{ color: "#a9cbff", fontWeight: 700 }}>{label}:</span> {value}
     </div>
   );
 }
@@ -4260,10 +4260,10 @@ function AnyRunVerdictConflictNotice({ items }: { items: any[] }) {
   return (
     <div
       style={{
-        border: "1px solid rgba(245,158,11,0.35)",
-        borderLeft: "4px solid var(--yellow, #f59e0b)",
+        border: "1px solid rgba(242,169,60,0.35)",
+        borderLeft: "4px solid var(--yellow, #f2a93c)",
         borderRadius: 8,
-        background: "rgba(245,158,11,0.08)",
+        background: "rgba(242,169,60,0.08)",
         padding: "12px 14px",
         marginBottom: 12,
         color: "var(--text-secondary)",

@@ -91,9 +91,9 @@ export default function BatchesPage() {
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, { bg: string; color: string }> = {
     created: { bg: "rgba(148,163,184,0.12)", color: "var(--text-muted)" },
-    processing: { bg: "rgba(96,165,250,0.12)", color: "var(--accent)" },
-    completed: { bg: "rgba(52,211,153,0.12)", color: "var(--green)" },
-    failed: { bg: "rgba(248,113,113,0.12)", color: "var(--red)" },
+    processing: { bg: "rgba(139,123,255,0.12)", color: "var(--accent)" },
+    completed: { bg: "rgba(43,212,160,0.12)", color: "var(--green)" },
+    failed: { bg: "rgba(251,113,133,0.12)", color: "var(--red)" },
   };
   const c = colors[status] || colors.created;
 

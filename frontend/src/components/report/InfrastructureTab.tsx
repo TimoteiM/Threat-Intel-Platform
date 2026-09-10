@@ -15,7 +15,7 @@ const INFRA_TYPE_COLORS: Record<string, string> = {
   ip: "var(--accent)",
   certificate: "var(--yellow)",
   asn: "var(--green)",
-  registrar: "#a78bfa",
+  registrar: "#8b7bff",
   nameserver: "var(--text-secondary)",
 };
 
@@ -76,7 +76,7 @@ export default function InfrastructureTab({ investigationId, evidence }: Props) 
   if (error) {
     return (
       <div style={{
-        padding: 20, background: "rgba(239,68,68,0.06)",
+        padding: 20, background: "rgba(251,113,133,0.06)",
         borderLeft: "3px solid var(--red)", borderRadius: "var(--radius-sm)",
       }}>
         <div style={{ fontSize: 12, color: "var(--red)" }}>{error}</div>
@@ -218,8 +218,8 @@ export default function InfrastructureTab({ investigationId, evidence }: Props) 
                       }}
                       style={{
                         padding: "3px 10px", fontSize: 11, fontWeight: 500,
-                        background: "rgba(96,165,250,0.08)", color: "var(--accent)",
-                        border: "1px solid rgba(96,165,250,0.25)", borderRadius: "var(--radius-sm)",
+                        background: "rgba(139,123,255,0.08)", color: "var(--accent)",
+                        border: "1px solid rgba(139,123,255,0.25)", borderRadius: "var(--radius-sm)",
                         cursor: "pointer", fontFamily: "var(--font-mono)",
                       }}
                     >
@@ -248,8 +248,8 @@ export default function InfrastructureTab({ investigationId, evidence }: Props) 
                 {cluster.domains.map((d, j) => (
                   <span key={j} style={{
                     padding: "3px 10px", fontSize: 11,
-                    background: "rgba(96,165,250,0.08)", color: "var(--accent)",
-                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(96,165,250,0.2)",
+                    background: "rgba(139,123,255,0.08)", color: "var(--accent)",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(139,123,255,0.2)",
                     fontFamily: "var(--font-mono)",
                   }}>{d}</span>
                 ))}
@@ -273,8 +273,8 @@ export default function InfrastructureTab({ investigationId, evidence }: Props) 
                 {pivot.domains.map((d, j) => (
                   <span key={j} style={{
                     padding: "3px 10px", fontSize: 11,
-                    background: "rgba(167,139,250,0.08)", color: "#a78bfa",
-                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(167,139,250,0.2)",
+                    background: "rgba(139,123,255,0.08)", color: "#8b7bff",
+                    borderRadius: "var(--radius-sm)", border: "1px solid rgba(139,123,255,0.2)",
                     fontFamily: "var(--font-mono)",
                   }}>{d}</span>
                 ))}
@@ -329,8 +329,8 @@ export default function InfrastructureTab({ investigationId, evidence }: Props) 
                   }}
                   style={{
                     padding: "5px 12px", fontSize: 11, fontWeight: 600,
-                    background: "rgba(96,165,250,0.08)", color: "var(--accent)",
-                    border: "1px solid rgba(96,165,250,0.25)", borderRadius: "var(--radius-sm)",
+                    background: "rgba(139,123,255,0.08)", color: "var(--accent)",
+                    border: "1px solid rgba(139,123,255,0.25)", borderRadius: "var(--radius-sm)",
                     cursor: "pointer", fontFamily: "var(--font-sans)",
                   }}
                 >

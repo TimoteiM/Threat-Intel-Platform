@@ -13,8 +13,8 @@ const CONTENT_SIGNALS = [
 
 function clamp(value: number) { return Math.max(0, Math.min(1, value)); }
 function tone(value: number) {
-  if (value < .35) return { label: "Low", color: "#38d9a9" };
-  if (value < .7) return { label: "Medium", color: "#fbbf24" };
+  if (value < .35) return { label: "Low", color: "#2bd4a0" };
+  if (value < .7) return { label: "Medium", color: "#f2a93c" };
   return { label: "High", color: "#fb7185" };
 }
 

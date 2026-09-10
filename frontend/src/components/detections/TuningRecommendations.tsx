@@ -232,7 +232,7 @@ export function RuleTuningPanel({
               style={{
                 ...MONO, fontSize: 10, padding: "3px 8px", borderRadius: 5, cursor: "pointer",
                 border: `1px solid ${index === chosen ? "var(--accent)" : "var(--panel-divider)"}`,
-                background: index === chosen ? "rgba(96,165,250,0.12)" : "var(--panel-card-bg)",
+                background: index === chosen ? "rgba(139,123,255,0.12)" : "var(--panel-card-bg)",
                 color: "var(--text-secondary)", maxWidth: 260,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               }}

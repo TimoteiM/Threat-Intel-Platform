@@ -13,9 +13,9 @@ import {
 import type { AlertInvestigationRun } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#f87171",
-  suspicious: "#fbbf24",
-  benign: "#34d399",
+  malicious: "#fb7185",
+  suspicious: "#f2a93c",
+  benign: "#2bd4a0",
   inconclusive: "#94a3b8",
 };
 
@@ -395,7 +395,7 @@ const primaryButtonStyle: React.CSSProperties = {
   padding: "8px 16px",
   borderRadius: 8,
   border: "none",
-  background: "linear-gradient(135deg, #60a5fa, #818cf8)",
+  background: "linear-gradient(135deg, #8b7bff, #c0acff)",
   color: "#fff",
   fontSize: 12,
   fontWeight: 600,

@@ -16,7 +16,7 @@
 
 import React from "react";
 
-export type ConsoleTone = "neutral" | "info" | "success" | "warning" | "danger";
+export type ConsoleTone = "neutral" | "info" | "success" | "warning" | "danger" | "accent";
 export type ConsoleModuleVariant = "solid" | "glass" | "outline" | "dense";
 
 interface ConsoleModuleProps {
@@ -152,6 +152,8 @@ function eyebrowColor(tone: ConsoleTone, accent?: string) {
       return "var(--tone-warning-eyebrow)";
     case "danger":
       return "var(--tone-danger-eyebrow)";
+    case "accent":
+      return "var(--shell-accent-strong)";
     case "neutral":
       return "var(--text-muted)";
     default:

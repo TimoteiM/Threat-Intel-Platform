@@ -144,7 +144,7 @@ export default function FaviconIntelSection({ faviconIntel }: Props) {
       {total_hosts_sharing === 0 && (
         <div style={{
           padding: "10px 14px", fontSize: 12, color: "var(--green)",
-          background: "rgba(52,211,153,0.06)", borderRadius: "var(--radius-sm)",
+          background: "rgba(43,212,160,0.06)", borderRadius: "var(--radius-sm)",
           borderLeft: "3px solid var(--green)",
         }}>
           No other hosts found sharing this favicon hash

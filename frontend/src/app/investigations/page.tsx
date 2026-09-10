@@ -578,7 +578,7 @@ export default function InvestigationsListPage() {
           color: var(--text-dim);
           letter-spacing: 0.16em;
           text-transform: uppercase;
-          border-bottom: 1px solid rgba(120, 145, 178, 0.12);
+          border-bottom: 1px solid rgba(150, 145, 190, 0.12);
           font-family: var(--font-mono);
         }
 
@@ -617,7 +617,7 @@ export default function InvestigationsListPage() {
 
         .catalog-row:hover {
           transform: translateY(-1px);
-          border-color: rgba(102, 168, 255, 0.28);
+          border-color: rgba(139, 123, 255, 0.28);
           box-shadow: var(--panel-shadow-card);
           background: var(--bg-card-hover);
         }
@@ -628,7 +628,7 @@ export default function InvestigationsListPage() {
         .pagination-controls button:focus-visible,
         .page-size-wrap select:focus-visible,
         button:focus-visible {
-          outline: 2px solid rgba(102, 168, 255, 0.8);
+          outline: 2px solid rgba(139, 123, 255, 0.8);
           outline-offset: 2px;
         }
 
@@ -672,8 +672,8 @@ export default function InvestigationsListPage() {
           font-size: 14px;
           font-weight: 700;
           letter-spacing: -0.02em;
-          background: rgba(120, 145, 178, 0.09);
-          border: 1px solid rgba(120, 145, 178, 0.18);
+          background: rgba(150, 145, 190, 0.09);
+          border: 1px solid rgba(150, 145, 190, 0.18);
         }
 
         .risk-value[data-tone="danger"] {
@@ -683,15 +683,15 @@ export default function InvestigationsListPage() {
         }
 
         .risk-value[data-tone="warning"] {
-          color: #fde68a;
-          background: rgba(251, 191, 36, 0.12);
-          border-color: rgba(251, 191, 36, 0.28);
+          color: #ffcf8a;
+          background: rgba(242, 169, 60, 0.12);
+          border-color: rgba(242, 169, 60, 0.28);
         }
 
         .risk-value[data-tone="info"] {
           color: #bfdbfe;
-          background: rgba(102, 168, 255, 0.12);
-          border-color: rgba(102, 168, 255, 0.28);
+          background: rgba(139, 123, 255, 0.12);
+          border-color: rgba(139, 123, 255, 0.28);
         }
 
         .row-date,
@@ -904,10 +904,10 @@ function buttonStyle(variant: "primary" | "secondary") {
   return {
     padding: "11px 18px",
     borderRadius: 999,
-    border: variant === "primary" ? "1px solid rgba(102, 168, 255, 0.35)" : "1px solid rgba(120, 145, 178, 0.2)",
+    border: variant === "primary" ? "1px solid rgba(139, 123, 255, 0.35)" : "1px solid rgba(150, 145, 190, 0.2)",
     background:
       variant === "primary"
-        ? "linear-gradient(135deg, #3b82f6, #2563eb)"
+        ? "linear-gradient(135deg, #7c5cff, #6a4fe0)"
         : "var(--bg-elevated)",
     color: variant === "primary" ? "#fff" : "var(--text-strong)",
     fontSize: 11,
@@ -916,7 +916,7 @@ function buttonStyle(variant: "primary" | "secondary") {
     fontFamily: "var(--font-mono)",
     letterSpacing: "0.08em",
     textTransform: "uppercase" as const,
-    boxShadow: variant === "primary" ? "0 18px 34px rgba(37, 99, 235, 0.24)" : "none",
+    boxShadow: variant === "primary" ? "0 18px 34px rgba(106, 79, 224, 0.24)" : "none",
   } as React.CSSProperties;
 }
 
@@ -941,7 +941,7 @@ function paginationButtonStyle(disabled: boolean, active = false) {
   return {
     padding: "7px 11px",
     background: active ? "var(--accent)" : "var(--bg-elevated)",
-    border: `1px solid ${active ? "var(--accent)" : "rgba(120, 145, 178, 0.18)"}`,
+    border: `1px solid ${active ? "var(--accent)" : "rgba(150, 145, 190, 0.18)"}`,
     borderRadius: 12,
     color: active ? "#fff" : disabled ? "var(--text-dim)" : "var(--text)",
     fontSize: 11,
@@ -1029,19 +1029,19 @@ function filterToneColors(tone: ReturnType<typeof getFilterTone>) {
       return {
         foreground: "#9bf0d8",
         foregroundActive: "#08121d",
-        background: "rgba(56, 217, 169, 0.08)",
-        backgroundActive: "rgba(56, 217, 169, 0.92)",
-        border: "rgba(56, 217, 169, 0.18)",
-        borderActive: "rgba(56, 217, 169, 0.44)",
+        background: "rgba(43, 212, 160, 0.08)",
+        backgroundActive: "rgba(43, 212, 160, 0.92)",
+        border: "rgba(43, 212, 160, 0.18)",
+        borderActive: "rgba(43, 212, 160, 0.44)",
       };
     case "warning":
       return {
-        foreground: "#fde68a",
+        foreground: "#ffcf8a",
         foregroundActive: "#09111d",
-        background: "rgba(251, 191, 36, 0.08)",
-        backgroundActive: "rgba(251, 191, 36, 0.92)",
-        border: "rgba(251, 191, 36, 0.18)",
-        borderActive: "rgba(251, 191, 36, 0.44)",
+        background: "rgba(242, 169, 60, 0.08)",
+        backgroundActive: "rgba(242, 169, 60, 0.92)",
+        border: "rgba(242, 169, 60, 0.18)",
+        borderActive: "rgba(242, 169, 60, 0.44)",
       };
     case "danger":
       return {
@@ -1057,10 +1057,10 @@ function filterToneColors(tone: ReturnType<typeof getFilterTone>) {
       return {
         foreground: "var(--text-secondary)",
         foregroundActive: "#08121d",
-        background: "rgba(120, 145, 178, 0.08)",
-        backgroundActive: "rgba(120, 145, 178, 0.88)",
-        border: "rgba(120, 145, 178, 0.18)",
-        borderActive: "rgba(120, 145, 178, 0.38)",
+        background: "rgba(150, 145, 190, 0.08)",
+        backgroundActive: "rgba(150, 145, 190, 0.88)",
+        border: "rgba(150, 145, 190, 0.18)",
+        borderActive: "rgba(150, 145, 190, 0.38)",
       };
   }
 }

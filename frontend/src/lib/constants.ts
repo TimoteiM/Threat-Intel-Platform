@@ -12,6 +12,9 @@ export const APP_VERSION = "v2.0";
 export type AppNavLink = {
   href: string;
   label: string;
+  /** Visual grouping only — clusters related nav items with a hairline
+   *  divider between groups, instead of one flat row of thirteen links. */
+  group?: "work" | "monitor" | "intake" | "reach" | "system";
 };
 
 export type AppFooterLink = AppNavLink & {
@@ -24,19 +27,19 @@ export type AppFooterLinkGroup = {
 };
 
 export const APP_NAV_LINKS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/investigations", label: "All Cases" },
-  { href: "/batches", label: "Bulk Analysis" },
-  { href: "/watchlist", label: "Watchlist" },
-  { href: "/exclusions", label: "Exclusion" },
-  { href: "/detections", label: "Detections" },
-  { href: "/email-investigations", label: "Email" },
-  { href: "/alert-investigations", label: "Alert Body" },
-  { href: "/assistant", label: "AI Assistant" },
-  { href: "/clients", label: "Clients" },
-  { href: "/alerts", label: "Alerts" },
-  { href: "/ip-lookup", label: "IP Lookup" },
-  { href: "/settings", label: "Settings" },
+  { href: "/dashboard", label: "Dashboard", group: "work" },
+  { href: "/investigations", label: "All Cases", group: "work" },
+  { href: "/batches", label: "Bulk Analysis", group: "work" },
+  { href: "/watchlist", label: "Watchlist", group: "monitor" },
+  { href: "/exclusions", label: "Exclusion", group: "monitor" },
+  { href: "/detections", label: "Detections", group: "monitor" },
+  { href: "/alerts", label: "Alerts", group: "monitor" },
+  { href: "/email-investigations", label: "Email", group: "intake" },
+  { href: "/alert-investigations", label: "Alert Body", group: "intake" },
+  { href: "/assistant", label: "AI Assistant", group: "reach" },
+  { href: "/clients", label: "Clients", group: "reach" },
+  { href: "/ip-lookup", label: "IP Lookup", group: "reach" },
+  { href: "/settings", label: "Settings", group: "system" },
 ] as const;
 
 export const APP_FOOTER_LINK_GROUPS = [
@@ -72,15 +75,21 @@ export const APP_FOOTER_LINK_GROUPS = [
 
 // Classification display
 
+// These mirror the palette defined in globals.css (--shell-success,
+// --shell-warning, --shell-danger, --shell-accent, --shell-info). They stay
+// as literal hex — not var() strings — because call sites across the app
+// build translucent fills by appending a two-digit alpha suffix directly to
+// this string (`${config.color}33`), which only produces valid CSS when the
+// value is a bare hex colour.
 export const CLASSIFICATION_CONFIG: Record<Classification, {
   color: string;
   bg: string;
   label: string;
 }> = {
-  benign: { color: "#38d9a9", bg: "rgba(56,217,169,0.12)", label: "BENIGN" },
-  suspicious: { color: "#fbbf24", bg: "rgba(251,191,36,0.12)", label: "SUSPICIOUS" },
+  benign: { color: "#2bd4a0", bg: "rgba(43,212,160,0.12)", label: "BENIGN" },
+  suspicious: { color: "#f2a93c", bg: "rgba(242,169,60,0.12)", label: "SUSPICIOUS" },
   malicious: { color: "#fb7185", bg: "rgba(251,113,133,0.12)", label: "MALICIOUS" },
-  inconclusive: { color: "#94a3b8", bg: "rgba(148,163,184,0.12)", label: "INCONCLUSIVE" },
+  inconclusive: { color: "#948fb0", bg: "rgba(148,143,176,0.12)", label: "INCONCLUSIVE" },
 };
 
 // SOC Action display
@@ -89,8 +98,8 @@ export const ACTION_CONFIG: Record<SOCAction, {
   color: string;
   icon: string;
 }> = {
-  monitor: { color: "#38d9a9", icon: "◉" },
-  investigate: { color: "#fbbf24", icon: "⬡" },
+  monitor: { color: "#2bd4a0", icon: "◉" },
+  investigate: { color: "#f2a93c", icon: "⬡" },
   block: { color: "#fb7185", icon: "⊘" },
   hunt: { color: "#fb923c", icon: "◎" },
 };
@@ -100,9 +109,9 @@ export const ACTION_CONFIG: Record<SOCAction, {
 export const SEVERITY_COLORS: Record<string, string> = {
   critical: "#fb7185",
   high: "#fb7185",
-  medium: "#fbbf24",
-  low: "#66a8ff",
-  info: "#94a3b8",
+  medium: "#f2a93c",
+  low: "#5b9dff",
+  info: "#948fb0",
 };
 
 // Collector status display
@@ -111,21 +120,24 @@ export const COLLECTOR_STATUS_CONFIG: Record<CollectorStatus, {
   symbol: string;
   color: string;
 }> = {
-  completed: { symbol: "✓", color: "#38d9a9" },
-  running: { symbol: "◌", color: "#66a8ff" },
+  completed: { symbol: "✓", color: "#2bd4a0" },
+  // "Running" gets the brand accent rather than the info blue — the one
+  // state where something is actively happening reads as *the* signature
+  // colour, not one status among many.
+  running: { symbol: "◌", color: "#8b7bff" },
   failed: { symbol: "✕", color: "#fb7185" },
-  pending: { symbol: "○", color: "#64748b" },
-  skipped: { symbol: "–", color: "#64748b" },
+  pending: { symbol: "○", color: "#6e6b82" },
+  skipped: { symbol: "–", color: "#6e6b82" },
 };
 
 // IOC type display
 
 export const IOC_TYPE_COLORS: Record<string, string> = {
-  ip: "#66a8ff",
-  domain: "#a78bfa",
-  url: "#fbbf24",
-  hash: "#94a3b8",
-  email: "#38d9a9",
+  ip: "#5b9dff",
+  domain: "#8b7bff",
+  url: "#f2a93c",
+  hash: "#948fb0",
+  email: "#2bd4a0",
 };
 
 // Collector display names

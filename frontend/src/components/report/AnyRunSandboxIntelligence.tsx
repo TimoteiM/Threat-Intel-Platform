@@ -153,10 +153,10 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot, 
         <div style={{
           marginBottom: 14,
           padding: "12px 14px",
-          border: "1px solid rgba(56, 217, 169, .28)",
-          borderLeft: "3px solid #38d9a9",
+          border: "1px solid rgba(43, 212, 160, .28)",
+          borderLeft: "3px solid #2bd4a0",
           borderRadius: 9,
-          background: "rgba(56, 217, 169, .07)",
+          background: "rgba(43, 212, 160, .07)",
         }}>
           <div style={{ color: "#5ee7c0", fontSize: 11, fontWeight: 800, marginBottom: 5 }}>
             Informational detections retained for visibility
@@ -478,7 +478,7 @@ const thumbResolutionStyle: React.CSSProperties = {
   display: "block",
   padding: "2px 8px 6px",
   fontSize: 10,
-  color: "#93c5fd",
+  color: "#a9cbff",
   fontWeight: 700,
 };
 

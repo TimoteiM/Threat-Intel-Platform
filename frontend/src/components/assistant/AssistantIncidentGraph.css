@@ -74,8 +74,8 @@
 .assistant-graph-button,
 .assistant-graph-controlbar button,
 .assistant-graph-mini-button {
-  border-color: rgba(102, 168, 255, 0.28);
-  background: rgba(102, 168, 255, 0.13);
+  border-color: rgba(139, 123, 255, 0.28);
+  background: rgba(139, 123, 255, 0.13);
 }
 
 .assistant-graph-controlbar {
@@ -88,7 +88,7 @@
 
 .assistant-graph-controlbar button {
   min-height: 30px;
-  border: 1px solid rgba(102, 168, 255, 0.24);
+  border: 1px solid rgba(139, 123, 255, 0.24);
   border-radius: 8px;
   color: var(--text-primary);
   background: rgba(15, 23, 42, 0.62);
@@ -97,16 +97,16 @@
 }
 
 .assistant-graph-controlbar button.is-active {
-  color: #cffafe;
-  border-color: rgba(103, 232, 249, 0.48);
-  background: rgba(103, 232, 249, 0.15);
+  color: #e0ecff;
+  border-color: rgba(169, 203, 255, 0.48);
+  background: rgba(169, 203, 255, 0.15);
 }
 
 .assistant-graph-canvas {
   height: 760px;
   background:
     linear-gradient(180deg, rgba(15, 23, 42, 0.28), rgba(2, 6, 23, 0.58)),
-    radial-gradient(circle at 35% 20%, rgba(103, 232, 249, 0.08), transparent 32%);
+    radial-gradient(circle at 35% 20%, rgba(169, 203, 255, 0.08), transparent 32%);
 }
 
 .assistant-graph-layout--full .assistant-graph-canvas {
@@ -130,11 +130,11 @@
 
 .assistant-graph-node--important {
   min-height: 98px;
-  box-shadow: 0 18px 42px rgba(103, 232, 249, 0.12);
+  box-shadow: 0 18px 42px rgba(169, 203, 255, 0.12);
 }
 
 .assistant-graph-node.is-selected {
-  box-shadow: 0 0 0 2px #67e8f9, 0 20px 44px rgba(103, 232, 249, 0.18);
+  box-shadow: 0 0 0 2px #a9cbff, 0 20px 44px rgba(169, 203, 255, 0.18);
 }
 
 .assistant-graph-node.is-highlighted {
@@ -225,10 +225,10 @@
 
 .assistant-graph-edge-label {
   position: absolute;
-  border: 1px solid rgba(103, 232, 249, 0.32);
+  border: 1px solid rgba(169, 203, 255, 0.32);
   border-radius: 999px;
   background: rgba(2, 6, 23, 0.9);
-  color: #cffafe;
+  color: #e0ecff;
   padding: 4px 8px;
   font-size: 10px;
   pointer-events: none;
@@ -279,7 +279,7 @@
 .assistant-graph-mini-button {
   min-height: 28px;
   margin-left: auto;
-  border: 1px solid rgba(102, 168, 255, 0.28);
+  border: 1px solid rgba(139, 123, 255, 0.28);
   border-radius: 8px;
   color: var(--text-primary);
   padding: 0 9px;

@@ -28,9 +28,9 @@ import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
 
 const CHART_COLORS = {
-  malicious: "#f87171",
-  suspicious: "#fbbf24",
-  benign: "#34d399",
+  malicious: "#fb7185",
+  suspicious: "#f2a93c",
+  benign: "#2bd4a0",
   inconclusive: "#94a3b8",
 };
 
@@ -266,7 +266,7 @@ export default function DashboardPage() {
                   <XAxis dataKey="bucket" tick={{ fill: "var(--text-dim)", fontSize: 11 }} />
                   <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} allowDecimals={false} />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} itemStyle={{ color: "var(--text-strong)" }} />
-                  <Bar dataKey="count" fill="#60a5fa" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="count" fill="#8b7bff" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
               {/* The largest bucket and the malicious/suspicious split are both
@@ -440,7 +440,7 @@ const legendRowStyle: React.CSSProperties = {
   alignItems: "center",
   gap: 10,
   padding: "10px 0",
-  borderBottom: "1px solid rgba(120, 145, 178, 0.10)",
+  borderBottom: "1px solid rgba(150, 145, 190, 0.10)",
 };
 
 const legendSwatchStyle: React.CSSProperties = {
@@ -490,8 +490,8 @@ const mutedCellStyle: React.CSSProperties = {
 const heroActionStyle: React.CSSProperties = {
   padding: "10px 16px",
   borderRadius: 14,
-  border: "1px solid rgba(102, 168, 255, 0.30)",
-  background: "linear-gradient(135deg, rgba(102, 168, 255, 0.18), rgba(37, 99, 235, 0.28))",
+  border: "1px solid rgba(139, 123, 255, 0.30)",
+  background: "linear-gradient(135deg, rgba(139, 123, 255, 0.18), rgba(106, 79, 224, 0.28))",
   color: "var(--text-strong)",
   fontSize: 12,
   fontWeight: 800,

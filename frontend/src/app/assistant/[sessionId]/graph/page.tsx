@@ -142,9 +142,9 @@ const secondaryLinkStyle: React.CSSProperties = {
 
 const primaryLinkStyle: React.CSSProperties = {
   ...secondaryLinkStyle,
-  border: "1px solid rgba(103,232,249,0.32)",
-  background: "rgba(103,232,249,0.12)",
-  color: "#cffafe",
+  border: "1px solid rgba(169,203,255,0.32)",
+  background: "rgba(169,203,255,0.12)",
+  color: "#e0ecff",
 };
 
 const messageStyle: React.CSSProperties = {

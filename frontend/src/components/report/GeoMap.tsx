@@ -5,10 +5,10 @@ import dynamic from "next/dynamic";
 import * as api from "@/lib/api";
 
 const GEO_TYPE_COLORS: Record<string, string> = {
-  hosting: "#60a5fa",
-  mx: "#34d399",
+  hosting: "#8b7bff",
+  mx: "#2bd4a0",
   redirect: "#fb923c",
-  subdomain: "#a78bfa",
+  subdomain: "#8b7bff",
 };
 
 const GEO_TYPE_LABELS: Record<string, string> = {

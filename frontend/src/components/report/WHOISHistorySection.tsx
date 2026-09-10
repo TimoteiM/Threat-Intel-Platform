@@ -54,7 +54,7 @@ export default function WHOISHistorySection({ domain }: Props) {
               style={{
                 padding: "12px 16px",
                 background: "var(--bg-input)",
-                border: `1px solid ${hasChanges ? "rgba(245,158,11,0.3)" : "var(--border)"}`,
+                border: `1px solid ${hasChanges ? "rgba(242,169,60,0.3)" : "var(--border)"}`,
                 borderRadius: "var(--radius)",
                 borderLeft: hasChanges ? "3px solid var(--yellow)" : "3px solid var(--border)",
               }}
@@ -76,7 +76,7 @@ export default function WHOISHistorySection({ domain }: Props) {
                   {idx === 0 && (
                     <span style={{
                       fontSize: 9, padding: "1px 6px", fontWeight: 600,
-                      background: "rgba(59,130,246,0.1)", color: "var(--accent)",
+                      background: "rgba(124,92,255,0.1)", color: "var(--accent)",
                       borderRadius: "var(--radius-sm)", letterSpacing: "0.06em",
                     }}>
                       LATEST
@@ -85,7 +85,7 @@ export default function WHOISHistorySection({ domain }: Props) {
                   {hasChanges && (
                     <span style={{
                       fontSize: 9, padding: "1px 6px", fontWeight: 600,
-                      background: "rgba(245,158,11,0.1)", color: "var(--yellow)",
+                      background: "rgba(242,169,60,0.1)", color: "var(--yellow)",
                       borderRadius: "var(--radius-sm)", letterSpacing: "0.06em",
                     }}>
                       CHANGED

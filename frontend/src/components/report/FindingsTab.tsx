@@ -163,12 +163,12 @@ export default function FindingsTab({ report, evidence }: Props) {
                           style={{
                             fontSize: 11,
                             fontWeight: 600,
-                            color: "#a78bfa",
+                            color: "#8b7bff",
                             textDecoration: "none",
                             padding: "3px 8px",
-                            background: "rgba(167,139,250,0.10)",
+                            background: "rgba(139,123,255,0.10)",
                             borderRadius: "var(--radius-sm)",
-                            border: "1px solid rgba(167,139,250,0.25)",
+                            border: "1px solid rgba(139,123,255,0.25)",
                             fontFamily: "var(--font-mono)",
                           }}
                         >
@@ -179,9 +179,9 @@ export default function FindingsTab({ report, evidence }: Props) {
                           style={{
                             fontSize: 11,
                             fontWeight: 600,
-                            color: "#a78bfa",
+                            color: "#8b7bff",
                             padding: "3px 8px",
-                            background: "rgba(167,139,250,0.10)",
+                            background: "rgba(139,123,255,0.10)",
                             borderRadius: "var(--radius-sm)",
                             fontFamily: "var(--font-mono)",
                           }}
@@ -243,7 +243,7 @@ export default function FindingsTab({ report, evidence }: Props) {
                   style={{
                     fontSize: 11,
                     fontWeight: 700,
-                    color: "#a78bfa",
+                    color: "#8b7bff",
                     textTransform: "uppercase",
                     letterSpacing: "0.04em",
                     marginBottom: 8,
@@ -255,7 +255,7 @@ export default function FindingsTab({ report, evidence }: Props) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {techniques.map((t, i) => (
                     <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-                      <span style={{ fontWeight: 600, color: "#a78bfa", fontFamily: "var(--font-mono)", minWidth: 80 }}>
+                      <span style={{ fontWeight: 600, color: "#8b7bff", fontFamily: "var(--font-mono)", minWidth: 80 }}>
                         {t.id}
                       </span>
                       <span style={{ color: "var(--text-secondary)" }}>{t.name}</span>

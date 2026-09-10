@@ -120,9 +120,9 @@ function sessionButtonStyle(active: boolean): React.CSSProperties {
     textAlign: "left",
     padding: 12,
     borderRadius: 12,
-    border: `1px solid ${active ? "rgba(102, 168, 255, 0.52)" : "rgba(120, 145, 178, 0.18)"}`,
+    border: `1px solid ${active ? "rgba(139, 123, 255, 0.52)" : "rgba(150, 145, 190, 0.18)"}`,
     background: active
-      ? "rgba(96, 165, 250, 0.10)"
+      ? "rgba(139, 123, 255, 0.10)"
       : "var(--panel-card-bg)",
     color: "var(--text)",
     cursor: "pointer",

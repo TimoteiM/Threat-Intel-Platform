@@ -33,9 +33,9 @@ import type {
 const ACTIVE_STATUSES = ["queued", "processing", "running"];
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#f87171",
-  suspicious: "#fbbf24",
-  benign: "#34d399",
+  malicious: "#fb7185",
+  suspicious: "#f2a93c",
+  benign: "#2bd4a0",
   inconclusive: "#94a3b8",
   not_investigated: "#64748b",
 };
@@ -45,9 +45,9 @@ function verdictColor(verdict?: string | null): string {
 }
 
 function riskColor(score: number): string {
-  if (score >= 70) return "#f87171";
-  if (score >= 35) return "#fbbf24";
-  return "#34d399";
+  if (score >= 70) return "#fb7185";
+  if (score >= 35) return "#f2a93c";
+  return "#2bd4a0";
 }
 
 export default function AlertInvestigationDetailPage() {
@@ -210,7 +210,7 @@ export default function AlertInvestigationDetailPage() {
   if (error || !run) {
     return (
       <div style={{ padding: 40 }}>
-        <div style={{ color: "#f87171", fontFamily: "var(--font-sans)", marginBottom: 12 }}>
+        <div style={{ color: "#fb7185", fontFamily: "var(--font-sans)", marginBottom: 12 }}>
           {error || "Alert investigation not found"}
         </div>
         <button onClick={() => router.push("/alert-investigations")} style={secondaryButtonStyle}>
@@ -241,8 +241,8 @@ export default function AlertInvestigationDetailPage() {
           role="status"
           style={{
             padding: "10px 14px", borderRadius: 10, fontSize: 12,
-            border: "1px solid rgba(52, 211, 153, 0.35)",
-            background: "rgba(52, 211, 153, 0.08)", color: "var(--text)",
+            border: "1px solid rgba(43, 212, 160, 0.35)",
+            background: "rgba(43, 212, 160, 0.08)", color: "var(--text)",
           }}
         >
           {suppressNote}
@@ -271,7 +271,7 @@ export default function AlertInvestigationDetailPage() {
               fontFamily: "var(--font-mono)",
               letterSpacing: "0.05em",
               textTransform: "uppercase",
-              color: isActive ? "#fbbf24" : verdictColor(run.overall_verdict),
+              color: isActive ? "#f2a93c" : verdictColor(run.overall_verdict),
             }}
           >
             {isActive ? run.status : run.overall_verdict || run.status}
@@ -280,9 +280,9 @@ export default function AlertInvestigationDetailPage() {
         stats={
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
             <HeroStat label="Indicators" value={String(summary?.indicators_total ?? run.indicator_count)} />
-            <HeroStat label="Malicious" value={String(counts.malicious ?? 0)} color="#f87171" />
-            <HeroStat label="Suspicious" value={String(counts.suspicious ?? 0)} color="#fbbf24" />
-            <HeroStat label="Benign" value={String(counts.benign ?? 0)} color="#34d399" />
+            <HeroStat label="Malicious" value={String(counts.malicious ?? 0)} color="#fb7185" />
+            <HeroStat label="Suspicious" value={String(counts.suspicious ?? 0)} color="#f2a93c" />
+            <HeroStat label="Benign" value={String(counts.benign ?? 0)} color="#2bd4a0" />
             <HeroStat
               label="Highest risk"
               value={String(summary?.highest_risk_score ?? 0)}
@@ -366,7 +366,7 @@ export default function AlertInvestigationDetailPage() {
 
       {run.error && (
         <ConsoleModule title="Run error" tone="danger" compact>
-          <div style={{ fontSize: 12, color: "#fca5a5", fontFamily: "var(--font-mono)" }}>{run.error}</div>
+          <div style={{ fontSize: 12, color: "#fda4af", fontFamily: "var(--font-mono)" }}>{run.error}</div>
         </ConsoleModule>
       )}
 
@@ -419,7 +419,7 @@ export default function AlertInvestigationDetailPage() {
           }
         >
           {aiReport.status === "failed" ? (
-            <div style={{ fontSize: 12, color: "#fca5a5", fontFamily: "var(--font-mono)" }}>
+            <div style={{ fontSize: 12, color: "#fda4af", fontFamily: "var(--font-mono)" }}>
               {aiReport.error || "The AI assistant could not analyse this alert."}
             </div>
           ) : (
@@ -448,13 +448,13 @@ export default function AlertInvestigationDetailPage() {
                   <div style={sectionLabelStyle}>Values redacted before AI analysis</div>
                   {resolvedIdentifiers.map((row) => (
                     <div key={row.token} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <span style={{ ...metaChipStyle, color: "#fbbf24", borderColor: "rgba(251,191,36,0.3)" }}>
+                      <span style={{ ...metaChipStyle, color: "#f2a93c", borderColor: "rgba(242,169,60,0.3)" }}>
                         {row.token}
                       </span>
                       <span style={{ fontSize: 10.5, color: "var(--text-muted)", fontFamily: "var(--font-sans)" }}>
                         {row.category}
                       </span>
-                      <span style={{ ...metaChipStyle, color: "var(--accent)", borderColor: "rgba(96,165,250,0.3)" }}>
+                      <span style={{ ...metaChipStyle, color: "var(--accent)", borderColor: "rgba(139,123,255,0.3)" }}>
                         {row.value}
                       </span>
                     </div>
@@ -572,8 +572,8 @@ export default function AlertInvestigationDetailPage() {
                           padding: "2px 7px",
                           borderRadius: 20,
                           background:
-                            report.status === "investigating" ? "rgba(251,191,36,0.14)" : "rgba(96,165,250,0.14)",
-                          color: report.status === "investigating" ? "#fbbf24" : "#60a5fa",
+                            report.status === "investigating" ? "rgba(242,169,60,0.14)" : "rgba(139,123,255,0.14)",
+                          color: report.status === "investigating" ? "#f2a93c" : "#8b7bff",
                           fontFamily: "var(--font-sans)",
                           textDecoration: "none",
                         }}
@@ -595,8 +595,8 @@ export default function AlertInvestigationDetailPage() {
                           textTransform: "uppercase",
                           padding: "2px 7px",
                           borderRadius: 20,
-                          background: "rgba(52,211,153,0.14)",
-                          color: "#34d399",
+                          background: "rgba(43,212,160,0.14)",
+                          color: "#2bd4a0",
                           fontFamily: "var(--font-sans)",
                           textDecoration: "none",
                         }}
@@ -652,7 +652,7 @@ export default function AlertInvestigationDetailPage() {
                   {report.status !== "skipped" && (
                     <div style={{ padding: "0 14px 12px 17px", display: "grid", gap: 8 }}>
                       {report.status === "investigating" ? (
-                        <div style={{ fontSize: 11.5, color: "#fbbf24", fontFamily: "var(--font-sans)" }}>
+                        <div style={{ fontSize: 11.5, color: "#f2a93c", fontFamily: "var(--font-sans)" }}>
                           Full investigation in progress — the verdict, findings and evidence appear here (and in
                           the export) as soon as it concludes.
                         </div>
@@ -682,7 +682,7 @@ export default function AlertInvestigationDetailPage() {
                               background: "var(--bg-input)",
                               color:
                                 collectorRun.status === "failed"
-                                  ? "#f87171"
+                                  ? "#fb7185"
                                   : collectorRun.status === "completed"
                                     ? "var(--text-secondary)"
                                     : "var(--text-muted)",
@@ -699,8 +699,8 @@ export default function AlertInvestigationDetailPage() {
                               fontFamily: "var(--font-mono)",
                               padding: "2px 8px",
                               borderRadius: 20,
-                              border: "1px solid rgba(96,165,250,0.28)",
-                              background: "rgba(96,165,250,0.10)",
+                              border: "1px solid rgba(139,123,255,0.28)",
+                              background: "rgba(139,123,255,0.10)",
                               color: "var(--accent)",
                             }}
                           >
@@ -798,10 +798,10 @@ function stripResolvedIdentifiers(markdown: string): string {
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
-  high: "#f87171",
-  medium: "#fbbf24",
+  high: "#fb7185",
+  medium: "#f2a93c",
   low: "#a3a3a3",
-  info: "#60a5fa",
+  info: "#8b7bff",
 };
 
 function FindingRow({ finding }: { finding: AlertFinding }) {
@@ -961,9 +961,9 @@ const typeBadgeStyle: React.CSSProperties = {
   textTransform: "uppercase",
   padding: "3px 7px",
   borderRadius: 4,
-  border: "1px solid rgba(129,140,248,0.25)",
-  background: "rgba(129,140,248,0.12)",
-  color: "#818cf8",
+  border: "1px solid rgba(192,172,255,0.25)",
+  background: "rgba(192,172,255,0.12)",
+  color: "#c0acff",
   fontFamily: "var(--font-mono)",
 };
 

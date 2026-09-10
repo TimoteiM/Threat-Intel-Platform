@@ -19,10 +19,10 @@ import { Button, MetaDot, Page, PageHeader } from "@/components/ui/Primitives";
 /* ─── Style constants ─── */
 
 const TYPE_STYLES: Record<string, { color: string; bg: string; border: string }> = {
-  domain: { color: "#818cf8", bg: "rgba(129,140,248,0.08)", border: "rgba(129,140,248,0.2)" },
-  ip: { color: "#38bdf8", bg: "rgba(56,189,248,0.08)", border: "rgba(56,189,248,0.2)" },
+  domain: { color: "#c0acff", bg: "rgba(192,172,255,0.08)", border: "rgba(192,172,255,0.2)" },
+  ip: { color: "#5b9dff", bg: "rgba(91,157,255,0.08)", border: "rgba(91,157,255,0.2)" },
   url: { color: "#c084fc", bg: "rgba(192,132,252,0.08)", border: "rgba(192,132,252,0.2)" },
-  hash: { color: "#fbbf24", bg: "rgba(251,191,36,0.08)", border: "rgba(251,191,36,0.2)" },
+  hash: { color: "#f2a93c", bg: "rgba(242,169,60,0.08)", border: "rgba(242,169,60,0.2)" },
 };
 
 const TYPE_OPTIONS = [
@@ -243,7 +243,7 @@ export default function ExclusionsPage() {
               disabled={adding || !newValue.trim() || newReason.trim().length < 3}
               style={{
                 padding: "10px 24px",
-                background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                background: "linear-gradient(135deg, #7c5cff, #6a4fe0)",
                 border: "none",
                 borderRadius: "var(--radius-sm)",
                 color: "#fff",
@@ -316,10 +316,10 @@ export default function ExclusionsPage() {
               style={{
                 marginTop: 12,
                 padding: "8px 12px",
-                background: "rgba(239,68,68,0.08)",
-                border: "1px solid rgba(239,68,68,0.2)",
+                background: "rgba(251,113,133,0.08)",
+                border: "1px solid rgba(251,113,133,0.2)",
                 borderRadius: "var(--radius-sm)",
-                color: "#ef4444",
+                color: "#fb7185",
                 fontSize: 11,
                 fontFamily: "var(--font-mono)",
               }}
@@ -335,10 +335,10 @@ export default function ExclusionsPage() {
           style={{
             marginBottom: 16,
             padding: "10px 14px",
-            background: "rgba(16,185,129,0.08)",
-            border: "1px solid rgba(16,185,129,0.2)",
+            background: "rgba(43,212,160,0.08)",
+            border: "1px solid rgba(43,212,160,0.2)",
             borderRadius: "var(--radius-sm)",
-            color: "#10b981",
+            color: "#2bd4a0",
             fontSize: 11,
             fontFamily: "var(--font-mono)",
           }}
@@ -449,7 +449,7 @@ export default function ExclusionsPage() {
                     </span>
                   )}
                   {entry.expired && (
-                    <span style={{ fontSize: 10, color: "#f59e0b", fontFamily: "var(--font-mono)" }}>
+                    <span style={{ fontSize: 10, color: "#f2a93c", fontFamily: "var(--font-mono)" }}>
                       EXPIRED
                     </span>
                   )}
@@ -488,10 +488,10 @@ export default function ExclusionsPage() {
                           onClick={() => handleDelete(entry.id)}
                           style={{
                             padding: "5px 10px",
-                            background: "rgba(239,68,68,0.12)",
-                            border: "1px solid rgba(239,68,68,0.3)",
+                            background: "rgba(251,113,133,0.12)",
+                            border: "1px solid rgba(251,113,133,0.3)",
                             borderRadius: "var(--radius-sm)",
-                            color: "#ef4444",
+                            color: "#fb7185",
                             fontSize: 10,
                             fontWeight: 700,
                             cursor: "pointer",

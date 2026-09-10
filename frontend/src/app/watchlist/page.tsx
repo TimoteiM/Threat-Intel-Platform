@@ -9,15 +9,15 @@ import { Button, Page, PageHeader } from "@/components/ui/Primitives";
 /* ─── Style constants ─── */
 
 const STATUS_COLORS: Record<string, { color: string; bg: string; border: string }> = {
-  active: { color: "#10b981", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.2)" },
-  paused: { color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.2)" },
+  active: { color: "#2bd4a0", bg: "rgba(43,212,160,0.08)", border: "rgba(43,212,160,0.2)" },
+  paused: { color: "#f2a93c", bg: "rgba(242,169,60,0.08)", border: "rgba(242,169,60,0.2)" },
   removed: { color: "#64748b", bg: "rgba(100,116,139,0.08)", border: "rgba(100,116,139,0.2)" },
 };
 
 const CLASSIFICATION_COLORS: Record<string, { color: string; bg: string }> = {
-  malicious: { color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
-  suspicious: { color: "#f59e0b", bg: "rgba(245,158,11,0.1)" },
-  clean: { color: "#10b981", bg: "rgba(16,185,129,0.1)" },
+  malicious: { color: "#fb7185", bg: "rgba(251,113,133,0.1)" },
+  suspicious: { color: "#f2a93c", bg: "rgba(242,169,60,0.1)" },
+  clean: { color: "#2bd4a0", bg: "rgba(43,212,160,0.1)" },
   inconclusive: { color: "#64748b", bg: "rgba(100,116,139,0.1)" },
 };
 
@@ -29,9 +29,9 @@ const SCHEDULE_OPTIONS = [
 ];
 
 const SCHEDULE_BADGE_STYLE = {
-  color: "#818cf8",
-  bg: "rgba(129,140,248,0.08)",
-  border: "rgba(129,140,248,0.2)",
+  color: "#c0acff",
+  bg: "rgba(192,172,255,0.08)",
+  border: "rgba(192,172,255,0.2)",
 };
 
 /* ─── Sparkline ─── */
@@ -46,7 +46,7 @@ function RiskSparkline({ history }: { history: Array<{ score: number; at: string
   const toY = (s: number) => PAD + ((max - s) / (max - min)) * (H - PAD * 2);
   const points = scores.map((s, i) => `${PAD + i * xStep},${toY(s)}`).join(" ");
   const last = scores[scores.length - 1];
-  const color = last >= 70 ? "#ef4444" : last >= 40 ? "#f59e0b" : "#10b981";
+  const color = last >= 70 ? "#fb7185" : last >= 40 ? "#f2a93c" : "#2bd4a0";
   return (
     <svg width={W} height={H} style={{ display: "block", flexShrink: 0 }}>
       <polyline
@@ -95,11 +95,11 @@ function DiffPanel({ diff }: { diff: Record<string, any> }) {
         const val = changes[key];
         const label = DIFF_LABELS[key] ?? key;
         let text = "";
-        let color = "#f59e0b";
+        let color = "#f2a93c";
         if (key === "risk_score" || key === "vt_malicious") {
           const delta = val.delta ?? 0;
           text = `${label}: ${val.prev ?? "?"} → ${val.curr ?? "?"} (${delta >= 0 ? "+" : ""}${delta})`;
-          color = delta > 0 ? "#ef4444" : "#10b981";
+          color = delta > 0 ? "#fb7185" : "#2bd4a0";
         } else if (key === "dns_ips") {
           const parts = [];
           if (val.added?.length) parts.push(`+${val.added.length} IP`);
@@ -107,7 +107,7 @@ function DiffPanel({ diff }: { diff: Record<string, any> }) {
           text = `${label}: ${parts.join(", ")}`;
         } else if (key === "threatfox_added") {
           text = `${label}: +${val.length}`;
-          color = "#ef4444";
+          color = "#fb7185";
         } else {
           text = `${label} changed`;
         }
@@ -343,7 +343,7 @@ export default function WatchlistPage() {
               disabled={adding || !newDomain.trim()}
               style={{
                 padding: "10px 24px",
-                background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                background: "linear-gradient(135deg, #7c5cff, #6a4fe0)",
                 border: "none", borderRadius: "var(--radius-sm)",
                 color: "#fff", fontSize: 11, fontWeight: 700,
                 cursor: adding ? "default" : "pointer",
@@ -401,8 +401,8 @@ export default function WatchlistPage() {
           {addError && (
             <div style={{
               padding: "8px 12px", marginTop: 12, fontSize: 12,
-              color: "#ef4444", background: "rgba(239,68,68,0.08)",
-              borderRadius: "var(--radius-sm)", border: "1px solid rgba(239,68,68,0.2)",
+              color: "#fb7185", background: "rgba(251,113,133,0.08)",
+              borderRadius: "var(--radius-sm)", border: "1px solid rgba(251,113,133,0.2)",
             }}>
               {addError}
             </div>
@@ -480,7 +480,7 @@ export default function WatchlistPage() {
               onClick={() => setShowAddForm(true)}
               style={{
                 padding: "10px 24px",
-                background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                background: "linear-gradient(135deg, #7c5cff, #6a4fe0)",
                 border: "none", borderRadius: "var(--radius)",
                 color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer",
                 fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
@@ -506,7 +506,7 @@ export default function WatchlistPage() {
                 style={{
                   padding: "16px 20px",
                   background: "var(--bg-card)",
-                  border: `1px solid ${deleteConfirmId === entry.id ? "rgba(239,68,68,0.4)" : "var(--border)"}`,
+                  border: `1px solid ${deleteConfirmId === entry.id ? "rgba(251,113,133,0.4)" : "var(--border)"}`,
                   borderRadius: "var(--radius)",
                   transition: "border-color 0.2s",
                 }}
@@ -609,8 +609,8 @@ export default function WatchlistPage() {
                       {entry.alert_count > 0 && (
                         <span style={{
                           fontSize: 9, padding: "2px 6px",
-                          background: "rgba(239,68,68,0.1)", color: "#ef4444",
-                          border: "1px solid rgba(239,68,68,0.2)",
+                          background: "rgba(251,113,133,0.1)", color: "#fb7185",
+                          border: "1px solid rgba(251,113,133,0.2)",
                           borderRadius: "var(--radius-sm)",
                           fontWeight: 700, fontFamily: "var(--font-mono)",
                         }}>
@@ -639,7 +639,7 @@ export default function WatchlistPage() {
                       </div>
                     )}
                     {entry.schedule_interval && entry.next_check_at && (
-                      <div style={{ fontSize: 10, color: "#818cf8", fontFamily: "var(--font-mono)" }}>
+                      <div style={{ fontSize: 10, color: "#c0acff", fontFamily: "var(--font-mono)" }}>
                         next {timeUntil(entry.next_check_at)}
                       </div>
                     )}
@@ -653,7 +653,7 @@ export default function WatchlistPage() {
                         disabled={isInvestigating}
                         style={{
                           padding: "6px 14px",
-                          background: isInvestigating ? "var(--bg-input)" : "linear-gradient(135deg, #3b82f6, #2563eb)",
+                          background: isInvestigating ? "var(--bg-input)" : "linear-gradient(135deg, #7c5cff, #6a4fe0)",
                           border: "none", borderRadius: "var(--radius-sm)",
                           color: "#fff", fontSize: 9, fontWeight: 700, cursor: isInvestigating ? "default" : "pointer",
                           fontFamily: "var(--font-mono)", letterSpacing: "0.06em",
@@ -716,8 +716,8 @@ export default function WatchlistPage() {
 
                     {latest.risk_score != null && (
                       <span style={{
-                        color: latest.risk_score >= 70 ? "#ef4444"
-                          : latest.risk_score >= 40 ? "#f59e0b" : "#10b981",
+                        color: latest.risk_score >= 70 ? "#fb7185"
+                          : latest.risk_score >= 40 ? "#f2a93c" : "#2bd4a0",
                         fontWeight: 700, fontSize: 12,
                       }}>
                         {latest.risk_score}
@@ -732,7 +732,7 @@ export default function WatchlistPage() {
 
                     <span style={{
                       color: latest.state === "completed" ? "var(--text-dim)"
-                        : latest.state === "failed" ? "#ef4444" : "#3b82f6",
+                        : latest.state === "failed" ? "#fb7185" : "#7c5cff",
                       fontSize: 10,
                     }}>
                       {latest.state}
@@ -779,8 +779,8 @@ export default function WatchlistPage() {
                   <div style={{
                     display: "flex", alignItems: "flex-start", gap: 10,
                     padding: "6px 12px 8px",
-                    background: "rgba(245,158,11,0.04)",
-                    border: "1px solid rgba(245,158,11,0.14)",
+                    background: "rgba(242,169,60,0.04)",
+                    border: "1px solid rgba(242,169,60,0.14)",
                     borderTop: "none",
                     borderRadius: "0 0 var(--radius-sm) var(--radius-sm)",
                     fontSize: 10, fontFamily: "var(--font-mono)",
@@ -863,19 +863,19 @@ function ActionButton({
       style={{
         padding: "5px 10px",
         background: "transparent",
-        border: `1px solid ${danger ? "rgba(239,68,68,0.3)" : "var(--border)"}`,
+        border: `1px solid ${danger ? "rgba(251,113,133,0.3)" : "var(--border)"}`,
         borderRadius: "var(--radius-sm)",
-        color: danger ? "#ef4444" : "var(--text-dim)",
+        color: danger ? "#fb7185" : "var(--text-dim)",
         fontSize: 9, fontWeight: 600, cursor: "pointer",
         fontFamily: "var(--font-mono)", letterSpacing: "0.04em",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = danger ? "#ef4444" : "var(--accent)";
-        e.currentTarget.style.color = danger ? "#ef4444" : "var(--accent)";
+        e.currentTarget.style.borderColor = danger ? "#fb7185" : "var(--accent)";
+        e.currentTarget.style.color = danger ? "#fb7185" : "var(--accent)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = danger ? "rgba(239,68,68,0.3)" : "var(--border)";
-        e.currentTarget.style.color = danger ? "#ef4444" : "var(--text-dim)";
+        e.currentTarget.style.borderColor = danger ? "rgba(251,113,133,0.3)" : "var(--border)";
+        e.currentTarget.style.color = danger ? "#fb7185" : "var(--text-dim)";
       }}
     >
       {label}

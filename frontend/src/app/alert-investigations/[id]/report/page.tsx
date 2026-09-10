@@ -28,18 +28,18 @@ import type {
 } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#f87171",
-  suspicious: "#fbbf24",
-  benign: "#34d399",
+  malicious: "#fb7185",
+  suspicious: "#f2a93c",
+  benign: "#2bd4a0",
   inconclusive: "#94a3b8",
   not_investigated: "#64748b",
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
-  high: "#f87171",
-  critical: "#f87171",
-  medium: "#fbbf24",
-  low: "#60a5fa",
+  high: "#fb7185",
+  critical: "#fb7185",
+  medium: "#f2a93c",
+  low: "#8b7bff",
   info: "#94a3b8",
   informational: "#94a3b8",
 };
@@ -121,7 +121,7 @@ export default function AlertReportPreviewPage() {
   if (error || !documents) {
     return (
       <div style={{ padding: 40 }}>
-        <div style={{ color: "#f87171", fontFamily: "var(--font-sans)", marginBottom: 12 }}>
+        <div style={{ color: "#fb7185", fontFamily: "var(--font-sans)", marginBottom: 12 }}>
           {error || "No report export available"}
         </div>
         <button onClick={() => router.push(`/alert-investigations/${runId}`)} style={buttonStyle}>
@@ -144,12 +144,12 @@ export default function AlertReportPreviewPage() {
         tone={summaryDoc?.overall_verdict === "malicious" ? "danger" : "info"}
         stats={
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
-            <HeroStat label="Full SOC reports" value={String(coverage.withReport)} color="#60a5fa" />
+            <HeroStat label="Full SOC reports" value={String(coverage.withReport)} color="#8b7bff" />
             <HeroStat label="IOC-only findings" value={String(coverage.inline)} />
-            <HeroStat label="Still running" value={String(coverage.running)} color={coverage.running ? "#fbbf24" : undefined} />
+            <HeroStat label="Still running" value={String(coverage.running)} color={coverage.running ? "#f2a93c" : undefined} />
             <HeroStat label="Context-only" value={String(coverage.skipped)} />
             {eventDocs.length > 0 && (
-              <HeroStat label="Endpoint events" value={String(eventDocs.length)} color="#a78bfa" />
+              <HeroStat label="Endpoint events" value={String(eventDocs.length)} color="#8b7bff" />
             )}
           </div>
         }
@@ -173,7 +173,7 @@ export default function AlertReportPreviewPage() {
 
       {coverage.running > 0 && (
         <ConsoleModule title="Still collecting" tone="warning" compact>
-          <div style={{ fontSize: 12, color: "#fbbf24", fontFamily: "var(--font-sans)" }}>
+          <div style={{ fontSize: 12, color: "#f2a93c", fontFamily: "var(--font-sans)" }}>
             {coverage.running} indicator{coverage.running === 1 ? "" : "s"} still have an investigation running — their
             SOC report appears here (and in the export) once it concludes. Refresh to check.
           </div>
@@ -253,7 +253,7 @@ function ExecutiveSummaryCard({
             headers={["Indicator", "Investigation", "State", "Classification", "Risk", "Origin"]}
             rows={doc.investigations.map((item) => [
               item.indicator || "—",
-              <a key={item.investigation_id} href={item.url} style={{ color: "#60a5fa" }}>
+              <a key={item.investigation_id} href={item.url} style={{ color: "#8b7bff" }}>
                 {item.investigation_id.slice(0, 8)}…
               </a>,
               item.state || "—",
@@ -732,8 +732,8 @@ const linkChipStyle: React.CSSProperties = {
   textTransform: "uppercase",
   padding: "3px 8px",
   borderRadius: 20,
-  background: "rgba(96,165,250,0.14)",
-  color: "#60a5fa",
+  background: "rgba(139,123,255,0.14)",
+  color: "#8b7bff",
   fontFamily: "var(--font-sans)",
   textDecoration: "none",
 };

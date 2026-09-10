@@ -15,6 +15,7 @@ import type { InvestigationInputType } from "@/lib/types";
 import { CLASSIFICATION_CONFIG } from "@/lib/constants";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 import { Details, MetaDot, PageHeader } from "@/components/ui/Primitives";
+import StatusPill from "@/components/ui/StatusPill";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -43,31 +44,17 @@ function timeAgo(dateStr: string): string {
 
 // ─── Collector strip ─────────────────────────────────────────────────────────
 
+// One collector, six unrelated colours used to be the rule here — a rainbow
+// that meant nothing, since no legend mapped colour to category. Restraint
+// reads as more capable than confetti: every chip now shares one quiet
+// neutral surface, and the only colour in the strip is the brand accent dot.
 const COLLECTORS = [
-  { label: "DNS Resolution",       color: "#60a5fa" },
-  { label: "HTTP Analysis",        color: "#a78bfa" },
-  { label: "TLS Certificate",      color: "#34d399" },
-  { label: "WHOIS Registration",   color: "#fbbf24" },
-  { label: "ASN & Geolocation",    color: "#60a5fa" },
-  { label: "VirusTotal",           color: "#f87171" },
-  { label: "URLScan",              color: "#60a5fa" },
-  { label: "AbuseIPDB",            color: "#fb923c" },
-  { label: "PhishTank",            color: "#f87171" },
-  { label: "ThreatFox",            color: "#fb923c" },
-  { label: "Google Safe Browsing", color: "#34d399" },
-  { label: "OpenCTI",              color: "#a78bfa" },
-  { label: "AnyRun Sandbox",       color: "#f87171" },
-  { label: "Brave OSINT",          color: "#94a3b8" },
-  { label: "Email Security",       color: "#34d399" },
-  { label: "Screenshot Analysis",  color: "#a78bfa" },
-  { label: "Typosquatting",        color: "#fbbf24" },
-  { label: "JS Sandbox",           color: "#60a5fa" },
-  { label: "Redirect Analysis",    color: "#94a3b8" },
-  { label: "Cert Transparency",    color: "#34d399" },
-  { label: "Infra Pivot",          color: "#a78bfa" },
-  { label: "MITRE ATT&CK",         color: "#f87171" },
-  { label: "Favicon Intel",        color: "#fbbf24" },
-  { label: "Subdomain Enum",       color: "#60a5fa" },
+  "DNS Resolution", "HTTP Analysis", "TLS Certificate", "WHOIS Registration",
+  "ASN & Geolocation", "VirusTotal", "URLScan", "AbuseIPDB",
+  "PhishTank", "ThreatFox", "Google Safe Browsing", "OpenCTI",
+  "AnyRun Sandbox", "Brave OSINT", "Email Security", "Screenshot Analysis",
+  "Typosquatting", "JS Sandbox", "Redirect Analysis", "Cert Transparency",
+  "Infra Pivot", "MITRE ATT&CK", "Favicon Intel", "Subdomain Enum",
 ];
 
 function CollectorStrip() {
@@ -82,27 +69,27 @@ function CollectorStrip() {
       marginBottom: 4,
     }}>
       <div className="collector-strip" style={{ display: "flex", gap: 8, width: "max-content" }}>
-        {items.map((c, i) => (
+        {items.map((label, i) => (
           <span key={i} style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 6,
+            gap: 7,
             padding: "5px 12px",
-            background: `${c.color}12`,
-            border: `1px solid ${c.color}30`,
+            background: "rgba(150, 145, 190, 0.07)",
+            border: "1px solid var(--panel-divider)",
             borderRadius: 20,
             fontSize: 11,
             fontWeight: 600,
             fontFamily: "var(--font-sans)",
-            color: c.color,
+            color: "var(--text-dim)",
             whiteSpace: "nowrap",
             letterSpacing: "0.02em",
           }}>
             <span style={{
               width: 5, height: 5, borderRadius: "50%",
-              background: c.color, flexShrink: 0,
+              background: "var(--shell-accent)", flexShrink: 0,
             }} />
-            {c.label}
+            {label}
           </span>
         ))}
       </div>
@@ -112,24 +99,28 @@ function CollectorStrip() {
 
 // ─── How it works ─────────────────────────────────────────────────────────────
 
+// One accent, three intensities — a step sequence doesn't need a different
+// hue per card to read as three distinct stages; the numbering already says
+// that. Deepening the same gradient through the sequence gives it direction
+// instead of variety for its own sake.
 const STEPS = [
   {
     icon: "⬡",
-    iconBg: "linear-gradient(135deg, #60a5fa, #818cf8)",
+    iconBg: "linear-gradient(135deg, #a897ff, #8b7bff)",
     title: "Submit an Observable",
     desc: "Enter a domain, IP, URL, file hash, or email address. Domains also support typosquatting and visual brand comparison.",
     tags: ["domain · ip · url · hash · email", "+ typosquatting check"],
   },
   {
     icon: "◎",
-    iconBg: "linear-gradient(135deg, #34d399, #60a5fa)",
+    iconBg: "linear-gradient(135deg, #8b7bff, #6a4fe0)",
     title: "20+ Collectors Run",
     desc: "DNS, HTTP, TLS, WHOIS, VirusTotal, AbuseIPDB, URLScan, OpenCTI, AnyRun, ThreatFox and more — all in parallel.",
     tags: ["≈ 2–90 seconds", "parallel execution"],
   },
   {
     icon: "◈",
-    iconBg: "linear-gradient(135deg, #a78bfa, #f87171)",
+    iconBg: "linear-gradient(135deg, #6a4fe0, #4a29c4)",
     title: "AI Analysis",
     desc: "Claude applies a strict methodology and classifies the observable with MITRE ATT&CK-mapped findings and IOCs.",
     tags: ["Benign · Suspicious · Malicious", "IOCs extracted"],
@@ -228,19 +219,16 @@ function HowItWorks() {
 
 // ─── Recent investigations (improved) ────────────────────────────────────────
 
-const CLS_BAR: Record<string, string> = {
-  malicious:    "#f87171",
-  suspicious:   "#fbbf24",
-  benign:       "#34d399",
-  inconclusive: "#64748b",
-};
+// Classification colour comes from CLASSIFICATION_CONFIG — the same source
+// the badge itself reads — rather than a second hardcoded map that could
+// silently drift out of sync with it.
 
-const STATE_LABEL: Record<string, { label: string; color: string }> = {
-  concluded:  { label: "concluded",  color: "var(--text-muted)" },
-  gathering:  { label: "gathering",  color: "#60a5fa" },
-  analyzing:  { label: "analyzing",  color: "#a78bfa" },
-  pending:    { label: "pending",    color: "var(--text-muted)" },
-  failed:     { label: "failed",     color: "#f87171" },
+const STATE_TONE: Record<string, "neutral" | "accent" | "danger"> = {
+  concluded: "neutral",
+  gathering: "accent",
+  analyzing: "accent",
+  pending: "neutral",
+  failed: "danger",
 };
 
 function RecentInvestigations({
@@ -290,8 +278,8 @@ function RecentInvestigations({
       }}>
         {items.map((inv, index) => {
           const clsConfig = CLASSIFICATION_CONFIG[inv.classification as keyof typeof CLASSIFICATION_CONFIG];
-          const barColor = CLS_BAR[inv.classification] || "var(--border)";
-          const stateInfo = STATE_LABEL[inv.state] || { label: inv.state, color: "var(--text-muted)" };
+          const barColor = clsConfig?.color || "var(--border)";
+          const stateTone = STATE_TONE[inv.state] || "neutral";
           const isLast = index === items.length - 1;
 
           return (
@@ -349,20 +337,9 @@ function RecentInvestigations({
                   {inv.domain}
                 </span>
                 {inv.observable_type && inv.observable_type !== "domain" && (
-                  <span style={{
-                    fontSize: 9, fontWeight: 700,
-                    padding: "2px 6px",
-                    background: "rgba(129,140,248,0.12)",
-                    color: "#818cf8",
-                    border: "1px solid rgba(129,140,248,0.25)",
-                    borderRadius: 3,
-                    fontFamily: "var(--font-mono)",
-                    letterSpacing: "0.04em",
-                    flexShrink: 0,
-                    textTransform: "uppercase" as const,
-                  }}>
+                  <StatusPill tone="accent" size="sm" outline mono>
                     {inv.observable_type}
-                  </span>
+                  </StatusPill>
                 )}
 
                 {/* Classification badge */}
@@ -386,7 +363,7 @@ function RecentInvestigations({
                   <span style={{
                     fontSize: 12, fontWeight: 700,
                     fontFamily: "var(--font-mono)",
-                    color: inv.risk_score >= 75 ? "#f87171" : inv.risk_score >= 40 ? "#fbbf24" : "#34d399",
+                    color: inv.risk_score >= 75 ? "var(--status-danger)" : inv.risk_score >= 40 ? "var(--status-warning)" : "var(--status-success)",
                     minWidth: 24, textAlign: "right",
                     flexShrink: 0,
                   }}>
@@ -397,13 +374,13 @@ function RecentInvestigations({
                 {/* State */}
                 <span style={{
                   fontSize: 10, fontWeight: 600,
-                  color: stateInfo.color,
+                  color: stateTone === "accent" ? "var(--shell-accent-strong)" : stateTone === "danger" ? "var(--status-danger)" : "var(--text-muted)",
                   fontFamily: "var(--font-sans)",
                   minWidth: 70, textAlign: "right",
                   flexShrink: 0,
                   letterSpacing: "0.02em",
                 }}>
-                  {stateInfo.label}
+                  {inv.state}
                 </span>
 
                 {/* Time ago */}
@@ -524,8 +501,8 @@ function DuplicateModal({
         <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 20 }}>
           <div style={{
             width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-            background: "rgba(251,191,36,0.12)",
-            border: "1px solid rgba(251,191,36,0.25)",
+            background: "rgba(242,169,60,0.12)",
+            border: "1px solid rgba(242,169,60,0.25)",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 18,
           }}>
@@ -595,7 +572,7 @@ function DuplicateModal({
               <span style={{
                 fontSize: 13, fontWeight: 700,
                 fontFamily: "var(--font-mono)",
-                color: best.risk_score >= 75 ? "#f87171" : best.risk_score >= 40 ? "#fbbf24" : "#34d399",
+                color: best.risk_score >= 75 ? "var(--status-danger)" : best.risk_score >= 40 ? "var(--status-warning)" : "var(--status-success)",
                 flexShrink: 0,
               }}>
                 {best.risk_score}
@@ -622,14 +599,14 @@ function DuplicateModal({
             style={{
               flex: 1,
               padding: "11px 16px",
-              background: "linear-gradient(135deg, #60a5fa, #818cf8)",
+              background: "linear-gradient(135deg, #8b7bff, #c0acff)",
               border: "none",
               borderRadius: "var(--radius)",
               color: "#fff",
               fontSize: 13, fontWeight: 600,
               fontFamily: "var(--font-sans)",
               cursor: "pointer",
-              boxShadow: "0 2px 8px rgba(96,165,250,0.3)",
+              boxShadow: "0 2px 8px rgba(139,123,255,0.32)",
             }}
           >
             View Existing Report
