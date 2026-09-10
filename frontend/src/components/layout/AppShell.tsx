@@ -12,6 +12,7 @@
 import React, { useEffect, useState } from "react";
 import Sidebar, { readCollapsed, writeCollapsed } from "@/components/layout/Sidebar";
 import Footer from "@/components/layout/Footer";
+import RouteProgress from "@/components/layout/RouteProgress";
 
 /** Below this, a 220px rail costs more room than it earns. */
 const NARROW_VIEWPORT = 1100;
@@ -48,6 +49,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <div className="app-shell__content">
+        <RouteProgress />
         <main className="app-shell__main">{children}</main>
         <Footer />
       </div>

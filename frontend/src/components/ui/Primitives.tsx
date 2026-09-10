@@ -15,6 +15,7 @@
  */
 
 import React from "react";
+import BrandLoader from "@/components/shared/BrandLoader";
 
 export type Status = "success" | "info" | "warning" | "danger" | "critical" | "neutral";
 
@@ -279,11 +280,7 @@ export function EmptyState({
 }
 
 export function LoadingState({ label = "Loading…" }: { label?: string }) {
-  return (
-    <div className="ds-state" role="status" aria-live="polite">
-      <div className="ds-state__title">{label}</div>
-    </div>
-  );
+  return <BrandLoader label={label} />;
 }
 
 /**

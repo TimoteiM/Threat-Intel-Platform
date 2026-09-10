@@ -1,39 +1,36 @@
 "use client";
 
+/**
+ * The Threat Analyzer mark.
+ *
+ * Two colourways of the same artwork, swapped by theme rather than tinted:
+ * the navy half of the mark is invisible on the app's near-black ground, so
+ * the dark-surface file carries it in --shell-text instead. The blue and the
+ * knocked-out star are identical in both.
+ *
+ * Rendered at a fixed height with automatic width — the mark is 1.58:1, and
+ * forcing it into a square box wastes a third of the height it is given.
+ */
+
 import React from "react";
 
-export default function BrandMark() {
+export default function BrandMark({ height = 24 }: { height?: number }) {
   return (
-    <div className="app-brand__mark" aria-hidden="true">
-      <svg viewBox="0 0 48 48" className="app-brand__markSvg" role="presentation">
-        <defs>
-          <linearGradient id="brand-core" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#a9b9ff" />
-            <stop offset="0.52" stopColor="#4f6ef7" />
-            <stop offset="1" stopColor="#3a53c9" />
-          </linearGradient>
-          <linearGradient id="brand-ring" x1="10" y1="8" x2="38" y2="40" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="rgba(255,255,255,0.92)" />
-            <stop offset="1" stopColor="rgba(200,212,255,0.6)" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M24 4 38 10v12c0 9.6-5.7 17.7-14 22-8.3-4.3-14-12.4-14-22V10L24 4Z"
-          fill="url(#brand-core)"
-        />
-        <path
-          d="M24 9.8 33.5 13.9v8.5c0 6.5-3.8 12.1-9.5 15.4-5.7-3.3-9.5-8.9-9.5-15.4v-8.5L24 9.8Z"
-          fill="rgba(8,9,14,0.36)"
-          stroke="rgba(200,212,255,0.36)"
-          strokeWidth="1"
-        />
-        <circle cx="24" cy="23" r="7.5" fill="none" stroke="url(#brand-ring)" strokeWidth="2.2" />
-        <circle cx="24" cy="23" r="2.6" fill="#f7f9ff" />
-        <path d="M24 15.2v-3.1" stroke="#f7f9ff" strokeWidth="1.7" strokeLinecap="round" />
-        <path d="m31.2 23h3.1" stroke="#dbe3ff" strokeWidth="1.7" strokeLinecap="round" />
-        <path d="M24 30.8v3.1" stroke="#dbe3ff" strokeWidth="1.7" strokeLinecap="round" />
-        <circle cx="16.8" cy="23" r="1.4" fill="#dbe3ff" opacity="0.9" />
-      </svg>
-    </div>
+    <span className="app-brand__mark" style={{ height }}>
+      <img
+        className="app-brand__markImg app-brand__markImg--dark"
+        src="/logo-mark-tight.png"
+        alt=""
+        height={height}
+        aria-hidden="true"
+      />
+      <img
+        className="app-brand__markImg app-brand__markImg--light"
+        src="/logo-mark-tight-on-light.png"
+        alt=""
+        height={height}
+        aria-hidden="true"
+      />
+    </span>
   );
 }

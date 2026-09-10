@@ -14,6 +14,7 @@
  */
 
 import React from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   APP_BRAND,
@@ -45,7 +46,7 @@ export default function Sidebar({
       aria-label="Primary"
     >
       <div className="app-sidebar__head">
-        <a
+        <Link
           href="/"
           className="app-brand"
           aria-label={APP_BRAND}
@@ -58,7 +59,7 @@ export default function Sidebar({
               <div className="app-brand__subtitle">{APP_SUBTITLE}</div>
             </div>
           )}
-        </a>
+        </Link>
       </div>
 
       <nav className="app-sidebar__nav">
@@ -73,7 +74,11 @@ export default function Sidebar({
               {items.map((link) => {
                 const active = isActive(pathname, link.href);
                 return (
-                  <a
+                  // next/link keeps navigation inside the client router. As
+                  // plain anchors these were full document reloads: the bundle
+                  // re-parsed on every click, and a progress indicator would
+                  // die with the unload before it could paint.
+                  <Link
                     key={link.href}
                     href={link.href}
                     className={`app-sidebar__link${active ? " app-sidebar__link--active" : ""}`}
@@ -82,7 +87,7 @@ export default function Sidebar({
                   >
                     {link.icon ? <NavIcon name={link.icon} /> : null}
                     <span className="app-sidebar__label">{link.label}</span>
-                  </a>
+                  </Link>
                 );
               })}
             </div>

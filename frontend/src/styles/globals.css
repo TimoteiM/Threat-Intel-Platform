@@ -231,23 +231,30 @@ html[data-theme="light"] /* The brand lock-up, shared by the rail head and the f
   color: inherit;
 }
 
+/* No tile behind the mark any more: the logo has its own silhouette and its
+   own colour, and a gradient chip behind it was a second brand competing with
+   the first. */
 .app-brand__mark {
-  width: 28px;
-  height: 28px;
   flex-shrink: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 8px;
-  border: 1px solid rgba(123, 147, 255, 0.35);
-  background: linear-gradient(145deg, #5f7bff, #3a53c9);
-  box-shadow: 0 2px 8px rgba(58, 83, 201, 0.35);
 }
 
-.app-brand__markSvg {
-  width: 18px;
-  height: 18px;
+.app-brand__markImg {
+  display: block;
+  width: auto;
+}
+
+/* Only one colourway is ever in the layout. The theme decides which. */
+.app-brand__markImg--light {
+  display: none;
+}
+
+html[data-theme="light"] .app-brand__markImg--dark {
+  display: none;
+}
+
+html[data-theme="light"] .app-brand__markImg--light {
   display: block;
 }
 
@@ -1428,4 +1435,134 @@ body.process-graph-fullscreen .app-shell__main {
     opacity: 1;
     animation-delay: 0s;
   }
+}
+
+/* ─── Loading ──────────────────────────────────────────────────────────── */
+
+.brand-loader {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 72px 0;
+  text-align: center;
+}
+
+.brand-loader--inline {
+  grid-auto-flow: column;
+  justify-items: start;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+}
+
+/* The mark is painted by the sweep, not by an <img>: the logo's alpha channel
+   is the mask, so the conic highlight can only ever light up the artwork. */
+.brand-loader__mark {
+  display: block;
+  background: var(--shell-accent);
+  -webkit-mask: url("/logo-mark.png") center / contain no-repeat;
+  mask: url("/logo-mark.png") center / contain no-repeat;
+  animation: brandPulse 1.4s ease-in-out infinite;
+}
+
+.brand-loader--inline .brand-loader__mark {
+  width: 20px;
+  height: 20px;
+}
+
+.brand-loader__label {
+  color: var(--text-dim);
+  font-size: var(--font-meta);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+
+/* Baseline, and the fallback wherever @property is unavailable: the mark
+   breathes in the accent. Not the sweep, but unmistakably alive. */
+@keyframes brandPulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+/* Rotating the element would rotate the mark. Only the gradient turns, which
+   CSS cannot animate on a background directly — so the sweep is driven by a
+   registered angle where supported, and degrades to a quiet pulse elsewhere. */
+@property --sweep-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@supports (background: conic-gradient(from var(--sweep-angle), red, blue)) {
+  .brand-loader__mark {
+    background: conic-gradient(
+      from var(--sweep-angle),
+      var(--shell-text-muted) 0deg,
+      var(--shell-text-muted) 200deg,
+      var(--shell-accent) 300deg,
+      var(--shell-accent-glow) 340deg,
+      var(--shell-text-muted) 360deg
+    );
+    animation: brandSweepAngle 1.6s linear infinite;
+  }
+}
+
+@keyframes brandSweepAngle {
+  to {
+    --sweep-angle: 360deg;
+  }
+}
+
+/* A sweeping highlight is exactly the kind of motion that causes trouble for
+   motion-sensitive users. They get the mark, holding still, in the accent. */
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader__mark {
+    animation: none;
+    background: var(--shell-accent);
+  }
+}
+
+/* ─── Route progress ───────────────────────────────────────────────────── */
+
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: var(--sidebar-width);
+  right: 0;
+  z-index: 80;
+  height: 2px;
+  background: transparent;
+  pointer-events: none;
+  transition: left 160ms ease;
+}
+
+.app-shell--collapsed .route-progress {
+  left: var(--sidebar-width-collapsed);
+}
+
+.route-progress__bar {
+  display: block;
+  height: 100%;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(90deg, var(--shell-accent-deep), var(--shell-accent), var(--shell-accent-glow));
+  box-shadow: 0 0 10px rgba(79, 110, 247, 0.55);
+  transition: width 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-progress__bar {
+    transition: none;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
