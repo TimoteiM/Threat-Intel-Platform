@@ -409,6 +409,7 @@ def _run_collectors_inline(
             fast_evidence,
             observable_type=observable_type,
             manual=bool((external_context or {}).get("requested_manually")),
+            suppressed=bool((external_context or {}).get("sandbox_suppressed")),
         )
         if decision.run:
             anyrun_executor = concurrent.futures.ThreadPoolExecutor(

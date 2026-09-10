@@ -31,7 +31,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import defer
 from sqlalchemy import func, or_, select
 
@@ -738,6 +738,109 @@ async def cancel_alert_investigation(
     }
     await db.commit()
     return {"run_id": str(run.id), "status": "cancelled", "revoked_task_ids": revoked}
+
+
+class SandboxSelectionRequest(BaseModel):
+    """The indicators an analyst picked out of an alert body for detonation."""
+
+    investigation_ids: list[str] = Field(..., min_length=1, max_length=25)
+
+
+@router.post("/{run_id}/sandbox")
+async def sandbox_selected_indicators(
+    body: SandboxSelectionRequest,
+    db: DBSession,
+    run_id: str = FastAPIPath(...),
+) -> dict[str, Any]:
+    """Detonate the selected indicators from this run in ANY.RUN.
+
+    The sandbox is deliberately absent from the automatic alert-body path — one
+    pasted alert can carry dozens of URLs, and each detonation costs a licence
+    request against a monthly allowance and holds the single analysis slot for
+    around two minutes. This is where the analyst spends that budget on the
+    handful worth it.
+    """
+    from app.collectors.registry import get_collector
+    from app.tasks.sandbox_task import run_sandbox_batch
+
+    run = await _get_run(db, run_id)
+    payload = _run_payload(run)
+
+    # Only indicators this run actually produced. Without this the endpoint
+    # would detonate any investigation id a caller cared to name.
+    allowed: dict[str, str] = {}
+    for report in payload.get("indicator_reports") or []:
+        if not isinstance(report, dict):
+            continue
+        for key in ("investigation", "prior_investigation"):
+            ref = report.get(key)
+            if isinstance(ref, dict):
+                ref_id = str(ref.get("investigation_id") or "").strip()
+                if ref_id:
+                    allowed[ref_id] = str((report.get("indicator") or {}).get("value") or "")
+
+    requested = [str(i).strip() for i in body.investigation_ids if str(i).strip()]
+    unknown = [i for i in requested if i not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(unknown)} indicator(s) do not belong to this run.",
+        )
+
+    collector_cls = get_collector("hybrid_analysis")
+    supported = set(getattr(collector_cls, "supported_types", ()) or ())
+
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for investigation_id in requested:
+        if investigation_id in seen:
+            continue
+        seen.add(investigation_id)
+        try:
+            parsed = uuid.UUID(investigation_id)
+        except ValueError:
+            rejected.append({"investigation_id": investigation_id, "reason": "invalid_id"})
+            continue
+
+        result = await db.execute(select(Investigation).where(Investigation.id == parsed))
+        inv = result.scalars().first()
+        if inv is None:
+            rejected.append({"investigation_id": investigation_id, "reason": "not_found"})
+            continue
+
+        state = str(inv.state or "").lower()
+        if state not in {"concluded", "failed"}:
+            # Re-running a collector under a live pipeline races the pipeline's
+            # own evidence write, and the loser is whichever finishes second.
+            rejected.append({"investigation_id": investigation_id, "reason": f"still_{state}"})
+            continue
+
+        observable_type = str(inv.observable_type or "domain").strip()
+        if observable_type not in supported:
+            rejected.append({"investigation_id": investigation_id, "reason": f"unsupported_type:{observable_type}"})
+            continue
+
+        accepted.append({"investigation_id": investigation_id, "indicator": allowed.get(investigation_id, inv.domain)})
+
+    if not accepted:
+        raise HTTPException(
+            status_code=409,
+            detail="None of the selected indicators can be sandboxed right now.",
+        )
+
+    task = run_sandbox_batch.delay([a["investigation_id"] for a in accepted])
+
+    return {
+        "run_id": str(run.id),
+        "task_id": getattr(task, "id", None),
+        "queued": accepted,
+        "rejected": rejected,
+        # One at a time, ~111s each measured across stored runs. The estimate is
+        # what stops the page looking hung on a selection of six.
+        "estimated_seconds": len(accepted) * 111,
+    }
 
 
 @router.delete("/{run_id}")

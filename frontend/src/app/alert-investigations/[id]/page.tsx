@@ -17,6 +17,7 @@ import {
   getAlertInvestigation,
   getRunCase,
   getSuppressionCandidate,
+  sandboxAlertIndicators,
   type AlertExportFormat,
 } from "@/lib/api";
 import type {
@@ -62,6 +63,9 @@ export default function AlertInvestigationDetailPage() {
   const [copied, setCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [sandboxPicks, setSandboxPicks] = useState<Record<string, boolean>>({});
+  const [sandboxing, setSandboxing] = useState(false);
+  const [sandboxNote, setSandboxNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     const data = await getAlertInvestigation(runId);
@@ -110,6 +114,65 @@ export default function AlertInvestigationDetailPage() {
     [run],
   );
   const aiReport: AlertAIReport | null = run?.ai_report || null;
+
+  // ANY.RUN is deliberately not run automatically on this path: one pasted
+  // alert can carry dozens of URLs, each detonation spends a licence request,
+  // and they queue one at a time. The analyst picks the few worth it.
+  // Only concluded indicators are offered — re-running a collector underneath a
+  // live pipeline races its own evidence write.
+  const sandboxable = useMemo(
+    () =>
+      reports
+        .map((report) => ({
+          id: String(
+            report.investigation?.investigation_id ||
+              report.prior_investigation?.investigation_id ||
+              "",
+          ),
+          value: report.indicator.value,
+          type: String(report.indicator.observable_type || report.indicator.type || ""),
+          status: report.status,
+        }))
+        .filter(
+          (item) =>
+            item.id &&
+            item.status !== "investigating" &&
+            ["url", "domain", "hash", "file"].includes(item.type),
+        ),
+    [reports],
+  );
+
+  const pickedIds = useMemo(
+    () => sandboxable.filter((item) => sandboxPicks[item.id]).map((item) => item.id),
+    [sandboxable, sandboxPicks],
+  );
+
+  const submitSandbox = useCallback(async () => {
+    if (!pickedIds.length) return;
+    setSandboxing(true);
+    setSandboxNote(null);
+    try {
+      const result = await sandboxAlertIndicators(runId, pickedIds);
+      const minutes = Math.max(1, Math.round(result.estimated_seconds / 60));
+      const skipped = result.rejected.length
+        ? ` ${result.rejected.length} could not be queued (${result.rejected
+            .map((r) => r.reason.replace(/_/g, " "))
+            .join(", ")}).`
+        : "";
+      setSandboxNote({
+        tone: "ok",
+        text:
+          `${result.queued.length} indicator(s) queued for detonation — about ${minutes} minute(s), ` +
+          `since the sandbox runs one at a time. Verdicts update on each investigation as they land.` +
+          skipped,
+      });
+      setSandboxPicks({});
+    } catch (err: any) {
+      setSandboxNote({ tone: "error", text: err?.message || "Could not queue the sandbox run." });
+    } finally {
+      setSandboxing(false);
+    }
+  }, [pickedIds, runId]);
   // The exported list is the integration contract: AI analysis first, then one
   // report per indicator.
   const exportList: AlertReport[] = useMemo(
@@ -512,6 +575,16 @@ export default function AlertInvestigationDetailPage() {
         eyebrow={`${reports.length} JSON report${reports.length === 1 ? "" : "s"}`}
         description="One self-contained JSON report per extracted indicator — these follow the AI report in the exported list."
       >
+        {sandboxable.length > 0 && <SandboxBar
+          candidates={sandboxable}
+          picked={pickedIds}
+          busy={sandboxing}
+          note={sandboxNote}
+          onToggleAll={(on) =>
+            setSandboxPicks(on ? Object.fromEntries(sandboxable.map((i) => [i.id, true])) : {})
+          }
+          onSubmit={submitSandbox}
+        />}
         {reports.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-dim)", fontFamily: "var(--font-sans)" }}>
             {isActive ? "Collectors are still running…" : "No indicator reports were produced."}
@@ -522,6 +595,12 @@ export default function AlertInvestigationDetailPage() {
               const key = `${report.indicator.type}:${report.indicator.value}:${index}`;
               const isOpen = !!expanded[key];
               const classification = report.verdict?.classification || "inconclusive";
+              const sandboxId = String(
+                report.investigation?.investigation_id ||
+                  report.prior_investigation?.investigation_id ||
+                  "",
+              );
+              const canSandbox = sandboxable.some((item) => item.id === sandboxId);
               return (
                 <div
                   key={key}
@@ -542,6 +621,21 @@ export default function AlertInvestigationDetailPage() {
                       flexWrap: "wrap",
                     }}
                   >
+                    {canSandbox ? (
+                      <input
+                        type="checkbox"
+                        checked={!!sandboxPicks[sandboxId]}
+                        onChange={(event) =>
+                          setSandboxPicks((prev) => ({ ...prev, [sandboxId]: event.target.checked }))
+                        }
+                        aria-label={`Select ${report.indicator.value} for sandbox detonation`}
+                        style={{ accentColor: "var(--accent)", width: 15, height: 15, cursor: "pointer" }}
+                      />
+                    ) : (
+                      // Kept in the layout so every row's type badge starts at
+                      // the same x — a ragged left edge is worse than a gap.
+                      <span style={{ width: 15, flexShrink: 0 }} aria-hidden="true" />
+                    )}
                     <span style={typeBadgeStyle}>{report.indicator.type}</span>
                     <span
                       style={{
@@ -795,6 +889,94 @@ function parseResolvedIdentifiers(markdown: string): ResolvedIdentifierRow[] {
 
 function stripResolvedIdentifiers(markdown: string): string {
   return markdown.replace(RESOLVED_SECTION_RE, "").trim();
+}
+
+/**
+ * Where the sandbox budget gets spent.
+ *
+ * The count and the time estimate are the point: ANY.RUN runs one analysis at
+ * a time and averages 111 seconds, so a selection of six is eleven minutes of
+ * queue. An analyst deciding that is fine — an analyst discovering it after
+ * clicking is not.
+ */
+function SandboxBar({
+  candidates,
+  picked,
+  busy,
+  note,
+  onToggleAll,
+  onSubmit,
+}: {
+  candidates: Array<{ id: string; value: string; type: string }>;
+  picked: string[];
+  busy: boolean;
+  note: { tone: "ok" | "error"; text: string } | null;
+  onToggleAll: (on: boolean) => void;
+  onSubmit: () => void;
+}) {
+  const allPicked = picked.length > 0 && picked.length === candidates.length;
+  const minutes = Math.max(1, Math.round((picked.length * 111) / 60));
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 8,
+        marginBottom: 12,
+        padding: "10px 12px",
+        borderRadius: 10,
+        border: "1px solid var(--panel-divider-strong)",
+        background: "var(--panel-outline-bg)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11.5, color: "var(--text-dim)", fontFamily: "var(--font-sans)", flex: 1, minWidth: 260 }}>
+          The sandbox does not run automatically on alert bodies — it would spend a month of
+          licence allowance on one ticket. Select the indicators worth detonating.
+        </span>
+        <button
+          type="button"
+          onClick={() => onToggleAll(!allPicked)}
+          style={{ ...secondaryButtonStyle, padding: "5px 10px", fontSize: 10 }}
+        >
+          {allPicked ? "Clear" : `Select all ${candidates.length}`}
+        </button>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={busy || picked.length === 0}
+          style={{
+            ...secondaryButtonStyle,
+            padding: "5px 12px",
+            fontSize: 10,
+            fontWeight: 700,
+            cursor: busy || picked.length === 0 ? "not-allowed" : "pointer",
+            opacity: busy || picked.length === 0 ? 0.5 : 1,
+            borderColor: picked.length ? "var(--accent)" : undefined,
+            color: picked.length ? "var(--accent)" : undefined,
+          }}
+        >
+          {busy
+            ? "Queueing…"
+            : picked.length
+              ? `Run sandbox on ${picked.length} · ~${minutes} min`
+              : "Run sandbox"}
+        </button>
+      </div>
+      {note && (
+        <div
+          role="status"
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--font-sans)",
+            color: note.tone === "error" ? "var(--status-danger)" : "var(--status-success)",
+          }}
+        >
+          {note.text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const SEVERITY_COLORS: Record<string, string> = {

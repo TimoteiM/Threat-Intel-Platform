@@ -416,6 +416,28 @@ export function getAlertInvestigationReportList(runId: string) {
   );
 }
 
+export interface SandboxSelectionResult {
+  run_id: string;
+  task_id: string | null;
+  queued: Array<{ investigation_id: string; indicator: string }>;
+  rejected: Array<{ investigation_id: string; reason: string }>;
+  estimated_seconds: number;
+}
+
+/**
+ * Detonate the chosen indicators from an alert body.
+ *
+ * ANY.RUN is off by default on this path — one alert can carry dozens of URLs
+ * and each detonation costs a licence request — so this is how an analyst
+ * spends that budget on the few worth it.
+ */
+export function sandboxAlertIndicators(runId: string, investigationIds: string[]) {
+  return request<SandboxSelectionResult>(`/alert-investigations/${runId}/sandbox`, {
+    method: "POST",
+    body: JSON.stringify({ investigation_ids: investigationIds }),
+  });
+}
+
 export function cancelAlertInvestigation(runId: string) {
   return request<{ run_id: string; status: string }>(`/alert-investigations/${runId}/cancel`, {
     method: "POST",

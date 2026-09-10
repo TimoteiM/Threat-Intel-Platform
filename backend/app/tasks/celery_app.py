@@ -103,4 +103,5 @@ celery_app.autodiscover_tasks([
     "app.tasks.case_event_task",
     "app.tasks.case_narrative_task",
     "app.tasks.anyrun_video_task",
+    "app.tasks.sandbox_task",
 ])

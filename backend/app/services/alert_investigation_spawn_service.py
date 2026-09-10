@@ -121,6 +121,12 @@ def spawn_investigation(
             observable_type=observable_type,
             context=context,
             requested_collectors=None,  # → platform defaults, VT included
+            # ANY.RUN stays out of the automatic path. A single alert body can
+            # carry dozens of URLs; detonating each would spend a month of
+            # licence allowance on one ticket, and they queue one at a time so
+            # the analyst waits for all of them. The results page offers the
+            # sandbox per indicator instead.
+            external_context={"sandbox_suppressed": True},
         )
         _store_investigation_task_id(investigation_id, getattr(task, "id", None))
     except Exception as exc:

@@ -66,6 +66,7 @@ def should_detonate(
     observable_type: str,
     excluded: bool = False,
     manual: bool = False,
+    suppressed: bool = False,
 ) -> SandboxDecision:
     """Is a sandbox run worth its cost for this observable?
 
@@ -78,6 +79,13 @@ def should_detonate(
     nothing was asking; a person typing a domain into the box *is* the question,
     and answering it with "we decided not to look" is the wrong answer. Batches
     and alert-spawned investigations are not manual — they are the volume.
+
+    `suppressed` is the caller saying "not automatically, whatever you think".
+    One pasted alert body can carry dozens of URLs, and detonating each one
+    burns a monthly licence allowance on a single ticket while the analyst
+    waits behind a queue that only moves one analysis at a time. Alert-body
+    indicators are therefore sandboxed on request, from the results page, on
+    the ones an analyst picks out.
     """
     kind = str(observable_type or "").strip().lower()
 
@@ -86,6 +94,12 @@ def should_detonate(
         # someone explicitly investigated their own corporate domain, they want
         # the sandbox, not a reminder that it is on the allowlist.
         return SandboxDecision(True, "requested_by_analyst")
+
+    if suppressed:
+        # Ahead of the file clause too. A pasted alert full of attachments is
+        # exactly the case this exists to stop; the analyst can still pick any
+        # of them and detonate deliberately.
+        return SandboxDecision(False, "awaiting_analyst_selection")
 
     if excluded:
         # The analyst has already said this is theirs and benign. Detonating it
