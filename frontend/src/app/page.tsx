@@ -75,7 +75,7 @@ function CollectorStrip() {
             alignItems: "center",
             gap: 7,
             padding: "5px 12px",
-            background: "rgba(150, 145, 190, 0.07)",
+            background: "rgba(126, 134, 170, 0.07)",
             border: "1px solid var(--panel-divider)",
             borderRadius: 20,
             fontSize: 11,
@@ -106,21 +106,21 @@ function CollectorStrip() {
 const STEPS = [
   {
     icon: "⬡",
-    iconBg: "linear-gradient(135deg, #a897ff, #8b7bff)",
+    iconBg: "linear-gradient(135deg, #7b93ff, #4f6ef7)",
     title: "Submit an Observable",
     desc: "Enter a domain, IP, URL, file hash, or email address. Domains also support typosquatting and visual brand comparison.",
     tags: ["domain · ip · url · hash · email", "+ typosquatting check"],
   },
   {
     icon: "◎",
-    iconBg: "linear-gradient(135deg, #8b7bff, #6a4fe0)",
+    iconBg: "linear-gradient(135deg, #4f6ef7, #3a53c9)",
     title: "20+ Collectors Run",
     desc: "DNS, HTTP, TLS, WHOIS, VirusTotal, AbuseIPDB, URLScan, OpenCTI, AnyRun, ThreatFox and more — all in parallel.",
     tags: ["≈ 2–90 seconds", "parallel execution"],
   },
   {
     icon: "◈",
-    iconBg: "linear-gradient(135deg, #6a4fe0, #4a29c4)",
+    iconBg: "linear-gradient(135deg, #3a53c9, #2c3f9e)",
     title: "AI Analysis",
     desc: "Claude applies a strict methodology and classifies the observable with MITRE ATT&CK-mapped findings and IOCs.",
     tags: ["Benign · Suspicious · Malicious", "IOCs extracted"],
@@ -401,9 +401,9 @@ function RecentInvestigations({
                     onDelete(inv);
                   }}
                   style={{
-                    border: "1px solid rgba(251, 113, 133, 0.28)",
+                    border: "1px solid rgba(240, 112, 80, 0.28)",
                     background: "rgba(127, 29, 29, 0.14)",
-                    color: "#fda4af",
+                    color: "#f5a48f",
                     borderRadius: 6,
                     padding: "5px 8px",
                     fontSize: 9,
@@ -501,8 +501,8 @@ function DuplicateModal({
         <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 20 }}>
           <div style={{
             width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-            background: "rgba(242,169,60,0.12)",
-            border: "1px solid rgba(242,169,60,0.25)",
+            background: "rgba(240,160,80,0.12)",
+            border: "1px solid rgba(240,160,80,0.25)",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 18,
           }}>
@@ -599,14 +599,14 @@ function DuplicateModal({
             style={{
               flex: 1,
               padding: "11px 16px",
-              background: "linear-gradient(135deg, #8b7bff, #c0acff)",
+              background: "linear-gradient(135deg, #4f6ef7, #8fa4ff)",
               border: "none",
               borderRadius: "var(--radius)",
               color: "#fff",
               fontSize: 13, fontWeight: 600,
               fontFamily: "var(--font-sans)",
               cursor: "pointer",
-              boxShadow: "0 2px 8px rgba(139,123,255,0.32)",
+              boxShadow: "0 2px 8px rgba(79,110,247,0.32)",
             }}
           >
             View Existing Report

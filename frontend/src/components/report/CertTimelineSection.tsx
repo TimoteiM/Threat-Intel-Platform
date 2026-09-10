@@ -46,7 +46,7 @@ export default function CertTimelineSection({ certTimeline }: Props) {
           {burst_periods.slice(0, 3).map((bp, i) => (
             <div key={i} style={{
               padding: "8px 14px", marginBottom: 4,
-              background: "rgba(251,113,133,0.06)",
+              background: "rgba(240,112,80,0.06)",
               borderLeft: "3px solid var(--red)",
               borderRadius: "var(--radius-sm)",
               fontSize: 12,
@@ -137,7 +137,7 @@ export default function CertTimelineSection({ certTimeline }: Props) {
                 gridTemplateColumns: "2fr 2fr 1.5fr 1.5fr 0.8fr",
                 padding: "6px 10px",
                 background: cert.is_short_lived
-                  ? "rgba(242,169,60,0.05)"
+                  ? "rgba(240,160,80,0.05)"
                   : i % 2 === 0 ? "var(--bg-input)" : "transparent",
                 borderRadius: "var(--radius-sm)",
                 borderLeft: cert.is_short_lived ? "2px solid var(--yellow)" : "2px solid transparent",

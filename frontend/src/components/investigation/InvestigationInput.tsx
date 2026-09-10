@@ -292,7 +292,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           width: "min(860px, 100%)",
           maxHeight: "calc(100dvh - 40px)",
           overflow: "auto",
-          background: "linear-gradient(180deg, rgba(13,12,20,0.98), rgba(6,6,10,0.98))",
+          background: "linear-gradient(180deg, rgba(11,13,20,0.98), rgba(7,8,12,0.98))",
           border: "1px solid rgba(148, 163, 184, 0.28)",
           borderRadius: 8,
           boxShadow: "0 30px 90px rgba(0,0,0,0.52)",
@@ -333,7 +333,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
               height: 34,
               borderRadius: 8,
               border: "1px solid rgba(148, 163, 184, 0.22)",
-              background: "rgba(13, 12, 20, 0.72)",
+              background: "rgba(11, 13, 20, 0.72)",
               color: "var(--text-secondary)",
               cursor: "pointer",
               fontSize: 18,
@@ -358,7 +358,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
               minHeight: 40,
               padding: "9px 12px",
               color: "var(--text)",
-              background: "rgba(13, 12, 20, 0.72)",
+              background: "rgba(11, 13, 20, 0.72)",
               border: "1px solid rgba(148, 163, 184, 0.28)",
               borderRadius: 8,
               outline: "none",
@@ -466,7 +466,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                 padding: "6px 14px",
                 borderRadius: "var(--radius-sm)",
                 border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-                background: active ? "rgba(139,123,255,0.12)" : "var(--bg-elevated)",
+                background: active ? "rgba(79,110,247,0.12)" : "var(--bg-elevated)",
                 color: active ? "var(--accent)" : "var(--text-dim)",
                 fontSize: 11,
                 fontWeight: active ? 700 : 500,
@@ -550,7 +550,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           style={{
             padding: "12px 28px",
             background: canSubmit
-              ? "linear-gradient(135deg, #8b7bff, #c0acff)"
+              ? "linear-gradient(135deg, #4f6ef7, #8fa4ff)"
               : "var(--bg-elevated)",
             border: "none",
             borderRadius: "var(--radius)",
@@ -560,7 +560,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
             fontFamily: "var(--font-sans)",
             cursor: canSubmit ? "pointer" : "not-allowed",
             transition: "all 0.2s",
-            boxShadow: canSubmit ? "0 2px 8px rgba(139, 123, 255, 0.3)" : "none",
+            boxShadow: canSubmit ? "0 2px 8px rgba(79, 110, 247, 0.3)" : "none",
             whiteSpace: "nowrap",
           }}
         >
@@ -587,7 +587,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
           }}
         >
           {alertPreviewError ? (
-            <div style={{ fontSize: 11, color: "#f2a93c", fontFamily: "var(--font-sans)" }}>
+            <div style={{ fontSize: 11, color: "#f0a050", fontFamily: "var(--font-sans)" }}>
               {alertPreviewError}
             </div>
           ) : (
@@ -617,7 +617,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                     ` · ${alertPreview!.total - alertPreview!.investigable_total} context-only`}
                 </span>
                 {alertPreview!.truncated && (
-                  <span style={{ fontSize: 10, color: "#f2a93c", fontFamily: "var(--font-sans)" }}>
+                  <span style={{ fontSize: 10, color: "#f0a050", fontFamily: "var(--font-sans)" }}>
                     {alertPreview!.dropped} beyond the {MAX_ALERT_INDICATORS}-indicator limit were dropped
                   </span>
                 )}
@@ -658,8 +658,8 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                       borderRadius: 20,
                       fontSize: 10.5,
                       fontFamily: "var(--font-mono)",
-                      background: indicator.investigable ? "rgba(139,123,255,0.10)" : "var(--bg-input)",
-                      border: `1px solid ${indicator.investigable ? "rgba(139,123,255,0.28)" : "var(--border)"}`,
+                      background: indicator.investigable ? "rgba(79,110,247,0.10)" : "var(--bg-input)",
+                      border: `1px solid ${indicator.investigable ? "rgba(79,110,247,0.28)" : "var(--border)"}`,
                       color: indicator.investigable ? "var(--text)" : "var(--text-muted)",
                       opacity: indicator.investigable ? 1 : 0.7,
                     }}
@@ -705,8 +705,8 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                           textTransform: "uppercase" as const,
                           padding: "1px 6px",
                           borderRadius: 20,
-                          background: prior.reusable ? "rgba(43,212,160,0.14)" : "rgba(242,169,60,0.12)",
-                          color: prior.reusable ? "#2bd4a0" : "#f2a93c",
+                          background: prior.reusable ? "rgba(46,204,113,0.14)" : "rgba(240,160,80,0.12)",
+                          color: prior.reusable ? "#2ecc71" : "#f0a050",
                           fontFamily: "var(--font-sans)",
                         }}
                       >
@@ -826,7 +826,7 @@ export default function InvestigationInput({ onSubmit, loading }: Props) {
                     background: !applicable
                       ? "var(--bg-input)"
                       : checked
-                        ? "rgba(139,123,255,0.08)"
+                        ? "rgba(79,110,247,0.08)"
                         : "var(--bg-input)",
                     border: `1px solid ${checked && applicable ? "var(--accent)" : "var(--border)"}`,
                     borderRadius: "var(--radius-sm)",
@@ -1039,12 +1039,12 @@ function proxyChoiceStyle(active: boolean): React.CSSProperties {
     minHeight: 72,
     padding: "13px 14px",
     borderRadius: 8,
-    border: `1px solid ${active ? "rgba(139, 123, 255, 0.72)" : "rgba(148, 163, 184, 0.18)"}`,
-    background: active ? "rgba(106, 79, 224, 0.24)" : "rgba(13, 12, 20, 0.72)",
+    border: `1px solid ${active ? "rgba(79, 110, 247, 0.72)" : "rgba(148, 163, 184, 0.18)"}`,
+    background: active ? "rgba(58, 83, 201, 0.24)" : "rgba(11, 13, 20, 0.72)",
     color: "var(--text)",
     cursor: "pointer",
     textAlign: "left",
-    boxShadow: active ? "0 0 0 1px rgba(139, 123, 255, 0.2)" : "none",
+    boxShadow: active ? "0 0 0 1px rgba(79, 110, 247, 0.2)" : "none",
   };
 }
 

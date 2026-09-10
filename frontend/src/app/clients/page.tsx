@@ -33,10 +33,10 @@ function parseCsvInput(raw: string): string[] {
 const PAGE_LIMIT = 25;
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#fb7185",
+  critical: "#f07050",
   high:     "#fb923c",
-  medium:   "#f2a93c",
-  low:      "#8b7bff",
+  medium:   "#f0a050",
+  low:      "#4f6ef7",
 };
 
 export default function ClientsPage() {
@@ -192,7 +192,7 @@ export default function ClientsPage() {
             style={{
               marginTop: 14,
               padding: "10px 24px",
-              background: (!name.trim() || !domain.trim() || adding) ? "var(--bg-elevated)" : "linear-gradient(135deg, #8b7bff, #c0acff)",
+              background: (!name.trim() || !domain.trim() || adding) ? "var(--bg-elevated)" : "linear-gradient(135deg, #4f6ef7, #8fa4ff)",
               border: "none",
               borderRadius: "var(--radius)",
               color: (!name.trim() || !domain.trim() || adding) ? "var(--text-muted)" : "#fff",
@@ -293,8 +293,8 @@ export default function ClientsPage() {
                       fontWeight: 700,
                       padding: "2px 7px",
                       borderRadius: 999,
-                      background: c.status === "active" ? "rgba(43,212,160,0.15)" : "rgba(148,163,184,0.15)",
-                      color: c.status === "active" ? "#2bd4a0" : "#94a3b8",
+                      background: c.status === "active" ? "rgba(46,204,113,0.15)" : "rgba(148,163,184,0.15)",
+                      color: c.status === "active" ? "#2ecc71" : "#94a3b8",
                       fontFamily: "var(--font-sans)",
                     }}>
                       {c.status.toUpperCase()}
@@ -346,19 +346,19 @@ export default function ClientsPage() {
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button
                     onClick={() => router.push(`/clients/${c.id}`)}
-                    style={actionBtn("#8b7bff")}
+                    style={actionBtn("#4f6ef7")}
                   >
                     View
                   </button>
                   <button
                     onClick={() => handleToggleStatus(c)}
-                    style={actionBtn(c.status === "active" ? "#f2a93c" : "#2bd4a0")}
+                    style={actionBtn(c.status === "active" ? "#f0a050" : "#2ecc71")}
                   >
                     {c.status === "active" ? "Pause" : "Resume"}
                   </button>
                   <button
                     onClick={() => handleDelete(c.id, c.name)}
-                    style={actionBtn("#fb7185")}
+                    style={actionBtn("#f07050")}
                   >
                     Del
                   </button>

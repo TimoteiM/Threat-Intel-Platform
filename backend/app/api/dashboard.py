@@ -110,6 +110,7 @@ async def get_stats(session: DBSession):
             Investigation.domain,
             Investigation.risk_score,
             Investigation.classification,
+            Investigation.observable_type,
             Investigation.created_at,
         )
         .where(Investigation.classification == "malicious")
@@ -144,6 +145,7 @@ def _build_recent_malicious(rows: Iterable) -> list[dict]:
                 "domain": row.domain,
                 "risk_score": row.risk_score,
                 "classification": row.classification,
+                "observable_type": row.observable_type,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
         )

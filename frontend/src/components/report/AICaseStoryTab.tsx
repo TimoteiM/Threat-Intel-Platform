@@ -11,11 +11,11 @@ const button: React.CSSProperties = { border: "1px solid var(--border)", borderR
 function verdictTone(verdict: unknown): { color: string; background: string } {
   switch (String(verdict || "").toLowerCase()) {
     case "benign":
-      return { color: "#2bd4a0", background: "rgba(43,212,160,.12)" };
+      return { color: "#2ecc71", background: "rgba(46,204,113,.12)" };
     case "suspicious":
-      return { color: "#f2a93c", background: "rgba(242,169,60,.12)" };
+      return { color: "#f0a050", background: "rgba(240,160,80,.12)" };
     case "malicious":
-      return { color: "#fb7185", background: "rgba(251,113,133,.12)" };
+      return { color: "#f07050", background: "rgba(240,112,80,.12)" };
     default:
       return { color: "#94a3b8", background: "rgba(148,163,184,.12)" };
   }
@@ -49,7 +49,7 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
     catch (e: any) { setError(e?.message || "Case Story generation failed"); }
     finally { setLoading(false); }
   }
-  if (!story) return <div style={{ ...panel, padding: 32, textAlign: "center", background: "linear-gradient(135deg, var(--bg-card), rgba(124,92,255,.08))" }}>
+  if (!story) return <div style={{ ...panel, padding: 32, textAlign: "center", background: "linear-gradient(135deg, var(--bg-card), rgba(79,110,247,.08))" }}>
     <div style={{ fontSize: 11, letterSpacing: ".12em", color: "var(--accent)", fontWeight: 800 }}>AI CASE STORY</div>
     <h2 style={{ margin: "10px 0 8px", fontSize: 22 }}>Turn the evidence into one SOC-ready investigation story</h2>
     <p style={{ ...muted, maxWidth: 720, margin: "0 auto 18px" }}>This older investigation does not have a saved Case Story. You can generate and cache one on demand.</p>
@@ -60,7 +60,7 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
   const storyTone = verdictTone(story.verdict);
 
   return <div style={{ display: "grid", gap: 14 }}>
-    <div style={{ ...panel, background: "linear-gradient(135deg, var(--bg-card), rgba(124,92,255,.10))", borderLeft: "3px solid var(--accent)" }}>
+    <div style={{ ...panel, background: "linear-gradient(135deg, var(--bg-card), rgba(79,110,247,.10))", borderLeft: "3px solid var(--accent)" }}>
       <div style={{ display: "flex", gap: 14, justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div><div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 800, letterSpacing: ".1em" }}>AI CASE STORY · {story.model}</div><h2 style={{ margin: "7px 0", fontSize: 21 }}>{story.headline}</h2><div style={muted}>{story.generated_at ? new Date(story.generated_at).toLocaleString() : ""}</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}><strong style={{ fontSize: 26 }}>{story.risk_score}</strong><span style={{ padding: "6px 9px", borderRadius: 6, background: storyTone.background, color: storyTone.color, fontWeight: 800, fontSize: 12 }}>{story.verdict}</span><span style={muted}>{story.confidence} confidence</span></div>
@@ -75,14 +75,14 @@ export default function AICaseStoryTab({ investigationId, initialStory }: { inve
       <Section title="Contradictions & benign signals">{story.contradicting_evidence?.length ? story.contradicting_evidence.map((item: any, i: number) => <div key={i} style={{ padding: "10px 0", borderTop: i ? "1px solid var(--border)" : undefined }}><b style={{ fontSize: 12 }}>{item.title}</b><div style={muted}>{item.explanation}</div><RefPills refs={item.evidence_refs} /></div>) : <div style={muted}>No meaningful contradictory evidence was identified.</div>}</Section>
     </div>
 
-    <Section title="Attack & investigation story"><div style={{ display: "grid", gap: 0 }}>{story.timeline?.map((event: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 10 }}><div style={{ display: "flex", alignItems: "center", flexDirection: "column" }}><span style={{ width: 10, height: 10, borderRadius: 99, background: event.phase === "observed" ? "var(--accent)" : event.phase === "inferred" ? "#f2a93c" : "#2bd4a0", marginTop: 4 }} />{i < story.timeline.length - 1 && <span style={{ width: 1, minHeight: 55, background: "var(--border)" }} />}</div><div style={{ paddingBottom: 15 }}><b style={{ fontSize: 12 }}>{event.label}</b><span style={{ ...muted, marginLeft: 8, textTransform: "uppercase", fontSize: 9 }}>{event.phase}</span><div style={muted}>{event.description}</div><RefPills refs={event.evidence_refs} /></div></div>)}</div></Section>
+    <Section title="Attack & investigation story"><div style={{ display: "grid", gap: 0 }}>{story.timeline?.map((event: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 10 }}><div style={{ display: "flex", alignItems: "center", flexDirection: "column" }}><span style={{ width: 10, height: 10, borderRadius: 99, background: event.phase === "observed" ? "var(--accent)" : event.phase === "inferred" ? "#f0a050" : "#2ecc71", marginTop: 4 }} />{i < story.timeline.length - 1 && <span style={{ width: 1, minHeight: 55, background: "var(--border)" }} />}</div><div style={{ paddingBottom: 15 }}><b style={{ fontSize: 12 }}>{event.label}</b><span style={{ ...muted, marginLeft: 8, textTransform: "uppercase", fontSize: 9 }}>{event.phase}</span><div style={muted}>{event.description}</div><RefPills refs={event.evidence_refs} /></div></div>)}</div></Section>
 
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(330px,1fr))", gap: 14 }}>
       <Section title="Visual assessment"><p style={muted}>{story.visual_assessment?.summary}</p>{story.visual_assessment?.observations?.map((x: string) => <div key={x} style={{ ...muted, marginTop: 5 }}>• {x}</div>)}<RefPills refs={story.visual_assessment?.evidence_refs} /></Section>
       <Section title="Changes & campaign correlation"><b style={{ fontSize: 11 }}>Since the previous run</b>{story.changes_since_last_run?.length ? story.changes_since_last_run.map((x: string) => <div key={x} style={{ ...muted, marginTop: 5 }}>• {x}</div>) : <div style={muted}>No prior run or material change is available.</div>}<b style={{ display: "block", fontSize: 11, marginTop: 14 }}>Related campaign assessment</b><p style={muted}>{story.campaign_assessment}</p></Section>
     </div>
 
-    <Section title="Prioritized SOC actions"><div style={{ display: "grid", gap: 8 }}>{story.recommended_actions?.map((item: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, padding: 10, background: "var(--bg-elevated)", borderRadius: 7 }}><b style={{ color: item.priority === "P1" ? "#fb7185" : item.priority === "P2" ? "#f2a93c" : "#8b7bff" }}>{item.priority}</b><div><b style={{ fontSize: 12 }}>{item.action}</b><div style={muted}>{item.rationale}</div><RefPills refs={item.evidence_refs} /></div></div>)}</div>{story.data_gaps?.length > 0 && <div style={{ marginTop: 14 }}><b style={{ fontSize: 11 }}>Data gaps</b>{story.data_gaps.map((x: string) => <div key={x} style={muted}>• {x}</div>)}</div>}</Section>
+    <Section title="Prioritized SOC actions"><div style={{ display: "grid", gap: 8 }}>{story.recommended_actions?.map((item: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "38px 1fr", gap: 10, padding: 10, background: "var(--bg-elevated)", borderRadius: 7 }}><b style={{ color: item.priority === "P1" ? "#f07050" : item.priority === "P2" ? "#f0a050" : "#4f6ef7" }}>{item.priority}</b><div><b style={{ fontSize: 12 }}>{item.action}</b><div style={muted}>{item.rationale}</div><RefPills refs={item.evidence_refs} /></div></div>)}</div>{story.data_gaps?.length > 0 && <div style={{ marginTop: 14 }}><b style={{ fontSize: 11 }}>Data gaps</b>{story.data_gaps.map((x: string) => <div key={x} style={muted}>• {x}</div>)}</div>}</Section>
 
     <InvestigationCaseChat investigationId={investigationId} />
 

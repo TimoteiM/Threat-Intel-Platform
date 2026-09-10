@@ -578,7 +578,7 @@ export default function InvestigationsListPage() {
           color: var(--text-dim);
           letter-spacing: 0.16em;
           text-transform: uppercase;
-          border-bottom: 1px solid rgba(150, 145, 190, 0.12);
+          border-bottom: 1px solid rgba(126, 134, 170, 0.12);
           font-family: var(--font-mono);
         }
 
@@ -617,7 +617,7 @@ export default function InvestigationsListPage() {
 
         .catalog-row:hover {
           transform: translateY(-1px);
-          border-color: rgba(139, 123, 255, 0.28);
+          border-color: rgba(79, 110, 247, 0.28);
           box-shadow: var(--panel-shadow-card);
           background: var(--bg-card-hover);
         }
@@ -628,7 +628,7 @@ export default function InvestigationsListPage() {
         .pagination-controls button:focus-visible,
         .page-size-wrap select:focus-visible,
         button:focus-visible {
-          outline: 2px solid rgba(139, 123, 255, 0.8);
+          outline: 2px solid rgba(79, 110, 247, 0.8);
           outline-offset: 2px;
         }
 
@@ -672,26 +672,26 @@ export default function InvestigationsListPage() {
           font-size: 14px;
           font-weight: 700;
           letter-spacing: -0.02em;
-          background: rgba(150, 145, 190, 0.09);
-          border: 1px solid rgba(150, 145, 190, 0.18);
+          background: rgba(126, 134, 170, 0.09);
+          border: 1px solid rgba(126, 134, 170, 0.18);
         }
 
         .risk-value[data-tone="danger"] {
-          color: #fda4af;
-          background: rgba(251, 113, 133, 0.12);
-          border-color: rgba(251, 113, 133, 0.28);
+          color: #f5a48f;
+          background: rgba(240, 112, 80, 0.12);
+          border-color: rgba(240, 112, 80, 0.28);
         }
 
         .risk-value[data-tone="warning"] {
-          color: #ffcf8a;
-          background: rgba(242, 169, 60, 0.12);
-          border-color: rgba(242, 169, 60, 0.28);
+          color: #f7c48d;
+          background: rgba(240, 160, 80, 0.12);
+          border-color: rgba(240, 160, 80, 0.28);
         }
 
         .risk-value[data-tone="info"] {
           color: #bfdbfe;
-          background: rgba(139, 123, 255, 0.12);
-          border-color: rgba(139, 123, 255, 0.28);
+          background: rgba(79, 110, 247, 0.12);
+          border-color: rgba(79, 110, 247, 0.28);
         }
 
         .row-date,
@@ -706,9 +706,9 @@ export default function InvestigationsListPage() {
         }
 
         .delete-case-button {
-          border: 1px solid rgba(251, 113, 133, 0.28);
+          border: 1px solid rgba(240, 112, 80, 0.28);
           background: rgba(127, 29, 29, 0.16);
-          color: #fda4af;
+          color: #f5a48f;
           border-radius: 10px;
           padding: 7px 10px;
           font-size: 10px;
@@ -722,7 +722,7 @@ export default function InvestigationsListPage() {
 
         .delete-case-button:hover:not(:disabled) {
           background: rgba(220, 38, 38, 0.22);
-          border-color: rgba(251, 113, 133, 0.52);
+          border-color: rgba(240, 112, 80, 0.52);
           color: #fecdd3;
         }
 
@@ -904,10 +904,10 @@ function buttonStyle(variant: "primary" | "secondary") {
   return {
     padding: "11px 18px",
     borderRadius: 999,
-    border: variant === "primary" ? "1px solid rgba(139, 123, 255, 0.35)" : "1px solid rgba(150, 145, 190, 0.2)",
+    border: variant === "primary" ? "1px solid rgba(79, 110, 247, 0.35)" : "1px solid rgba(126, 134, 170, 0.2)",
     background:
       variant === "primary"
-        ? "linear-gradient(135deg, #7c5cff, #6a4fe0)"
+        ? "linear-gradient(135deg, #4f6ef7, #3a53c9)"
         : "var(--bg-elevated)",
     color: variant === "primary" ? "#fff" : "var(--text-strong)",
     fontSize: 11,
@@ -916,7 +916,7 @@ function buttonStyle(variant: "primary" | "secondary") {
     fontFamily: "var(--font-mono)",
     letterSpacing: "0.08em",
     textTransform: "uppercase" as const,
-    boxShadow: variant === "primary" ? "0 18px 34px rgba(106, 79, 224, 0.24)" : "none",
+    boxShadow: variant === "primary" ? "0 18px 34px rgba(58, 83, 201, 0.24)" : "none",
   } as React.CSSProperties;
 }
 
@@ -941,7 +941,7 @@ function paginationButtonStyle(disabled: boolean, active = false) {
   return {
     padding: "7px 11px",
     background: active ? "var(--accent)" : "var(--bg-elevated)",
-    border: `1px solid ${active ? "var(--accent)" : "rgba(150, 145, 190, 0.18)"}`,
+    border: `1px solid ${active ? "var(--accent)" : "rgba(126, 134, 170, 0.18)"}`,
     borderRadius: 12,
     color: active ? "#fff" : disabled ? "var(--text-dim)" : "var(--text)",
     fontSize: 11,
@@ -1027,40 +1027,40 @@ function filterToneColors(tone: ReturnType<typeof getFilterTone>) {
   switch (tone) {
     case "success":
       return {
-        foreground: "#9bf0d8",
+        foreground: "#8fe3ae",
         foregroundActive: "#08121d",
-        background: "rgba(43, 212, 160, 0.08)",
-        backgroundActive: "rgba(43, 212, 160, 0.92)",
-        border: "rgba(43, 212, 160, 0.18)",
-        borderActive: "rgba(43, 212, 160, 0.44)",
+        background: "rgba(46, 204, 113, 0.08)",
+        backgroundActive: "rgba(46, 204, 113, 0.92)",
+        border: "rgba(46, 204, 113, 0.18)",
+        borderActive: "rgba(46, 204, 113, 0.44)",
       };
     case "warning":
       return {
-        foreground: "#ffcf8a",
+        foreground: "#f7c48d",
         foregroundActive: "#09111d",
-        background: "rgba(242, 169, 60, 0.08)",
-        backgroundActive: "rgba(242, 169, 60, 0.92)",
-        border: "rgba(242, 169, 60, 0.18)",
-        borderActive: "rgba(242, 169, 60, 0.44)",
+        background: "rgba(240, 160, 80, 0.08)",
+        backgroundActive: "rgba(240, 160, 80, 0.92)",
+        border: "rgba(240, 160, 80, 0.18)",
+        borderActive: "rgba(240, 160, 80, 0.44)",
       };
     case "danger":
       return {
-        foreground: "#fda4af",
+        foreground: "#f5a48f",
         foregroundActive: "#09111d",
-        background: "rgba(251, 113, 133, 0.08)",
-        backgroundActive: "rgba(251, 113, 133, 0.92)",
-        border: "rgba(251, 113, 133, 0.18)",
-        borderActive: "rgba(251, 113, 133, 0.44)",
+        background: "rgba(240, 112, 80, 0.08)",
+        backgroundActive: "rgba(240, 112, 80, 0.92)",
+        border: "rgba(240, 112, 80, 0.18)",
+        borderActive: "rgba(240, 112, 80, 0.44)",
       };
     case "neutral":
     default:
       return {
         foreground: "var(--text-secondary)",
         foregroundActive: "#08121d",
-        background: "rgba(150, 145, 190, 0.08)",
-        backgroundActive: "rgba(150, 145, 190, 0.88)",
-        border: "rgba(150, 145, 190, 0.18)",
-        borderActive: "rgba(150, 145, 190, 0.38)",
+        background: "rgba(126, 134, 170, 0.08)",
+        backgroundActive: "rgba(126, 134, 170, 0.88)",
+        border: "rgba(126, 134, 170, 0.18)",
+        borderActive: "rgba(126, 134, 170, 0.38)",
       };
   }
 }

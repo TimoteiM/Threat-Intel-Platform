@@ -75,7 +75,7 @@ export default function ClassificationBadge({ classification, confidence, riskSc
               marginTop: 8,
               height: 3,
               borderRadius: 999,
-              background: "rgba(150, 145, 190, 0.16)",
+              background: "rgba(126, 134, 170, 0.16)",
               overflow: "hidden",
               maxWidth: 220,
             }}

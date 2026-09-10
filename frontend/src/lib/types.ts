@@ -1112,6 +1112,7 @@ export interface RecentMalicious {
   domain: string;
   risk_score?: number;
   classification?: string;
+  observable_type?: string;
   created_at?: string;
 }
 

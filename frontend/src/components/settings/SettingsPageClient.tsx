@@ -10,9 +10,9 @@ import { useSettingsPreferences } from "@/components/settings/SettingsPreference
 import CostSection from "@/components/settings/CostSection";
 
 const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
-  healthy: { label: "Healthy", color: "#2bd4a0", bg: "rgba(43,212,160,0.12)" },
-  low_quota: { label: "Low Quota", color: "#f2a93c", bg: "rgba(242,169,60,0.14)" },
-  rate_limited: { label: "Rate Limited", color: "#fb7185", bg: "rgba(251,113,133,0.14)" },
+  healthy: { label: "Healthy", color: "#2ecc71", bg: "rgba(46,204,113,0.12)" },
+  low_quota: { label: "Low Quota", color: "#f0a050", bg: "rgba(240,160,80,0.14)" },
+  rate_limited: { label: "Rate Limited", color: "#f07050", bg: "rgba(240,112,80,0.14)" },
   unavailable: { label: "Unavailable", color: "#fb923c", bg: "rgba(251,146,60,0.14)" },
   not_configured: { label: "Not Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
   configured: { label: "Configured", color: "#94a3b8", bg: "rgba(148,163,184,0.14)" },
@@ -231,8 +231,8 @@ export default function SettingsPageClient() {
             style={{
               padding: "14px 16px",
               borderRadius: "var(--radius)",
-              border: "1px solid rgba(251,113,133,0.22)",
-              background: "rgba(251,113,133,0.1)",
+              border: "1px solid rgba(240,112,80,0.22)",
+              background: "rgba(240,112,80,0.1)",
               color: "var(--text)",
             }}
           >

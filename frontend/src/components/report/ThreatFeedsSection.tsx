@@ -196,7 +196,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
                 key={i}
                 style={{
                   padding: "10px 14px",
-                  background: "rgba(251,113,133,0.06)",
+                  background: "rgba(240,112,80,0.06)",
                   borderLeft: "3px solid var(--red)",
                   borderRadius: "var(--radius-sm)",
                 }}
@@ -204,7 +204,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{
                     padding: "2px 8px", fontSize: 10, fontWeight: 700,
-                    background: "rgba(251,113,133,0.15)", color: "var(--red)",
+                    background: "rgba(240,112,80,0.15)", color: "var(--red)",
                     borderRadius: 3, letterSpacing: "0.05em",
                   }}>
                     {ioc.threat_type.toUpperCase()}
@@ -212,7 +212,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
                   {ioc.malware && (
                     <span style={{
                       padding: "2px 8px", fontSize: 10, fontWeight: 600,
-                      background: "rgba(242,169,60,0.12)", color: "var(--yellow)",
+                      background: "rgba(240,160,80,0.12)", color: "var(--yellow)",
                       borderRadius: 3,
                     }}>
                       {ioc.malware}
@@ -251,7 +251,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
         <div style={{ marginBottom: 14 }}>
           <div style={{
             padding: "10px 14px",
-            background: "rgba(251,113,133,0.06)",
+            background: "rgba(240,112,80,0.06)",
             borderLeft: "3px solid var(--red)",
             borderRadius: "var(--radius-sm)",
             fontSize: 12, color: "var(--red)",
@@ -309,8 +309,8 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
               {otx.indicator_facts.slice(0, 10).map((fact, i) => (
                 <span key={`${fact}-${i}`} style={{
                   padding: "3px 8px", fontSize: 10, fontWeight: 700,
-                  background: "rgba(242,169,60,0.12)", color: "var(--yellow)",
-                  borderRadius: 3, border: "1px solid rgba(242,169,60,0.22)",
+                  background: "rgba(240,160,80,0.12)", color: "var(--yellow)",
+                  borderRadius: 3, border: "1px solid rgba(240,160,80,0.22)",
                 }}>
                   {fact}
                 </span>
@@ -373,7 +373,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
                   key={`${pulse.id || pulse.name}-${i}`}
                   style={{
                     padding: "10px 14px",
-                    background: "rgba(242,169,60,0.06)",
+                    background: "rgba(240,160,80,0.06)",
                     borderLeft: "3px solid var(--yellow)",
                     borderRadius: "var(--radius-sm)",
                   }}
@@ -418,7 +418,7 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
       {!hasAnyHit && threatFeeds.feeds_checked.length > 0 && (
         <div style={{
           padding: "10px 14px", fontSize: 12, color: "var(--green)",
-          background: "rgba(43,212,160,0.06)", borderRadius: "var(--radius-sm)",
+          background: "rgba(46,204,113,0.06)", borderRadius: "var(--radius-sm)",
           borderLeft: "3px solid var(--green)", marginBottom: 12,
         }}>
           No hits across {threatFeeds.feeds_checked.length} threat feed{threatFeeds.feeds_checked.length > 1 ? "s" : ""}
@@ -440,9 +440,9 @@ export default function ThreatFeedsSection({ threatFeeds }: Props) {
 type FeedStatus = "clean" | "warning" | "danger" | "skipped";
 
 const statusColors: Record<FeedStatus, { bg: string; border: string; text: string; dot: string }> = {
-  clean:   { bg: "rgba(43,212,160,0.06)",  border: "rgba(43,212,160,0.2)",  text: "var(--green)",         dot: "var(--green)" },
-  warning: { bg: "rgba(242,169,60,0.08)",  border: "rgba(242,169,60,0.2)",  text: "var(--yellow)",        dot: "var(--yellow)" },
-  danger:  { bg: "rgba(251,113,133,0.08)", border: "rgba(251,113,133,0.2)", text: "var(--red)",           dot: "var(--red)" },
+  clean:   { bg: "rgba(46,204,113,0.06)",  border: "rgba(46,204,113,0.2)",  text: "var(--green)",         dot: "var(--green)" },
+  warning: { bg: "rgba(240,160,80,0.08)",  border: "rgba(240,160,80,0.2)",  text: "var(--yellow)",        dot: "var(--yellow)" },
+  danger:  { bg: "rgba(240,112,80,0.08)", border: "rgba(240,112,80,0.2)", text: "var(--red)",           dot: "var(--red)" },
   skipped: { bg: "var(--bg-input)",        border: "var(--border-dim)",     text: "var(--text-muted)",    dot: "var(--text-muted)" },
 };
 

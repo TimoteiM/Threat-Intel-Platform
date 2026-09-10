@@ -28,9 +28,9 @@ import SignalCard from "@/components/ui/SignalCard";
 import StatusPill from "@/components/ui/StatusPill";
 
 const CHART_COLORS = {
-  malicious: "#fb7185",
-  suspicious: "#f2a93c",
-  benign: "#2bd4a0",
+  malicious: "#f07050",
+  suspicious: "#f0a050",
+  benign: "#2ecc71",
   inconclusive: "#94a3b8",
 };
 
@@ -134,26 +134,35 @@ export default function DashboardPage() {
 
   const recentMaliciousRows = stats.recent_malicious.map((inv) => ({
     id: inv.id,
+    // The IOC is the one value in the row an analyst reads character by
+    // character — it gets the mono face, so a swapped l/1 or rn/m is visible.
     domain: (
       <button
         type="button"
         onClick={() => router.push(`/investigations/${inv.id}`)}
-        style={rowLinkStyle}
+        style={{ ...rowLinkStyle, fontFamily: "var(--font-mono)" }}
       >
         {inv.domain}
       </button>
     ),
-    risk_score: inv.risk_score != null ? (
-      <StatusPill tone="danger" size="sm" mono>
-        {inv.risk_score}
+    observable_type: (
+      <StatusPill tone="accent" size="sm" outline mono>
+        {inv.observable_type || "domain"}
       </StatusPill>
-    ) : (
-      <span style={mutedCellStyle}>-</span>
     ),
     classification: (
       <StatusPill tone="danger" size="sm">
         {inv.classification || "malicious"}
       </StatusPill>
+    ),
+    // A score is a magnitude, so it reads as a number on a scale — banding it
+    // into a pill threw away the difference between 71 and 98.
+    risk_score: inv.risk_score != null ? (
+      <span style={{ ...scoreCellStyle, color: scoreColor(inv.risk_score) }}>
+        {inv.risk_score}
+      </span>
+    ) : (
+      <span style={mutedCellStyle}>-</span>
     ),
     created_at: inv.created_at ? new Date(inv.created_at).toLocaleString() : "-",
     tone: "danger" as const,
@@ -188,12 +197,22 @@ export default function DashboardPage() {
             <SignalCard
               label="Suspicious"
               value={suspiciousCount.toLocaleString()}
-              caption="needs corroboration"
+              caption="Needs corroboration"
               tone="warning"
               accent="var(--status-warning)"
             />
-            <SignalCard label="Concluded" value={classificationTotals.toLocaleString()} tone="neutral" />
-            <SignalCard label="Total investigations" value={stats.total_investigations.toLocaleString()} tone="neutral" />
+            <SignalCard
+              label="Concluded"
+              value={classificationTotals.toLocaleString()}
+              caption="Verdict reached"
+              tone="neutral"
+            />
+            <SignalCard
+              label="Total investigated"
+              value={stats.total_investigations.toLocaleString()}
+              caption="All time"
+              tone="neutral"
+            />
             <SignalCard
               label="Peak risk band"
               value={highestRiskBucket ? highestRiskBucket.bucket : "—"}
@@ -266,7 +285,7 @@ export default function DashboardPage() {
                   <XAxis dataKey="bucket" tick={{ fill: "var(--text-dim)", fontSize: 11 }} />
                   <YAxis tick={{ fill: "var(--text-dim)", fontSize: 11 }} allowDecimals={false} />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} itemStyle={{ color: "var(--text-strong)" }} />
-                  <Bar dataKey="count" fill="#8b7bff" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="count" fill="#4f6ef7" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
               {/* The largest bucket and the malicious/suspicious split are both
@@ -360,10 +379,11 @@ export default function DashboardPage() {
         {recentMaliciousRows.length > 0 ? (
           <IntelTable
             columns={[
-              { key: "domain", label: "Investigation", wrap: true },
-              { key: "risk_score", label: "Risk", align: "right" },
-              { key: "classification", label: "Classification", align: "center" },
-              { key: "created_at", label: "Created", align: "right" },
+              { key: "domain", label: "IOC", wrap: true },
+              { key: "observable_type", label: "Type", align: "left" },
+              { key: "classification", label: "Verdict", align: "center" },
+              { key: "risk_score", label: "Score", align: "right" },
+              { key: "created_at", label: "When", align: "right" },
             ]}
             rows={recentMaliciousRows}
             density="compact"
@@ -440,7 +460,7 @@ const legendRowStyle: React.CSSProperties = {
   alignItems: "center",
   gap: 10,
   padding: "10px 0",
-  borderBottom: "1px solid rgba(150, 145, 190, 0.10)",
+  borderBottom: "1px solid rgba(126, 134, 170, 0.10)",
 };
 
 const legendSwatchStyle: React.CSSProperties = {
@@ -482,6 +502,20 @@ const tablePrimaryStyle: React.CSSProperties = {
   fontFamily: "var(--font-sans)",
 };
 
+// Score bands, shared by the cell and anything else that ranks a 0-100 risk.
+function scoreColor(score: number): string {
+  if (score >= 70) return "var(--status-danger)";
+  if (score >= 40) return "var(--status-warning)";
+  return "var(--status-success)";
+}
+
+const scoreCellStyle: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 13,
+  fontWeight: 700,
+  fontVariantNumeric: "tabular-nums",
+};
+
 const mutedCellStyle: React.CSSProperties = {
   color: "var(--text-muted)",
   fontFamily: "var(--font-mono)",
@@ -490,8 +524,8 @@ const mutedCellStyle: React.CSSProperties = {
 const heroActionStyle: React.CSSProperties = {
   padding: "10px 16px",
   borderRadius: 14,
-  border: "1px solid rgba(139, 123, 255, 0.30)",
-  background: "linear-gradient(135deg, rgba(139, 123, 255, 0.18), rgba(106, 79, 224, 0.28))",
+  border: "1px solid rgba(79, 110, 247, 0.30)",
+  background: "linear-gradient(135deg, rgba(79, 110, 247, 0.18), rgba(58, 83, 201, 0.28))",
   color: "var(--text-strong)",
   fontSize: 12,
   fontWeight: 800,

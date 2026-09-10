@@ -74,8 +74,8 @@
 .assistant-graph-button,
 .assistant-graph-controlbar button,
 .assistant-graph-mini-button {
-  border-color: rgba(139, 123, 255, 0.28);
-  background: rgba(139, 123, 255, 0.13);
+  border-color: rgba(79, 110, 247, 0.28);
+  background: rgba(79, 110, 247, 0.13);
 }
 
 .assistant-graph-controlbar {
@@ -88,7 +88,7 @@
 
 .assistant-graph-controlbar button {
   min-height: 30px;
-  border: 1px solid rgba(139, 123, 255, 0.24);
+  border: 1px solid rgba(79, 110, 247, 0.24);
   border-radius: 8px;
   color: var(--text-primary);
   background: rgba(15, 23, 42, 0.62);
@@ -279,7 +279,7 @@
 .assistant-graph-mini-button {
   min-height: 28px;
   margin-left: auto;
-  border: 1px solid rgba(139, 123, 255, 0.28);
+  border: 1px solid rgba(79, 110, 247, 0.28);
   border-radius: 8px;
   color: var(--text-primary);
   padding: 0 9px;

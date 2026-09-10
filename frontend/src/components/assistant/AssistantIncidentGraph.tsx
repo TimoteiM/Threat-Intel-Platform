@@ -754,16 +754,16 @@ function entityStyle(type: string) {
     incident: { icon: "!", color: "#a9cbff" },
     detection: { icon: "#", color: "#a9cbff" },
     ip: { icon: "IP", color: "#5b9dff" },
-    domain: { icon: "D", color: "#2bd4a0" },
+    domain: { icon: "D", color: "#2ecc71" },
     url: { icon: "/", color: "#2dd4bf" },
-    hash: { icon: "H", color: "#8b7bff" },
+    hash: { icon: "H", color: "#4f6ef7" },
     user: { icon: "@", color: "#facc15" },
-    host: { icon: "H", color: "#f2a93c" },
+    host: { icon: "H", color: "#f0a050" },
     process: { icon: "P", color: "#fb923c" },
     file: { icon: "F", color: "#c084fc" },
     command: { icon: "$", color: "#fb923c" },
-    network: { icon: "N", color: "#8b7bff" },
-    mitre: { icon: "T", color: "#fb7185" },
+    network: { icon: "N", color: "#4f6ef7" },
+    mitre: { icon: "T", color: "#f07050" },
     email: { icon: "M", color: "#e879f9" },
     cloud: { icon: "C", color: "#a9cbff" },
   };
@@ -771,16 +771,16 @@ function entityStyle(type: string) {
 }
 
 function severityColor(severity: string) {
-  if (severity === "critical") return "#fb7185";
+  if (severity === "critical") return "#f07050";
   if (severity === "high") return "#fb923c";
   if (severity === "medium") return "#fde047";
   return "#94a3b8";
 }
 
 function edgeColor(edge: SocGraphEdge) {
-  if (edge.type.includes("blocked") || edge.type.includes("quarantined")) return "#2bd4a0";
+  if (edge.type.includes("blocked") || edge.type.includes("quarantined")) return "#2ecc71";
   if (edge.type.includes("executed") || edge.type.includes("downloaded")) return "#fb923c";
-  if (edge.type.includes("mitre")) return "#fb7185";
+  if (edge.type.includes("mitre")) return "#f07050";
   return "#a9cbff";
 }
 

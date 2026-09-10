@@ -459,16 +459,16 @@ const modeSwitcherStyle: React.CSSProperties = {
 function modeButtonStyle(active: boolean, tone: "warning" | "success"): React.CSSProperties {
   const palette = tone === "warning"
     ? {
-        background: "linear-gradient(180deg, rgba(242, 169, 60, 0.2), rgba(242, 169, 60, 0.12))",
-        border: "rgba(242, 169, 60, 0.34)",
-        shadow: "0 16px 28px rgba(242, 169, 60, 0.18)",
-        color: "#ffcf8a",
+        background: "linear-gradient(180deg, rgba(240, 160, 80, 0.2), rgba(240, 160, 80, 0.12))",
+        border: "rgba(240, 160, 80, 0.34)",
+        shadow: "0 16px 28px rgba(240, 160, 80, 0.18)",
+        color: "#f7c48d",
       }
     : {
-        background: "linear-gradient(180deg, rgba(43, 212, 160, 0.18), rgba(43, 212, 160, 0.12))",
-        border: "rgba(43, 212, 160, 0.3)",
-        shadow: "0 16px 28px rgba(43, 212, 160, 0.16)",
-        color: "#9bf0d8",
+        background: "linear-gradient(180deg, rgba(46, 204, 113, 0.18), rgba(46, 204, 113, 0.12))",
+        border: "rgba(46, 204, 113, 0.3)",
+        shadow: "0 16px 28px rgba(46, 204, 113, 0.16)",
+        color: "#8fe3ae",
       };
 
   return {
@@ -505,10 +505,10 @@ function modeButtonLabelStyle(active: boolean): React.CSSProperties {
 function runButtonStyle(disabled: boolean): React.CSSProperties {
   return {
     appearance: "none",
-    border: "1px solid rgba(139, 123, 255, 0.34)",
+    border: "1px solid rgba(79, 110, 247, 0.34)",
     background: disabled
       ? "var(--bg-elevated)"
-      : "linear-gradient(180deg, rgba(139, 123, 255, 0.24), rgba(124, 92, 255, 0.16))",
+      : "linear-gradient(180deg, rgba(79, 110, 247, 0.24), rgba(79, 110, 247, 0.16))",
     color: "var(--text-strong)",
     borderRadius: 999,
     padding: "10px 14px",
@@ -525,7 +525,7 @@ function runButtonStyle(disabled: boolean): React.CSSProperties {
 function secondaryButtonStyle(disabled: boolean): React.CSSProperties {
   return {
     appearance: "none",
-    border: "1px solid rgba(150, 145, 190, 0.24)",
+    border: "1px solid rgba(126, 134, 170, 0.24)",
     background: disabled
       ? "var(--bg-elevated)"
       : "var(--panel-card-bg)",

@@ -113,10 +113,10 @@ function resolveStateTone(state: string, report: any): "neutral" | "info" | "suc
 
 function stateAccent(state: string) {
   const normalized = String(state || "").toLowerCase();
-  if (normalized === "failed" || normalized === "error") return "#fb7185";
-  if (normalized === "concluded") return "#2bd4a0";
-  if (normalized === "evaluating") return "#f2a93c";
-  if (normalized === "gathering") return "#8b7bff";
+  if (normalized === "failed" || normalized === "error") return "#f07050";
+  if (normalized === "concluded") return "#2ecc71";
+  if (normalized === "evaluating") return "#f0a050";
+  if (normalized === "gathering") return "#4f6ef7";
   return "#7891b2";
 }
 
@@ -135,44 +135,44 @@ function actionButtonPalette(tone: "neutral" | "info" | "success" | "warning" | 
   switch (tone) {
     case "danger":
       return {
-        foreground: "#fda4af",
-        background: "rgba(251, 113, 133, 0.12)",
-        border: "rgba(251, 113, 133, 0.28)",
-        hoverBackground: "rgba(251, 113, 133, 0.18)",
-        hoverBorder: "rgba(251, 113, 133, 0.42)",
+        foreground: "#f5a48f",
+        background: "rgba(240, 112, 80, 0.12)",
+        border: "rgba(240, 112, 80, 0.28)",
+        hoverBackground: "rgba(240, 112, 80, 0.18)",
+        hoverBorder: "rgba(240, 112, 80, 0.42)",
       };
     case "success":
       return {
-        foreground: "#9bf0d8",
-        background: "rgba(43, 212, 160, 0.10)",
-        border: "rgba(43, 212, 160, 0.26)",
-        hoverBackground: "rgba(43, 212, 160, 0.16)",
-        hoverBorder: "rgba(43, 212, 160, 0.40)",
+        foreground: "#8fe3ae",
+        background: "rgba(46, 204, 113, 0.10)",
+        border: "rgba(46, 204, 113, 0.26)",
+        hoverBackground: "rgba(46, 204, 113, 0.16)",
+        hoverBorder: "rgba(46, 204, 113, 0.40)",
       };
     case "warning":
       return {
-        foreground: "#ffcf8a",
-        background: "rgba(242, 169, 60, 0.10)",
-        border: "rgba(242, 169, 60, 0.26)",
-        hoverBackground: "rgba(242, 169, 60, 0.16)",
-        hoverBorder: "rgba(242, 169, 60, 0.40)",
+        foreground: "#f7c48d",
+        background: "rgba(240, 160, 80, 0.10)",
+        border: "rgba(240, 160, 80, 0.26)",
+        hoverBackground: "rgba(240, 160, 80, 0.16)",
+        hoverBorder: "rgba(240, 160, 80, 0.40)",
       };
     case "info":
       return {
         foreground: "#bfdbfe",
-        background: "rgba(139, 123, 255, 0.10)",
-        border: "rgba(139, 123, 255, 0.26)",
-        hoverBackground: "rgba(139, 123, 255, 0.16)",
-        hoverBorder: "rgba(139, 123, 255, 0.40)",
+        background: "rgba(79, 110, 247, 0.10)",
+        border: "rgba(79, 110, 247, 0.26)",
+        hoverBackground: "rgba(79, 110, 247, 0.16)",
+        hoverBorder: "rgba(79, 110, 247, 0.40)",
       };
     case "neutral":
     default:
       return {
         foreground: "var(--text-secondary)",
-        background: "rgba(150, 145, 190, 0.08)",
-        border: "rgba(150, 145, 190, 0.22)",
-        hoverBackground: "rgba(150, 145, 190, 0.12)",
-        hoverBorder: "rgba(150, 145, 190, 0.34)",
+        background: "rgba(126, 134, 170, 0.08)",
+        border: "rgba(126, 134, 170, 0.22)",
+        hoverBackground: "rgba(126, 134, 170, 0.12)",
+        hoverBorder: "rgba(126, 134, 170, 0.34)",
       };
   }
 }
@@ -613,9 +613,9 @@ export default function InvestigationPage() {
             <span style={{
               fontSize: 10, fontWeight: 700,
               padding: "3px 8px",
-              background: "rgba(192,172,255,0.12)",
-              color: "#c0acff",
-              border: "1px solid rgba(192,172,255,0.25)",
+              background: "rgba(143,164,255,0.12)",
+              color: "#8fa4ff",
+              border: "1px solid rgba(143,164,255,0.25)",
               borderRadius: 4,
               fontFamily: "var(--font-mono)",
               letterSpacing: "0.05em",
@@ -644,8 +644,8 @@ export default function InvestigationPage() {
               height: "100%",
               width: `${progressPct}%`,
               background: liveState === "failed"
-                ? "linear-gradient(90deg, #fb7185, #fb7185)"
-                : "linear-gradient(90deg, var(--accent), #2bd4a0)",
+                ? "linear-gradient(90deg, #f07050, #f07050)"
+                : "linear-gradient(90deg, var(--accent), #2ecc71)",
               transition: "width 400ms ease",
             }} />
           </div>
@@ -677,7 +677,7 @@ export default function InvestigationPage() {
         />
         <div style={{ textAlign: "center", marginTop: 16 }}>
           {cancelError && (
-            <div style={{ color: "#fb7185", fontSize: 12, marginBottom: 8 }}>{cancelError}</div>
+            <div style={{ color: "#f07050", fontSize: 12, marginBottom: 8 }}>{cancelError}</div>
           )}
           <button
             onClick={handleRefresh}
@@ -698,10 +698,10 @@ export default function InvestigationPage() {
               style={{
                 marginLeft: 10,
                 padding: "8px 20px",
-                background: "rgba(251,113,133,0.12)",
-                border: "1px solid rgba(251,113,133,0.35)",
+                background: "rgba(240,112,80,0.12)",
+                border: "1px solid rgba(240,112,80,0.35)",
                 borderRadius: "var(--radius-sm)",
-                color: "#fda4af",
+                color: "#f5a48f",
                 fontSize: 12,
                 cursor: canceling ? "not-allowed" : "pointer",
                 fontFamily: "var(--font-sans)",
@@ -745,8 +745,8 @@ export default function InvestigationPage() {
     } catch (e: any) {
       return (
         <div style={{
-          padding: 24, background: "rgba(251,113,133,0.08)",
-          border: "1px solid rgba(251,113,133,0.2)", borderRadius: "var(--radius)",
+          padding: 24, background: "rgba(240,112,80,0.08)",
+          border: "1px solid rgba(240,112,80,0.2)", borderRadius: "var(--radius)",
         }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)", marginBottom: 8 }}>
             Error rendering {activeTab} tab
@@ -934,9 +934,9 @@ export default function InvestigationPage() {
               <span style={{
                 fontSize: 10, fontWeight: 700,
                 padding: "3px 8px",
-                background: "rgba(192,172,255,0.12)",
-                color: "#c0acff",
-                border: "1px solid rgba(192,172,255,0.25)",
+                background: "rgba(143,164,255,0.12)",
+                color: "#8fa4ff",
+                border: "1px solid rgba(143,164,255,0.25)",
                 borderRadius: 4,
                 fontFamily: "var(--font-mono)",
                 letterSpacing: "0.05em",
@@ -992,7 +992,7 @@ export default function InvestigationPage() {
         </div>
       </div>
       {cancelError && (
-        <div style={{ color: "#fb7185", fontSize: 12, marginBottom: 10 }}>{cancelError}</div>
+        <div style={{ color: "#f07050", fontSize: 12, marginBottom: 10 }}>{cancelError}</div>
       )}
 
       {/* Collector progress */}
@@ -1076,7 +1076,7 @@ function FloatingTabNavigator({
         alignItems: "stretch",
         width: "min(620px, calc(100vw - 28px))",
         padding: 5,
-        border: "1px solid rgba(139,123,255,.34)",
+        border: "1px solid rgba(79,110,247,.34)",
         borderRadius: 16,
         background: "rgba(7,18,33,.9)",
         boxShadow: "0 18px 48px rgba(0,0,0,.42), 0 0 24px rgba(55,125,210,.12)",
@@ -1097,8 +1097,8 @@ function FloatingTabNavigator({
         placeContent: "center",
         minWidth: 150,
         padding: "7px 16px",
-        borderLeft: "1px solid rgba(150,145,190,.14)",
-        borderRight: "1px solid rgba(150,145,190,.14)",
+        borderLeft: "1px solid rgba(126,134,170,.14)",
+        borderRight: "1px solid rgba(126,134,170,.14)",
         textAlign: "center",
       }}>
         <span style={{ color: "var(--accent)", fontSize: 8, fontWeight: 800, letterSpacing: ".11em", textTransform: "uppercase" }}>
@@ -1178,8 +1178,8 @@ function ConsoleActionButton({ onClick, children, tone = "neutral", disabled = f
       disabled={disabled}
       style={{
         padding: "8px 14px",
-        background: disabled ? "rgba(150, 145, 190, 0.08)" : palette.background,
-        border: `1px solid ${disabled ? "rgba(150, 145, 190, 0.12)" : palette.border}`,
+        background: disabled ? "rgba(126, 134, 170, 0.08)" : palette.background,
+        border: `1px solid ${disabled ? "rgba(126, 134, 170, 0.12)" : palette.border}`,
         borderRadius: 12,
         color: disabled ? "var(--text-muted)" : palette.foreground,
         fontSize: 12,
@@ -1253,17 +1253,17 @@ function stageRowStyle(active: boolean, done: boolean): React.CSSProperties {
     borderRadius: 14,
     border: `1px solid ${
       active
-        ? "rgba(139, 123, 255, 0.28)"
+        ? "rgba(79, 110, 247, 0.28)"
         : done
-        ? "rgba(43, 212, 160, 0.24)"
-        : "rgba(150, 145, 190, 0.16)"
+        ? "rgba(46, 204, 113, 0.24)"
+        : "rgba(126, 134, 170, 0.16)"
     }`,
     background: active
-      ? "rgba(139, 123, 255, 0.10)"
+      ? "rgba(79, 110, 247, 0.10)"
       : done
-      ? "rgba(43, 212, 160, 0.08)"
+      ? "rgba(46, 204, 113, 0.08)"
       : "var(--panel-empty-bg)",
-    color: active ? "#bfdbfe" : done ? "#9bf0d8" : "var(--text-secondary)",
+    color: active ? "#bfdbfe" : done ? "#8fe3ae" : "var(--text-secondary)",
   };
 }
 
@@ -1279,23 +1279,23 @@ function stageIconStyle(active: boolean, done: boolean): React.CSSProperties {
     fontWeight: 800,
     letterSpacing: "0.08em",
     textTransform: "uppercase",
-    color: active ? "#bfdbfe" : done ? "#9bf0d8" : "var(--text-dim)",
+    color: active ? "#bfdbfe" : done ? "#8fe3ae" : "var(--text-dim)",
     background: active
-      ? "rgba(139, 123, 255, 0.12)"
+      ? "rgba(79, 110, 247, 0.12)"
       : done
-      ? "rgba(43, 212, 160, 0.12)"
-      : "rgba(150, 145, 190, 0.08)",
+      ? "rgba(46, 204, 113, 0.12)"
+      : "rgba(126, 134, 170, 0.08)",
   };
 }
 
 const inlineErrorStyle: React.CSSProperties = {
-  color: "#fda4af",
+  color: "#f5a48f",
   fontSize: 12,
   fontWeight: 600,
   padding: "12px 14px",
   borderRadius: 14,
-  border: "1px solid rgba(251, 113, 133, 0.24)",
-  background: "rgba(251, 113, 133, 0.10)",
+  border: "1px solid rgba(240, 112, 80, 0.24)",
+  background: "rgba(240, 112, 80, 0.10)",
 };
 
 function NoData({ label }: { label: string }) {
@@ -1375,10 +1375,10 @@ class ErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div style={{
-          padding: 24, background: "rgba(251,113,133,0.08)",
-          border: "1px solid rgba(251,113,133,0.2)", borderRadius: 8,
+          padding: 24, background: "rgba(240,112,80,0.08)",
+          border: "1px solid rgba(240,112,80,0.2)", borderRadius: 8,
         }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#fb7185", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f07050", marginBottom: 8 }}>
             Error rendering &quot;{this.props.fallback}&quot; tab
           </div>
           <pre style={{

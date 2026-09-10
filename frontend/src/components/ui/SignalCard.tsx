@@ -45,13 +45,15 @@ export default function SignalCard({
   return (
     <div className={className} style={{ minWidth: 0, display: "grid", gap: 2, ...style }}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+        {/* Sentence case, not caps. A metric label is read, not shouted, and
+            SMALL CAPS AT 11PX costs legibility for emphasis the number
+            already has. Uppercase stays where it marks a state (badges,
+            pills), not where it names a value. */}
         <span
           style={{
-            fontSize: "var(--font-micro)",
-            fontWeight: 700,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: "var(--text-muted)",
+            fontSize: "var(--font-meta)",
+            fontWeight: 500,
+            color: "var(--text-dim)",
           }}
         >
           {label}

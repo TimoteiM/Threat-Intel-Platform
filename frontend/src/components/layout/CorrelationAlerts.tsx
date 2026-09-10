@@ -130,7 +130,7 @@ export default function CorrelationAlerts() {
     setOpen(true);
   };
   const tone = worst >= 70 ? "var(--status-danger)" : "var(--status-warning)";
-  const toneBg = worst >= 70 ? "rgba(251, 113, 133, 0.1)" : "rgba(242, 169, 60, 0.1)";
+  const toneBg = worst >= 70 ? "rgba(240, 112, 80, 0.1)" : "rgba(240, 160, 80, 0.1)";
 
   return (
     <div ref={panel} style={{ position: "relative" }}>

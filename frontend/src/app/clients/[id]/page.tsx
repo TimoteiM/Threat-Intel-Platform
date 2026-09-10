@@ -18,10 +18,10 @@ function timeAgo(dateStr?: string): string {
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: "#fb7185",
+  critical: "#f07050",
   high:     "#fb923c",
-  medium:   "#f2a93c",
-  low:      "#8b7bff",
+  medium:   "#f0a050",
+  low:      "#4f6ef7",
 };
 
 const ALERT_TYPE_LABELS: Record<string, string> = {
@@ -32,9 +32,9 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
 };
 
 const CLASSIFICATION_COLORS: Record<string, string> = {
-  malicious:    "#fb7185",
-  suspicious:   "#f2a93c",
-  benign:       "#2bd4a0",
+  malicious:    "#f07050",
+  suspicious:   "#f0a050",
+  benign:       "#2ecc71",
   inconclusive: "#94a3b8",
 };
 
@@ -183,8 +183,8 @@ export default function ClientDetailPage() {
             fontWeight: 700,
             padding: "3px 9px",
             borderRadius: 999,
-            background: client.status === "active" ? "rgba(43,212,160,0.15)" : "rgba(148,163,184,0.15)",
-            color: client.status === "active" ? "#2bd4a0" : "#94a3b8",
+            background: client.status === "active" ? "rgba(46,204,113,0.15)" : "rgba(148,163,184,0.15)",
+            color: client.status === "active" ? "#2ecc71" : "#94a3b8",
             fontFamily: "var(--font-sans)",
           }}>
             {client.status.toUpperCase()}
@@ -238,7 +238,7 @@ export default function ClientDetailPage() {
               />
               <Field label="Status" value={client.status} />
               <Field label="Registered" value={timeAgo(client.created_at)} />
-              <Field label="Total Alerts" value={String(client.alert_count)} accent={client.alert_count > 0 ? "#fb7185" : undefined} />
+              <Field label="Total Alerts" value={String(client.alert_count)} accent={client.alert_count > 0 ? "#f07050" : undefined} />
               <Field label="Last Alert" value={timeAgo(client.last_alert_at)} />
               <Field
                 label="Default Analyzers"
@@ -333,7 +333,7 @@ export default function ClientDetailPage() {
                       }}>
                         {ALERT_TYPE_LABELS[a.alert_type] || a.alert_type}
                       </span>
-                      {a.resolved && <span style={{ fontSize: 9, color: "#2bd4a0", fontFamily: "var(--font-sans)" }}>✓ Resolved</span>}
+                      {a.resolved && <span style={{ fontSize: 9, color: "#2ecc71", fontFamily: "var(--font-sans)" }}>✓ Resolved</span>}
                       {!a.resolved && a.acknowledged && <span style={{ fontSize: 9, color: "#94a3b8", fontFamily: "var(--font-sans)" }}>Acknowledged</span>}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-sans)" }}>
@@ -362,7 +362,7 @@ export default function ClientDetailPage() {
                       )}
                       <button
                         onClick={() => handleResolve(a.id)}
-                        style={smallBtn("#2bd4a0")}
+                        style={smallBtn("#2ecc71")}
                       >
                         Resolve
                       </button>
@@ -446,7 +446,7 @@ export default function ClientDetailPage() {
                     <span style={{
                       fontSize: 12,
                       fontFamily: "var(--font-mono)",
-                      color: inv.risk_score >= 70 ? "#fb7185" : inv.risk_score >= 40 ? "#f2a93c" : "#8b7bff",
+                      color: inv.risk_score >= 70 ? "#f07050" : inv.risk_score >= 40 ? "#f0a050" : "#4f6ef7",
                     }}>
                       {inv.risk_score}
                     </span>

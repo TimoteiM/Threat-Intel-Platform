@@ -60,24 +60,24 @@ function toneColors(tone: ConsoleTone) {
   switch (tone) {
     case "success":
       return {
-        foreground: "#8ff0d0",
-        background: "rgba(43, 212, 160, 0.12)",
-        border: "rgba(43, 212, 160, 0.34)",
-        borderStrong: "rgba(43, 212, 160, 0.42)",
+        foreground: "#86e6ac",
+        background: "rgba(46, 204, 113, 0.12)",
+        border: "rgba(46, 204, 113, 0.34)",
+        borderStrong: "rgba(46, 204, 113, 0.42)",
       };
     case "warning":
       return {
-        foreground: "#ffcf8a",
-        background: "rgba(242, 169, 60, 0.12)",
-        border: "rgba(242, 169, 60, 0.34)",
-        borderStrong: "rgba(242, 169, 60, 0.42)",
+        foreground: "#f7c48d",
+        background: "rgba(240, 160, 80, 0.12)",
+        border: "rgba(240, 160, 80, 0.34)",
+        borderStrong: "rgba(240, 160, 80, 0.42)",
       };
     case "danger":
       return {
-        foreground: "#fda4af",
-        background: "rgba(251, 113, 133, 0.12)",
-        border: "rgba(251, 113, 133, 0.34)",
-        borderStrong: "rgba(251, 113, 133, 0.42)",
+        foreground: "#f5a48f",
+        background: "rgba(240, 112, 80, 0.12)",
+        border: "rgba(240, 112, 80, 0.34)",
+        borderStrong: "rgba(240, 112, 80, 0.42)",
       };
     case "info":
       return {
@@ -91,18 +91,18 @@ function toneColors(tone: ConsoleTone) {
     // (an active run, a reused verdict), kept apart from info/success/etc.
     case "accent":
       return {
-        foreground: "#d5c9ff",
-        background: "rgba(139, 123, 255, 0.14)",
-        border: "rgba(139, 123, 255, 0.38)",
-        borderStrong: "rgba(139, 123, 255, 0.48)",
+        foreground: "#c3cdff",
+        background: "rgba(79, 110, 247, 0.14)",
+        border: "rgba(79, 110, 247, 0.38)",
+        borderStrong: "rgba(79, 110, 247, 0.48)",
       };
     case "neutral":
     default:
       return {
         foreground: "var(--text-secondary)",
-        background: "rgba(150, 145, 190, 0.08)",
-        border: "rgba(150, 145, 190, 0.24)",
-        borderStrong: "rgba(150, 145, 190, 0.34)",
+        background: "rgba(126, 134, 170, 0.08)",
+        border: "rgba(126, 134, 170, 0.24)",
+        borderStrong: "rgba(126, 134, 170, 0.34)",
       };
   }
 }

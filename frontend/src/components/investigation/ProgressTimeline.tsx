@@ -34,9 +34,9 @@ export default function ProgressTimeline({ collectors, analystDone }: Props) {
               padding: "10px 12px",
               background:
                 status === "completed"
-                  ? "rgba(43,212,160,0.06)"
+                  ? "rgba(46,204,113,0.06)"
                   : "transparent",
-              border: `1px solid ${status === "completed" ? "rgba(43,212,160,0.18)" : "var(--border)"}`,
+              border: `1px solid ${status === "completed" ? "rgba(46,204,113,0.18)" : "var(--border)"}`,
               borderRadius: "var(--radius)",
               textAlign: "center",
             }}
@@ -67,8 +67,8 @@ export default function ProgressTimeline({ collectors, analystDone }: Props) {
         style={{
           flex: 1,
           padding: "10px 12px",
-          background: analystDone ? "rgba(139,123,255,0.06)" : "transparent",
-          border: `1px solid ${analystDone ? "rgba(139,123,255,0.18)" : "var(--border)"}`,
+          background: analystDone ? "rgba(79,110,247,0.06)" : "transparent",
+          border: `1px solid ${analystDone ? "rgba(79,110,247,0.18)" : "var(--border)"}`,
           borderRadius: "var(--radius)",
           textAlign: "center",
         }}

@@ -13,9 +13,9 @@ import {
 import type { AlertInvestigationRun } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#fb7185",
-  suspicious: "#f2a93c",
-  benign: "#2bd4a0",
+  malicious: "#f07050",
+  suspicious: "#f0a050",
+  benign: "#2ecc71",
   inconclusive: "#94a3b8",
 };
 
@@ -312,9 +312,9 @@ export default function AlertInvestigationsPage() {
                     handleDelete(run);
                   }}
                   style={{
-                    border: "1px solid rgba(251, 113, 133, 0.28)",
+                    border: "1px solid rgba(240, 112, 80, 0.28)",
                     background: "rgba(127, 29, 29, 0.14)",
-                    color: "#fda4af",
+                    color: "#f5a48f",
                     borderRadius: 6,
                     padding: "5px 8px",
                     fontSize: 9,
@@ -395,7 +395,7 @@ const primaryButtonStyle: React.CSSProperties = {
   padding: "8px 16px",
   borderRadius: 8,
   border: "none",
-  background: "linear-gradient(135deg, #8b7bff, #c0acff)",
+  background: "linear-gradient(135deg, #4f6ef7, #8fa4ff)",
   color: "#fff",
   fontSize: 12,
   fontWeight: 600,

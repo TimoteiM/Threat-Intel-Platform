@@ -308,7 +308,7 @@ export default function EmailInvestigationsPage() {
     lineHeight: 1.6,
     padding: "10px 12px",
     borderRadius: 14,
-    border: "1px solid rgba(150, 145, 190, 0.12)",
+    border: "1px solid rgba(126, 134, 170, 0.12)",
     background: "var(--panel-empty-bg)",
   };
 
@@ -363,8 +363,8 @@ export default function EmailInvestigationsPage() {
             type="button"
             onClick={refreshHistory}
             style={{
-              background: "rgba(139,123,255,0.12)",
-              border: "1px solid rgba(139,123,255,0.28)",
+              background: "rgba(79,110,247,0.12)",
+              border: "1px solid rgba(79,110,247,0.28)",
               color: "var(--text-strong)",
               borderRadius: "999px",
               fontSize: 11,
@@ -480,8 +480,8 @@ export default function EmailInvestigationsPage() {
                       key={h.id}
                       style={{
                         borderRadius: 18,
-                        border: `1px solid ${isSelected ? "rgba(139,123,255,0.40)" : "var(--panel-divider-strong)"}`,
-                        background: isSelected ? "rgba(139,123,255,0.10)" : "var(--panel-card-bg)",
+                        border: `1px solid ${isSelected ? "rgba(79,110,247,0.40)" : "var(--panel-divider-strong)"}`,
+                        background: isSelected ? "rgba(79,110,247,0.10)" : "var(--panel-card-bg)",
                         padding: 12,
                       }}
                     >
@@ -536,9 +536,9 @@ export default function EmailInvestigationsPage() {
                             onClick={() => cancelRun(h.id)}
                             disabled={cancelingRunId === h.id}
                             style={{
-                              background: "rgba(251,113,133,0.12)",
-                              border: "1px solid rgba(251,113,133,0.30)",
-                              color: "#fda4af",
+                              background: "rgba(240,112,80,0.12)",
+                              border: "1px solid rgba(240,112,80,0.30)",
+                              color: "#f5a48f",
                               borderRadius: 999,
                               fontSize: 11,
                               fontWeight: 700,
@@ -558,7 +558,7 @@ export default function EmailInvestigationsPage() {
               </div>
             )}
             {historyTotal > 0 ? (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(150,145,190,0.12)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(126,134,170,0.12)" }}>
                 <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
                   {historyShowingFrom}-{historyShowingTo} of {historyTotal}
                 </div>
@@ -657,7 +657,7 @@ export default function EmailInvestigationsPage() {
                 type="submit"
                 disabled={!file || loading}
                 style={{
-                  background: "linear-gradient(135deg,#8b7bff,#c0acff)",
+                  background: "linear-gradient(135deg,#4f6ef7,#8fa4ff)",
                   border: "none",
                   color: "#fff",
                   borderRadius: 999,
@@ -715,7 +715,7 @@ export default function EmailInvestigationsPage() {
               style={{
                 height: "100%",
                 width: `${progressModel.percent}%`,
-                background: "linear-gradient(90deg, var(--accent), #2bd4a0)",
+                background: "linear-gradient(90deg, var(--accent), #2ecc71)",
                 transition: "width 300ms ease",
               }}
             />
@@ -741,9 +741,9 @@ export default function EmailInvestigationsPage() {
                 onClick={() => cancelRun(activeRunId)}
                 disabled={cancelingRunId === activeRunId}
                 style={{
-                  background: "rgba(251,113,133,0.12)",
-                  border: "1px solid rgba(251,113,133,0.35)",
-                  color: "#fda4af",
+                  background: "rgba(240,112,80,0.12)",
+                  border: "1px solid rgba(240,112,80,0.35)",
+                  color: "#f5a48f",
                   borderRadius: "var(--radius)",
                   fontSize: 12,
                   fontWeight: 600,
@@ -773,9 +773,9 @@ export default function EmailInvestigationsPage() {
             const verdict = String((result as any)?.resolution?.overall_verdict || "inconclusive").toLowerCase();
             const confidence = String((result as any)?.resolution?.confidence || "low").toLowerCase();
             const signals: string[] = (result as any)?.resolution?.primary_signals || [];
-            const color = verdict === "malicious" ? "#fb7185" : verdict === "suspicious" ? "#f2a93c" : verdict === "clean" ? "#2bd4a0" : "#94a3b8";
-            const bg = verdict === "malicious" ? "rgba(251,113,133,0.08)" : verdict === "suspicious" ? "rgba(242,169,60,0.08)" : verdict === "clean" ? "rgba(43,212,160,0.08)" : "rgba(148,163,184,0.06)";
-            const border = verdict === "malicious" ? "rgba(251,113,133,0.35)" : verdict === "suspicious" ? "rgba(242,169,60,0.35)" : verdict === "clean" ? "rgba(43,212,160,0.3)" : "var(--border)";
+            const color = verdict === "malicious" ? "#f07050" : verdict === "suspicious" ? "#f0a050" : verdict === "clean" ? "#2ecc71" : "#94a3b8";
+            const bg = verdict === "malicious" ? "rgba(240,112,80,0.08)" : verdict === "suspicious" ? "rgba(240,160,80,0.08)" : verdict === "clean" ? "rgba(46,204,113,0.08)" : "rgba(148,163,184,0.06)";
+            const border = verdict === "malicious" ? "rgba(240,112,80,0.35)" : verdict === "suspicious" ? "rgba(240,160,80,0.35)" : verdict === "clean" ? "rgba(46,204,113,0.3)" : "var(--border)";
             return (
               <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -815,7 +815,7 @@ export default function EmailInvestigationsPage() {
                   display: "flex",
                   gap: 10,
                   flexWrap: "wrap",
-                  borderBottom: "1px solid rgba(150, 145, 190, 0.22)",
+                  borderBottom: "1px solid rgba(126, 134, 170, 0.22)",
                   paddingBottom: 8,
                   marginBottom: 10,
                 }}
@@ -828,14 +828,14 @@ export default function EmailInvestigationsPage() {
                     style={{
                       background:
                         activeResultTab === t.id
-                          ? "linear-gradient(180deg, rgba(139,123,255,0.18) 0%, rgba(139,123,255,0.08) 100%)"
+                          ? "linear-gradient(180deg, rgba(79,110,247,0.18) 0%, rgba(79,110,247,0.08) 100%)"
                           : "rgba(15, 23, 42, 0.72)",
                       border: activeResultTab === t.id
-                        ? "1px solid rgba(139,123,255,0.52)"
-                        : "1px solid rgba(150,145,190,0.22)",
+                        ? "1px solid rgba(79,110,247,0.52)"
+                        : "1px solid rgba(126,134,170,0.22)",
                       borderBottom: activeResultTab === t.id
-                        ? "1px solid rgba(139,123,255,0.65)"
-                        : "1px solid rgba(150,145,190,0.22)",
+                        ? "1px solid rgba(79,110,247,0.65)"
+                        : "1px solid rgba(126,134,170,0.22)",
                       color: activeResultTab === t.id ? "#d8e9ff" : "var(--text-secondary)",
                       fontSize: 14,
                       letterSpacing: "0.04em",
@@ -845,7 +845,7 @@ export default function EmailInvestigationsPage() {
                       minWidth: 132,
                       borderRadius: 12,
                       boxShadow: activeResultTab === t.id
-                        ? "0 10px 24px rgba(106, 79, 224, 0.18)"
+                        ? "0 10px 24px rgba(58, 83, 201, 0.18)"
                         : "none",
                       cursor: "pointer",
                       marginBottom: -1,
@@ -909,7 +909,7 @@ export default function EmailInvestigationsPage() {
                   <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", minWidth: 90 }}>Auth Header</span>
                   {(["spf", "dkim", "dmarc"] as const).map((k) => {
                     const val = String((result.authentication as any)?.[k] || "none").toLowerCase();
-                    const c = val === "pass" ? "#2bd4a0" : val === "fail" || val === "permerror" ? "#fb7185" : "#f2a93c";
+                    const c = val === "pass" ? "#2ecc71" : val === "fail" || val === "permerror" ? "#f07050" : "#f0a050";
                     return (
                       <span key={k} style={{ fontSize: 11, fontWeight: 700, color: c, border: "1px solid var(--border)", borderRadius: 6, padding: "2px 7px", textTransform: "uppercase" }}>
                         {k.toUpperCase()}: {val}
@@ -939,7 +939,7 @@ export default function EmailInvestigationsPage() {
             const hasData = es.available !== false || auth.spf;
             if (!hasData) return null;
             const spoofability = String(es.spoofability_score || "").toLowerCase();
-            const spoofColor = spoofability === "high" ? "#fb7185" : spoofability === "medium" ? "#f2a93c" : spoofability === "low" ? "#8b7bff" : "#2bd4a0";
+            const spoofColor = spoofability === "high" ? "#f07050" : spoofability === "medium" ? "#f0a050" : spoofability === "low" ? "#4f6ef7" : "#2ecc71";
             return (
               <div style={{ border: "1px solid var(--panel-divider-strong)", borderRadius: "var(--shell-radius-lg)", padding: "var(--space-4)" }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
@@ -949,7 +949,7 @@ export default function EmailInvestigationsPage() {
                   {/* Header-parsed tokens */}
                   {(["spf", "dkim", "dmarc"] as const).map((k) => {
                     const headerVal = String(auth?.[k] || "none").toLowerCase();
-                    const c = headerVal === "pass" ? "#2bd4a0" : headerVal === "fail" || headerVal === "permerror" ? "#fb7185" : "#f2a93c";
+                    const c = headerVal === "pass" ? "#2ecc71" : headerVal === "fail" || headerVal === "permerror" ? "#f07050" : "#f0a050";
                     return (
                       <div key={k} style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                         <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>{k.toUpperCase()} (header)</div>
@@ -961,7 +961,7 @@ export default function EmailInvestigationsPage() {
                   {es.dmarc_policy !== undefined && (
                     <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DMARC Policy (DNS)</div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: es.dmarc_policy === "reject" ? "#2bd4a0" : es.dmarc_policy === "quarantine" ? "#8b7bff" : "#f2a93c" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.dmarc_policy === "reject" ? "#2ecc71" : es.dmarc_policy === "quarantine" ? "#4f6ef7" : "#f0a050" }}>
                         {String(es.dmarc_policy || "none").toUpperCase()}
                       </div>
                     </div>
@@ -970,7 +970,7 @@ export default function EmailInvestigationsPage() {
                   {es.spf_all_qualifier !== undefined && (
                     <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>SPF All Qualifier</div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: es.spf_all_qualifier === "-all" ? "#2bd4a0" : es.spf_all_qualifier === "+all" ? "#fb7185" : "#f2a93c" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.spf_all_qualifier === "-all" ? "#2ecc71" : es.spf_all_qualifier === "+all" ? "#f07050" : "#f0a050" }}>
                         {String(es.spf_all_qualifier || "none")}
                       </div>
                     </div>
@@ -978,7 +978,7 @@ export default function EmailInvestigationsPage() {
                   {/* DKIM selectors */}
                   <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                     <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>DKIM Selectors</div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: (es.dkim_selectors_found || []).length > 0 ? "#2bd4a0" : "#f2a93c" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: (es.dkim_selectors_found || []).length > 0 ? "#2ecc71" : "#f0a050" }}>
                       {(es.dkim_selectors_found || []).length > 0 ? (es.dkim_selectors_found || []).join(", ") : "None found"}
                     </div>
                   </div>
@@ -986,7 +986,7 @@ export default function EmailInvestigationsPage() {
                   {typeof es.email_security_score === "number" && (
                     <div style={{ padding: "var(--space-2) 0", borderBottom: "1px solid var(--panel-divider-soft)" }}>
                       <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Security Score</div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: es.email_security_score >= 80 ? "#2bd4a0" : es.email_security_score >= 50 ? "#f2a93c" : "#fb7185" }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: es.email_security_score >= 80 ? "#2ecc71" : es.email_security_score >= 50 ? "#f0a050" : "#f07050" }}>
                         {es.email_security_score}/100
                       </div>
                     </div>
@@ -1024,7 +1024,7 @@ export default function EmailInvestigationsPage() {
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
               {(() => {
                 const cls = (result?.resolution?.sender_domain_analysis?.classification || "unknown").toLowerCase();
-                const c = cls === "malicious" ? "#fb7185" : cls === "suspicious" ? "#f2a93c" : cls === "benign" ? "#2bd4a0" : "var(--text-secondary)";
+                const c = cls === "malicious" ? "#f07050" : cls === "suspicious" ? "#f0a050" : cls === "benign" ? "#2ecc71" : "var(--text-secondary)";
                 return <span style={{ fontSize: 11, color: c, border: "1px solid var(--border)", borderRadius: 999, padding: "4px 8px", fontWeight: 700, textTransform: "uppercase" }}>{cls}</span>;
               })()}
             </div>
@@ -1041,7 +1041,7 @@ export default function EmailInvestigationsPage() {
                   <div key={idx} style={{ padding: "12px 14px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)", borderLeft: `3px solid ${findingSeverityColor(f?.severity)}` }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 8px", color: findingSeverityColor(f?.severity), background: "rgba(139,123,255,0.10)", textTransform: "uppercase" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 999, padding: "2px 8px", color: findingSeverityColor(f?.severity), background: "rgba(79,110,247,0.10)", textTransform: "uppercase" }}>
                           {(f?.severity || "info").toUpperCase()}
                         </span>
                         <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 700 }}>{f?.title || "Untitled finding"}</span>
@@ -1084,7 +1084,7 @@ export default function EmailInvestigationsPage() {
                     if (typeof val !== "number") return null;
                     const pct = (val * 100).toFixed(0);
                     const label = k.replace("_probability", "").replace(/_/g, " ");
-                    const color = val > 0.7 ? "#fb7185" : val > 0.4 ? "#f2a93c" : "var(--text-dim)";
+                    const color = val > 0.7 ? "#f07050" : val > 0.4 ? "#f0a050" : "var(--text-dim)";
                     return (
                       <span key={k} style={{ marginRight: 12, color }}>
                         {label}: {pct}%
@@ -1127,11 +1127,11 @@ export default function EmailInvestigationsPage() {
                     padding: "4px 8px",
                     color:
                       String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "malicious"
-                        ? "#fb7185"
+                        ? "#f07050"
                         : String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "suspicious"
-                          ? "#f2a93c"
+                          ? "#f0a050"
                           : String((result as any)?.indicator_checks?.email_anyrun?.verdict || "unknown").toLowerCase() === "clean"
-                            ? "#2bd4a0"
+                            ? "#2ecc71"
                             : "var(--text-secondary)",
                     border: "1px solid var(--border)",
                   }}>
@@ -1211,8 +1211,8 @@ export default function EmailInvestigationsPage() {
                         renderItem={(d, idx) => {
                           const tl = d.threatLevel ?? 0;
                           const label = tl >= 2 ? "malicious" : tl === 1 ? "suspicious" : "clean";
-                          const labelColor = tl >= 2 ? "#fb7185" : tl === 1 ? "#f2a93c" : "#2bd4a0";
-                          const labelBg = tl >= 2 ? "rgba(251,113,133,0.12)" : tl === 1 ? "rgba(242,169,60,0.12)" : "rgba(43,212,160,0.1)";
+                          const labelColor = tl >= 2 ? "#f07050" : tl === 1 ? "#f0a050" : "#2ecc71";
+                          const labelBg = tl >= 2 ? "rgba(240,112,80,0.12)" : tl === 1 ? "rgba(240,160,80,0.12)" : "rgba(46,204,113,0.1)";
                           return (
                             <div key={`${d.name}-${idx}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 2 }}>
                               <span style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", wordBreak: "break-all", flex: 1 }}>
@@ -1243,7 +1243,7 @@ export default function EmailInvestigationsPage() {
                           const tl = h.threatLevel ?? 0;
                           const isMalicious = tl >= 2;
                           const isSuspicious = tl === 1;
-                          const ipColor = isMalicious ? "#fb7185" : isSuspicious ? "#f2a93c" : "var(--text-secondary)";
+                          const ipColor = isMalicious ? "#f07050" : isSuspicious ? "#f0a050" : "var(--text-secondary)";
                           return (
                             <div key={`${h.display}-${idx}`} style={{ marginBottom: 4 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1251,7 +1251,7 @@ export default function EmailInvestigationsPage() {
                                   {h.display}
                                 </span>
                                 {(isMalicious || isSuspicious) && (
-                                  <span style={{ fontSize: 9, color: ipColor, background: isMalicious ? "rgba(251,113,133,0.12)" : "rgba(242,169,60,0.12)", border: `1px solid ${ipColor}40`, borderRadius: 999, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                  <span style={{ fontSize: 9, color: ipColor, background: isMalicious ? "rgba(240,112,80,0.12)" : "rgba(240,160,80,0.12)", border: `1px solid ${ipColor}40`, borderRadius: 999, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
                                     {isMalicious ? "malicious" : "suspicious"}
                                   </span>
                                 )}
@@ -1365,7 +1365,7 @@ export default function EmailInvestigationsPage() {
                   const staticItems = (result as any)?.indicator_checks?.attachment_analysis?.items || [];
                   const staticFound = staticItems.find((i: any) => String(i?.hash || "").toLowerCase() === String(a?.sha256 || "").toLowerCase());
                   return (
-                    <div key={idx} style={{ border: `1px solid ${isRisky ? "rgba(251,113,133,0.4)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 10 }}>
+                    <div key={idx} style={{ border: `1px solid ${isRisky ? "rgba(240,112,80,0.4)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 10 }}>
                       <div style={{ fontSize: 12, color: "var(--text)", fontWeight: 600, marginBottom: 6 }}>
                         {a?.filename || "unnamed_attachment"}
                         <span style={{ fontSize: 11, color: "var(--text-dim)", fontWeight: 400, marginLeft: 8 }}>({a?.size_bytes ?? 0} bytes)</span>
@@ -1383,15 +1383,15 @@ export default function EmailInvestigationsPage() {
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
                         <div style={{ padding: "6px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6 }}>
                           <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>VirusTotal</div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: attVtVerdict === "malicious" ? "#fb7185" : attVtVerdict === "suspicious" ? "#f2a93c" : attVtVerdict === "clean" ? "#2bd4a0" : "var(--text)" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: attVtVerdict === "malicious" ? "#f07050" : attVtVerdict === "suspicious" ? "#f0a050" : attVtVerdict === "clean" ? "#2ecc71" : "var(--text)" }}>
                             {attVtVerdict.toUpperCase()}
                           </div>
                           <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>m={a?.vt?.malicious_count ?? 0}, s={a?.vt?.suspicious_count ?? 0}, n={a?.vt?.total_vendors ?? 0}</div>
-                          {a?.vt?.verdict === "rate_limited" && <div style={{ fontSize: 10, color: "#fb7185" }}>rate limited</div>}
+                          {a?.vt?.verdict === "rate_limited" && <div style={{ fontSize: 10, color: "#f07050" }}>rate limited</div>}
                         </div>
                         <div style={{ padding: "6px 10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 6 }}>
                           <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 2 }}>AnyRun TI</div>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: anyrunVerdict === "malicious" ? "#fb7185" : anyrunVerdict === "suspicious" ? "#f2a93c" : anyrunVerdict === "clean" ? "#2bd4a0" : "var(--text-dim)" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: anyrunVerdict === "malicious" ? "#f07050" : anyrunVerdict === "suspicious" ? "#f0a050" : anyrunVerdict === "clean" ? "#2ecc71" : "var(--text-dim)" }}>
                             {a?.anyrun?.checked ? anyrunVerdict.toUpperCase() || "CHECKED" : a?.anyrun?.error === "Not requested" ? "Not queried" : "Not found"}
                           </div>
                           {typeof a?.anyrun?.threat_score === "number" && <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>score: {a.anyrun.threat_score}</div>}
@@ -1413,10 +1413,10 @@ export default function EmailInvestigationsPage() {
 
           {/* URL summary strip */}
           {urlSummary.caution.length > 0 && (
-            <div style={{ background: "rgba(251,113,133,0.07)", border: "1px solid rgba(251,113,133,0.3)", borderRadius: "var(--radius-lg)", padding: "10px 14px" }}>
-              <div style={{ fontSize: 11, color: "#fb7185", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Suspicious / Malicious URL Destinations</div>
+            <div style={{ background: "rgba(240,112,80,0.07)", border: "1px solid rgba(240,112,80,0.3)", borderRadius: "var(--radius-lg)", padding: "10px 14px" }}>
+              <div style={{ fontSize: 11, color: "#f07050", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Suspicious / Malicious URL Destinations</div>
               {urlSummary.caution.map((d, i) => (
-                <div key={i} style={{ fontSize: 11, color: "#fda4af", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</div>
+                <div key={i} style={{ fontSize: 11, color: "#f5a48f", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{d}</div>
               ))}
             </div>
           )}
@@ -1430,7 +1430,7 @@ export default function EmailInvestigationsPage() {
                 {result.indicator_checks.urls.map((u: any, idx: number) => {
                   const finalUrl = u?.screenshot?.final_url || u?.url_behavior?.final_url || "Not present in the provided evidence.";
                   const verdict = (u?.effective_verdict || u?.vt?.verdict || "unknown").toLowerCase();
-                  const verdictColor = verdict === "malicious" ? "#fb7185" : verdict === "suspicious" ? "#f2a93c" : verdict === "clean" ? "#2bd4a0" : "var(--text)";
+                  const verdictColor = verdict === "malicious" ? "#f07050" : verdict === "suspicious" ? "#f0a050" : verdict === "clean" ? "#2ecc71" : "var(--text)";
                   const anyrunVerdict = String(u?.anyrun?.verdict || "").toLowerCase();
                   // Determine which source drove the effective verdict
                   const vtV = String(u?.vt?.verdict || "").toLowerCase();
@@ -1442,7 +1442,7 @@ export default function EmailInvestigationsPage() {
                     return "";
                   })();
                   return (
-                    <div key={idx} style={{ border: `1px solid ${verdict === "malicious" ? "rgba(251,113,133,0.4)" : verdict === "suspicious" ? "rgba(242,169,60,0.3)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 12 }}>
+                    <div key={idx} style={{ border: `1px solid ${verdict === "malicious" ? "rgba(240,112,80,0.4)" : verdict === "suspicious" ? "rgba(240,160,80,0.3)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: 12 }}>
                       {/* URL header */}
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: verdictColor }}>{verdict.toUpperCase()}</span>
@@ -1454,14 +1454,14 @@ export default function EmailInvestigationsPage() {
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginBottom: 8 }}>
                         {/* Verdict details */}
-                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(139,123,255,0.05)" }}>
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(79,110,247,0.05)" }}>
                           <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Signals</div>
                           <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 2 }}>
                             VT: {u?.vt?.verdict || "unknown"} (m={u?.vt?.malicious_count ?? 0}, s={u?.vt?.suspicious_count ?? 0}, n={u?.vt?.total_vendors ?? 0})
-                            {u?.vt?.verdict === "rate_limited" && <span style={{ color: "#fb7185" }}> [rate limited]</span>}
+                            {u?.vt?.verdict === "rate_limited" && <span style={{ color: "#f07050" }}> [rate limited]</span>}
                           </div>
                           {u?.anyrun && u.anyrun.error !== "Not requested" && (
-                            <div style={{ fontSize: 10, color: anyrunVerdict === "malicious" ? "#fb7185" : anyrunVerdict === "suspicious" ? "#f2a93c" : anyrunVerdict === "clean" ? "#2bd4a0" : "var(--text-dim)", marginTop: 3 }}>
+                            <div style={{ fontSize: 10, color: anyrunVerdict === "malicious" ? "#f07050" : anyrunVerdict === "suspicious" ? "#f0a050" : anyrunVerdict === "clean" ? "#2ecc71" : "var(--text-dim)", marginTop: 3 }}>
                               AnyRun TI: {u.anyrun.checked ? (anyrunVerdict || "unknown") + (typeof u.anyrun.threat_score === "number" ? ` (score ${u.anyrun.threat_score})` : "") : "not found in database"}
                             </div>
                           )}
@@ -1476,7 +1476,7 @@ export default function EmailInvestigationsPage() {
                           </div>
                         </div>
                         {/* Final URL + behavior */}
-                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(43,212,160,0.04)" }}>
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 8, background: "rgba(46,204,113,0.04)" }}>
                           <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: 4 }}>Destination</div>
                           <div style={{ fontSize: 11, color: "var(--text)", wordBreak: "break-all", fontFamily: "var(--font-mono)" }}>{finalUrl}</div>
                           {(u?.urlscan?.page_title || u?.urlscan?.page_ip) && (
@@ -1488,7 +1488,7 @@ export default function EmailInvestigationsPage() {
                           )}
                           <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-dim)" }}>
                             Redirects: {u?.url_behavior?.redirect_count ?? "N/A"}
-                            {" | "}Cred form: <span style={{ color: u?.url_behavior?.credential_form_present ? "#fb7185" : "var(--text-dim)", fontWeight: u?.url_behavior?.credential_form_present ? 700 : 400 }}>{u?.url_behavior?.credential_form_present ? "YES" : "No"}</span>
+                            {" | "}Cred form: <span style={{ color: u?.url_behavior?.credential_form_present ? "#f07050" : "var(--text-dim)", fontWeight: u?.url_behavior?.credential_form_present ? 700 : 400 }}>{u?.url_behavior?.credential_form_present ? "YES" : "No"}</span>
                             {" | "}UA cloaking: {u?.url_behavior?.ua_cloaking_detected ? "Yes" : "No"}
                           </div>
                         </div>
@@ -1529,17 +1529,17 @@ function historyPaginationButtonStyle(disabled: boolean): React.CSSProperties {
 
 function findingSeverityColor(severity?: string): string {
   const s = String(severity || "").toLowerCase();
-  if (s === "high") return "#fb7185";
-  if (s === "medium") return "#f2a93c";
-  if (s === "low") return "#8b7bff";
+  if (s === "high") return "#f07050";
+  if (s === "medium") return "#f0a050";
+  if (s === "low") return "#4f6ef7";
   return "#94a3b8";
 }
 
 function copyBtnStyle(active: boolean): React.CSSProperties {
   return {
-    background: active ? "rgba(43,212,160,0.15)" : "var(--bg-elevated)",
-    border: `1px solid ${active ? "rgba(43,212,160,0.4)" : "var(--border)"}`,
-    color: active ? "#2bd4a0" : "var(--text-muted)",
+    background: active ? "rgba(46,204,113,0.15)" : "var(--bg-elevated)",
+    border: `1px solid ${active ? "rgba(46,204,113,0.4)" : "var(--border)"}`,
+    color: active ? "#2ecc71" : "var(--text-muted)",
     borderRadius: 6,
     fontSize: 10,
     fontWeight: 600,
@@ -1800,7 +1800,7 @@ function PaginatedTextList<T>({
 
 function pagerButtonStyle(disabled: boolean): React.CSSProperties {
   return {
-    background: disabled ? "rgba(148,163,184,0.08)" : "rgba(139,123,255,0.12)",
+    background: disabled ? "rgba(148,163,184,0.08)" : "rgba(79,110,247,0.12)",
     color: disabled ? "var(--text-muted)" : "var(--accent)",
     border: "1px solid var(--border)",
     borderRadius: 8,

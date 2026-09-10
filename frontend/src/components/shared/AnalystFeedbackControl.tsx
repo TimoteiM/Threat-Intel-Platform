@@ -22,13 +22,13 @@ const OPTIONS: Array<{ verdict: Verdict; label: string; color: string; hint: str
   {
     verdict: "true_positive",
     label: "TRUE POSITIVE",
-    color: "#fb7185",
+    color: "#f07050",
     hint: "The threat was real",
   },
   {
     verdict: "false_positive",
     label: "FALSE POSITIVE",
-    color: "#2bd4a0",
+    color: "#2ecc71",
     hint: "Not a threat",
   },
   { verdict: "unclear", label: "UNCLEAR", color: "#64748b", hint: "Could not determine" },
@@ -183,7 +183,7 @@ export default function AnalystFeedbackControl({
       )}
 
       {error && (
-        <div style={{ marginTop: 8, fontSize: 10, color: "#fb7185", fontFamily: "var(--font-mono)" }}>
+        <div style={{ marginTop: 8, fontSize: 10, color: "#f07050", fontFamily: "var(--font-mono)" }}>
           {error}
         </div>
       )}

@@ -59,10 +59,10 @@ export default function AnyRunProcessGraphTab({ evidence, graphOnly = false, gra
             <div style={{
               margin: "10px 0",
               padding: "10px 12px",
-              border: "1px solid rgba(242, 169, 60, 0.35)",
+              border: "1px solid rgba(240, 160, 80, 0.35)",
               borderLeft: "3px solid var(--yellow)",
               borderRadius: 6,
-              background: "rgba(242, 169, 60, 0.08)",
+              background: "rgba(240, 160, 80, 0.08)",
               color: "var(--text-secondary)",
               fontSize: 12,
             }}>

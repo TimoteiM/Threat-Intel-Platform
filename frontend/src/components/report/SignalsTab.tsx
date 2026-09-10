@@ -67,8 +67,8 @@ export default function SignalsTab({ evidence }: Props) {
               key={gap?.id || i}
               style={{
                 padding: "10px 14px",
-                background: "rgba(251,113,133,0.04)",
-                border: "1px solid rgba(251,113,133,0.12)",
+                background: "rgba(240,112,80,0.04)",
+                border: "1px solid rgba(240,112,80,0.12)",
                 borderRadius: "var(--radius-sm)",
                 marginBottom: 8,
               }}

@@ -170,7 +170,7 @@ const preStyle: React.CSSProperties = {
 const reportSurfaceStyle: React.CSSProperties = {
   padding: 16,
   borderRadius: 16,
-  border: "1px solid rgba(150, 145, 190, 0.14)",
+  border: "1px solid rgba(126, 134, 170, 0.14)",
   background: "linear-gradient(180deg, rgba(8, 13, 24, 0.72), rgba(6, 10, 18, 0.92))",
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
   maxHeight: 560,

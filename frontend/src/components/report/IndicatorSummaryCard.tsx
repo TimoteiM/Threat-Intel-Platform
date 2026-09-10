@@ -14,9 +14,9 @@ import React from "react";
 import type { AlertIndicatorSummary } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
-  malicious: "#fb7185",
-  suspicious: "#f2a93c",
-  benign: "#2bd4a0",
+  malicious: "#f07050",
+  suspicious: "#f0a050",
+  benign: "#2ecc71",
   inconclusive: "#94a3b8",
   not_investigated: "#64748b",
 };

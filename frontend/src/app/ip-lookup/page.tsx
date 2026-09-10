@@ -238,8 +238,8 @@ export default function IPLookupPage() {
                       {item.threatfox_count > 0 && (
                         <span style={{
                           fontSize: 9, fontWeight: 700, padding: "1px 5px",
-                          background: "rgba(251,113,133,0.1)", color: "var(--red)",
-                          border: "1px solid rgba(251,113,133,0.2)", borderRadius: "var(--radius-sm)",
+                          background: "rgba(240,112,80,0.1)", color: "var(--red)",
+                          border: "1px solid rgba(240,112,80,0.2)", borderRadius: "var(--radius-sm)",
                           fontFamily: "var(--font-sans)",
                         }}>
                           TF:{item.threatfox_count}
@@ -334,8 +334,8 @@ function IPLookupResult({ result }: { result: any }) {
             {ab.category_labels.map((label: string, i: number) => (
               <span key={i} style={{
                 padding: "4px 12px", fontSize: 11, fontWeight: 600,
-                background: "rgba(251,113,133,0.08)", color: "var(--red)",
-                border: "1px solid rgba(251,113,133,0.22)", borderRadius: "var(--radius-sm)",
+                background: "rgba(240,112,80,0.08)", color: "var(--red)",
+                border: "1px solid rgba(240,112,80,0.22)", borderRadius: "var(--radius-sm)",
                 fontFamily: "var(--font-sans)",
               }}>
                 {label}
@@ -388,8 +388,8 @@ function IPLookupResult({ result }: { result: any }) {
                     {r.category_labels.map((c: string, j: number) => (
                       <span key={j} style={{
                         fontSize: 10, padding: "1px 6px",
-                        background: "rgba(251,113,133,0.08)", color: "var(--red)",
-                        border: "1px solid rgba(251,113,133,0.18)", borderRadius: "var(--radius-sm)",
+                        background: "rgba(240,112,80,0.08)", color: "var(--red)",
+                        border: "1px solid rgba(240,112,80,0.18)", borderRadius: "var(--radius-sm)",
                         fontFamily: "var(--font-sans)",
                       }}>{c}</span>
                     ))}
@@ -425,14 +425,14 @@ function IPLookupResult({ result }: { result: any }) {
                   </span>
                   <span style={{
                     fontSize: 10, fontWeight: 600, padding: "2px 8px",
-                    background: "rgba(251,113,133,0.1)", color: "var(--red)",
-                    border: "1px solid rgba(251,113,133,0.25)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-sans)",
+                    background: "rgba(240,112,80,0.1)", color: "var(--red)",
+                    border: "1px solid rgba(240,112,80,0.25)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-sans)",
                   }}>{ioc.threat_type}</span>
                   {ioc.malware && (
                     <span style={{
                       fontSize: 10, fontWeight: 600, padding: "2px 8px",
-                      background: "rgba(242,169,60,0.1)", color: "var(--yellow)",
-                      border: "1px solid rgba(242,169,60,0.25)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-sans)",
+                      background: "rgba(240,160,80,0.1)", color: "var(--yellow)",
+                      border: "1px solid rgba(240,160,80,0.25)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-sans)",
                     }}>{ioc.malware}</span>
                   )}
                   {ioc.confidence_level != null && (
@@ -451,8 +451,8 @@ function IPLookupResult({ result }: { result: any }) {
                     {ioc.tags.map((t: string, j: number) => (
                       <span key={j} style={{
                         fontSize: 10, padding: "1px 7px",
-                        background: "rgba(139,123,255,0.08)", color: "var(--accent)",
-                        border: "1px solid rgba(139,123,255,0.2)", borderRadius: "var(--radius-sm)",
+                        background: "rgba(79,110,247,0.08)", color: "var(--accent)",
+                        border: "1px solid rgba(79,110,247,0.2)", borderRadius: "var(--radius-sm)",
                         fontFamily: "var(--font-sans)",
                       }}>{t}</span>
                     ))}
@@ -468,7 +468,7 @@ function IPLookupResult({ result }: { result: any }) {
         <Section title="ThreatFox IOC Matches">
           <div style={{
             padding: "9px 12px", fontSize: 12, color: "var(--green)",
-            background: "rgba(43,212,160,0.06)", border: "1px solid rgba(43,212,160,0.18)",
+            background: "rgba(46,204,113,0.06)", border: "1px solid rgba(46,204,113,0.18)",
             borderRadius: "var(--radius-sm)",
           }}>
             No IOC matches found in ThreatFox for this IP.

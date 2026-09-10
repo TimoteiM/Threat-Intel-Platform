@@ -153,12 +153,12 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot, 
         <div style={{
           marginBottom: 14,
           padding: "12px 14px",
-          border: "1px solid rgba(43, 212, 160, .28)",
-          borderLeft: "3px solid #2bd4a0",
+          border: "1px solid rgba(46, 204, 113, .28)",
+          borderLeft: "3px solid #2ecc71",
           borderRadius: 9,
-          background: "rgba(43, 212, 160, .07)",
+          background: "rgba(46, 204, 113, .07)",
         }}>
-          <div style={{ color: "#5ee7c0", fontSize: 11, fontWeight: 800, marginBottom: 5 }}>
+          <div style={{ color: "#6fdc95", fontSize: 11, fontWeight: 800, marginBottom: 5 }}>
             Informational detections retained for visibility
           </div>
           {informationalEvents.map((event, index) => (

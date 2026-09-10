@@ -54,9 +54,9 @@ export default function ExecutiveSummaryTab({ report, intelligence }: Props) {
             fontWeight: 600,
             padding: "2px 8px",
             borderRadius: "var(--radius-sm)",
-            border: `1px solid ${report?.ai_model?.startsWith("claude-") ? "#fb923c" : "#8b7bff"}`,
-            color: report?.ai_model?.startsWith("claude-") ? "#fb923c" : "#8b7bff",
-            background: report?.ai_model?.startsWith("claude-") ? "rgba(251,146,60,0.08)" : "rgba(139,123,255,0.08)",
+            border: `1px solid ${report?.ai_model?.startsWith("claude-") ? "#fb923c" : "#4f6ef7"}`,
+            color: report?.ai_model?.startsWith("claude-") ? "#fb923c" : "#4f6ef7",
+            background: report?.ai_model?.startsWith("claude-") ? "rgba(251,146,60,0.08)" : "rgba(79,110,247,0.08)",
           }}>
             {report?.ai_model
               ? report.ai_model.startsWith("claude-sonnet") ? "Claude Sonnet 4.6"
