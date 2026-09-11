@@ -46,6 +46,61 @@ def _is_threat_bearing(row: dict[str, Any]) -> bool:
     return level > 0 or bool(str(row.get("threat_name") or "").strip())
 
 
+def _collapse_network_threats(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """The IDS events, grouped by the rule that fired.
+
+    This is what "13 network threats" actually means, and it is the question an
+    analyst asks next. Raw, the events repeat: thirteen here are two Suricata
+    rules, one seen nine times and one four. Grouping by signature id keeps the
+    rule text, the class and the destinations while dropping twelve near
+    duplicates that would otherwise crowd the prompt.
+    """
+    events = ((raw.get("behavior_details") or {}).get("network_threats")) or []
+    if not isinstance(events, list) or not events:
+        return None
+
+    grouped: dict[Any, dict[str, Any]] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        key = event.get("sid") or event.get("msg")
+        entry = grouped.setdefault(
+            key,
+            {
+                "rule": _trim(event.get("msg"), 300),
+                "signature_id": event.get("sid"),
+                "class": event.get("class"),
+                "priority": event.get("priority"),
+                "events": 0,
+                "_destinations": set(),
+                "_processes": set(),
+                "_times": [],
+            },
+        )
+        entry["events"] += 1
+        dst_ip = str(event.get("dstip") or "").strip()
+        if dst_ip:
+            port = str(event.get("dstport") or "").strip()
+            entry["_destinations"].add(f"{dst_ip}:{port}" if port else dst_ip)
+        process = str(event.get("processName") or "").strip()
+        if process:
+            entry["_processes"].add(f"{process} (pid {event.get('pid')})" if event.get("pid") else process)
+        when = str(event.get("time") or "").strip()
+        if when:
+            entry["_times"].append(when)
+
+    rules = []
+    for entry in sorted(grouped.values(), key=lambda e: -e["events"])[:15]:
+        times = sorted(entry.pop("_times"))
+        entry["destinations"] = sorted(entry.pop("_destinations"))[:10]
+        entry["processes"] = sorted(entry.pop("_processes"))[:6]
+        entry["first_seen"] = times[0] if times else None
+        entry["last_seen"] = times[-1] if times else None
+        rules.append(entry)
+
+    return {"event_count": len(events), "distinct_rules": len(grouped), "rules": rules}
+
+
 def summarize_sandbox_evidence(evidence: dict[str, Any]) -> dict[str, Any] | None:
     """The sandbox run, projected for a prompt. None when nothing was detonated."""
     block = evidence.get("hybrid_analysis") or evidence.get("anyrun") or {}
@@ -92,6 +147,9 @@ def summarize_sandbox_evidence(evidence: dict[str, Any]) -> dict[str, Any] | Non
             "analysis_link": item.get("analysis_link"),
             "analysis_id": item.get("analysis_id"),
             "behaviour_counts": raw.get("behavior_counts") or {},
+            # The IDS detections, by rule. Without these the model can say
+            # "13 network threats" and nothing about what they were.
+            "network_threats": _collapse_network_threats(raw),
             "process_tree": {
                 "process_count": tree.get("process_count"),
                 "edge_count": tree.get("edge_count"),

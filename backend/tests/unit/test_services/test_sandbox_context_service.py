@@ -29,6 +29,27 @@ def _evidence() -> dict:
                         "verdict_text": "Malicious activity",
                         "threatName": ["exploit-kit"],
                         "behavior_counts": {"processes": 183, "network_threats": 13},
+                        "behavior_details": {
+                            # Nine of one rule, four of another — the shape the
+                            # real payload takes, and the reason these are
+                            # grouped rather than listed.
+                            "network_threats": (
+                                [
+                                    {"sid": 2071928, "msg": "ET EXPLOIT_KIT TA569 Gholoader CnC TDS Domain in TLS SNI",
+                                     "class": "Exploit Kit Activity Detected", "priority": 1,
+                                     "dstip": "95.133.228.51", "dstport": 443,
+                                     "processName": "msedge.exe", "pid": 5040,
+                                     "time": "2026-09-11T06:20:00.974Z"}
+                                ] * 9
+                                + [
+                                    {"sid": 2071927, "msg": "ET EXPLOIT_KIT TA569 Gholoader CnC Domain in DNS Lookup",
+                                     "class": "Exploit Kit Activity Detected", "priority": 1,
+                                     "dstip": "192.168.100.2", "dstport": 53,
+                                     "processName": "msedge.exe", "pid": 5040,
+                                     "time": "2026-09-11T06:20:06.086Z"}
+                                ] * 4
+                            ),
+                        },
                         "iocs": [
                             {"ioc": "cdn14.example.org", "type": "domain",
                              "category": "DNS requests", "reputation": 2},
@@ -116,3 +137,26 @@ def test_case_context_does_not_truncate_the_sandbox():
 
     flattened = str(context["sandbox"])
     assert "[truncated]" not in flattened
+
+
+def test_network_threats_group_by_rule_not_by_event():
+    """"13 network threats" is not an answer; the two rules behind it are."""
+    threats = summarize_sandbox_evidence(_evidence())["runs"][0]["network_threats"]
+    assert threats["event_count"] == 13
+    assert threats["distinct_rules"] == 2
+
+    top = threats["rules"][0]
+    assert top["events"] == 9
+    assert top["signature_id"] == 2071928
+    assert "Gholoader" in top["rule"]
+    assert top["destinations"] == ["95.133.228.51:443"]
+    assert top["processes"] == ["msedge.exe (pid 5040)"]
+
+    # Ordered by how often each fired, so the strongest signal leads.
+    assert [r["events"] for r in threats["rules"]] == [9, 4]
+
+
+def test_no_ids_events_is_none_not_an_empty_shell():
+    evidence = _evidence()
+    evidence["hybrid_analysis"]["items"][0]["raw_summary"]["behavior_details"] = {}
+    assert summarize_sandbox_evidence(evidence)["runs"][0]["network_threats"] is None
