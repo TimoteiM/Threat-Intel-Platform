@@ -31,6 +31,21 @@ def _update_run(run_uuid: uuid.UUID, *, result_json_patch: dict | None = None, *
             merged = dict(run.result_json or {})
             merged.update(result_json_patch)
             run.result_json = merged
+
+            # The row has its own status and completed_at columns, and nothing
+            # was writing them — every run in the table read "queued" for ever,
+            # because the API takes status from result_json and never noticed.
+            # Harmless to the UI, fatal to any SQL asked how long a run took.
+            if "status" in result_json_patch:
+                run.status = str(result_json_patch["status"] or "queued")
+            if "error" in result_json_patch:
+                run.error = result_json_patch.get("error")
+            finished = result_json_patch.get("completed_at")
+            if finished:
+                try:
+                    run.completed_at = datetime.fromisoformat(str(finished))
+                except (TypeError, ValueError):
+                    run.completed_at = datetime.now(timezone.utc)
         for key, value in fields.items():
             setattr(run, key, value)
         db.commit()

@@ -136,8 +136,11 @@ def test_render_email_template_resolution_enforces_expected_layout() -> None:
     )
     assert text.startswith('Email subject: "Quarterly Update"')
     assert "After our investigation, we found:" in text
-    assert "Embedded URLs:" in text
-    assert "Additional findings:" in text
+    # The report is a bullet list, not headed sections (926789c). What matters
+    # is that every evidence class still gets a line of its own.
+    assert "- The sender's email address" in text
+    assert "URL(s) were found in the email body" in text
+    assert text.count("\n- ") >= 2
 
 
 def test_process_email_investigation_submits_email_to_anyrun_once(monkeypatch) -> None:
@@ -276,7 +279,7 @@ def test_run_email_indicator_checks_skips_hybrid_fanout_when_anyrun_enabled(monk
     monkeypatch.setattr(
         indicator_svc,
         "_check_attachments",
-        lambda attachments, max_hashes, run_anyrun: {
+        lambda attachments, max_hashes, run_anyrun, inspection=None: {
             "present": True,
             "items": [{"sha256": "a" * 64, "hybrid_analysis": {"checked": False, "verdict": "unknown"}}],
         },

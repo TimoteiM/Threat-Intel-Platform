@@ -297,11 +297,25 @@ def _build_auth_section(extracted: dict[str, Any]) -> dict[str, Any]:
     else:
         spoof = "low"
 
+    # "none" and "fail" are different claims and must not be conflated. A domain
+    # that publishes no policy has told us nothing about this message — that is
+    # the sender's neglect, and it is why missing auth is context rather than a
+    # verdict. A domain that publishes an enforcing policy and then *fails* it
+    # has told us something specific about this message: it did not come from
+    # where it claims. Only the second is evidence.
+    security = extracted.get("email_security") or {}
+    policy = str(security.get("dmarc_policy") or "").strip().lower()
+    spf_qualifier = str(security.get("spf_all_qualifier") or "").strip()
+    enforcing = policy in {"quarantine", "reject"} or spf_qualifier == "-all"
+
     return {
         "spf_result": spf,
         "dkim_result": dkim,
         "dmarc_result": dmarc,
         "spoofing_risk_assessment": spoof,
+        "auth_failures": concrete_failures,
+        "policy_enforced": enforcing,
+        "_evidential_failure": bool(concrete_failures and enforcing),
     }
 
 
@@ -345,7 +359,8 @@ def _final_conclusion(
     spoof = auth_section.get("spoofing_risk_assessment")
 
     # Only classify based on infrastructure/reputation, URL, and attachment outcomes.
-    # Authentication gaps or spoofability are context, not enough to make an email suspicious.
+    # Authentication *gaps* or spoofability are context, not enough to make an
+    # email suspicious — a supplier with no DMARC record is not a threat.
     if max_rank >= 3:
         classification = "malicious"
     elif max_rank >= 2:
@@ -355,12 +370,23 @@ def _final_conclusion(
     else:
         classification = "benign"
 
+    # A failure against a policy the domain actually enforces is the exception:
+    # the message asserts an origin its own domain refuses to vouch for. That is
+    # evidence about this message, so it can raise an otherwise-quiet email to
+    # suspicious — but never past it on its own, because a forwarder or mailing
+    # list breaks SPF for legitimate mail too.
+    if auth_section.get("_evidential_failure") and classification in {"benign", "inconclusive"}:
+        classification = "suspicious"
+
     if classification == "malicious":
         confidence = "high" if spoof in {"medium", "high"} else "medium"
     elif classification == "suspicious":
         confidence = "medium"
     elif classification == "benign":
-        confidence = "medium"
+        # With no policy published there is nothing to have passed, so "benign"
+        # here rests on the message's own content rather than on the sender
+        # being who they claim. Say so by holding confidence down.
+        confidence = "low" if spoof == "high" else "medium"
     else:
         confidence = "low"
 

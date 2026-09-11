@@ -571,6 +571,18 @@ class EmailInvestigationRun(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    # These four exist in the table but were left unmapped when the run state
+    # moved into result_json, so every row read "queued" for ever and nothing
+    # could be asked in SQL how long a run took. They are a projection of
+    # result_json, not a second source of truth: _update_run is the only writer
+    # and derives both from the same patch.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     __table_args__ = (
         Index("idx_email_runs_created", "created_at"),
     )

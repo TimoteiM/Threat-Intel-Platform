@@ -60,11 +60,17 @@ _URL_IN_PDF = re.compile(rb"/URI\s*\(\s*([^)]{4,400}?)\s*\)")
 _PDF_ACTIONS = (
     (b"/OpenAction", "opens an action automatically when the document is opened"),
     (b"/AA", "carries an additional-actions trigger"),
-    (b"/JavaScript", "embeds JavaScript"),
-    (b"/JS", "embeds JavaScript"),
+    # /JavaScript and /JS both appear in essentially every JS-bearing PDF and
+    # mean the same thing, so they share one finding id and are reported once.
+    ((b"/JavaScript", b"/JS"), "embeds JavaScript"),
     (b"/Launch", "can launch an external program"),
     (b"/EmbeddedFile", "contains an embedded file"),
 )
+
+# /URI(...) is the link annotation a viewer renders. A malicious PDF does not
+# use it — it puts the address inside the JavaScript action instead, which the
+# annotation pattern never sees.
+_RAW_URL_IN_PDF = re.compile(rb"https?://[^\s<>()\[\]{}\"\']{4,400}")
 
 
 def _sniff(data: bytes) -> tuple[str, str]:
@@ -285,23 +291,35 @@ def _inspect_pdf(data: bytes, filename: str) -> tuple[list[dict[str, str]], list
     """
     findings: list[dict[str, str]] = []
     for marker, description in _PDF_ACTIONS:
-        if marker in data:
-            findings.append({
-                "id": f"pdf_{marker.decode('ascii', 'ignore').strip('/').lower()}",
-                "severity": "high" if marker in (b"/Launch", b"/JavaScript", b"/JS") else "medium",
-                "detail": f"{filename} {description}.",
-            })
+        markers = marker if isinstance(marker, tuple) else (marker,)
+        if not any(m in data for m in markers):
+            continue
+        primary = markers[0]
+        findings.append({
+            "id": f"pdf_{primary.decode('ascii', 'ignore').strip('/').lower()}",
+            "severity": "high" if primary in (b"/Launch", b"/JavaScript") else "medium",
+            "detail": f"{filename} {description}.",
+        })
 
     urls: list[str] = []
-    for match in _URL_IN_PDF.finditer(data):
+
+    def _add(raw: bytes) -> None:
         try:
-            url = match.group(1).decode("utf-8", "ignore").strip()
+            url = raw.decode("utf-8", "ignore").strip().rstrip(")>")
         except Exception:
-            continue
+            return
         if url.lower().startswith(("http://", "https://")) and url not in urls:
             urls.append(url)
+
+    for match in _URL_IN_PDF.finditer(data):
+        _add(match.group(1))
         if len(urls) >= 25:
             break
+    # Then the addresses hiding in JavaScript and stream text.
+    for match in _RAW_URL_IN_PDF.finditer(data):
+        if len(urls) >= 25:
+            break
+        _add(match.group(0))
 
     if urls:
         findings.append({

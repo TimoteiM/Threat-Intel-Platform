@@ -201,10 +201,38 @@ def _lookup_email_anyrun(payload: bytes, filename: str, *, run_anyrun: bool) -> 
     verdict = (result or {}).get("verdict")
     error = (result or {}).get("error")
     logger.info("AnyRun email sandbox: checked=%s verdict=%s error=%s elapsed=%.1fs", checked, verdict, error, elapsed)
+    data = dict(result) if isinstance(result, dict) else {}
+    state, message = _email_sandbox_state(data)
     return {
-        **(result if isinstance(result, dict) else {}),
+        **data,
         "file_name": filename,
+        # A completed run that produced no artifacts is a real result — the
+        # message did nothing observable — and it must not read the same as a
+        # run that never happened. Without this the UI showed both as blank.
+        "email_analysis_state": state,
+        "email_analysis_message": message,
     }
+
+
+def _email_sandbox_state(result: dict[str, Any]) -> tuple[str, str]:
+    """Classify the outcome of the email-level sandbox submission."""
+    if not result or not result.get("checked"):
+        error = str(result.get("error") or "").strip() if result else ""
+        return "not_analysed", error or "The email was not submitted to the sandbox."
+
+    io_summary = result.get("dynamic_io_summary")
+    artifacts = 0
+    if isinstance(io_summary, dict):
+        artifacts = sum(len(v) for v in io_summary.values() if isinstance(v, (list, tuple)))
+
+    if artifacts:
+        return "completed", f"The sandbox recorded {artifacts} observable artifact(s) for this message."
+    if result.get("analysis_id"):
+        return (
+            "completed_no_artifacts",
+            "The sandbox ran this message to completion and observed no network or file activity.",
+        )
+    return "completed_no_artifacts", "The sandbox returned a result with no recorded activity."
 
 
 def _aggregate_email_risk(checks: dict[str, Any]) -> dict[str, Any]:
@@ -422,11 +450,46 @@ def prepare_history_payload(response_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# How many clean URLs to show the model when none is risky. Enough to justify
+# "all clean", not so many that a newsletter's footer becomes the prompt.
+CLEAN_URL_SAMPLE = 5
+
+_RISKY_VERDICTS = {"malicious", "suspicious"}
+
+
+def _url_is_risky(item: dict[str, Any]) -> bool:
+    """Anything that would change an analyst's mind about this URL."""
+    if str(item.get("effective_verdict") or "").lower() in _RISKY_VERDICTS:
+        return True
+    for source in ("vt", "anyrun", "urlscan"):
+        block = item.get(source)
+        if isinstance(block, dict) and str(block.get("verdict") or "").lower() in _RISKY_VERDICTS:
+            return True
+    behavior = item.get("url_behavior")
+    if isinstance(behavior, dict) and (
+        behavior.get("credential_form_present") or behavior.get("ua_cloaking_detected")
+    ):
+        return True
+    lexical = item.get("lexical_ml")
+    if isinstance(lexical, dict) and str(lexical.get("label") or "").lower() == "high":
+        return True
+    return False
+
+
 def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
     sender_domain = checks.get("sender_domain") or {}
     whois = sender_domain.get("whois") or {}
+    # One phishing email carries a median of five URLs and up to twenty here,
+    # nearly all of them unsubscribe links and tracking pixels. Sending the
+    # clean ones to the model buys nothing and is paid for per token, so when
+    # anything in the message is risky, only the risky ones go. When nothing
+    # is, they all go — the model still has to be able to say "all clean".
+    all_urls = [u for u in (checks.get("urls") or []) if isinstance(u, dict)]
+    risky = [u for u in all_urls if _url_is_risky(u)]
+    selected = risky or all_urls[:CLEAN_URL_SAMPLE]
+
     urls_compact: list[dict[str, Any]] = []
-    for item in checks.get("urls") or []:
+    for item in selected:
         vt = item.get("vt") or {}
         ss = item.get("screenshot") or {}
         lexical = item.get("lexical_ml") or {}
@@ -475,6 +538,8 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         )
+
+    urls_omitted = len(all_urls) - len(urls_compact)
 
     attachments = checks.get("attachments") or {}
     attachment_analysis = checks.get("attachment_analysis") or {}
@@ -553,6 +618,10 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
             "ipwhois": sender_ip.get("ipwhois"),
         },
         "urls": urls_compact,
+        # Stated rather than implied: "3 URLs" with 17 silently dropped would
+        # invite the model to conclude the message carried only three.
+        "urls_total": len(all_urls),
+        "urls_omitted_as_clean": urls_omitted,
         "attachments": {
             "present": attachments.get("present"),
             "items": att_items,
