@@ -446,19 +446,25 @@ export interface AISpendModel {
   output_tokens: number;
   usd: number;
   priced: boolean;
+  /** Shown beside the cost so the arithmetic can be checked by hand. */
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
 }
 
 export interface AISpend {
   available: boolean;
   reason?: string;
-  today?: { calls: number; usd: number; input_tokens: number; output_tokens: number };
-  this_month?: {
+  window_days?: number;
+  window_label?: string;
+  window?: {
     calls: number;
     usd: number;
     input_tokens: number;
     output_tokens: number;
     unpriced_calls: number;
   };
+  /** Budget is a monthly figure, so it is always measured against the month. */
+  month_to_date_usd?: number;
   by_model?: AISpendModel[];
   unpriced_models?: string[];
   budget?: { monthly_usd: number; remaining_usd: number; percent_used: number } | null;
@@ -467,8 +473,8 @@ export interface AISpend {
 }
 
 /** What our own AI calls cost. Not a provider balance — see the service docstring. */
-export function getAISpend() {
-  return request<AISpend>("/cost/ai-spend");
+export function getAISpend(days = 30) {
+  return request<AISpend>(`/cost/ai-spend?days=${days}`);
 }
 
 export function setAIBudget(monthlyUsd: number) {

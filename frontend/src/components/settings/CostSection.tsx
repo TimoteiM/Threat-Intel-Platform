@@ -227,19 +227,20 @@ export default function CostSection() {
  */
 function AISpendPanel() {
   const [spend, setSpend] = useState<api.AISpend | null>(null);
+  const [days, setDays] = useState(30);
   const [budgetInput, setBudgetInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const next = await api.getAISpend();
+      const next = await api.getAISpend(days);
       setSpend(next);
       if (next.budget) setBudgetInput(String(next.budget.monthly_usd));
     } catch (err: any) {
       setError(err?.message || "Could not read AI spend.");
     }
-  }, []);
+  }, [days]);
 
   useEffect(() => {
     load();
@@ -264,30 +265,54 @@ function AISpendPanel() {
     return <ErrorState title="AI spend unavailable" detail={spend.reason || "The usage store is unreachable."} partial />;
   }
 
-  const month = spend.this_month!;
-  const today = spend.today!;
+  const win = spend.window!;
   const budget = spend.budget;
   const unpriced = spend.unpriced_models || [];
+  const tokens = win.input_tokens + win.output_tokens;
 
   return (
-    <Section
-      title="AI spend"
-      hint={spend.scope_note}
-    >
+    <Section title="AI spend" hint={spend.scope_note}>
+      {/* Buckets are UTC calendar days, so the shortest window is "today so
+          far" rather than a rolling 24 hours. Labelled as such. */}
+      <div className="ds-toolbar" role="group" aria-label="Spend window" style={{ justifySelf: "start", marginBottom: "var(--space-3)" }}>
+        {[
+          { value: 1, label: "24h" },
+          { value: 7, label: "7 days" },
+          { value: 30, label: "30 days" },
+        ].map((option) => (
+          <Button
+            key={option.value}
+            variant={days === option.value ? "primary" : "secondary"}
+            aria-pressed={days === option.value}
+            onClick={() => setDays(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+
       <MetricStrip
         metrics={[
-          { label: "This month", value: `$${month.usd.toFixed(2)}`, hint: `${month.calls} call${month.calls === 1 ? "" : "s"}` },
-          { label: "Today", value: `$${today.usd.toFixed(2)}`, hint: `${today.calls} call${today.calls === 1 ? "" : "s"}` },
+          {
+            label: spend.window_label || `Last ${spend.window_days} days`,
+            value: `$${win.usd.toFixed(4)}`,
+            hint: `${win.calls} call${win.calls === 1 ? "" : "s"}`,
+          },
+          {
+            label: "Tokens in window",
+            value: tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens),
+            hint: `${win.input_tokens.toLocaleString()} in · ${win.output_tokens.toLocaleString()} out`,
+          },
+          {
+            label: "Month to date",
+            value: `$${(spend.month_to_date_usd ?? 0).toFixed(4)}`,
+            hint: "calendar month, what the budget measures",
+          },
           {
             label: "Budget remaining",
             value: budget ? `$${budget.remaining_usd.toFixed(2)}` : "—",
             hint: budget ? `${budget.percent_used}% of $${budget.monthly_usd.toFixed(2)} used` : "no budget set",
             status: budget ? (budget.percent_used >= 90 ? "danger" : budget.percent_used >= 70 ? "warning" : undefined) : undefined,
-          },
-          {
-            label: "Tokens this month",
-            value: `${((month.input_tokens + month.output_tokens) / 1000).toFixed(1)}k`,
-            hint: `${month.input_tokens.toLocaleString()} in · ${month.output_tokens.toLocaleString()} out`,
           },
         ]}
       />
@@ -307,13 +332,12 @@ function AISpendPanel() {
           }}
         >
           <strong style={{ color: "var(--status-warning)" }}>
-            {month.unpriced_calls} call{month.unpriced_calls === 1 ? "" : "s"} could not be costed.
+            {win.unpriced_calls} call{win.unpriced_calls === 1 ? "" : "s"} could not be costed.
           </strong>{" "}
           No rate is configured for {unpriced.join(", ")}, so their tokens are counted but their
           dollars are not — the figure above is therefore a floor, not a total. Set the rate with
-          the <code style={MONO}>AI_MODEL_PRICES</code> environment variable, e.g.{" "}
-          <code style={MONO}>{`{"gpt-5.6-luna": {"input": 1.25, "output": 10.0}}`}</code>, in dollars
-          per million tokens.
+          the <code style={MONO}>AI_MODEL_PRICES</code> environment variable, in dollars per
+          million tokens.
         </div>
       )}
 
@@ -355,6 +379,7 @@ function AISpendPanel() {
                 <th style={{ textAlign: "right" }}>Calls</th>
                 <th style={{ textAlign: "right" }}>Input</th>
                 <th style={{ textAlign: "right" }}>Output</th>
+                <th style={{ textAlign: "right" }}>Rate $/M (in · out)</th>
                 <th style={{ textAlign: "right" }}>Cost</th>
               </tr>
             </thead>
@@ -368,6 +393,11 @@ function AISpendPanel() {
                   <td style={{ ...MONO, textAlign: "right" }}>{row.calls.toLocaleString()}</td>
                   <td style={{ ...MONO, textAlign: "right" }}>{row.input_tokens.toLocaleString()}</td>
                   <td style={{ ...MONO, textAlign: "right" }}>{row.output_tokens.toLocaleString()}</td>
+                  {/* The rate is on the row so the cost can be checked by hand:
+                      tokens ÷ 1,000,000 × rate. */}
+                  <td style={{ ...MONO, textAlign: "right", color: "var(--text-dim)" }}>
+                    {row.priced ? `${row.input_per_mtok} · ${row.output_per_mtok}` : "—"}
+                  </td>
                   <td style={{ ...MONO, textAlign: "right" }}>
                     {row.priced ? `$${row.usd.toFixed(4)}` : <span style={{ color: "var(--status-warning)" }}>unpriced</span>}
                   </td>

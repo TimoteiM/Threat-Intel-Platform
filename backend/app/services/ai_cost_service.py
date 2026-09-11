@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis as redis_lib
@@ -51,9 +51,11 @@ class ModelPrice:
 # Anthropic list prices, first-party API, as published 2026-06-24. Matched by
 # longest prefix so dated snapshot ids (claude-haiku-4-5-20251001) resolve.
 #
-# There are deliberately NO OpenAI defaults here. The configured model is
-# gpt-5.6-luna, and inventing a rate for it would produce a plausible number
-# that is wrong — worse than no number. Supply rates via AI_MODEL_PRICES.
+# There are deliberately no OpenAI defaults here — a rate this file invented
+# would be a plausible wrong number on a spend page. Operator-supplied rates
+# come from AI_MODEL_PRICES and are merged over this table, which is also why
+# cost is computed when the page is read rather than when the call was made:
+# configuring a rate today has to price the tokens already recorded.
 ANTHROPIC_PRICES: dict[str, ModelPrice] = {
     "claude-fable-5": ModelPrice(10.00, 50.00, 1.00),
     "claude-mythos-5": ModelPrice(10.00, 50.00, 1.00),
@@ -167,6 +169,7 @@ def record_ai_usage(
                 model_key = f"ai_cost:{scope}:{period}:model:{provider}:{model}"
                 pipe.hincrby(model_key, "input_tokens", input_tokens)
                 pipe.hincrby(model_key, "output_tokens", output_tokens)
+                pipe.hincrby(model_key, "cached_input_tokens", cached_input_tokens)
                 pipe.hincrby(model_key, "calls", 1)
                 if micros is not None:
                     pipe.hincrby(model_key, "micros", micros)
@@ -216,11 +219,11 @@ def record_from_response(provider: str, model: str, response: Any, *, purpose: s
     )
 
 
-def _read_period(client: redis_lib.Redis, scope: str, period: str) -> dict[str, int]:
-    raw = client.hgetall(f"ai_cost:{scope}:{period}") or {}
+def _read_hash(client: redis_lib.Redis, key: str) -> dict[str, int]:
+    raw = client.hgetall(key) or {}
     out: dict[str, int] = {}
-    for key, value in raw.items():
-        name = key.decode() if isinstance(key, bytes) else str(key)
+    for name, value in raw.items():
+        name = name.decode() if isinstance(name, bytes) else str(name)
         try:
             out[name] = int(value)
         except (TypeError, ValueError):
@@ -228,74 +231,137 @@ def _read_period(client: redis_lib.Redis, scope: str, period: str) -> dict[str, 
     return out
 
 
-def ai_spend_summary() -> dict[str, Any]:
-    """Spend today and this month, the per-model split, and budget headroom."""
+def _members(client: redis_lib.Redis, key: str) -> list[str]:
+    return sorted(
+        (m.decode() if isinstance(m, bytes) else str(m))
+        for m in (client.smembers(key) or set())
+    )
+
+
+# The windows the Settings page offers. Buckets are UTC calendar days, so "24h"
+# means today so far rather than a rolling window — labelled accordingly rather
+# than pretending to a precision the storage does not have.
+WINDOWS: dict[int, str] = {
+    1: "Today (UTC)",
+    7: "Last 7 days",
+    30: "Last 30 days",
+}
+
+
+def ai_spend_summary(days: int = 30) -> dict[str, Any]:
+    """Spend over the last `days` UTC days, priced now rather than when recorded.
+
+    Cost is derived at read time from the stored token counts. Recording the
+    dollars instead would freeze them: a model with no rate configured would
+    stay at zero for ever, and correcting a rate would never reach the history
+    it was wrong about. Tokens are the fact; the price is a lookup.
+    """
+    days = max(1, int(days))
     now = datetime.now(timezone.utc)
-    day, month = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")
-    empty = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "micros": 0}
+    day_keys = [(now - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(days)]
+    month = now.strftime("%Y-%m")
 
     try:
         client = redis_lib.Redis.from_url(get_settings().redis_url)
-        today = {**empty, **_read_period(client, "day", day)}
-        this_month = {**empty, **_read_period(client, "month", month)}
 
-        models: list[dict[str, Any]] = []
-        for entry in client.smembers(f"ai_cost:models:{month}") or set():
-            label = entry.decode() if isinstance(entry, bytes) else str(entry)
-            stats = _read_period(client, "month", f"{month}:model:{label}")
-            provider, _, model = label.partition(":")
-            micros = stats.get("micros")
-            models.append(
-                {
-                    "provider": provider,
-                    "model": model,
-                    "calls": stats.get("calls", 0),
-                    "input_tokens": stats.get("input_tokens", 0),
-                    "output_tokens": stats.get("output_tokens", 0),
-                    "usd": round((micros or 0) / MICROS_PER_DOLLAR, 4),
-                    "priced": price_for(model) is not None,
-                }
+        per_model: dict[str, dict[str, int]] = {}
+        calls = 0
+        for day in day_keys:
+            for label in _members(client, f"ai_cost:models:{day}"):
+                stats = _read_hash(client, f"ai_cost:day:{day}:model:{label}")
+                if not stats:
+                    continue
+                bucket = per_model.setdefault(
+                    label, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+                )
+                for field in bucket:
+                    bucket[field] += stats.get(field, 0)
+            calls += _read_hash(client, f"ai_cost:day:{day}").get("calls", 0)
+
+        # The budget is a monthly figure, so it is always measured against the
+        # calendar month regardless of which window is on screen.
+        # Month-to-date is read from the month's own buckets, not from the
+        # selected window — the budget is monthly, so the figure it is measured
+        # against must not change when someone picks "24h".
+        month_micros = 0
+        for label in _members(client, f"ai_cost:models:{month}"):
+            stats = _read_hash(client, f"ai_cost:month:{month}:model:{label}")
+            if not stats:
+                continue
+            _, _, model_name = label.partition(":")
+            month_micros += (
+                cost_micros(
+                    model_name,
+                    input_tokens=stats.get("input_tokens", 0),
+                    output_tokens=stats.get("output_tokens", 0),
+                    cached_input_tokens=stats.get("cached_input_tokens", 0),
+                )
+                or 0
             )
-        models.sort(key=lambda m: (-m["usd"], -m["calls"]))
-
-        unpriced = sorted(
-            (e.decode() if isinstance(e, bytes) else str(e))
-            for e in (client.smembers(f"ai_cost:unpriced_models:{month}") or set())
-        )
         budget_micros = _read_budget(client)
     except Exception as exc:
         logger.warning("Could not read AI spend: %s", exc)
         return {"available": False, "reason": "usage store unreachable"}
 
-    spent = this_month.get("micros", 0)
+    models: list[dict[str, Any]] = []
+    window_micros = 0
+    unpriced_calls = 0
+    unpriced: list[str] = []
+
+    for label, stats in per_model.items():
+        provider, _, model = label.partition(":")
+        micros = cost_micros(
+            model,
+            input_tokens=stats["input_tokens"],
+            output_tokens=stats["output_tokens"],
+            cached_input_tokens=stats["cached_input_tokens"],
+        )
+        price = price_for(model)
+        if micros is None:
+            unpriced_calls += stats["calls"]
+            unpriced.append(label)
+        else:
+            window_micros += micros
+        models.append(
+            {
+                "provider": provider,
+                "model": model,
+                "calls": stats["calls"],
+                "input_tokens": stats["input_tokens"],
+                "output_tokens": stats["output_tokens"],
+                "usd": round((micros or 0) / MICROS_PER_DOLLAR, 4),
+                "priced": price is not None,
+                # Shown next to the cost so the arithmetic is checkable by hand.
+                "input_per_mtok": price.input_per_mtok if price else None,
+                "output_per_mtok": price.output_per_mtok if price else None,
+            }
+        )
+    models.sort(key=lambda m: (-m["usd"], -m["calls"]))
+
     budget: dict[str, Any] | None = None
     if budget_micros:
         budget = {
             "monthly_usd": round(budget_micros / MICROS_PER_DOLLAR, 2),
-            "remaining_usd": round((budget_micros - spent) / MICROS_PER_DOLLAR, 2),
-            "percent_used": round(min(999.0, spent * 100 / budget_micros), 1),
+            "remaining_usd": round((budget_micros - month_micros) / MICROS_PER_DOLLAR, 2),
+            "percent_used": round(min(999.0, month_micros * 100 / budget_micros), 1),
         }
 
     return {
         "available": True,
-        "today": {
-            "calls": today.get("calls", 0),
-            "usd": round(today.get("micros", 0) / MICROS_PER_DOLLAR, 4),
-            "input_tokens": today.get("input_tokens", 0),
-            "output_tokens": today.get("output_tokens", 0),
+        "window_days": days,
+        "window_label": WINDOWS.get(days, f"Last {days} days"),
+        "window": {
+            "calls": calls,
+            "usd": round(window_micros / MICROS_PER_DOLLAR, 4),
+            "input_tokens": sum(m["input_tokens"] for m in models),
+            "output_tokens": sum(m["output_tokens"] for m in models),
+            "unpriced_calls": unpriced_calls,
         },
-        "this_month": {
-            "calls": this_month.get("calls", 0),
-            "usd": round(spent / MICROS_PER_DOLLAR, 4),
-            "input_tokens": this_month.get("input_tokens", 0),
-            "output_tokens": this_month.get("output_tokens", 0),
-            "unpriced_calls": this_month.get("unpriced_calls", 0),
-        },
+        "month_to_date_usd": round(month_micros / MICROS_PER_DOLLAR, 4),
         "by_model": models,
-        "unpriced_models": unpriced,
+        "unpriced_models": sorted(set(unpriced)),
         "budget": budget,
         "prices_source": PRICES_SOURCE,
-        # Said plainly, because the number means less than it appears to.
         "scope_note": (
             "Metered from this application's own requests. Spend on the same API "
             "key from anywhere else is not included, and neither provider exposes "

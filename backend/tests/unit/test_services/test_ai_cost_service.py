@@ -33,9 +33,14 @@ def test_cached_input_bills_at_the_cache_rate():
 
 
 def test_an_unknown_model_is_unpriced_not_free():
-    """The whole point. None means 'we do not know', and the caller must say so."""
-    assert price_for("gpt-5.6-luna") is None
-    assert cost_micros("gpt-5.6-luna", input_tokens=50_000, output_tokens=5_000) is None
+    """The whole point. None means 'we do not know', and the caller must say so.
+
+    Uses a model nothing could have a rate for — gpt-5.6-luna was the example
+    until an operator configured it, which is exactly the behaviour this file
+    documents rather than a reason to weaken the assertion.
+    """
+    assert price_for("no-such-model-v9") is None
+    assert cost_micros("no-such-model-v9", input_tokens=50_000, output_tokens=5_000) is None
 
 
 def test_operator_supplied_rates_are_used(monkeypatch):
@@ -83,3 +88,16 @@ def test_usage_is_read_from_either_provider_shape(monkeypatch, usage, expected_i
 
     assert captured["input_tokens"] == expected_in
     assert captured["output_tokens"] == expected_out
+
+
+def test_cost_matches_hand_arithmetic_at_the_configured_rate(monkeypatch):
+    """The figure on the page has to survive being checked on paper."""
+    class _Settings:
+        ai_model_prices = '{"gpt-5.6-luna": {"input": 0.20, "output": 1.20}}'
+        redis_url = "redis://localhost:6379/0"
+
+    monkeypatch.setattr(ai_cost_service, "get_settings", lambda: _Settings())
+    # 989,961 / 1e6 * 0.20 = 0.1979922 ; 13,898 / 1e6 * 1.20 = 0.0166776
+    micros = cost_micros("gpt-5.6-luna", input_tokens=989_961, output_tokens=13_898)
+    assert micros == round((0.1979922 + 0.0166776) * 1_000_000)
+    assert abs(micros / 1_000_000 - 0.2147) < 0.0001

@@ -33,7 +33,9 @@ async def get_cost_dashboard(
 
 
 @router.get("/ai-spend")
-async def get_ai_spend() -> dict[str, Any]:
+async def get_ai_spend(
+    days: int = Query(default=30, ge=1, le=90),
+) -> dict[str, Any]:
     """What this application's AI calls cost, priced from their own token usage.
 
     Not a provider balance. Neither OpenAI nor Anthropic exposes remaining
@@ -41,7 +43,7 @@ async def get_ai_spend() -> dict[str, Any]:
     admin-scoped key — so this meters our own requests and counts them against
     a budget the analyst sets.
     """
-    return ai_spend_summary()
+    return ai_spend_summary(days=days)
 
 
 class AIBudgetRequest(BaseModel):
