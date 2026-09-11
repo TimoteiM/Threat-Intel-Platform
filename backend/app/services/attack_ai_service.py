@@ -39,6 +39,7 @@ from app.analyst.attack_mapping import (
     get_technique_info,
     normalize_technique_id,
 )
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +248,7 @@ def _complete(system: str, user: str, *, model: str | None) -> str:
                 ],
                 max_output_tokens=1024,
             )
+            record_from_response("openai", chosen or settings.openai_model, response)
             text = getattr(response, "output_text", None) or ""
             if text.strip():
                 return text

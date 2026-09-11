@@ -18,6 +18,7 @@ from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.services.provider_usage_metrics import record_provider_request
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,7 @@ async def _call_openai(api_key: str, model: str, system: str, user_text: str) ->
         ],
         max_output_tokens=3000,
     )
+    record_from_response("openai", model, response)
     text = getattr(response, "output_text", None) or ""
     if text:
         return text
@@ -330,4 +332,5 @@ async def _call_claude(api_key: str, model: str, system: str, user_text: str) ->
         system=system,
         messages=[{"role": "user", "content": user_text}],
     )
+    record_from_response("anthropic", model, response)
     return response.content[0].text if response and response.content else ""

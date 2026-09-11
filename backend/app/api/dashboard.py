@@ -145,7 +145,10 @@ def _build_recent_malicious(rows: Iterable) -> list[dict]:
                 "domain": row.domain,
                 "risk_score": row.risk_score,
                 "classification": row.classification,
-                "observable_type": row.observable_type,
+                # getattr, not attribute access: the column is in the select, but
+                # this builder is also handed plain row stand-ins, and a missing
+                # type should degrade to "unknown" rather than raise.
+                "observable_type": getattr(row, "observable_type", None),
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
         )

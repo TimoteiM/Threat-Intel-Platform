@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # OpenAI is the primary AI provider; Anthropic is used as fallback.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5-20251001"
+    # Per-million-token rates for models this app calls, as JSON:
+    #   {"gpt-5.6-luna": {"input": 1.25, "output": 10.0}}
+    # Anthropic models are priced from a built-in table; anything else has to be
+    # supplied here, because a guessed rate is worse than an absent one.
+    ai_model_prices: str = ""
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
     # Second AbuseIPDB account, used when the first is out of daily checks.

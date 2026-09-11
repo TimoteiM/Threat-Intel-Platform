@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, get_settings
 from app.services.sandbox_context_service import summarize_sandbox_evidence
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,7 @@ class InvestigationCaseStoryService:
                     model=primary, instructions=SYSTEM, input=[{"role": "user", "content": content}],
                     text_format=schema, reasoning={"effort": "low"}, max_output_tokens=4500, store=False,
                 )
+                record_from_response("openai", primary, response)
                 parsed = getattr(response, "output_parsed", None)
                 if parsed is not None:
                     return parsed, primary

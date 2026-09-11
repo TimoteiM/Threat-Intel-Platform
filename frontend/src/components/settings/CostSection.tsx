@@ -69,6 +69,7 @@ export default function CostSection() {
 
   return (
     <div style={{ display: "grid", gap: "var(--space-4)" }}>
+      <AISpendPanel />
       <div className="ds-toolbar" role="group" aria-label="Time window" style={{ justifySelf: "start" }}>
         {[7, 30, 90].map((value) => (
           <Button
@@ -210,5 +211,175 @@ export default function CostSection() {
         </>
       )}
     </div>
+  );
+}
+
+
+/**
+ * What the AI providers have cost us this month.
+ *
+ * Deliberately not called a balance. Neither OpenAI nor Anthropic will return
+ * remaining credit over an API — OpenAI's Usage API reports spend, and needs an
+ * admin-scoped key — so this is metered from our own requests: every call
+ * reports its tokens, we price them, and the total counts down from a budget
+ * entered here. The scope note says so on the panel rather than in a docstring
+ * nobody reading the number will see.
+ */
+function AISpendPanel() {
+  const [spend, setSpend] = useState<api.AISpend | null>(null);
+  const [budgetInput, setBudgetInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const next = await api.getAISpend();
+      setSpend(next);
+      if (next.budget) setBudgetInput(String(next.budget.monthly_usd));
+    } catch (err: any) {
+      setError(err?.message || "Could not read AI spend.");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const saveBudget = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.setAIBudget(Number(budgetInput) || 0);
+      await load();
+    } catch (err: any) {
+      setError(err?.message || "Could not save the budget.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (error && !spend) return <ErrorState title="AI spend unavailable" detail={error} />;
+  if (!spend) return null;
+  if (!spend.available) {
+    return <ErrorState title="AI spend unavailable" detail={spend.reason || "The usage store is unreachable."} partial />;
+  }
+
+  const month = spend.this_month!;
+  const today = spend.today!;
+  const budget = spend.budget;
+  const unpriced = spend.unpriced_models || [];
+
+  return (
+    <Section
+      title="AI spend"
+      hint={spend.scope_note}
+    >
+      <MetricStrip
+        metrics={[
+          { label: "This month", value: `$${month.usd.toFixed(2)}`, hint: `${month.calls} call${month.calls === 1 ? "" : "s"}` },
+          { label: "Today", value: `$${today.usd.toFixed(2)}`, hint: `${today.calls} call${today.calls === 1 ? "" : "s"}` },
+          {
+            label: "Budget remaining",
+            value: budget ? `$${budget.remaining_usd.toFixed(2)}` : "—",
+            hint: budget ? `${budget.percent_used}% of $${budget.monthly_usd.toFixed(2)} used` : "no budget set",
+            status: budget ? (budget.percent_used >= 90 ? "danger" : budget.percent_used >= 70 ? "warning" : undefined) : undefined,
+          },
+          {
+            label: "Tokens this month",
+            value: `${((month.input_tokens + month.output_tokens) / 1000).toFixed(1)}k`,
+            hint: `${month.input_tokens.toLocaleString()} in · ${month.output_tokens.toLocaleString()} out`,
+          },
+        ]}
+      />
+
+      {unpriced.length > 0 && (
+        <div
+          role="note"
+          style={{
+            marginTop: "var(--space-3)",
+            padding: "var(--space-3)",
+            borderLeft: "3px solid var(--status-warning)",
+            background: "rgba(240, 160, 80, 0.07)",
+            borderRadius: "0 var(--shell-radius-sm) var(--shell-radius-sm) 0",
+            fontSize: "var(--font-meta)",
+            lineHeight: 1.6,
+            color: "var(--text-secondary)",
+          }}
+        >
+          <strong style={{ color: "var(--status-warning)" }}>
+            {month.unpriced_calls} call{month.unpriced_calls === 1 ? "" : "s"} could not be costed.
+          </strong>{" "}
+          No rate is configured for {unpriced.join(", ")}, so their tokens are counted but their
+          dollars are not — the figure above is therefore a floor, not a total. Set the rate with
+          the <code style={MONO}>AI_MODEL_PRICES</code> environment variable, e.g.{" "}
+          <code style={MONO}>{`{"gpt-5.6-luna": {"input": 1.25, "output": 10.0}}`}</code>, in dollars
+          per million tokens.
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginTop: "var(--space-3)", flexWrap: "wrap" }}>
+        <label htmlFor="ai-budget" style={{ fontSize: "var(--font-meta)", color: "var(--text-dim)" }}>
+          Monthly budget (USD)
+        </label>
+        <input
+          id="ai-budget"
+          type="number"
+          min={0}
+          step="1"
+          value={budgetInput}
+          onChange={(event) => setBudgetInput(event.target.value)}
+          placeholder="0 to clear"
+          style={{
+            ...MONO,
+            width: 120,
+            padding: "6px 9px",
+            borderRadius: "var(--shell-radius-sm)",
+            border: "1px solid var(--border)",
+            background: "var(--bg-input)",
+            color: "var(--text)",
+            fontSize: "var(--font-meta)",
+          }}
+        />
+        <Button variant="secondary" onClick={saveBudget} disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        {error && <span style={{ fontSize: "var(--font-micro)", color: "var(--status-danger)" }}>{error}</span>}
+      </div>
+
+      {(spend.by_model || []).length > 0 && (
+        <div style={{ marginTop: "var(--space-4)", overflowX: "auto" }}>
+          <table className="ds-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th style={{ textAlign: "right" }}>Calls</th>
+                <th style={{ textAlign: "right" }}>Input</th>
+                <th style={{ textAlign: "right" }}>Output</th>
+                <th style={{ textAlign: "right" }}>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(spend.by_model || []).map((row) => (
+                <tr key={`${row.provider}:${row.model}`}>
+                  <td style={MONO}>
+                    {row.model}{" "}
+                    <span style={{ color: "var(--text-muted)", fontSize: "var(--font-micro)" }}>{row.provider}</span>
+                  </td>
+                  <td style={{ ...MONO, textAlign: "right" }}>{row.calls.toLocaleString()}</td>
+                  <td style={{ ...MONO, textAlign: "right" }}>{row.input_tokens.toLocaleString()}</td>
+                  <td style={{ ...MONO, textAlign: "right" }}>{row.output_tokens.toLocaleString()}</td>
+                  <td style={{ ...MONO, textAlign: "right" }}>
+                    {row.priced ? `$${row.usd.toFixed(4)}` : <span style={{ color: "var(--status-warning)" }}>unpriced</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: "var(--space-2)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+            {spend.prices_source}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }

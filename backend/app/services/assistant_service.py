@@ -22,6 +22,7 @@ from app.services.assistant_prompt_service import (
 )
 from app.services.assistant_sanitizer_service import sanitize_entries
 from app.services.assistant_incident_graph_service import build_assistant_incident_graph
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +353,7 @@ class AssistantService:
             ],
             max_output_tokens=4096,
         )
+        record_from_response("openai", model, response)
         raw_text = getattr(response, "output_text", None) or ""
         if raw_text:
             return raw_text
@@ -372,6 +374,7 @@ class AssistantService:
             system=system,
             messages=[{"role": "user", "content": user_text}],
         )
+        record_from_response("anthropic", model, response)
         return response.content[0].text if response and response.content else ""
 
     async def export_session_markdown(self, session_id: UUID) -> str:

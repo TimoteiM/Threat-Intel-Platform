@@ -12,6 +12,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ def detect_sensitive_forms_in_screenshots(
             reasoning={"effort": "low"},
             max_output_tokens=900,
             store=False,
+        )
+        record_from_response(
+            "openai", str(getattr(settings, "openai_model", "") or "gpt-5.6-luna"), response
         )
         parsed = response.output_parsed
         if parsed is None:

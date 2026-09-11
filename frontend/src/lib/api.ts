@@ -438,6 +438,46 @@ export function sandboxAlertIndicators(runId: string, investigationIds: string[]
   });
 }
 
+export interface AISpendModel {
+  provider: string;
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+  priced: boolean;
+}
+
+export interface AISpend {
+  available: boolean;
+  reason?: string;
+  today?: { calls: number; usd: number; input_tokens: number; output_tokens: number };
+  this_month?: {
+    calls: number;
+    usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    unpriced_calls: number;
+  };
+  by_model?: AISpendModel[];
+  unpriced_models?: string[];
+  budget?: { monthly_usd: number; remaining_usd: number; percent_used: number } | null;
+  prices_source?: string;
+  scope_note?: string;
+}
+
+/** What our own AI calls cost. Not a provider balance — see the service docstring. */
+export function getAISpend() {
+  return request<AISpend>("/cost/ai-spend");
+}
+
+export function setAIBudget(monthlyUsd: number) {
+  return request<{ monthly_usd: number }>("/cost/ai-budget", {
+    method: "PUT",
+    body: JSON.stringify({ monthly_usd: monthlyUsd }),
+  });
+}
+
 export function cancelAlertInvestigation(runId: string) {
   return request<{ run_id: string; status: string }>(`/alert-investigations/${runId}/cancel`, {
     method: "POST",

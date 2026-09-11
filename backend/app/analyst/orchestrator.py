@@ -23,6 +23,7 @@ from app.analyst.response_parser import parse_response
 from app.config import get_settings
 from app.models.enums import InvestigationState
 from app.models.schemas import AnalystReport, CollectedEvidence
+from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,7 @@ async def _call_claude(
         system=system,
         messages=[*messages, {"role": "assistant", "content": "{"}],
     )
+    record_from_response("anthropic", model, response)
     usage = getattr(response, "usage", None)
     if usage is not None:
         logger.info(
@@ -225,6 +227,7 @@ async def _call_openai(
         max_output_tokens=max_output_tokens,
         store=False,
     )
+    record_from_response("openai", model, response)
     usage = getattr(response, "usage", None)
     if usage is not None:
         logger.info(
