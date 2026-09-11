@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, get_settings
+from app.services.sandbox_context_service import summarize_sandbox_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,16 @@ def compact_case_context(*, detail: dict[str, Any], evidence: dict[str, Any], re
             "urlscan", "url_lexical_ml", "ml_url_score", "final_risk", "screenshot", "visual_comparison",
             "opencti", "dns", "http", "tls", "whois", "hosting", "email_security",
         ) if evidence.get(key) is not None}, depth=4, list_limit=10, string_limit=900),
+        # Projected separately, and deliberately not through the depth-4 bound
+        # above: the sandbox payload sits one level deeper than that budget, so
+        # the generic walk reduced the verdict, the process tree and every
+        # other field to the string "[truncated]".
+        "sandbox": _bounded(
+            summarize_sandbox_evidence(evidence),
+            depth=8,
+            list_limit=25,
+            string_limit=1200,
+        ),
         "derived_intelligence": _bounded({
             "timeline": intelligence.get("timeline"), "summary": intelligence.get("summary"),
             "ioc_quality": intelligence.get("ioc_quality"), "rescan_diff": intelligence.get("rescan_diff"),
