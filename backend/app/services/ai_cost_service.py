@@ -248,6 +248,26 @@ WINDOWS: dict[int, str] = {
 }
 
 
+def _earliest_recorded_day(client: redis_lib.Redis) -> str | None:
+    """The oldest day bucket still held, or None if nothing has been metered.
+
+    Checked with EXISTS over the retention window rather than SCAN: the TTL
+    bounds it to 90 candidates, and SCAN on a shared Redis is a courtesy not
+    worth spending here.
+    """
+    today = datetime.now(timezone.utc)
+    candidates = [
+        (today - timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(DAY_TTL_SECONDS // 86400)
+    ]
+    with client.pipeline() as pipe:
+        for day in candidates:
+            pipe.exists(f"ai_cost:day:{day}")
+        present = pipe.execute()
+    found = [day for day, exists in zip(candidates, present) if exists]
+    return found[-1] if found else None
+
+
 def ai_spend_summary(days: int = 30) -> dict[str, Any]:
     """Spend over the last `days` UTC days, priced now rather than when recorded.
 
@@ -299,6 +319,11 @@ def ai_spend_summary(days: int = 30) -> dict[str, Any]:
                 or 0
             )
         budget_micros = _read_budget(client)
+
+        # The earliest day we hold anything for. Without it, three window
+        # buttons that all show the same figure look broken, when in fact
+        # there is only one day of history to divide.
+        first_day = _earliest_recorded_day(client)
     except Exception as exc:
         logger.warning("Could not read AI spend: %s", exc)
         return {"available": False, "reason": "usage store unreachable"}
@@ -350,6 +375,11 @@ def ai_spend_summary(days: int = 30) -> dict[str, Any]:
         "available": True,
         "window_days": days,
         "window_label": WINDOWS.get(days, f"Last {days} days"),
+        "window_start": day_keys[-1],
+        "window_end": day_keys[0],
+        # When this equals window_end there is a single day of history, and
+        # every window necessarily reports the same total.
+        "first_recorded_day": first_day,
         "window": {
             "calls": calls,
             "usd": round(window_micros / MICROS_PER_DOLLAR, 4),

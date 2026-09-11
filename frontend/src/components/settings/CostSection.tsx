@@ -291,6 +291,8 @@ function AISpendPanel() {
         ))}
       </div>
 
+      <WindowCoverage spend={spend} />
+
       <MetricStrip
         metrics={[
           {
@@ -304,14 +306,11 @@ function AISpendPanel() {
             hint: `${win.input_tokens.toLocaleString()} in · ${win.output_tokens.toLocaleString()} out`,
           },
           {
-            label: "Month to date",
-            value: `$${(spend.month_to_date_usd ?? 0).toFixed(4)}`,
-            hint: "calendar month, what the budget measures",
-          },
-          {
             label: "Budget remaining",
             value: budget ? `$${budget.remaining_usd.toFixed(2)}` : "—",
-            hint: budget ? `${budget.percent_used}% of $${budget.monthly_usd.toFixed(2)} used` : "no budget set",
+            hint: budget
+              ? `${budget.percent_used}% of $${budget.monthly_usd.toFixed(2)} used this calendar month`
+              : "no budget set",
             status: budget ? (budget.percent_used >= 90 ? "danger" : budget.percent_used >= 70 ? "warning" : undefined) : undefined,
           },
         ]}
@@ -411,5 +410,39 @@ function AISpendPanel() {
         </div>
       )}
     </Section>
+  );
+}
+
+
+/**
+ * What the selected window actually covers.
+ *
+ * Three buttons that all report the same total read as a broken control. They
+ * are not — there is simply one day of history, because metering began then.
+ * Saying so is cheaper than letting someone conclude the filter is dead.
+ */
+function WindowCoverage({ spend }: { spend: api.AISpend }) {
+  const start = spend.window_start;
+  const end = spend.window_end;
+  const first = spend.first_recorded_day;
+  if (!start || !end) return null;
+
+  const singleDay = !first || first === end;
+  const coveredFrom = first && first > start ? first : start;
+
+  return (
+    <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--font-micro)", color: "var(--text-muted)" }}>
+      {start === end ? `${start} (UTC)` : `${start} to ${end} (UTC)`}
+      {singleDay ? (
+        <>
+          {" · "}
+          <span style={{ color: "var(--status-warning)" }}>
+            metering began {first || end}, so every window covers the same single day so far
+          </span>
+        </>
+      ) : coveredFrom !== start ? (
+        <>{` · data begins ${coveredFrom}`}</>
+      ) : null}
+    </div>
   );
 }

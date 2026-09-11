@@ -101,3 +101,95 @@ def test_cost_matches_hand_arithmetic_at_the_configured_rate(monkeypatch):
     micros = cost_micros("gpt-5.6-luna", input_tokens=989_961, output_tokens=13_898)
     assert micros == round((0.1979922 + 0.0166776) * 1_000_000)
     assert abs(micros / 1_000_000 - 0.2147) < 0.0001
+
+
+class _FakeRedis:
+    """Enough Redis to exercise the window summation, and nothing more.
+
+    Written because the real store held a single day when the windows were
+    built, so every window returned the same total and there was no way to see
+    whether the summation worked or merely looked like it did.
+    """
+
+    def __init__(self, hashes: dict, sets: dict):
+        self._hashes = hashes
+        self._sets = sets
+
+    def hgetall(self, key):
+        return {k.encode(): str(v).encode() for k, v in self._hashes.get(key, {}).items()}
+
+    def smembers(self, key):
+        return {m.encode() for m in self._sets.get(key, set())}
+
+    def get(self, key):
+        return None
+
+    def exists(self, key):
+        return 1 if key in self._hashes else 0
+
+    def pipeline(self):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    def __init__(self, client):
+        self._client = client
+        self._queued = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def exists(self, key):
+        self._queued.append(key)
+        return self
+
+    def execute(self):
+        return [self._client.exists(key) for key in self._queued]
+
+
+def _three_days_of_usage(monkeypatch):
+    """Today, yesterday and six days ago — so 24h, 7d and 30d must differ."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    days = [(now - timedelta(days=n)).strftime("%Y-%m-%d") for n in (0, 1, 6)]
+    label = "openai:test-model"
+    hashes, sets = {}, {}
+    for day, tokens in zip(days, (1_000_000, 2_000_000, 4_000_000)):
+        hashes[f"ai_cost:day:{day}"] = {"calls": 1}
+        hashes[f"ai_cost:day:{day}:model:{label}"] = {
+            "calls": 1, "input_tokens": tokens, "output_tokens": 0, "cached_input_tokens": 0,
+        }
+        sets[f"ai_cost:models:{day}"] = {label}
+
+    class _Settings:
+        ai_model_prices = '{"test-model": {"input": 1.00, "output": 1.00}}'
+        redis_url = "redis://localhost:6379/0"
+
+    monkeypatch.setattr(ai_cost_service, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(
+        ai_cost_service.redis_lib.Redis, "from_url",
+        staticmethod(lambda *a, **k: _FakeRedis(hashes, sets)),
+    )
+    return days
+
+
+def test_each_window_sums_only_the_days_it_covers(monkeypatch):
+    _three_days_of_usage(monkeypatch)
+    # $1 per million input, so the dollars equal the millions of tokens.
+    assert ai_cost_service.ai_spend_summary(days=1)["window"]["usd"] == 1.0
+    assert ai_cost_service.ai_spend_summary(days=2)["window"]["usd"] == 3.0
+    assert ai_cost_service.ai_spend_summary(days=7)["window"]["usd"] == 7.0
+    assert ai_cost_service.ai_spend_summary(days=30)["window"]["usd"] == 7.0
+
+
+def test_window_reports_the_span_it_covers(monkeypatch):
+    days = _three_days_of_usage(monkeypatch)
+    summary = ai_cost_service.ai_spend_summary(days=7)
+    assert summary["window_end"] == days[0]
+    # Six days ago is the oldest bucket held, and the panel needs to say so
+    # rather than let identical totals read as a broken control.
+    assert summary["first_recorded_day"] == days[2]

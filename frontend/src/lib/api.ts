@@ -465,6 +465,10 @@ export interface AISpend {
   };
   /** Budget is a monthly figure, so it is always measured against the month. */
   month_to_date_usd?: number;
+  window_start?: string;
+  window_end?: string;
+  /** Oldest day still held. Equal to window_end means one day of history. */
+  first_recorded_day?: string | null;
   by_model?: AISpendModel[];
   unpriced_models?: string[];
   budget?: { monthly_usd: number; remaining_usd: number; percent_used: number } | null;
