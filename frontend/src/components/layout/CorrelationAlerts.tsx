@@ -174,9 +174,14 @@ export default function CorrelationAlerts() {
           role="dialog"
           aria-label="New correlated cases"
           style={{
+            // The badge lives in the sidebar footer, at the bottom-left of the
+            // viewport. Dropping down from it opened the panel below the screen,
+            // and anchoring its right edge pushed it toward the left edge — both
+            // leftovers from when this sat in a top bar. It opens up and out over
+            // the page instead.
             position: "absolute",
-            right: 0,
-            top: "calc(100% + 8px)",
+            left: 0,
+            bottom: "calc(100% + 8px)",
             zIndex: 70,
             width: "min(430px, 88vw)",
             maxHeight: "62vh",
