@@ -158,6 +158,7 @@ def run_alert_body_investigation(
     reuse_prior_investigations: bool | None = None,
     prior_investigation_lookup: Callable[[list[tuple[str, str]]], dict[str, Any]] | None = None,
     spawn_investigations: bool | None = None,
+    alert_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Extract indicators from `alert_body` and investigate each one.
@@ -180,6 +181,34 @@ def run_alert_body_investigation(
     # an excluded indicator would be collected anyway — and the list may have
     # grown between the alert arriving and the run starting.
     exclusion_matcher = load_exclusion_matcher_sync()
+
+    # The same reasoning as the indicator pass below, which was never applied to
+    # the alert-level suppression: the API decided this alert was suppressed and
+    # wrote that on the run, but the worker rebuilds the indicator list from the
+    # stored body and inherited none of it. So a suppressed alert was recorded
+    # as suppressed and then investigated anyway — 653 of 664 runs, 3,828
+    # indicator reports and 186 spawned investigations after the analyst had
+    # already said the rule was noise.
+    #
+    # Re-evaluated here rather than passed in as a flag, so a suppression added
+    # between the alert arriving and the run starting is honoured too.
+    alert_suppression = (
+        exclusion_matcher.match_alert(alert_fields) if isinstance(alert_fields, dict) and alert_fields else None
+    )
+    if alert_suppression is not None:
+        for item in indicators:
+            item["investigable"] = False
+        extraction["investigable_total"] = 0
+        logger.info(
+            "Alert-body run %s suppressed by exclusion %s — no indicator will be investigated",
+            run_id,
+            alert_suppression.get("id"),
+        )
+        # Counted, so the exclusion list can show the suppression working. Alert
+        # suppressions recorded no hits at all before this, which left an
+        # analyst no way to tell a working rule from a broken one.
+        record_exclusion_hits_sync([str(alert_suppression.get("id"))])
+
     excluded_total = apply_exclusions(indicators, exclusion_matcher)
     if excluded_total:
         extraction["investigable_total"] = sum(1 for item in indicators if item.get("investigable"))

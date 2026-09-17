@@ -97,6 +97,8 @@ def run_alert_body_investigation_task(
             reuse_prior_investigations=reuse_prior_investigations,
             spawn_investigations=spawn_investigations,
             is_cancelled=lambda: _is_cancelled(parsed_id),
+            # Written at ingest; this is what a suppression is matched on.
+            alert_fields=(run.result_json or {}).get("alert_fields"),
         )
         summary = payload.get("summary") or {}
         # The sender's own reference travels with the run, so their callback and
