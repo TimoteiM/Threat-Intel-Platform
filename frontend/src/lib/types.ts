@@ -901,6 +901,17 @@ export interface CollectedEvidence {
   attachment_analysis?: AttachmentAnalysisEvidence;
   hybrid_analysis?: HybridAnalysisEvidence;
   opencti?: OpenCTIEvidence;
+  /**
+   * CAPE collector output. `available: false` with a reason is a real result —
+   * it means CAPE was consulted and had nothing, which is not the same as the
+   * collector not having run at all (then the key is absent).
+   */
+  cape?: {
+    meta?: { status?: string; completed_at?: string | null; error?: string | null };
+    available: boolean;
+    reason?: string | null;
+    report?: Record<string, any> | null;
+  };
   final_risk?: FinalRiskEvidence;
   redirect_destination_intel?: RedirectDestinationIntelEvidence;
   threat_feeds?: ThreatFeedEvidence;

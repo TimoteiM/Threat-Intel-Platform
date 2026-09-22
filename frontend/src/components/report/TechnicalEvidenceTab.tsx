@@ -2032,9 +2032,16 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           two sandboxes answer with different evidence, and an analyst needs to
           see which one produced a finding. CAPE is on-premises and detonates
           files; AnyRun is interactive and handles URLs. */}
-      {investigationId && (
+      {(investigationId || evidence?.cape) && (
         <Section title="CAPE Sandbox">
-          <CapeSandboxSection investigationId={investigationId} observableType={observableType} />
+          <CapeSandboxSection
+            investigationId={investigationId}
+            observableType={observableType}
+            // The collector's own result. Without this the panel only ever
+            // showed the detonation workflow, so an investigation where the
+            // CAPE analyzer ran and answered displayed nothing at all.
+            capeEvidence={evidence?.cape}
+          />
         </Section>
       )}
 

@@ -6,6 +6,17 @@
  * The browser only ever talks to the Threat Analyzer backend: it holds no CAPE
  * URL and no CAPE token, and nothing rendered here carries either.
  *
+ * Two halves, because they answer different questions and an analyst needs to
+ * tell them apart:
+ *
+ * 1. **What CAPE already knows** — the collector's result for this observable,
+ *    stored with the investigation. For a hash that is CAPE's own prior
+ *    analysis; for a domain it is whether any sample detonated *here* reached
+ *    out to it. "Consulted and found nothing" is a real finding and is shown,
+ *    because silence would read as "not checked".
+ * 2. **Detonation** — the asynchronous submit/poll workflow, which only exists
+ *    once somebody has asked for one.
+ *
  * Submitting is a deliberate act with a confirmation, because it really does
  * execute the sample on a Windows VM with internet access. The panel then
  * polls our own API — never CAPE — until the analysis reaches a terminal
@@ -21,15 +32,18 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
+import type { CollectedEvidence } from "@/lib/types";
 
 const POLL_MS = 6000;
 
 export default function CapeSandboxSection({
   investigationId,
   observableType,
+  capeEvidence,
 }: {
-  investigationId: string;
+  investigationId?: string;
   observableType?: string | null;
+  capeEvidence?: CollectedEvidence["cape"];
 }) {
   const [analysis, setAnalysis] = useState<api.SandboxAnalysisResult | api.SandboxAnalysis | null>(null);
   const [result, setResult] = useState<api.SandboxReport | null>(null);
@@ -42,6 +56,10 @@ export default function CapeSandboxSection({
   const eligible = ["hash", "file"].includes(String(observableType || "").toLowerCase());
 
   const load = useCallback(async () => {
+    if (!investigationId) {
+      setLoading(false);
+      return null;
+    }
     try {
       const { items } = await api.listSandboxAnalyses({ investigation_id: investigationId, limit: 1 });
       const latest = items[0] ?? null;
@@ -114,17 +132,52 @@ export default function CapeSandboxSection({
 
   if (loading) return <Muted>Checking for a sandbox analysis…</Muted>;
 
+  const collectorReport = (capeEvidence?.report as api.SandboxReport | undefined) || null;
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
       {error && <Banner tone="danger">{error}</Banner>}
 
+      {/* Half one: what the collector found when this investigation ran. */}
+      {capeEvidence && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <SubHeading>What CAPE already knows</SubHeading>
+          {collectorReport ? (
+            <>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
+                <Fact label="Verdict" value={<VerdictChip verdict={collectorReport.verdict || "unknown"} />} />
+                <Fact
+                  label="Malware score"
+                  value={
+                    collectorReport.malscore === null || collectorReport.malscore === undefined
+                      ? <span style={{ color: "var(--text-muted)" }}>not scored</span>
+                      : <strong style={{ color: "var(--text)" }}>{collectorReport.malscore.toFixed(1)} / 10</strong>
+                  }
+                />
+                <Fact label="CAPE task" value={collectorReport.task_id ?? "—"} mono />
+                {collectorReport.machine && <Fact label="Machine" value={collectorReport.machine} mono />}
+              </div>
+              <Result report={collectorReport} />
+            </>
+          ) : (
+            <Muted>
+              {capeEvidence.reason ||
+                "The CAPE analyzer ran and returned no analysis for this observable."}
+            </Muted>
+          )}
+        </div>
+      )}
+
+      {capeEvidence && <Divider />}
+
       {!analysis && (
         <div style={{ display: "grid", gap: 10 }}>
+          <SubHeading>Detonation</SubHeading>
           <Muted>
             {eligible
               ? "This sample has not been detonated in the CAPE sandbox."
-              : "CAPE detonates files. This observable is not a file or a hash, so there is nothing to submit — " +
-                "any CAPE findings for it would appear because another detonated sample contacted it."}
+              : "CAPE detonates files, so there is nothing to submit for this observable. " +
+                "Findings above, if any, come from samples detonated here that contacted it."}
           </Muted>
           {eligible && !confirming && (
             <button type="button" onClick={() => setConfirming(true)} disabled={busy} style={primaryButton(busy)}>
@@ -155,6 +208,7 @@ export default function CapeSandboxSection({
 
       {analysis && (
         <>
+          <SubHeading>Detonation</SubHeading>
           <Header analysis={analysis} result={result} />
 
           {analysis.limitations?.length > 0 && (
@@ -223,22 +277,32 @@ function Header({
 }
 
 function Result({ report }: { report: api.SandboxReport }) {
+  // Stored evidence can predate a schema change; a missing branch here would
+  // throw and take the entire Technical Evidence tab with it.
+  const network = report.network || ({} as api.SandboxReport["network"]);
+  const behaviour = report.behaviour || ({} as api.SandboxReport["behaviour"]);
+  const detections = report.detections || [];
+  const signatures = report.signatures || [];
+  const dropped = report.dropped_files || [];
+  const configs = report.extracted_configs || [];
+  const errors = report.errors || [];
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {report.detections.length > 0 && (
+      {detections.length > 0 && (
         <Block title="Detections">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {report.detections.map((d) => (
+            {detections.map((d) => (
               <span key={d} style={chip("var(--status-danger)")}>{d}</span>
             ))}
           </div>
         </Block>
       )}
 
-      {report.signatures.length > 0 && (
-        <Block title={`Behavioural signatures (${report.signatures.length})`}>
+      {signatures.length > 0 && (
+        <Block title={`Behavioural signatures (${signatures.length})`}>
           <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
-            {report.signatures.slice(0, 15).map((s) => (
+            {signatures.slice(0, 15).map((s) => (
               <li key={s.name} style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
                 <strong style={{ color: "var(--text)" }}>{s.name}</strong>
                 {s.description ? ` — ${s.description}` : ""}
@@ -251,17 +315,17 @@ function Result({ report }: { report: api.SandboxReport }) {
         </Block>
       )}
 
-      {(report.network.domains.length > 0 || report.network.destinations.length > 0) && (
+      {((network.domains?.length || 0) > 0 || (network.destinations?.length || 0) > 0) && (
         <Block title="Network">
-          <ListRow label="Contacted domains" values={report.network.domains} />
-          <ListRow label="DNS queries" values={report.network.dns_queries} />
-          <ListRow label="Destinations" values={report.network.destinations} />
-          <ListRow label="TLS SNI" values={report.network.tls_sni} />
-          {report.network.http_requests.length > 0 && (
+          <ListRow label="Contacted domains" values={network.domains} />
+          <ListRow label="DNS queries" values={network.dns_queries} />
+          <ListRow label="Destinations" values={network.destinations} />
+          <ListRow label="TLS SNI" values={network.tls_sni} />
+          {(network.http_requests?.length || 0) > 0 && (
             <div style={{ marginTop: 8 }}>
               <div style={labelStyle}>HTTP requests</div>
               <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                {report.network.http_requests.slice(0, 10).map((r, i) => (
+                {(network.http_requests || []).slice(0, 10).map((r, i) => (
                   <li key={i} style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
                     {r.method} {r.host}{r.uri}{r.status ? ` → ${r.status}` : ""}
                   </li>
@@ -272,19 +336,19 @@ function Result({ report }: { report: api.SandboxReport }) {
         </Block>
       )}
 
-      {report.behaviour.process_count > 0 && (
-        <Block title={`Behaviour (${report.behaviour.process_count} processes)`}>
-          <ListRow label="Commands" values={report.behaviour.commands} mono />
-          <ListRow label="Mutexes" values={report.behaviour.mutexes} mono />
-          <ListRow label="Files written" values={report.behaviour.files_written} mono />
-          <ListRow label="Registry" values={report.behaviour.registry_keys} mono />
+      {(behaviour.process_count || 0) > 0 && (
+        <Block title={`Behaviour (${behaviour.process_count} processes)`}>
+          <ListRow label="Commands" values={behaviour.commands} mono />
+          <ListRow label="Mutexes" values={behaviour.mutexes} mono />
+          <ListRow label="Files written" values={behaviour.files_written} mono />
+          <ListRow label="Registry" values={behaviour.registry_keys} mono />
         </Block>
       )}
 
-      {report.dropped_files.length > 0 && (
-        <Block title={`Dropped and extracted files (${report.dropped_files.length})`}>
+      {dropped.length > 0 && (
+        <Block title={`Dropped and extracted files (${dropped.length})`}>
           <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 3 }}>
-            {report.dropped_files.slice(0, 15).map((f, i) => (
+            {dropped.slice(0, 15).map((f, i) => (
               <li key={i} style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                 <span style={{ fontFamily: "var(--font-mono)" }}>{f.name || f.sha256?.slice(0, 16)}</span>
                 {f.file_type ? ` — ${f.file_type}` : ""}
@@ -299,19 +363,19 @@ function Result({ report }: { report: api.SandboxReport }) {
         </Block>
       )}
 
-      {report.extracted_configs.length > 0 && (
+      {configs.length > 0 && (
         <Block title="Extracted configuration">
           <pre style={{ margin: 0, fontSize: 11.5, fontFamily: "var(--font-mono)", color: "var(--text-secondary)",
                         whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 260, overflow: "auto" }}>
-            {JSON.stringify(report.extracted_configs, null, 2)}
+            {JSON.stringify(configs, null, 2)}
           </pre>
         </Block>
       )}
 
-      {report.errors.length > 0 && (
+      {errors.length > 0 && (
         <Block title="Analysis errors">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {report.errors.map((e, i) => (
+            {errors.map((e, i) => (
               <li key={i} style={{ fontSize: 12, color: "var(--status-warning)" }}>{e}</li>
             ))}
           </ul>
@@ -361,7 +425,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function ListRow({ label, values, mono }: { label: string; values: string[]; mono?: boolean }) {
+function ListRow({ label, values, mono }: { label: string; values?: string[]; mono?: boolean }) {
   if (!values || values.length === 0) return null;
   return (
     <div style={{ marginTop: 6 }}>
@@ -391,6 +455,19 @@ function Banner({ tone, children }: { tone: "warning" | "danger"; children: Reac
       {children}
     </div>
   );
+}
+
+function SubHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+                  textTransform: "uppercase", color: "var(--text-dim)" }}>
+      {children}
+    </div>
+  );
+}
+
+function Divider() {
+  return <div style={{ height: 1, background: "var(--border)" }} />;
 }
 
 function Muted({ children }: { children: React.ReactNode }) {
