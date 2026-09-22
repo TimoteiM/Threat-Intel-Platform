@@ -180,10 +180,32 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(api_router)
 
 
-@app.get("/api/health")
-async def health():
+def _health_payload() -> dict:
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
     }
+
+
+@app.get("/api/health")
+async def health():
+    return _health_payload()
+
+
+@app.get("/health")
+async def health_alias():
+    """The same answer, without the /api prefix.
+
+    TraceCat's delivery template runs a preflight against /health before it
+    sends anything, and that path has never existed here — it used to 404, and
+    once default-deny went in it became a 401, because an unknown path is
+    refused before routing ever happens. Either way the preflight can only
+    fail, and a failed preflight means alerts are not sent at all.
+
+    Adding the alias rather than editing the appliance is deliberate: the
+    integrations are meant to keep working without being modified, and a
+    liveness probe is the one thing that has to answer before a caller has
+    established anything at all.
+    """
+    return _health_payload()

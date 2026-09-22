@@ -72,7 +72,13 @@ services:
             # Remove first so re-running never stacks duplicates.
             while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN 2>/dev/null; do :; done
             while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP 2>/dev/null; do :; done
+            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP " 2>/dev/null; do :; done
+            # Inserted in reverse, so the chain ends up RETURN, LOG, DROP.
             iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP
+            # A dropped packet is silent by design, which makes "the sender timed
+            # out" and "the sender was blocked" look identical from the outside.
+            # Rate-limited so a port scan cannot flood the kernel log.
+            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP "
             iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN
           done
           echo "[firewall] DOCKER-USER rules applied for: $$EXTERNAL_IFACES (allow $$INGEST_CIDR)"
@@ -123,7 +129,15 @@ services:
     volumes:
       - ./backend:/app
       - artifacts:/app/artifacts
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # --timeout-graceful-shutdown bounds how long a stop can take. Without it
+    # uvicorn waits for open connections to close, and /api/sse streams stay
+    # open for as long as a browser tab is watching an investigation — with a
+    # 330s grace period above, one idle tab could hold the API down for
+    # minutes. Every second of that is a second TraceCat's preflight cannot
+    # connect, and a failed preflight means a batch of alerts is not sent at
+    # all. Five seconds is ample for real HTTP requests here: the long work
+    # runs in Celery, and an EventSource reconnects on its own.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
 
   # ── Celery Worker ──
   worker:

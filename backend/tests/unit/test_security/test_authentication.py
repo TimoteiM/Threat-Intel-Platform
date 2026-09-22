@@ -168,6 +168,41 @@ def test_health_stays_open_because_the_container_probe_uses_it(monkeypatch):
     assert _client(monkeypatch, mode="enforce").get("/api/health").status_code == 200
 
 
+def test_the_unprefixed_health_probe_is_open_too(monkeypatch):
+    """TraceCat's delivery template preflights /health before it sends.
+
+    That path is not under /api, so default-deny refused it with a 401 — and a
+    failed preflight means a batch of alerts is never sent at all. The
+    appliance is not supposed to need modifying, so the probe answers here.
+    """
+    import app.middleware.auth as auth_mod
+
+    class _Settings:
+        auth_mode = "enforce"
+        session_secret = SECRET
+        ingest_trusted_networks: list = []
+        ingest_trusted_path_set: frozenset = frozenset()
+
+    monkeypatch.setattr(auth_mod, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(auth_mod, "_identify", lambda request, settings: None)
+
+    api = FastAPI()
+    api.add_middleware(AuthenticationMiddleware)
+
+    @api.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    @api.get("/metrics")
+    def metrics():
+        return {"secret": "not a liveness probe"}
+
+    client = TestClient(api)
+    assert client.get("/health").status_code == 200
+    # And only that path: being outside /api is not itself a reason to be open.
+    assert client.get("/metrics").status_code == 401
+
+
 def test_monitor_lets_an_unauthenticated_request_through(monkeypatch, caplog):
     """The rollout mode. If this ever denies, a live alert pipeline drops alerts."""
     with caplog.at_level("WARNING"):

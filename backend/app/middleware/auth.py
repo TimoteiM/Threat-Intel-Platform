@@ -51,6 +51,10 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
         # The container healthcheck calls this over loopback. Locking it would
         # make the API unstartable rather than secure.
         "/api/health",
+        # The same probe under its unprefixed name, because TraceCat's delivery
+        # template checks it before sending and cannot be asked to change.
+        # It reports liveness and nothing else — no data, no configuration.
+        "/health",
         # You cannot present a credential until you have one.
         "/api/auth/login",
         # Answers "am I logged in" for the UI, and returns 401 when not — the

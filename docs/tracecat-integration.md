@@ -100,3 +100,78 @@ connections — the grace period protects requests already in progress, not new
 connections arriving while the container restarts. With retries configured in
 TraceCat this is invisible. Removing it entirely means running two API replicas
 behind a proxy, which this deployment does not currently do.
+
+---
+
+## ConnectTimeout on the preflight (September 2026)
+
+TraceCat began reporting this, often enough to lose whole batches:
+
+```
+DELIVERY FAILED — Alert-Investigations
+Endpoint: http://10.45.0.71:8000/health
+Final status/error: ConnectTimeout: Connection to 10.45.0.71 timed out (connect timeout=10)
+Attempts: 0
+Preflight health check failed after 3 attempts. 1 incident(s) were not sent this run.
+```
+
+It arrived during authentication work, which made the authentication look
+responsible. It was not: a refused credential returns 401 immediately. A
+**connect timeout** means the TCP handshake got no answer at all, which happens
+before anything reads a header.
+
+Two real causes, both found by measurement rather than inspection.
+
+### The API was genuinely absent, for 27 seconds at a time
+
+Every restart takes the published port with it, and TraceCat's preflight budget
+is three attempts at a 10-second connect timeout — 30 seconds. A 27-second
+outage sits inside that budget and exhausts it.
+
+Nineteen of those 27 seconds were *shutdown*. `stop_grace_period` is 330s, and
+uvicorn waits for open connections before exiting — and `/api/sse` streams stay
+open for as long as a browser tab is watching an investigation. One idle tab
+could hold the API down for minutes.
+
+Fixed by bounding it in `docker-compose.yml`:
+
+```yaml
+command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
+```
+
+Five seconds is ample for the HTTP requests this API actually serves — the long
+work runs in Celery — and an `EventSource` reconnects on its own. The window now
+fits inside TraceCat's retries, so a restart delays a delivery instead of
+losing it.
+
+### The preflight path was never a route
+
+`/health` has no `/api` prefix, so it has never existed here. It used to 404;
+once default-deny went in it became a 401, because an unknown path is refused
+before routing happens. Either way the preflight could only fail.
+
+`/health` is now a public alias of `/api/health`, returning the same payload.
+Adding the alias rather than editing the appliance is deliberate — these
+integrations are meant to keep working untouched, and a liveness probe is the
+one thing that has to answer before a caller has established anything.
+
+### Telling a block apart from an outage, next time
+
+A dropped packet is silent by design, so "the sender was blocked" and "the
+sender timed out" look identical from outside. The firewall now logs what it
+drops, rate-limited so a port scan cannot flood the kernel log:
+
+```bash
+grep TIP8000DROP /var/log/kern.log        # nothing here → it was not the firewall
+docker compose exec firewall iptables -L DOCKER-USER -n -v   # per-rule counters
+```
+
+For the record, during this incident the DROP counter was frozen at 210 while
+the allow rule passed 1,943 packets, and TraceCat was delivering successfully
+throughout — which is how the firewall was ruled out.
+
+### Still true
+
+`INGEST_CIDR` is a single host, `172.23.10.16/32`. If TraceCat ever gains a
+second egress address, everything from it is dropped and looks exactly like
+this again — the kernel log above is what distinguishes the two.
