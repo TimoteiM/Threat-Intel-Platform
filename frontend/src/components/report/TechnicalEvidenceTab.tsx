@@ -93,6 +93,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
   const urlBehavior = evidence?.url_behavior || ({} as any);
   const contentMl = evidence?.content_ml || ({} as any);
   const attachmentAnalysis = evidence?.attachment_analysis || ({} as any);
+  const cape = evidence?.cape;
   const hybridAnalysis = evidence?.hybrid_analysis || ({} as any);
   const anyRunSensitiveFormDetection = arr(hybridAnalysis?.items)
     .map((item: any) => item?.raw_summary?.sensitive_form_detection)
@@ -237,6 +238,16 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: !!(hybridAnalysis?.items?.length) || !!hybridAnalysis?.meta?.status,
       },
       {
+        // Always offered, like the other sandbox: an analyst asking "did we
+        // detonate this?" needs an answer even when the answer is no.
+        title: "CAPE Sandbox",
+        visible: true,
+        // Green once the collector has actually run — a stored `reason` with
+        // no report is still a result ("consulted, nothing found"), and the
+        // panel additionally offers detonation for a file or hash.
+        hasData: !!(cape?.report) || !!cape?.meta?.status || isFileHash,
+      },
+      {
         title: "Final Risk Aggregation",
         visible: true,
         hasData: !!(finalRisk && Object.keys(finalRisk).length > 0),
@@ -282,7 +293,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: true,
       },
     ],
-    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, openCti, finalRisk, hasRedirectDestinationIntel, intel, spamhausSia, type],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, cape, openCti, finalRisk, hasRedirectDestinationIntel, intel, spamhausSia, type],
   );
   const availableSections = React.useMemo(
     () => sectionDefs.filter((s) => s.visible),
@@ -2032,18 +2043,16 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           two sandboxes answer with different evidence, and an analyst needs to
           see which one produced a finding. CAPE is on-premises and detonates
           files; AnyRun is interactive and handles URLs. */}
-      {(investigationId || evidence?.cape) && (
-        <Section title="CAPE Sandbox">
-          <CapeSandboxSection
-            investigationId={investigationId}
-            observableType={observableType}
-            // The collector's own result. Without this the panel only ever
-            // showed the detonation workflow, so an investigation where the
-            // CAPE analyzer ran and answered displayed nothing at all.
-            capeEvidence={evidence?.cape}
-          />
-        </Section>
-      )}
+      <Section title="CAPE Sandbox">
+        <CapeSandboxSection
+          investigationId={investigationId}
+          observableType={observableType}
+          // The collector's own result. Without this the panel only ever
+          // showed the detonation workflow, so an investigation where the
+          // CAPE analyzer ran and answered displayed nothing at all.
+          capeEvidence={evidence?.cape}
+        />
+      </Section>
 
       <Section title="Final Risk Aggregation">
         {!finalRisk || Object.keys(finalRisk).length === 0 ? (
