@@ -159,6 +159,16 @@ class Settings(BaseSettings):
     # Printed once on first boot so there is a way in. Leave empty to generate.
     bootstrap_admin_username: str = "admin"
     bootstrap_admin_password: str = ""
+
+    # Senders that may reach the ingest route without a credential, because they
+    # cannot be given one — an appliance whose webhook has no header field.
+    # Comma-separated addresses or CIDRs, matched against the real peer address.
+    # This is weaker than a key: anything able to occupy or spoof one of these
+    # addresses inherits the exemption, so keep it to exact hosts.
+    ingest_trusted_cidrs: str = ""
+    # The only paths the exemption can reach, and only by POST. Without this the
+    # allowance would cover deletes and reads from the same address.
+    ingest_trusted_paths: str = "/api/alert-investigations,/api/alert-investigations/raw"
     log_level: str = "INFO"
 
     # —— Investigation Defaults ———
@@ -251,6 +261,32 @@ class Settings(BaseSettings):
                 "At least one AI provider key must be set: OPENAI_API_KEY or ANTHROPIC_API_KEY."
             )
         return self
+
+    @property
+    def ingest_trusted_networks(self) -> list:
+        """Parsed once. An unparseable entry is dropped with a warning rather
+        than widening the allowance by accident."""
+        import ipaddress as _ip
+        import logging as _logging
+
+        networks: list[Any] = []
+        for raw in str(self.ingest_trusted_cidrs or "").split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            try:
+                networks.append(_ip.ip_network(entry, strict=False))
+            except ValueError:
+                _logging.getLogger(__name__).error(
+                    "INGEST_TRUSTED_CIDRS entry %r is not an address or CIDR — ignoring it", entry
+                )
+        return networks
+
+    @property
+    def ingest_trusted_path_set(self) -> frozenset[str]:
+        return frozenset(
+            p.strip() for p in str(self.ingest_trusted_paths or "").split(",") if p.strip()
+        )
 
     @property
     def cors_origins_list(self) -> list[str]:

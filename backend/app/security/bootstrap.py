@@ -93,6 +93,43 @@ def _ensure_ingest_key(db: Session) -> None:
     )
 
 
+def warn_on_overbroad_ingest_trust(settings) -> None:
+    """Shout if the ingest exemption covers this platform's own frontend.
+
+    Every browser request reaches the API from the frontend container's address
+    on the compose bridge. A trusted range that includes it does not exempt an
+    appliance — it exempts everyone with a browser, silently, and the logs will
+    look entirely normal afterwards. Private-range entries are the usual way
+    that happens, so they are called out by name.
+    """
+    import ipaddress
+
+    networks = settings.ingest_trusted_networks
+    if not networks:
+        return
+
+    # The compose bridge. Anything covering it is the failure described above.
+    bridge = ipaddress.ip_network("172.16.0.0/12")
+    for network in networks:
+        try:
+            overlaps = network.overlaps(bridge)
+        except TypeError:  # v4 against v6
+            continue
+        if overlaps and network.prefixlen < 32:
+            _banner(
+                "INGEST TRUST RANGE MAY COVER THIS PLATFORM'S OWN FRONTEND",
+                f"range: {network}",
+                "Browser traffic reaches the API from the compose bridge, so a range",
+                "covering it exempts every anonymous browser, not just the appliance.",
+                "Use the appliance's exact address (a /32) instead.",
+            )
+    logger.info(
+        "Ingest exemption active for %s on %s",
+        ", ".join(str(n) for n in networks),
+        ", ".join(sorted(settings.ingest_trusted_path_set)) or "(no paths configured)",
+    )
+
+
 def resolve_session_secret(settings) -> str:
     """The configured signing secret, or a per-boot one with a warning.
 

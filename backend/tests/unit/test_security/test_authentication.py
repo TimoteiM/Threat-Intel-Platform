@@ -98,6 +98,10 @@ def _client(monkeypatch, *, mode: str, identity=None) -> TestClient:
     class _Settings:
         auth_mode = mode
         session_secret = SECRET
+        # No ingest exemption in these cases: they are about the credential
+        # path, and a stray trusted range would quietly make them pass.
+        ingest_trusted_networks: list = []
+        ingest_trusted_path_set: frozenset = frozenset()
 
     monkeypatch.setattr(auth_mod, "get_settings", lambda: _Settings())
     monkeypatch.setattr(auth_mod, "_identify", lambda request, settings: identity)
@@ -160,6 +164,8 @@ def test_monitor_does_not_invent_an_identity(monkeypatch):
     class _Settings:
         auth_mode = "monitor"
         session_secret = SECRET
+        ingest_trusted_networks: list = []
+        ingest_trusted_path_set: frozenset = frozenset()
 
     monkeypatch.setattr(auth_mod, "get_settings", lambda: _Settings())
     monkeypatch.setattr(auth_mod, "_identify", lambda request, settings: None)
@@ -189,3 +195,84 @@ def test_preflight_is_never_challenged(monkeypatch):
         headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
     )
     assert response.status_code != 401
+
+
+# ── The ingest network exemption ─────────────────────────────────────────────
+#
+# An appliance whose webhook cannot carry a header still has to deliver, so its
+# address is exempted. The danger is that the platform's own frontend reaches
+# this API from the compose bridge, so every browser request arrives from one
+# internal address — an exemption keyed on address alone is a full bypass.
+
+
+def _ingest_client(monkeypatch, *, cidrs: str, peer: str) -> TestClient:
+    import app.middleware.auth as auth_mod
+
+    class _Settings:
+        auth_mode = "enforce"
+        session_secret = SECRET
+        ingest_trusted_paths = "/api/alert-investigations"
+        ingest_trusted_path_set = frozenset({"/api/alert-investigations"})
+
+        @property
+        def ingest_trusted_networks(self):
+            import ipaddress
+
+            return [ipaddress.ip_network(c.strip(), strict=False) for c in cidrs.split(",") if c.strip()]
+
+    monkeypatch.setattr(auth_mod, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(auth_mod, "_identify", lambda request, settings: None)
+
+    api = FastAPI()
+    api.add_middleware(AuthenticationMiddleware)
+
+    @api.post("/api/alert-investigations")
+    def ingest():
+        return {"accepted": True}
+
+    @api.get("/api/investigations")
+    def read():
+        return {"secret": "live data"}
+
+    @api.delete("/api/clients/{client_id}")
+    def delete_client(client_id: str):
+        return {"deleted": client_id}
+
+    return TestClient(api, client=(peer, 50000))
+
+
+def test_the_appliance_can_post_alerts_without_a_credential(monkeypatch):
+    client = _ingest_client(monkeypatch, cidrs="172.23.10.16/32", peer="172.23.10.16")
+    assert client.post("/api/alert-investigations", json={}).status_code == 200
+
+
+def test_the_same_address_cannot_read(monkeypatch):
+    """The exemption is for delivery, not for access."""
+    client = _ingest_client(monkeypatch, cidrs="172.23.10.16/32", peer="172.23.10.16")
+    assert client.get("/api/investigations").status_code == 401
+
+
+def test_the_same_address_cannot_delete(monkeypatch):
+    client = _ingest_client(monkeypatch, cidrs="172.23.10.16/32", peer="172.23.10.16")
+    assert client.delete("/api/clients/abc").status_code == 401
+
+
+def test_another_address_posting_the_same_route_is_refused(monkeypatch):
+    client = _ingest_client(monkeypatch, cidrs="172.23.10.16/32", peer="10.0.0.9")
+    assert client.post("/api/alert-investigations", json={}).status_code == 401
+
+
+def test_a_forwarded_for_header_cannot_claim_the_exemption(monkeypatch):
+    """The header is written by the caller. Trusting it would exempt anyone."""
+    client = _ingest_client(monkeypatch, cidrs="172.23.10.16/32", peer="10.0.0.9")
+    response = client.post(
+        "/api/alert-investigations",
+        json={},
+        headers={"X-Forwarded-For": "172.23.10.16", "X-Real-IP": "172.23.10.16"},
+    )
+    assert response.status_code == 401
+
+
+def test_with_no_ranges_configured_nothing_is_exempt(monkeypatch):
+    client = _ingest_client(monkeypatch, cidrs="", peer="172.23.10.16")
+    assert client.post("/api/alert-investigations", json={}).status_code == 401

@@ -61,10 +61,15 @@ async def lifespan(app: FastAPI):
 
     # A session secret has to be settled before the first cookie is signed, and
     # there has to be an account to sign in with before default-deny bites.
-    from app.security.bootstrap import ensure_bootstrap_credentials, resolve_session_secret
+    from app.security.bootstrap import (
+        ensure_bootstrap_credentials,
+        resolve_session_secret,
+        warn_on_overbroad_ingest_trust,
+    )
 
     settings.session_secret = resolve_session_secret(settings)
     ensure_bootstrap_credentials()
+    warn_on_overbroad_ingest_trust(settings)
     logger.info("Authentication mode: %s", settings.auth_mode)
 
     logger.info("Threat Investigation Platform starting")

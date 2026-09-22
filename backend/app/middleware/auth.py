@@ -23,6 +23,7 @@ In `enforce` the same decision returns 401. Nothing else differs between them.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from datetime import datetime, timezone
 
@@ -79,6 +80,21 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             request.state.identity = identity
             return await call_next(request)
 
+        # An appliance whose webhook cannot carry a header still has to be able
+        # to deliver. The exemption is deliberately narrow: this exact address,
+        # posting to the ingest route, and nothing else. A read or a delete from
+        # the same host is refused like any other anonymous caller.
+        trusted = _trusted_ingest(request, settings)
+        if trusted is not None:
+            request.state.identity = trusted
+            logger.info(
+                "Ingest accepted from trusted address %s (%s %s) — no credential presented",
+                trusted["id"],
+                request.method,
+                path,
+            )
+            return await call_next(request)
+
         mode = str(getattr(settings, "auth_mode", "enforce") or "enforce").strip().lower()
         client = request.client.host if request.client else "unknown"
         if mode == "monitor":
@@ -104,6 +120,45 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             },
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def _trusted_ingest(request: Request, settings) -> dict | None:
+    """The network exemption, or None.
+
+    Three things have to line up, and each one is load-bearing:
+
+    * The **peer address** — `request.client.host`, the address the packets
+      actually came from. X-Forwarded-For is never consulted: it is a header
+      the caller writes, so trusting it would let anyone claim to be the
+      appliance. If this API is ever put behind a real reverse proxy, that
+      proxy's address becomes the peer and this exemption must be reworked
+      rather than pointed at the header.
+    * The **method**, POST only.
+    * The **path**, from a configured list.
+
+    The reason for the last two: the platform's own frontend container reaches
+    this API from the compose bridge, so every browser request arrives from a
+    single internal address. An exemption keyed on address alone would hand
+    every anonymous browser a complete bypass.
+    """
+    networks = settings.ingest_trusted_networks
+    if not networks:
+        return None
+    if request.method != "POST":
+        return None
+    if request.url.path not in settings.ingest_trusted_path_set:
+        return None
+
+    peer = request.client.host if request.client else None
+    if not peer:
+        return None
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return None
+    if not any(address in network for network in networks):
+        return None
+    return {"kind": "trusted_network", "id": peer, "role": "ingest"}
 
 
 def _is_public(path: str) -> bool:
