@@ -487,6 +487,19 @@ export interface AuthStatus {
   authenticated: boolean;
   username?: string | null;
   role?: string | null;
+  /** Which sign-in methods this deployment can actually complete. */
+  providers?: { password: boolean; microsoft: boolean };
+}
+
+/**
+ * Hand the browser to Entra ID.
+ *
+ * A full navigation, not fetch(): the flow is a chain of cross-origin
+ * redirects that ends with the API setting a cookie, and XHR can neither
+ * follow it nor be allowed to.
+ */
+export function startMicrosoftSignIn(next: string) {
+  window.location.href = `/api/auth/oidc/start?next=${encodeURIComponent(next)}`;
 }
 
 /** Public: is this caller signed in, and is signing in required yet. */

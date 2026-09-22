@@ -169,6 +169,35 @@ class Settings(BaseSettings):
     # The only paths the exemption can reach, and only by POST. Without this the
     # allowance would cover deletes and reads from the same address.
     ingest_trusted_paths: str = "/api/alert-investigations,/api/alert-investigations/raw"
+
+    # —— Microsoft Entra ID (Azure AD) single sign-on ————————————————————
+    # Off until a tenant, client id and secret are all present, so a deployment
+    # that has not registered an application keeps working on passwords alone
+    # and the sign-in page shows no button that cannot work.
+    #
+    # Tenant-specific on purpose: the "common" authority would accept a token
+    # issued by ANY Microsoft tenant, including one an attacker creates in two
+    # minutes, and a domain check alone does not save you — the display name and
+    # even an unverified domain can be chosen by whoever owns that tenant. The
+    # GUID here is the only thing that pins sign-in to your directory.
+    oidc_tenant_id: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    # Must match a Redirect URI registered on the app registration, exactly,
+    # including scheme, host, port and path. Entra rejects plain http for
+    # anything but localhost, so this is an https URL in any real deployment.
+    oidc_redirect_url: str = ""
+    # A second gate behind the tenant pin: guest accounts invited into your
+    # directory authenticate against your tenant but carry their own domain.
+    # Empty means any account in the tenant, guests included.
+    oidc_allowed_domains: str = ""
+    # Create a local record the first time someone signs in. With this off,
+    # only people an administrator has already added can use SSO.
+    oidc_auto_provision: bool = True
+    oidc_default_role: str = "analyst"
+    # Comma-separated addresses that get "admin" when provisioned. Existing
+    # accounts keep the role they already have — this never demotes anyone.
+    oidc_admin_emails: str = ""
     log_level: str = "INFO"
 
     # —— Investigation Defaults ———
@@ -286,6 +315,24 @@ class Settings(BaseSettings):
     def ingest_trusted_path_set(self) -> frozenset[str]:
         return frozenset(
             p.strip() for p in str(self.ingest_trusted_paths or "").split(",") if p.strip()
+        )
+
+    @property
+    def oidc_configured(self) -> bool:
+        """All four required pieces present. Anything less is not half-on."""
+        return all(
+            str(getattr(self, name, "") or "").strip()
+            for name in ("oidc_tenant_id", "oidc_client_id", "oidc_client_secret", "oidc_redirect_url")
+        )
+
+    @property
+    def oidc_allowed_domain_list(self) -> list[str]:
+        return [d.strip().lower().lstrip("@") for d in str(self.oidc_allowed_domains or "").split(",") if d.strip()]
+
+    @property
+    def oidc_admin_email_set(self) -> frozenset[str]:
+        return frozenset(
+            e.strip().lower() for e in str(self.oidc_admin_emails or "").split(",") if e.strip()
         )
 
     @property

@@ -54,6 +54,12 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
         # Reports the mode and whether this caller is known. The UI reads it to
         # decide whether to show a login wall at all, so it cannot be behind one.
         "/api/auth/status",
+        # The two legs of the Microsoft sign-in round trip. Someone who has not
+        # signed in yet has no credential to present, so requiring one here
+        # would make single sign-on unreachable. They defend themselves with a
+        # signed, single-use flow cookie instead — app/security/oidc.py.
+        "/api/auth/oidc/start",
+        "/api/auth/oidc/callback",
     }
 )
 

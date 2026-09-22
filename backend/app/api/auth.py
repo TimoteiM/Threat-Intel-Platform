@@ -115,8 +115,13 @@ async def status(request: Request) -> dict[str, Any]:
     the sign-in page only when the mode says a refusal is actually coming.
     """
     identity = getattr(request.state, "identity", None)
+    settings = get_settings()
     return {
-        "mode": str(get_settings().auth_mode or "enforce").strip().lower(),
+        "mode": str(settings.auth_mode or "enforce").strip().lower(),
+        # What the sign-in page may offer. A Microsoft button on a deployment
+        # with no tenant configured is a button that can only ever fail, so the
+        # page is told rather than left to guess.
+        "providers": {"password": True, "microsoft": settings.oidc_configured},
         "authenticated": bool(identity),
         "username": (identity or {}).get("username"),
         "role": (identity or {}).get("role"),

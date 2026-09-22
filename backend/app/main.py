@@ -53,6 +53,16 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS risk_score_history JSONB",
             "ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS evidence_diff_json JSONB",
             "CREATE INDEX IF NOT EXISTS idx_watchlist_next_check ON watchlist(next_check_at)",
+            # Entra ID sign-in. An account that authenticates against the
+            # directory has no password here, so the column has to give up its
+            # NOT NULL — on a table that predates single sign-on.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id VARCHAR(64)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(320)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(120)",
+            "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id)",
+            "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))

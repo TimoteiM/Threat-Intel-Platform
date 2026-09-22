@@ -327,7 +327,17 @@ class User(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # Null for an account that signs in through Entra ID: there is no password
+    # to store, and inventing one would be a credential nobody asked for.
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "local" or "microsoft". Kept so the UI can say how someone gets in, and so
+    # a password change cannot be offered to an account that has no password.
+    auth_provider: Mapped[str] = mapped_column(String(20), nullable=False, default="local")
+    # Entra's `oid` claim — immutable within the tenant. Matching on this rather
+    # than on the address means a rename does not orphan someone's history.
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # "admin" may manage users and API keys; "analyst" may use the platform.
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="analyst")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
