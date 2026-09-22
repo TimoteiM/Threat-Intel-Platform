@@ -268,3 +268,60 @@ def test_a_resumed_analysis_that_already_has_a_task_id_is_polled_not_resubmitted
     client = FakeClient(views=[task(42, "reported")])
     cape_task._poll_and_store(client, ANALYSIS_ID, "42", Settings())
     assert client.submissions == 0 and client.searches == 0
+
+
+# ── Finding the sample on disk ───────────────────────────────────────────────
+#
+# The UI submits an investigation id and nothing else, so the uploaded file has
+# to be found by hash. Every file submission failed with "No file is available"
+# while the sample sat on disk, because nothing looked for it.
+
+
+def test_the_file_is_verified_against_the_hash_before_it_is_submitted(tmp_path, monkeypatch):
+    """A stored digest is a claim about a file. Detonating the wrong one would
+    run something nobody asked for and attribute the result to this sample."""
+    import hashlib
+    from app.tasks import cape_task as mod
+
+    good = tmp_path / "sample.bin"
+    good.write_bytes(b"harmless fixture")
+    digest = hashlib.sha256(b"harmless fixture").hexdigest()
+
+    class Art:
+        id = "a1"
+        storage_path = str(good)
+        artifact_name = "sample.bin"
+
+    class DB:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, *_a): return Art()
+        def execute(self, *_a, **_k): raise AssertionError("not reached")
+
+    monkeypatch.setattr(mod, "Session", lambda _engine: DB())
+
+    path, name = mod._resolve_sample("a1", None, digest)
+    assert path is not None and name == "sample.bin"
+
+    # Same artifact, wrong hash: refused rather than submitted.
+    path, _ = mod._resolve_sample("a1", None, "f" * 64)
+    assert path is None
+
+
+def test_a_missing_file_is_not_mistaken_for_a_sample(tmp_path, monkeypatch):
+    """Most historical uploads have been swept by retention; an artifact row is
+    not evidence that the file still exists."""
+    from app.tasks import cape_task as mod
+
+    class Art:
+        id = "a1"
+        storage_path = str(tmp_path / "gone.bin")
+        artifact_name = "gone.bin"
+
+    class DB:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, *_a): return Art()
+
+    monkeypatch.setattr(mod, "Session", lambda _engine: DB())
+    assert mod._resolve_sample("a1", None, "a" * 64)[0] is None

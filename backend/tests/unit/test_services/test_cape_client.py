@@ -467,3 +467,63 @@ def test_no_usable_report_format_is_an_error(monkeypatch):
     monkeypatch.setattr(cape.time, "sleep", lambda s: None)
     with pytest.raises(cape.CapeValidationError):
         build(lambda r: httpx.Response(404, json={"detail": "nope"})).fetch_report(7)
+
+
+# ── Searching by something other than a hash ─────────────────────────────────
+#
+# GET /tasks/search/ accepts only md5, sha1 and sha256 — /tasks/search/domain/
+# returns 404 on the live instance — so "which analyses contacted this host"
+# goes through POST /tasks/extendedsearch/.
+
+
+def test_an_indicator_search_returns_report_shaped_matches():
+    """CAPE answers with {info, target, network, malscore} per match, which is
+    the substance of a report — so the caller needs no second request."""
+    captured = {}
+
+    def handler(request):
+        captured["path"] = request.url.path
+        captured["body"] = request.read()
+        return ok({"error": False, "data": [
+            {"info": {"id": 4, "started": "..."}, "malscore": 6.0,
+             "target": {"file": {"name": "x.exe"}}, "network": {"domains": [{"domain": "c2.test"}]}}
+        ]})
+
+    hits = build(handler).search_reports("domain", "c2.test")
+    assert captured["path"].endswith("/tasks/extendedsearch/")
+    assert b"domain" in captured["body"] and b"c2.test" in captured["body"]
+    assert len(hits) == 1 and hits[0]["info"]["id"] == 4
+
+
+def test_no_matches_is_an_empty_list_not_an_error():
+    """CAPE signals a miss with the same envelope it uses for a failure."""
+    def handler(request):
+        return ok({"error": True, "error_value": "Unable to retrieve records"})
+
+    assert build(handler).search_reports("domain", "google.com") == []
+
+
+def test_a_genuine_search_failure_still_raises():
+    def handler(request):
+        return ok({"error": True, "error_value": "database connection refused"})
+
+    with pytest.raises(cape.CapeValidationError):
+        build(handler).search_reports("domain", "x.test")
+
+
+def test_the_search_option_cannot_be_chosen_by_a_caller():
+    """The option lands in a POST body CAPE dispatches on."""
+    def handler(request):
+        raise AssertionError("must not reach the network")
+
+    for bad in ("../../etc", "drop table", "", "configs; --"):
+        with pytest.raises(cape.CapeValidationError):
+            build(handler).search_reports(bad, "x")
+
+
+def test_an_overlong_search_argument_is_refused():
+    def handler(request):
+        raise AssertionError("must not reach the network")
+
+    with pytest.raises(cape.CapeValidationError):
+        build(handler).search_reports("domain", "a" * 600)

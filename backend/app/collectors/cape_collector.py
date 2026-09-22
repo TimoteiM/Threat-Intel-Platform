@@ -10,13 +10,12 @@ Two different questions, depending on the observable:
 
 * **hash / file** — ask CAPE directly whether it has analysed this sample
   (`tasks/search/sha256`). This is the case an alert carrying a hash hits.
-* **domain / ip / url** — CAPE has no endpoint that answers "which analyses
-  contacted this host", so this asks *our* stored analyses instead: a domain
-  in an alert that a sample we detonated reached out to is a strong finding,
-  and it needs no guessing about CAPE's API surface to produce.
-
-The second is a local query by design. Inventing a CAPE search route that this
-deployment may not expose would be a guess dressed up as an integration.
+* **domain / ip / url** — asks CAPE which of *its* analyses contacted the
+  host, through POST /tasks/extendedsearch/. The GET /tasks/search/ route
+  accepts only file hashes — /tasks/search/domain/ returns 404 on this
+  instance — which is why the first version of this collector answered domains
+  from our own records alone. It still falls back to those, because an
+  analysis this platform ran and CAPE has since pruned is still evidence.
 """
 
 from __future__ import annotations
@@ -134,17 +133,23 @@ class CapeCollector(BaseCollector):
     # -- domain / ip / url ---------------------------------------------------
 
     def _by_indicator(self) -> CapeEvidence:
-        """Which of our detonations touched this host.
-
-        JSONB containment against a GIN index, on lowercased hostnames — not a
-        scan of the report text.
-        """
+        """Which analyses — CAPE's or ours — touched this host."""
         evidence = CapeEvidence()
         needle = self._indicator_value()
         if not needle:
             evidence.reason = "No usable indicator value."
             return evidence
 
+        # 1. CAPE itself. Its store covers every analysis the instance has run,
+        #    including ones this platform never asked for.
+        remote = self._ask_cape(needle)
+        if remote is not None:
+            evidence.available = True
+            evidence.report = remote
+            return evidence
+
+        # 2. Ours, as a fallback: an analysis we ran and CAPE has since pruned
+        #    is still evidence.
         matches: list[SandboxAnalysis] = []
         with Session(sync_engine) as db:
             for field in ("domains", "dns_queries", "tls_sni", "hosts"):
@@ -165,9 +170,8 @@ class CapeCollector(BaseCollector):
 
         if not matches:
             evidence.reason = (
-                f"No sandbox analysis on this platform contacted {needle}. "
-                "CAPE cannot be searched by network indicator, so this covers "
-                "samples detonated here only."
+                f"No CAPE analysis has contacted {needle}. Searched CAPE's own "
+                "analyses and this platform's stored detonations."
             )
             return evidence
 
@@ -180,6 +184,39 @@ class CapeCollector(BaseCollector):
                 f"while detonating {best.sample_name or best.sha256[:16]}."
             ]
         return evidence
+
+    def _ask_cape(self, needle: str) -> CapeNormalizedReport | None:
+        """CAPE's own analyses that contacted this indicator.
+
+        The search response is report-shaped already — info, target, network
+        and malscore — so the match is normalized straight from it rather than
+        pulling the full report, which runs to tens of megabytes for one task.
+        """
+        from app.services.cape_normalizer import normalize_report
+
+        options = ["ip"] if self.observable_type == "ip" else ["domain"]
+        if self.observable_type == "url":
+            options = ["url", "domain"]
+
+        settings = get_settings()
+        try:
+            with cape.CapeClient(settings=settings) as client:
+                for option in options:
+                    argument = self.domain if option == "url" else needle
+                    hits = client.search_reports(option, argument)
+                    if not hits:
+                        continue
+                    best = max(hits, key=lambda h: _as_int((h.get("info") or {}).get("id")))
+                    report = normalize_report(best, task_id=(best.get("info") or {}).get("id"))
+                    report.limitations = list(report.limitations) + [
+                        f"Matched because CAPE task {report.task_id} contacted {argument} "
+                        f"while analysing {report.file_name or 'another sample'}."
+                    ]
+                    return report
+        except cape.CapeError as exc:
+            # A search failure is a gap, not a verdict. Fall through to ours.
+            logger.info("CAPE indicator search failed for %s: %s", needle, cape.redact(str(exc))[:200])
+        return None
 
     def _indicator_value(self) -> str | None:
         value = str(self.domain or "").strip().lower()
@@ -194,6 +231,13 @@ class CapeCollector(BaseCollector):
 
     def _empty_evidence(self, meta: CollectorMeta) -> CapeEvidence:
         return CapeEvidence(meta=meta, available=False, reason="CAPE collector did not complete.")
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
 
 
 def _as_report(payload: Any) -> CapeNormalizedReport | None:

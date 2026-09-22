@@ -238,10 +238,11 @@ What the collector does depends on the observable:
 * **hash / file** — this platform's own stored analysis first, then CAPE's
   `tasks/search/sha256/`. It never detonates: submission is the asynchronous
   workflow, started deliberately.
-* **domain / IP / URL** — searches the network indicators of samples detonated
-  *here*. CAPE has no endpoint that answers "which analyses contacted this
-  host", so this is a local JSONB lookup against a GIN index, and the result
-  says so rather than implying CAPE was asked.
+* **domain / IP / URL** — asks CAPE which of *its* analyses contacted the host,
+  via `POST /apiv2/tasks/extendedsearch/`, then falls back to this platform's
+  own stored detonations. The GET `/tasks/search/` route accepts only file
+  hashes — `/tasks/search/domain/` returns 404 on this instance — which is why
+  the first version answered domains from local records alone.
 
 ### In what the AI reads
 
@@ -288,6 +289,18 @@ All five routes confirmed working through the reverse proxy at
 | `GET /tasks/view/{task_id}/` | 200 |
 | `GET /tasks/get/report/{task_id}/json/` | 200, 41 MB, parsed and normalized |
 | `GET /tasks/get/report/{task_id}/lite/` | **not served** — returns non-JSON on this instance |
+| `POST /tasks/extendedsearch/` | 200 — searches by domain, ip, url, name, signature, malfamily |
+
+`/apiv2/` serves CAPE's own API documentation page, which lists 41 endpoints;
+that is the authoritative answer for what this instance exposes. Notably
+`tasks/create/url/` exists, so CAPE can analyse a URL directly — not used yet,
+but it is there if URL detonation is ever wanted.
+
+`extendedsearch` signals a miss with `{"error": true, "error_value": "Unable to
+retrieve records"}` — the same envelope as a genuine failure. Confirmed the
+difference by searching a term that does exist (`name=MediaCreationTool_22H2.exe`
+returns `error: false` with data), so a miss is treated as an empty result and
+only other errors are raised.
 
 `json` is therefore the only usable report format here. The client tries it
 first and falls back to `lite`, so nothing needs changing; the fallback simply

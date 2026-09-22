@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -110,7 +111,7 @@ def _obtain_task(
                          note="adopted an existing CAPE analysis for this hash")
             return str(adopted)
 
-    path, filename = _resolve_sample(artifact_id, sample_name)
+    path, filename = _resolve_sample(artifact_id, sample_name, sha256)
     if path is None:
         # Nothing to detonate. For a hash seen in an alert with no file behind
         # it this is the expected outcome, not a fault: CAPE had no prior
@@ -176,21 +177,61 @@ def _reconcile_after_ambiguous(client: cape.CapeClient, sha256: str) -> int | No
     return max((t.task_id for t in tasks), default=None)
 
 
-def _resolve_sample(artifact_id: uuid.UUID | None, sample_name: str | None) -> tuple[Path | None, str]:
-    """The file on disk for this analysis, if the platform still holds one."""
-    if artifact_id is None:
-        return None, sample_name or "sample.bin"
+def _resolve_sample(
+    artifact_id: uuid.UUID | None, sample_name: str | None, sha256: str | None = None
+) -> tuple[Path | None, str]:
+    """The file on disk for this analysis, if the platform still holds one.
+
+    Falls back to any retained upload with this hash when no artifact was
+    recorded — an analysis raised from a hash is still submittable if we
+    happen to hold the file.
+
+    The content is verified against the hash before the path is returned.
+    A stored digest is a claim about a file; sending the wrong one to a
+    sandbox would detonate something nobody asked for and attribute the
+    result to this sample.
+    """
+    candidates: list[Artifact] = []
     with Session(sync_engine) as db:
-        artifact = db.get(Artifact, artifact_id)
-        if artifact is None:
-            return None, sample_name or "sample.bin"
-        path = Path(str(artifact.storage_path or "")).expanduser()
-        if not path.is_absolute():
-            path = Path("/app") / path
-        if not path.exists() or not path.is_file():
-            logger.warning("Artifact %s has no file at %s", artifact_id, path)
-            return None, artifact.artifact_name or sample_name or "sample.bin"
-        return path, artifact.artifact_name or sample_name or "sample.bin"
+        if artifact_id is not None:
+            artifact = db.get(Artifact, artifact_id)
+            if artifact is not None:
+                candidates.append(artifact)
+        if not candidates and sha256:
+            candidates = list(
+                db.execute(
+                    select(Artifact)
+                    .where(Artifact.sha256_hash == str(sha256).lower(),
+                           Artifact.collector_name == "upload")
+                    .order_by(Artifact.created_at.asc())
+                ).scalars().all()
+            )
+
+        for artifact in candidates:
+            path = Path(str(artifact.storage_path or "")).expanduser()
+            if not path.is_absolute():
+                path = Path("/app") / path
+            if not path.exists() or not path.is_file():
+                logger.info("Artifact %s is no longer retained at %s", artifact.id, path)
+                continue
+            if sha256 and _digest_of(path) != str(sha256).lower():
+                logger.warning(
+                    "Artifact %s does not hash to %s; refusing to submit it", artifact.id, str(sha256)[:16]
+                )
+                continue
+            return path, artifact.artifact_name or sample_name or "sample.bin"
+
+    return None, sample_name or "sample.bin"
+
+
+def _digest_of(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 # ── polling and storing ──────────────────────────────────────────────────────

@@ -62,6 +62,10 @@ logger = logging.getLogger(__name__)
 # endpoints this integration touches is readable in one place.
 PATH_STATUS = "/cuckoo/status/"
 PATH_SEARCH_SHA256 = "/tasks/search/sha256/{sha256}/"
+# POST. The GET /tasks/search/ route only accepts md5, sha1 and sha256 —
+# confirmed against the live instance, where /tasks/search/domain/ 404s.
+# Searching by anything else, a contacted domain included, goes through here.
+PATH_EXTENDED_SEARCH = "/tasks/extendedsearch/"
 PATH_CREATE_FILE = "/tasks/create/file/"
 PATH_VIEW_TASK = "/tasks/view/{task_id}/"
 PATH_REPORT = "/tasks/get/report/{task_id}/{fmt}/"
@@ -511,6 +515,48 @@ class CapeClient:
                 return []
             raise
         return [t for t in (_as_task(item) for item in _as_list(data)) if t is not None]
+
+    def search_reports(self, option: str, argument: str) -> list[dict[str, Any]]:
+        """Search CAPE's analysis store by something other than a file hash.
+
+        This is how "which analyses contacted this domain" is answered. The GET
+        /tasks/search/ route accepts only md5, sha1 and sha256 — verified
+        against the live instance, where /tasks/search/domain/ returns 404 —
+        so anything else goes through POST /tasks/extendedsearch/.
+
+        Returns **report-shaped** dicts, not task stubs: CAPE answers this with
+        `{info, target, network, malscore}` per match, which is the substance
+        of a report already. The domain lookup therefore needs no second call,
+        and avoids pulling a 41MB report to learn one fact.
+
+        A miss comes back as `{"error": true, "error_value": "Unable to
+        retrieve records"}` — the same envelope CAPE uses for a genuine
+        failure — so it is translated to an empty list rather than raised.
+        Confirmed by searching a term that does exist, which returns
+        `error: false` with data.
+
+        `option` is restricted to a known set: it lands in a POST body CAPE
+        dispatches on, and passing a caller's string through would let a
+        request steer the query.
+        """
+        allowed = {"domain", "ip", "url", "name", "signature", "malfamily", "sha256", "md5", "imphash"}
+        key = str(option or "").strip().lower()
+        if key not in allowed:
+            raise CapeValidationError(f"Unsupported search option {option!r}", request_id=self.request_id)
+        value = str(argument or "").strip()
+        if not value or len(value) > 512:
+            raise CapeValidationError("Search argument is empty or too long", request_id=self.request_id)
+
+        response = self._request(
+            "POST", PATH_EXTENDED_SEARCH, data={"option": key, "argument": value}, retry=False
+        )
+        try:
+            payload = self._json(response)
+        except CapeValidationError as exc:
+            if "unable to retrieve records" in str(exc).lower():
+                return []
+            raise
+        return [item for item in _as_list(payload) if isinstance(item, dict)]
 
     def submit_file(
         self,

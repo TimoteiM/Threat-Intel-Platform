@@ -168,6 +168,25 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
             "or run this against a hash or file investigation.",
         )
 
+    # The UI submits an investigation id and nothing else, so the uploaded
+    # sample has to be found here. Without this every file submission reached
+    # the worker with no artifact and failed with "No file is available" —
+    # while the file sat on disk the whole time.
+    if artifact is None:
+        stored = (
+            await db.execute(
+                select(Artifact)
+                .where(Artifact.sha256_hash == sha256, Artifact.collector_name == "upload")
+                .order_by(Artifact.created_at.asc())
+            )
+        ).scalars().all()
+        for candidate in stored:
+            if _artifact_file(candidate) is not None:
+                artifact = candidate
+                sample_name = sample_name or candidate.artifact_name
+                sample_size = sample_size or candidate.size_bytes
+                break
+
     if sample_size and int(sample_size) > int(settings.cape_max_upload_bytes):
         raise HTTPException(
             413, f"That sample is larger than the {settings.cape_max_upload_bytes} byte submission limit."
@@ -346,6 +365,20 @@ async def _load(analysis_id: str, db: DBSession) -> SandboxAnalysis:
     if row is None:
         raise HTTPException(404, "No such analysis.")
     return row
+
+
+def _artifact_file(artifact: Artifact):
+    """The artifact's file on disk, or None when it is no longer retained.
+
+    Most historical uploads have been swept by the retention policy, so an
+    artifact row is not evidence that a sample still exists.
+    """
+    from pathlib import Path
+
+    path = Path(str(artifact.storage_path or "")).expanduser()
+    if not path.is_absolute():
+        path = Path("/app") / path
+    return path if path.exists() and path.is_file() else None
 
 
 def _as_uuid(value: str | None, field: str) -> uuid.UUID | None:
