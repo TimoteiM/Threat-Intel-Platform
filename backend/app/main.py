@@ -68,6 +68,11 @@ async def lifespan(app: FastAPI):
             # which SQLAlchemy cannot express as a column index.
             "CREATE INDEX IF NOT EXISTS idx_sandbox_normalized_gin "
             "ON sandbox_analyses USING GIN (normalized_json jsonb_path_ops)",
+            # URL detonation: CAPE fetches a URL as well as running a file, and
+            # a URL analysis has no local sample to hash.
+            "ALTER TABLE sandbox_analyses ADD COLUMN IF NOT EXISTS target_kind VARCHAR(10) NOT NULL DEFAULT 'file'",
+            "ALTER TABLE sandbox_analyses ADD COLUMN IF NOT EXISTS target_url VARCHAR(2048)",
+            "ALTER TABLE sandbox_analyses ALTER COLUMN sha256 DROP NOT NULL",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))

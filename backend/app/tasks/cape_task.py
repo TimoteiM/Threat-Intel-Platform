@@ -66,13 +66,18 @@ def run_cape_analysis(self, analysis_id: str) -> dict[str, Any]:
         artifact_id = row.artifact_id
         sample_name = row.sample_name
         task_id = row.provider_task_id
+        target_kind = getattr(row, "target_kind", "file") or "file"
+        target_url = getattr(row, "target_url", None)
         db.commit()
 
     request_id = uuid.uuid4().hex[:12]
     try:
         with cape.CapeClient(settings=settings, request_id=request_id) as client:
             if not task_id:
-                task_id = _obtain_task(client, analysis_uuid, sha256, artifact_id, sample_name, settings)
+                task_id = _obtain_task(
+                    client, analysis_uuid, sha256, artifact_id, sample_name, settings,
+                    target_kind=target_kind, target_url=target_url,
+                )
             if task_id is None:
                 return {"analysis_id": analysis_id, "status": svc.STATUS_FAILED}
             return _poll_and_store(client, analysis_uuid, task_id, settings)
@@ -98,12 +103,18 @@ def run_cape_analysis(self, analysis_id: str) -> dict[str, Any]:
 def _obtain_task(
     client: cape.CapeClient,
     analysis_id: uuid.UUID,
-    sha256: str,
+    sha256: str | None,
     artifact_id: uuid.UUID | None,
     sample_name: str | None,
     settings,
+    *,
+    target_kind: str = "file",
+    target_url: str | None = None,
 ) -> str | None:
-    """Adopt an existing CAPE analysis, or submit the file. Never both."""
+    """Adopt an existing CAPE analysis, or submit. Never both."""
+    if target_kind == "url":
+        return _obtain_url_task(client, analysis_id, target_url, settings)
+
     if settings.cape_reuse_existing_analysis:
         adopted = _find_reusable(client, sha256)
         if adopted is not None:
@@ -147,6 +158,55 @@ def _obtain_task(
         _terminal(analysis_id, svc.STATUS_FAILED, error="CAPE returned no task id", note="no task id")
         return None
     _record_task(analysis_id, str(task_id), reused=False, note="submitted to CAPE")
+    return str(task_id)
+
+
+def _obtain_url_task(
+    client: cape.CapeClient, analysis_id: uuid.UUID, target_url: str | None, settings
+) -> str | None:
+    """Ask CAPE to fetch and detonate a URL.
+
+    Reuse works differently here. A file is identified by a hash CAPE can be
+    searched on directly; a URL is looked up through extendedsearch, and only
+    a completed analysis is worth adopting.
+    """
+    if not target_url:
+        _terminal(analysis_id, svc.STATUS_FAILED,
+                  error="No URL recorded for this analysis.", note="no url")
+        return None
+
+    if settings.cape_reuse_existing_analysis:
+        try:
+            hits = client.search_reports("url", target_url)
+            adopted = max(
+                (int((h.get("info") or {}).get("id") or 0) for h in hits),
+                default=0,
+            )
+            if adopted:
+                _record_task(analysis_id, str(adopted), reused=True,
+                             note="adopted an existing CAPE analysis for this URL")
+                return str(adopted)
+        except cape.CapeError as exc:
+            logger.info("CAPE URL search failed, will submit instead: %s", exc)
+
+    _set_status(analysis_id, svc.STATUS_SUBMITTING, note=f"submitting URL {target_url[:120]}")
+    try:
+        submission = client.submit_url(url=target_url)
+    except cape.CapeAmbiguousSubmission as exc:
+        logger.warning("Ambiguous CAPE URL submission for %s: %s", analysis_id, exc)
+        _terminal(
+            analysis_id, svc.STATUS_FAILED,
+            error=("The URL submission timed out. It was NOT resubmitted automatically — "
+                   "check CAPE for a task before retrying."),
+            note="ambiguous url submission",
+        )
+        return None
+
+    task_id = submission.task_id
+    if task_id is None:
+        _terminal(analysis_id, svc.STATUS_FAILED, error="CAPE returned no task id", note="no task id")
+        return None
+    _record_task(analysis_id, str(task_id), reused=False, note="URL submitted to CAPE")
     return str(task_id)
 
 

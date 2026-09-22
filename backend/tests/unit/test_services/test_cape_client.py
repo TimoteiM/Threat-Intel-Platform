@@ -527,3 +527,76 @@ def test_an_overlong_search_argument_is_refused():
 
     with pytest.raises(cape.CapeValidationError):
         build(handler).search_reports("domain", "a" * 600)
+
+
+# ── URL detonation ───────────────────────────────────────────────────────────
+#
+# CAPE fetches a URL and runs whatever comes back. The parameter name is taken
+# from the instance's own API page: curl -F url="somebadness.tld" .../create/url/
+
+
+def test_a_url_submission_sends_the_documented_field_and_the_route():
+    captured = {}
+
+    def handler(request):
+        captured["path"] = request.url.path
+        captured["body"] = request.read()
+        return ok({"error": False, "data": {"task_ids": [88]}})
+
+    submission = build(handler).submit_url(url="http://evil.test/landing")
+    assert submission.task_id == 88
+    assert captured["path"].endswith("/tasks/create/url/")
+    from urllib.parse import parse_qs
+
+    fields = parse_qs(captured["body"].decode())
+    assert fields["url"] == ["http://evil.test/landing"]
+    assert fields["route"] == ["internet"]
+    assert fields["enforce_timeout"] == ["1"]
+
+
+def test_a_bare_host_is_given_a_scheme():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = request.read()
+        return ok({"error": False, "data": {"task_ids": [1]}})
+
+    build(handler).submit_url(url="evil.test")
+    # The body is form-encoded, so decode before asserting on the value.
+    from urllib.parse import parse_qs
+
+    fields = parse_qs(captured["body"].decode())
+    assert fields["url"] == ["http://evil.test"]
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "file:///etc/passwd",          # would read the guest's own disk
+        "ftp://evil.test/x",
+        "http://",                     # no host
+        "",
+        "x" * 3000,
+        "http://evil.test/\nInjected: 1",
+    ],
+)
+def test_a_hostile_url_never_reaches_cape(hostile):
+    """CAPE fetches this from inside the sandbox, so the target is a security
+    decision, not a formatting one."""
+    def handler(request):
+        raise AssertionError("must not reach the network")
+
+    with pytest.raises(cape.CapeValidationError):
+        build(handler).submit_url(url=hostile)
+
+
+def test_an_ambiguous_url_submission_is_not_resent():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        raise httpx.ReadTimeout("no answer")
+
+    with pytest.raises(cape.CapeAmbiguousSubmission):
+        build(handler).submit_url(url="http://evil.test/")
+    assert calls["n"] == 1

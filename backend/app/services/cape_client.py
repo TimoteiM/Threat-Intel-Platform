@@ -67,6 +67,7 @@ PATH_SEARCH_SHA256 = "/tasks/search/sha256/{sha256}/"
 # Searching by anything else, a contacted domain included, goes through here.
 PATH_EXTENDED_SEARCH = "/tasks/extendedsearch/"
 PATH_CREATE_FILE = "/tasks/create/file/"
+PATH_CREATE_URL = "/tasks/create/url/"
 PATH_VIEW_TASK = "/tasks/view/{task_id}/"
 PATH_REPORT = "/tasks/get/report/{task_id}/{fmt}/"
 
@@ -599,6 +600,48 @@ class CapeClient:
             )
         return CapeSubmission(task_ids=tuple(task_ids), raw=payload if isinstance(payload, dict) else {})
 
+    def submit_url(
+        self, *, url: str, route: str | None = None, analysis_timeout: int | None = None
+    ) -> CapeSubmission:
+        """Ask CAPE to fetch and detonate a URL.
+
+        The parameter name is `url`, taken from this instance's own API page:
+        `curl -F url="somebadness.tld" .../apiv2/tasks/create/url/`.
+
+        Same rule as a file submission and for the same reason: never retried.
+        An ambiguous POST may already have created a task, and resending it
+        occupies a second machine from a pool of six.
+
+        The URL is validated here rather than trusted. It reaches CAPE, which
+        will fetch it from inside the sandbox network — a caller who could put
+        `file://` or an internal address in this field would be choosing what
+        the sandbox reaches out to.
+        """
+        target = _safe_url(url, self.request_id)
+        settings = self.settings
+        data = {
+            "url": target,
+            "route": str(route or settings.cape_route or "internet"),
+            "timeout": str(int(analysis_timeout or settings.cape_analysis_timeout_seconds)),
+            "enforce_timeout": "1",
+        }
+        try:
+            response = self._request("POST", PATH_CREATE_URL, data=data, retry=False)
+        except (CapeTimeout, CapeConnectionError) as exc:
+            raise CapeAmbiguousSubmission(
+                f"URL submission outcome unknown — CAPE may or may not have accepted it: {exc}",
+                request_id=self.request_id,
+            ) from None
+
+        payload = self._json(response)
+        task_ids = _extract_task_ids(payload)
+        if not task_ids:
+            raise CapeValidationError(
+                f"CAPE accepted the URL but named no task id: {str(payload)[:300]}",
+                request_id=self.request_id,
+            )
+        return CapeSubmission(task_ids=tuple(task_ids), raw=payload if isinstance(payload, dict) else {})
+
     def view_task(self, task_id: int | str) -> CapeTask:
         """GET /tasks/view/{id}/ — lifecycle state. Not the analysis result."""
         tid = _validate_task_id(task_id, self.request_id)
@@ -716,6 +759,30 @@ def _validate_task_id(task_id: Any, request_id: str) -> str:
     candidate = str(task_id).strip()
     if not _TASK_ID_RE.match(candidate):
         raise CapeValidationError(f"Not a CAPE task id: {candidate!r}", request_id=request_id)
+    return candidate
+
+
+def _safe_url(value: str, request_id: str) -> str:
+    """An http(s) URL with a hostname, and nothing else.
+
+    CAPE fetches this from inside the sandbox, so the scheme and target matter:
+    `file://` would read the guest's disk, and a bare internal address turns a
+    detonation request into a probe of somebody's network.
+    """
+    from urllib.parse import urlparse
+
+    candidate = str(value or "").strip()
+    if not candidate or len(candidate) > 2048:
+        raise CapeValidationError("URL is empty or too long", request_id=request_id)
+    if "://" not in candidate:
+        candidate = f"http://{candidate}"
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https"):
+        raise CapeValidationError(f"Unsupported URL scheme {parsed.scheme!r}", request_id=request_id)
+    if not parsed.hostname:
+        raise CapeValidationError("URL has no host", request_id=request_id)
+    if any(c in candidate for c in ("\n", "\r", "\x00")):
+        raise CapeValidationError("URL contains control characters", request_id=request_id)
     return candidate
 
 

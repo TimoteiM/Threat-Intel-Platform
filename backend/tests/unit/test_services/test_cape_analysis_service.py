@@ -35,6 +35,8 @@ class Row:
         self.alert_run_id = None
         self.artifact_id = None
         self.idempotency_key = kw.get("idempotency_key", "k")
+        self.target_kind = kw.get("target_kind", "file")
+        self.target_url = kw.get("target_url")
         self.policy_version = svc.ANALYSIS_POLICY_VERSION
         self.run_seq = 1
         self.provider_task_id = kw.get("provider_task_id")
@@ -256,3 +258,53 @@ def test_other_file_types_are_not_blocked_by_the_pdf_limitation():
 
 def test_the_limitation_is_found_by_declared_type_too():
     assert svc.sample_limitations(sample_name="blob", sample_type="PDF document") != []
+
+
+# ── URL targets ──────────────────────────────────────────────────────────────
+
+
+def test_a_url_analysis_is_identified_by_its_url():
+    key = svc.make_idempotency_key(client="acme", target_url="http://evil.test/a", target_kind="url")
+    assert key.split("|")[1] == "url:http://evil.test/a"
+
+
+def test_urls_that_mean_the_same_page_are_one_analysis():
+    """Otherwise a trailing slash detonates the same page twice."""
+    a = svc.make_idempotency_key(client="acme", target_url="Evil.TEST/a/", target_kind="url")
+    b = svc.make_idempotency_key(client="acme", target_url="http://evil.test/a", target_kind="url")
+    assert a == b
+
+
+def test_a_url_and_a_file_never_collide():
+    assert svc.make_idempotency_key(client="a", sha256=SHA) != svc.make_idempotency_key(
+        client="a", target_url="http://x.test", target_kind="url"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("example.com", "http://example.com"),
+        ("HTTPS://Example.com:443/a/", "https://example.com/a"),
+        ("http://example.com:8080/x", "http://example.com:8080/x"),
+        ("", ""),
+    ],
+)
+def test_url_normalisation(raw, expected):
+    assert svc.normalise_url(raw) == expected
+
+
+def test_a_url_analysis_needs_a_url_and_a_file_analysis_needs_a_digest():
+    with pytest.raises(ValueError):
+        svc.get_or_create(FakeDB(), target_kind="url", target_url="")
+    with pytest.raises(ValueError):
+        svc.get_or_create(FakeDB(), target_kind="file", sha256=None)
+
+
+def test_a_url_analysis_records_its_target():
+    db = FakeDB(existing=None)
+    row, created = svc.get_or_create(db, target_kind="url", target_url="Evil.test/Path/")
+    assert created is True
+    assert row.target_kind == "url"
+    assert row.target_url == "http://evil.test/Path"
+    assert row.sha256 is None

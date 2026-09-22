@@ -244,6 +244,14 @@ What the collector does depends on the observable:
   hashes — `/tasks/search/domain/` returns 404 on this instance — which is why
   the first version answered domains from local records alone.
 
+  A domain or URL can also be **detonated**: `POST /apiv2/tasks/create/url/`
+  makes CAPE fetch it and run whatever comes back. The panel offers this on
+  domain and URL investigations, behind the same confirmation as a file, with
+  the wording changed to say that the site will see a real visit from the
+  sandbox. The target always comes from the stored observable — no API field
+  accepts a URL from a request, because that would let a caller choose what the
+  sandbox reaches out to.
+
 ### In what the AI reads
 
 Three models see sandbox evidence, and all three now get CAPE:

@@ -528,6 +528,9 @@ export interface SandboxAnalysis {
   id: string;
   provider: string;
   status: SandboxStatus;
+  /** "file" — a sample was run. "url" — CAPE fetched a URL and ran the result. */
+  target_kind?: "file" | "url";
+  target_url?: string | null;
   verdict?: "malicious" | "suspicious" | "likely_benign" | "unknown" | null;
   /** Null means CAPE did not report a score — never treat it as zero. */
   malscore?: number | null;

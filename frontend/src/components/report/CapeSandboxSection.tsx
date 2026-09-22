@@ -53,7 +53,11 @@ export default function CapeSandboxSection({
   const [confirming, setConfirming] = useState(false);
   const timer = useRef<number | null>(null);
 
-  const eligible = ["hash", "file"].includes(String(observableType || "").toLowerCase());
+  // CAPE runs a file and fetches a URL, so both are submittable — they just
+  // mean different things, and the confirmation says which.
+  const kind = String(observableType || "").toLowerCase();
+  const isUrlTarget = ["domain", "url"].includes(kind);
+  const eligible = ["hash", "file", "domain", "url"].includes(kind);
 
   const load = useCallback(async () => {
     if (!investigationId) {
@@ -174,24 +178,38 @@ export default function CapeSandboxSection({
         <div style={{ display: "grid", gap: 10 }}>
           <SubHeading>Detonation</SubHeading>
           <Muted>
-            {eligible
-              ? "This sample has not been detonated in the CAPE sandbox."
-              : "CAPE detonates files, so there is nothing to submit for this observable. " +
-                "Findings above, if any, come from samples detonated here that contacted it."}
+            {!eligible
+              ? "CAPE analyses files and URLs. There is nothing to submit for this observable."
+              : isUrlTarget
+              ? "This has not been detonated in the CAPE sandbox. CAPE can fetch it and run whatever it returns."
+              : "This sample has not been detonated in the CAPE sandbox."}
           </Muted>
           {eligible && !confirming && (
             <button type="button" onClick={() => setConfirming(true)} disabled={busy} style={primaryButton(busy)}>
-              Submit to sandbox
+              {isUrlTarget ? "Detonate URL in sandbox" : "Submit to sandbox"}
             </button>
           )}
           {eligible && confirming && (
             <div style={{ display: "grid", gap: 8, border: "1px solid var(--status-warning)",
                           borderRadius: "var(--radius)", padding: "12px 14px" }}>
-              <strong style={{ fontSize: 13, color: "var(--text)" }}>Detonate this sample?</strong>
+              <strong style={{ fontSize: 13, color: "var(--text)" }}>
+                {isUrlTarget ? "Detonate this URL?" : "Detonate this sample?"}
+              </strong>
               <p style={{ fontSize: 12, color: "var(--text-dim)", margin: 0, lineHeight: 1.5 }}>
-                The file will be <strong>executed</strong> on an isolated Windows analysis machine with
-                internet access enabled, so it may contact its real infrastructure. Analysis takes a
-                few minutes and the result is evidence for review, not an automatic verdict.
+                {isUrlTarget ? (
+                  <>
+                    CAPE will <strong>fetch this URL</strong> from an isolated Windows analysis machine
+                    with internet access and execute whatever it returns. The site will see a real
+                    visit from the sandbox. Analysis takes a few minutes and the result is evidence
+                    for review, not an automatic verdict.
+                  </>
+                ) : (
+                  <>
+                    The file will be <strong>executed</strong> on an isolated Windows analysis machine with
+                    internet access enabled, so it may contact its real infrastructure. Analysis takes a
+                    few minutes and the result is evidence for review, not an automatic verdict.
+                  </>
+                )}
               </p>
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" onClick={() => submit(false)} disabled={busy} style={primaryButton(busy)}>
@@ -266,6 +284,9 @@ function Header({
           : <strong style={{ color: "var(--text)" }}>{score.toFixed(1)} / 10</strong>}
       />
       <Fact label="CAPE task" value={analysis.provider_task_id ?? "—"} mono />
+      {analysis.target_kind === "url" && analysis.target_url && (
+        <Fact label="URL analysed" value={analysis.target_url} mono />
+      )}
       {analysis.reused_existing && <Fact label="Source" value="Existing CAPE analysis" />}
       {result?.machine && <Fact label="Machine" value={result.machine} mono />}
       {result?.route && <Fact label="Network route" value={result.route} />}

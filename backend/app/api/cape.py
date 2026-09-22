@@ -60,6 +60,9 @@ class SubmitRequest(BaseModel):
     sha256: str | None = Field(default=None, min_length=64, max_length=64,
                                description="Required when no artifact is given: look CAPE up by hash.")
     force_new: bool = Field(default=False, description="Detonate again even if an analysis exists.")
+    # No URL field. A domain or URL investigation is detonated by naming the
+    # investigation; the target comes from the stored observable. Accepting a
+    # URL here would let a request choose what the sandbox reaches out to.
 
 
 @router.get("/status")
@@ -116,6 +119,8 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
         raise HTTPException(503, "The CAPE sandbox integration is not configured.")
 
     artifact: Artifact | None = None
+    target_kind = "file"
+    target_url: str | None = None
     sha256 = (body.sha256 or "").strip().lower()
     sample_name = None
     sample_size = None
@@ -153,6 +158,11 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
             candidate = str(inv.domain or "").strip().lower()
             if len(candidate) == 64:
                 sha256 = candidate
+        # A domain or URL is detonated by fetching it, not by hashing it. CAPE
+        # downloads the page and runs whatever comes back.
+        if str(inv.observable_type or "") in ("domain", "url"):
+            target_kind = "url"
+            target_url = str(inv.domain or "").strip()
     if alert_run_id is not None:
         run = (
             await db.execute(select(AlertBodyInvestigationRun).where(AlertBodyInvestigationRun.id == alert_run_id))
@@ -161,11 +171,11 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
             raise HTTPException(404, "No such alert run.")
         client_label = client_label or run.alert_client
 
-    if len(sha256) != 64:
+    if target_kind == "file" and len(sha256) != 64:
         raise HTTPException(
             400,
-            "No SHA-256 is available for this sample. Supply artifact_id or sha256, "
-            "or run this against a hash or file investigation.",
+            "Nothing to analyse. Supply artifact_id or sha256, or run this against a "
+            "file, hash, domain or URL investigation.",
         )
 
     # The UI submits an investigation id and nothing else, so the uploaded
@@ -194,7 +204,7 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
 
     run_seq = 1
     if body.force_new:
-        run_seq = await run_in_threadpool(_next_run_seq, sha256, client_label)
+        run_seq = await run_in_threadpool(_next_run_seq, sha256, client_label, target_url)
 
     def create() -> tuple[dict[str, Any], bool]:
         from sqlalchemy.orm import Session
@@ -203,7 +213,9 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
         with Session(sync_engine) as sync_db:
             row, created = svc.get_or_create(
                 sync_db,
-                sha256=sha256,
+                sha256=sha256 or None,
+                target_kind=target_kind,
+                target_url=target_url,
                 client=client_label,
                 sample_name=sample_name,
                 sample_size=sample_size,
@@ -235,7 +247,9 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
 
     payload["created"] = created
     payload["note"] = (
-        "Queued for detonation in an isolated sandbox."
+        ("Queued: CAPE will fetch and detonate this URL in an isolated sandbox."
+         if target_kind == "url" else
+         "Queued for detonation in an isolated sandbox.")
         if created
         else "An analysis for this sample already exists; showing that one."
     )
@@ -342,19 +356,21 @@ async def retry_analysis(analysis_id: str, request: Request, db: DBSession) -> d
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _next_run_seq(sha256: str, client: str | None) -> int:
+def _next_run_seq(sha256: str | None, client: str | None, target_url: str | None = None) -> int:
     from sqlalchemy.orm import Session
     from app.db.session import sync_engine
     from sqlalchemy import func
 
     with Session(sync_engine) as db:
-        highest = db.execute(
-            select(func.max(SandboxAnalysis.run_seq)).where(
-                SandboxAnalysis.sha256 == sha256,
-                SandboxAnalysis.client == client,
-                SandboxAnalysis.provider == svc.PROVIDER_CAPE,
-            )
-        ).scalar()
+        query = select(func.max(SandboxAnalysis.run_seq)).where(
+            SandboxAnalysis.client == client,
+            SandboxAnalysis.provider == svc.PROVIDER_CAPE,
+        )
+        if target_url:
+            query = query.where(SandboxAnalysis.target_url == svc.normalise_url(target_url))
+        else:
+            query = query.where(SandboxAnalysis.sha256 == sha256)
+        highest = db.execute(query).scalar()
     return int(highest or 0) + 1
 
 

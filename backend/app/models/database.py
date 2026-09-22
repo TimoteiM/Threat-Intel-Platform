@@ -770,8 +770,13 @@ class SandboxAnalysis(Base):
     # reported, or failed / timed_out / cancelled.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
 
-    # The sample. sha256 is the identity everything else keys on.
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # What is being analysed. CAPE detonates a file or fetches a URL, and the
+    # two have different identities — a URL has no file hash until CAPE has
+    # downloaded something.
+    target_kind: Mapped[str] = mapped_column(String(10), nullable=False, default="file")
+    target_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # The sample. Null for a URL analysis, where there is no local file.
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     sha1: Mapped[str | None] = mapped_column(String(40), nullable=True)
     md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sample_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

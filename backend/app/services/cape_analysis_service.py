@@ -87,11 +87,37 @@ _LIMITED_EXTENSIONS = {
 
 
 def make_idempotency_key(
-    *, client: str | None, sha256: str, provider: str = PROVIDER_CAPE,
+    *, client: str | None, sha256: str | None = None, target_url: str | None = None,
+    target_kind: str = "file", provider: str = PROVIDER_CAPE,
     policy_version: str = ANALYSIS_POLICY_VERSION, run_seq: int = 1,
 ) -> str:
+    """Identity of one analysis.
+
+    A file is identified by its digest, a URL by the URL itself — normalised to
+    lowercase host and no trailing slash so `Example.com/` and `example.com`
+    are one analysis rather than two detonations of the same page.
+    """
     tenant = (client or "_global").strip().lower() or "_global"
-    return f"{tenant}|{str(sha256).strip().lower()}|{provider}|{policy_version}|{int(run_seq)}"
+    if str(target_kind) == "url":
+        identity = f"url:{normalise_url(target_url)}"
+    else:
+        identity = str(sha256 or "").strip().lower()
+    return f"{tenant}|{identity}|{provider}|{policy_version}|{int(run_seq)}"
+
+
+def normalise_url(value: str | None) -> str:
+    from urllib.parse import urlparse, urlunparse
+
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    if "://" not in candidate:
+        candidate = f"http://{candidate}"
+    parsed = urlparse(candidate)
+    host = (parsed.hostname or "").lower()
+    port = f":{parsed.port}" if parsed.port and parsed.port not in (80, 443) else ""
+    path = parsed.path.rstrip("/") or ""
+    return urlunparse((parsed.scheme.lower(), f"{host}{port}", path, "", parsed.query, ""))
 
 
 def sample_limitations(*, sample_name: str | None, sample_type: str | None = None) -> list[str]:
@@ -108,7 +134,9 @@ def sample_limitations(*, sample_name: str | None, sample_type: str | None = Non
 def get_or_create(
     db: Session,
     *,
-    sha256: str,
+    sha256: str | None = None,
+    target_kind: str = "file",
+    target_url: str | None = None,
     client: str | None = None,
     sample_name: str | None = None,
     sample_size: int | None = None,
@@ -126,12 +154,18 @@ def get_or_create(
     possibly a millisecond ago in another worker — and this caller should
     simply watch that analysis rather than starting a second one.
     """
-    digest = str(sha256 or "").strip().lower()
-    if len(digest) != 64:
-        raise ValueError("A SHA-256 digest is required to create a sandbox analysis")
+    kind = "url" if str(target_kind) == "url" else "file"
+    digest = str(sha256 or "").strip().lower() or None
+    url = normalise_url(target_url) if kind == "url" else None
+
+    if kind == "file" and (digest is None or len(digest) != 64):
+        raise ValueError("A SHA-256 digest is required to create a file sandbox analysis")
+    if kind == "url" and not url:
+        raise ValueError("A URL is required to create a URL sandbox analysis")
 
     key = make_idempotency_key(
-        client=client, sha256=digest, provider=provider, run_seq=run_seq
+        client=client, sha256=digest, target_url=url, target_kind=kind,
+        provider=provider, run_seq=run_seq,
     )
 
     existing = db.execute(
@@ -144,6 +178,8 @@ def get_or_create(
     row = SandboxAnalysis(
         provider=provider,
         status=STATUS_QUEUED,
+        target_kind=kind,
+        target_url=url,
         sha256=digest,
         sample_name=(sample_name or None),
         sample_size=sample_size,
@@ -289,6 +325,8 @@ def to_public_dict(row: SandboxAnalysis) -> dict[str, Any]:
         "id": str(row.id),
         "provider": row.provider,
         "status": row.status,
+        "target_kind": getattr(row, "target_kind", "file") or "file",
+        "target_url": getattr(row, "target_url", None),
         "verdict": row.verdict,
         "malscore": row.malscore,
         "sha256": row.sha256,
