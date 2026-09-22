@@ -24,6 +24,7 @@ from app.collectors.brave_osint_collector import BraveOSINTCollector
 from app.collectors.urlscan_collector import URLScanCollector
 from app.collectors.hybrid_analysis_collector import HybridAnalysisCollector
 from app.collectors.opencti_collector import OpenCTICollector
+from app.collectors.cape_collector import CapeCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
@@ -39,6 +40,7 @@ COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
     "urlscan":      URLScanCollector,
     "hybrid_analysis": HybridAnalysisCollector,
     "opencti":         OpenCTICollector,
+    "cape":            CapeCollector,
 }
 
 

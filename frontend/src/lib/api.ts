@@ -514,6 +514,144 @@ export function login(username: string, password: string) {
   });
 }
 
+// ── CAPEv2 sandbox ───────────────────────────────────────────────────────────
+//
+// The browser talks only to this backend. It never holds a CAPE URL, never
+// sees the CAPE token, and never calls CAPE directly — the token exists solely
+// in the backend process, and none of these responses carry it.
+
+export type SandboxStatus =
+  | "queued" | "submitting" | "submitted" | "pending" | "running"
+  | "processing" | "reported" | "failed" | "timed_out" | "cancelled";
+
+export interface SandboxAnalysis {
+  id: string;
+  provider: string;
+  status: SandboxStatus;
+  verdict?: "malicious" | "suspicious" | "likely_benign" | "unknown" | null;
+  /** Null means CAPE did not report a score — never treat it as zero. */
+  malscore?: number | null;
+  sha256: string;
+  sample_name?: string | null;
+  sample_size?: number | null;
+  sample_type?: string | null;
+  provider_task_id?: string | null;
+  reused_existing: boolean;
+  error?: string | null;
+  requested_by?: string | null;
+  created_at?: string | null;
+  submitted_at?: string | null;
+  completed_at?: string | null;
+  limitations: string[];
+  state_history: Array<{ status: string; from?: string | null; at: string; actor?: string; note?: string }>;
+  raw_summary: Record<string, unknown>;
+  created?: boolean;
+  note?: string;
+}
+
+export interface SandboxReport {
+  task_id?: number | null;
+  malscore?: number | null;
+  verdict: string;
+  detections: string[];
+  signatures: Array<{ name: string; description: string; severity: number; ttps: string[] }>;
+  sha256?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
+  file_size?: number | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  machine?: string | null;
+  route?: string | null;
+  network: {
+    domains: string[];
+    dns_queries: string[];
+    hosts: string[];
+    destinations: string[];
+    http_requests: Array<{ method: string; host: string; uri: string; status?: number | null }>;
+    tls_sni: string[];
+  };
+  behaviour: {
+    mutexes: string[];
+    registry_keys: string[];
+    files_written: string[];
+    files_read: string[];
+    commands: string[];
+    process_tree: Array<{ name: string; pid?: number | null; command_line?: string; children?: unknown[] }>;
+    process_count: number;
+  };
+  dropped_files: Array<{
+    name?: string | null; sha256?: string | null; size?: number | null;
+    file_type?: string | null; is_cape_payload: boolean; cape_type?: string | null;
+  }>;
+  extracted_configs: Array<Record<string, unknown>>;
+  has_screenshots: boolean;
+  errors: string[];
+  limitations: string[];
+}
+
+export interface SandboxAnalysisResult extends SandboxAnalysis {
+  available: boolean;
+  result?: SandboxReport | null;
+}
+
+/** Reachability and machine availability. Administrators only. */
+export function getCapeStatus() {
+  return request<{
+    configured: boolean;
+    enabled: boolean;
+    reachable: boolean;
+    version?: string | null;
+    machines_total?: number | null;
+    machines_available?: number | null;
+    detail?: string;
+    error_kind?: string;
+  }>("/cape/status");
+}
+
+export function listSandboxAnalyses(params: {
+  investigation_id?: string;
+  alert_run_id?: string;
+  sha256?: string;
+  status?: string;
+  limit?: number;
+} = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  });
+  const suffix = query.toString();
+  return request<{ items: SandboxAnalysis[] }>(`/cape/analyses${suffix ? `?${suffix}` : ""}`);
+}
+
+export function submitToSandbox(body: {
+  investigation_id?: string;
+  alert_run_id?: string;
+  artifact_id?: string;
+  sha256?: string;
+  force_new?: boolean;
+}) {
+  return request<SandboxAnalysis>("/cape/analyses", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function getSandboxAnalysis(id: string) {
+  return request<SandboxAnalysis>(`/cape/analyses/${id}`);
+}
+
+export function getSandboxResult(id: string) {
+  return request<SandboxAnalysisResult>(`/cape/analyses/${id}/result`);
+}
+
+export function retrySandboxAnalysis(id: string) {
+  return request<SandboxAnalysis>(`/cape/analyses/${id}/retry`, { method: "POST" });
+}
+
+/** Statuses that are still moving, so the panel knows when to keep polling. */
+export const SANDBOX_ACTIVE_STATUSES: SandboxStatus[] = [
+  "queued", "submitting", "submitted", "pending", "running", "processing",
+];
+
 /** The signed-in caller, as /auth/me reports them. */
 export interface Me {
   kind: "user" | "api_key";

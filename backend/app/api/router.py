@@ -28,6 +28,7 @@ from app.api.alert_investigations import router as alert_investigations_router
 from app.api.assistant import router as assistant_router
 from app.api.admin import router as admin_router
 from app.api.anyrun import router as anyrun_router
+from app.api.cape import router as cape_router
 from app.api.auth import router as auth_router
 from app.api.auth_oidc import router as auth_oidc_router
 
@@ -51,6 +52,7 @@ api_router.include_router(watchlist_router)
 api_router.include_router(exclusions_router)
 api_router.include_router(detections_router)
 api_router.include_router(anyrun_router)
+api_router.include_router(cape_router)
 api_router.include_router(cost_router)
 api_router.include_router(whois_history_router)
 api_router.include_router(geo_router)

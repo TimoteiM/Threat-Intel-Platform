@@ -33,6 +33,7 @@ def get_api_health_snapshot(*, force_refresh: bool = False) -> APIHealthResponse
         _get_cached_or_probe("virustotal", _probe_virustotal, force_refresh=force_refresh),
         _get_cached_or_probe("abuseipdb", _probe_abuseipdb, force_refresh=force_refresh),
         _get_cached_or_probe("urlscan", _probe_urlscan, force_refresh=force_refresh),
+        _get_cached_or_probe("cape", _probe_cape, force_refresh=force_refresh),
         _configured_provider(
             "opencti",
             "OpenCTI",
@@ -123,6 +124,53 @@ def _get_cached_or_probe(
     result = probe()
     _CACHE[provider] = (now + DEFAULT_CACHE_TTL_SECONDS, result)
     return result
+
+
+def _probe_cape() -> APIProviderHealth:
+    """Reachability of the CAPE sandbox, for the integrations panel.
+
+    Actually calls /cuckoo/status/ rather than reporting "configured", because
+    what breaks with CAPE is the network path to the reverse proxy, not the
+    presence of a setting. Machine availability rides along in the quota
+    fields: an idle pool should show all six free, and a pool stuck at zero is
+    the signal that analyses will queue rather than run.
+
+    Nothing secret is returned. Any error text goes through the client's
+    redaction before it reaches this object.
+    """
+    settings = get_settings()
+    # getattr, not attribute access: every probe in this list runs inside one
+    # snapshot call and nothing catches an exception between them, so a probe
+    # that raises takes the whole integrations panel down with it. A settings
+    # object without CAPE keys means CAPE is off, not that the panel is broken.
+    if not getattr(settings, "cape_configured", False):
+        return _not_configured("cape", "CAPEv2 Sandbox")
+
+    from app.services import cape_client as cape
+
+    try:
+        with cape.CapeClient(settings=settings) as client:
+            status = client.status()
+    except cape.CapeError as exc:
+        return _unavailable("cape", "CAPEv2 Sandbox", cape.redact(str(exc))[:300])
+    except Exception as exc:  # noqa: BLE001 — a probe must never break the panel
+        logger.warning("CAPE health probe failed: %s", cape.redact(str(exc)))
+        return _unavailable("cape", "CAPEv2 Sandbox", cape.redact(str(exc))[:300])
+
+    available = status.machines_available
+    total = status.machines_total
+    healthy = available is None or available > 0
+    return APIProviderHealth(
+        provider="cape",
+        display_name="CAPEv2 Sandbox",
+        configured=True,
+        status="healthy" if healthy else "low_quota",
+        remaining=float(available) if available is not None else None,
+        limit=float(total) if total is not None else None,
+        unit="analysis machines",
+        last_checked_at=datetime.now(timezone.utc),
+        source="probe",
+    )
 
 
 def _probe_virustotal() -> APIProviderHealth:

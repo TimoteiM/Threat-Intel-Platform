@@ -12,6 +12,7 @@ import FaviconIntelSection from "@/components/report/FaviconIntelSection";
 import CertTimelineSection from "@/components/report/CertTimelineSection";
 import AnyRunInteractiveEvidence from "@/components/report/AnyRunInteractiveEvidence";
 import AnyRunSandboxIntelligence from "@/components/report/AnyRunSandboxIntelligence";
+import CapeSandboxSection from "@/components/report/CapeSandboxSection";
 import LexicalRiskExplainer from "@/components/report/LexicalRiskExplainer";
 import FinalRiskExplainer from "@/components/report/FinalRiskExplainer";
 import RedirectDestinationGraph from "@/components/report/RedirectDestinationGraph";
@@ -2026,6 +2027,16 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         />
         <AnyRunSandboxIntelligence hybridAnalysis={hybridAnalysis} videoTaskId={videoTaskId} screenshot={evidence?.screenshot} />
       </Section>
+
+      {/* Kept separate from the AnyRun section rather than merged into it: the
+          two sandboxes answer with different evidence, and an analyst needs to
+          see which one produced a finding. CAPE is on-premises and detonates
+          files; AnyRun is interactive and handles URLs. */}
+      {investigationId && (
+        <Section title="CAPE Sandbox">
+          <CapeSandboxSection investigationId={investigationId} observableType={observableType} />
+        </Section>
+      )}
 
       <Section title="Final Risk Aggregation">
         {!finalRisk || Object.keys(finalRisk).length === 0 ? (

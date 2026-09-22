@@ -54,6 +54,15 @@ celery_app.conf.update(
 
     # Celery Beat — periodic task schedule
     beat_schedule={
+        # A CAPE analysis outlives the worker that started it: its state is in
+        # Postgres, so a worker killed mid-poll leaves a row still owed an
+        # answer. This picks those up, and retires any that blew their polling
+        # deadline while nobody was watching. Idempotent by construction — an
+        # analysis that already has a CAPE task id is polled, never resubmitted.
+        "cape-resume-in-flight": {
+            "task": "app.tasks.cape_task.resume_sandbox_analyses",
+            "schedule": crontab(minute="*/5"),
+        },
         "watchlist-scheduled-checks": {
             "task": "tasks.watchlist_check",
             "schedule": crontab(minute=0),  # Every hour, on the hour

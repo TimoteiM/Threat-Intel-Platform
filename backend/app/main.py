@@ -63,6 +63,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id)",
             "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+            # CAPE sandbox. The table itself is created by create_all; this is
+            # the index the "which detonation contacted this host" lookup needs,
+            # which SQLAlchemy cannot express as a column index.
+            "CREATE INDEX IF NOT EXISTS idx_sandbox_normalized_gin "
+            "ON sandbox_analyses USING GIN (normalized_json jsonb_path_ops)",
         ]
         for stmt in col_migrations:
             await conn.execute(text(stmt))

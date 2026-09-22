@@ -1522,3 +1522,103 @@ class APIProviderHealth(BaseModel):
 class APIHealthResponse(BaseModel):
     providers: list[APIProviderHealth] = Field(default_factory=list)
     generated_at: datetime
+
+
+# ─── CAPEv2 sandbox ───
+#
+# The normalized shape of a CAPE analysis. Nothing outside cape_normalizer.py
+# builds these, and nothing outside it reads CAPE's own JSON — so a CAPE schema
+# change lands in one file rather than across the application.
+
+
+class CapeNetworkIndicators(BaseModel):
+    """What the sample talked to. Deduplicated, order preserved."""
+
+    domains: list[str] = []
+    dns_queries: list[str] = []
+    hosts: list[str] = []
+    # "ip:port/protocol", flattened so the UI does not have to nest a table.
+    destinations: list[str] = []
+    http_requests: list[dict] = []
+    tls_sni: list[str] = []
+
+
+class CapeBehaviourSummary(BaseModel):
+    mutexes: list[str] = []
+    registry_keys: list[str] = []
+    files_written: list[str] = []
+    files_read: list[str] = []
+    commands: list[str] = []
+    process_tree: list[dict] = []
+    process_count: int = 0
+
+
+class CapeDroppedFile(BaseModel):
+    name: Optional[str] = None
+    sha256: Optional[str] = None
+    md5: Optional[str] = None
+    size: Optional[int] = None
+    file_type: Optional[str] = None
+    # CAPE's own payload/config extraction, when it recognised a family.
+    is_cape_payload: bool = False
+    cape_type: Optional[str] = None
+
+
+class CapeSignature(BaseModel):
+    name: str
+    description: str = ""
+    severity: int = 0
+    confidence: Optional[int] = None
+    # ATT&CK ids CAPE attached, when it did.
+    ttps: list[str] = []
+
+
+class CapeNormalizedReport(BaseModel):
+    """Everything downstream reads. Traceable to its task through `task_id`."""
+
+    task_id: Optional[int] = None
+    status: str = "unknown"
+    # Absent means "not reported by CAPE", never "clean". A missing malscore is
+    # the single most dangerous field in this integration to default to zero.
+    malscore: Optional[float] = None
+    verdict: str = "unknown"          # malicious | suspicious | likely_benign | unknown
+    detections: list[str] = []
+    signatures: list[CapeSignature] = []
+
+    sha256: Optional[str] = None
+    sha1: Optional[str] = None
+    md5: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    machine: Optional[str] = None
+    route: Optional[str] = None
+
+    network: CapeNetworkIndicators = Field(default_factory=CapeNetworkIndicators)
+    behaviour: CapeBehaviourSummary = Field(default_factory=CapeBehaviourSummary)
+    dropped_files: list[CapeDroppedFile] = []
+    extracted_configs: list[dict] = []
+
+    has_screenshots: bool = False
+    screenshot_count: int = 0
+    report_format: Optional[str] = None
+    report_size_bytes: Optional[int] = None
+
+    # What CAPE could not do, and what we chose not to trust. Shown to the
+    # analyst rather than swallowed, because an empty result from a sample that
+    # never executed is not the same as an empty result from one that did.
+    errors: list[str] = []
+    limitations: list[str] = []
+
+
+class CapeEvidence(BaseModel):
+    """Collector-facing view: at most one analysis per observable."""
+
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="cape"))
+    available: bool = False
+    reason: Optional[str] = None
+    report: Optional[CapeNormalizedReport] = None

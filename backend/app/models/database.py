@@ -737,6 +737,111 @@ class AlertBodyInvestigationRun(Base):
     )
 
 
+class SandboxAnalysis(Base):
+    """One detonation, from the moment it is asked for to the stored verdict.
+
+    Provider-tagged rather than CAPE-named: the platform already talks to two
+    other sandboxes, and a table called `cape_analyses` would have to be
+    duplicated the next time one is added.
+
+    Idempotency is the whole reason this row exists before CAPE is contacted.
+    A submission is expensive — it occupies one of six VMs for minutes — so a
+    retried request, a double-clicked button and two workers racing must all
+    converge on the same analysis. `idempotency_key` carries the tenant, the
+    sample, the provider and the analysis policy, and is unique; a second
+    attempt finds the row instead of creating one. Re-analysing on purpose
+    bumps `run_seq`, which changes the key, so a deliberate re-run is possible
+    and an accidental one is not.
+
+    The provider's raw report is deliberately NOT stored here. `raw_summary`
+    keeps a bounded reference — task id, format, size, section counts — so any
+    finding can be traced back to the CAPE task without this table growing by
+    tens of megabytes per sample.
+    """
+
+    __tablename__ = "sandbox_analyses"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="cape", index=True)
+
+    # queued → submitting → submitted → pending → running → processing →
+    # reported, or failed / timed_out / cancelled.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued", index=True)
+
+    # The sample. sha256 is the identity everything else keys on.
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sha1: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sample_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sample_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # Whose estate. A string, matching Investigation.client_domain and
+    # AlertBodyInvestigationRun.alert_client — this schema has no RLS, and
+    # inventing a second tenancy model here would just be a third answer.
+    client: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+
+    # What asked for it. All optional: a detonation can be raised from an
+    # investigation, from an alert run, or from an artifact on its own.
+    investigation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("investigations.id", ondelete="SET NULL"), nullable=True
+    )
+    alert_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("alert_body_investigation_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Tenant + sample + provider + policy + run_seq. Unique.
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    policy_version: Mapped[str] = mapped_column(String(20), nullable=False, default="v1")
+    run_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    # The provider's handle on this analysis.
+    provider_task_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # True when this row adopted an analysis CAPE had already run for this hash
+    # rather than detonating again.
+    reused_existing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Nullable on purpose and never defaulted to zero: unknown is not benign.
+    malscore: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    normalized_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    raw_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # Every state change, with who and when. This is the audit trail for the
+    # workflow itself; API mutations are additionally logged by the router.
+    state_history: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bounded so a wedged task cannot be polled forever by a restarted worker.
+    poll_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    requested_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_sandbox_analyses_created", "created_at"),
+        Index("idx_sandbox_analyses_client_created", "client", "created_at"),
+        Index("idx_sandbox_analyses_sha_provider", "sha256", "provider"),
+        Index("idx_sandbox_analyses_alert_run", "alert_run_id"),
+        # The worker's claim query: unfinished rows, oldest first.
+        Index("idx_sandbox_analyses_status_created", "status", "created_at"),
+    )
+
+
 class AnalystFeedback(Base):
     """
     An analyst's verdict on what the platform concluded.

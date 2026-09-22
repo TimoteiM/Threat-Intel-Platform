@@ -170,6 +170,44 @@ class Settings(BaseSettings):
     # allowance would cover deletes and reads from the same address.
     ingest_trusted_paths: str = "/api/alert-investigations,/api/alert-investigations/raw"
 
+    # —— CAPEv2 sandbox ————————————————————————————————————————————————
+    # Off until a base URL and a token are both present, so a deployment that
+    # has not stood up the reverse proxy keeps working exactly as before.
+    #
+    # The token lives here and nowhere else: not in Postgres, not in an API
+    # response, not in the frontend bundle, and not in a log line. See
+    # app/services/cape_client.py for the redaction that enforces the last one.
+    cape_enabled: bool = False
+    # The internal HTTPS reverse proxy, including the /apiv2 prefix. CAPE itself
+    # binds 127.0.0.1 on its own host, so this is never CAPE's own port.
+    # Administrator-controlled configuration only — no request may supply it,
+    # which is what keeps this integration from becoming an SSRF gadget.
+    cape_api_base_url: str = ""
+    cape_api_token: str = ""
+    cape_verify_tls: bool = True
+    # A custom internal CA, for a proxy whose certificate a public root does not
+    # chain to. Path inside the backend container.
+    cape_ca_bundle: str = ""
+    cape_connect_timeout_seconds: int = 10
+    cape_request_timeout_seconds: int = 60
+    # Passed to CAPE as the guest execution timeout, not used as an HTTP timeout.
+    cape_analysis_timeout_seconds: int = 180
+    cape_poll_interval_seconds: int = 10
+    cape_max_poll_duration_seconds: int = 900
+    # Internet access is activated per analysis on this deployment, so every
+    # submission has to ask for it explicitly or the sample runs isolated and
+    # its network behaviour — the part an alert is usually about — is missing.
+    cape_route: str = "internet"
+    cape_reuse_existing_analysis: bool = True
+    # Report formats to try, in order. The full JSON report is authoritative for
+    # malscore, signatures and network indicators; `lite` is the smaller
+    # fallback for an instance that only has that one enabled.
+    cape_report_formats: str = "json,lite"
+    # A report is analyst evidence, not a stream to ingest unbounded. CAPE
+    # reports for a busy sample reach tens of megabytes.
+    cape_max_report_bytes: int = 64 * 1024 * 1024
+    cape_max_upload_bytes: int = 100 * 1024 * 1024
+
     # —— Microsoft Entra ID (Azure AD) single sign-on ————————————————————
     # Off until a tenant, client id and secret are all present, so a deployment
     # that has not registered an application keeps working on passwords alone
@@ -316,6 +354,40 @@ class Settings(BaseSettings):
         return frozenset(
             p.strip() for p in str(self.ingest_trusted_paths or "").split(",") if p.strip()
         )
+
+    @property
+    def cape_configured(self) -> bool:
+        """Enabled, and actually able to talk to something. Not half-on."""
+        return bool(
+            self.cape_enabled
+            and str(self.cape_api_base_url or "").strip()
+            and str(self.cape_api_token or "").strip()
+        )
+
+    @property
+    def cape_base_url(self) -> str:
+        """The base, without a trailing slash, so path joins stay predictable."""
+        return str(self.cape_api_base_url or "").strip().rstrip("/")
+
+    @property
+    def cape_tls_verify(self):
+        """What requests/httpx should be given for `verify`.
+
+        A CA bundle path when one is configured, otherwise the boolean. Turning
+        verification off is a development affordance only; cape_client warns
+        loudly every time it does it, because an unverified TLS connection to a
+        malware sandbox is an invitation to feed this platform whatever someone
+        on the path would like it to believe.
+        """
+        bundle = str(self.cape_ca_bundle or "").strip()
+        if bundle:
+            return bundle
+        return bool(self.cape_verify_tls)
+
+    @property
+    def cape_report_format_list(self) -> list[str]:
+        formats = [f.strip().lower() for f in str(self.cape_report_formats or "").split(",") if f.strip()]
+        return formats or ["json"]
 
     @property
     def oidc_configured(self) -> bool:
