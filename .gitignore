@@ -20,3 +20,11 @@ artifacts/
 .coverage
 htmlcov/
 nul
+
+# Host trust material bind-mounted into containers (CA certificates and the
+# like). The README explains what belongs here; nothing else is committed.
+# secrets/* rather than secrets/: git does not descend into an ignored
+# directory, so a negation inside one never applies and the README could not
+# be committed to explain what the directory is for.
+secrets/*
+!secrets/README.md

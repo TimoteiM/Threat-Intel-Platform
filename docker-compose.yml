@@ -129,6 +129,16 @@ services:
     volumes:
       - ./backend:/app
       - artifacts:/app/artifacts
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
     # --timeout-graceful-shutdown bounds how long a stop can take. Without it
     # uvicorn waits for open connections to close, and /api/sse streams stay
     # open for as long as a browser tab is watching an investigation — with a
@@ -172,6 +182,16 @@ services:
     volumes:
       - ./backend:/app
       - artifacts:/app/artifacts
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
     command: celery -A app.tasks.celery_app worker --loglevel=info
 
   # ── Celery Beat (scheduler) ──
@@ -196,6 +216,16 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      # The internal CA that signed the CAPE reverse proxy's certificate.
+      # Read-only, and a single file rather than the whole secrets/ directory
+      # so these containers can see the trust anchor and nothing else that
+      # may later be put alongside it. The public certificate only — the CAPE
+      # token is not here, it arrives through env_file.
+      #
+      # The file must exist on the host BEFORE these containers are created:
+      # Docker silently creates a directory at a missing bind source, and a
+      # directory named cape-internal-ca.crt then blocks the real file.
+      - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
     command: celery -A app.tasks.celery_app beat --loglevel=info
 
   # ── Frontend ──
