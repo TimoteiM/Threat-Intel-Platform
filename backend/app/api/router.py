@@ -28,9 +28,12 @@ from app.api.alert_investigations import router as alert_investigations_router
 from app.api.assistant import router as assistant_router
 from app.api.admin import router as admin_router
 from app.api.anyrun import router as anyrun_router
+from app.api.auth import router as auth_router
 
 api_router = APIRouter()
 
+# First, so the sign-in route is registered before anything that needs it.
+api_router.include_router(auth_router)
 api_router.include_router(investigations_router)
 api_router.include_router(sse_router)
 api_router.include_router(enrichment_router)

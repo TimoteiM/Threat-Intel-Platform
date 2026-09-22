@@ -9,7 +9,12 @@ services:
       POSTGRES_DB: threatintel
       PGDATA: /var/lib/postgresql/data/18/docker
     ports:
-      - "5432:5432"
+      # Loopback only. This was published on every interface with the
+      # credentials that are two lines above, so the whole dataset was readable
+      # from the network without touching the API at all. Containers reach it
+      # as "postgres:5432" over the compose network, which does not use this.
+      # An operator who wants a SQL client can tunnel: ssh -L 5432:127.0.0.1:5432
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +28,9 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Same reasoning, and Redis had no password at all: it answered PING and
+      # listed 1,776 keys from the network.
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

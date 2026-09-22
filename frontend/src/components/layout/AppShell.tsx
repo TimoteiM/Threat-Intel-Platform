@@ -10,9 +10,11 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar, { readCollapsed, writeCollapsed } from "@/components/layout/Sidebar";
 import Footer from "@/components/layout/Footer";
 import RouteProgress from "@/components/layout/RouteProgress";
+import AuthGate from "@/components/layout/AuthGate";
 
 /** Below this, a 220px rail costs more room than it earns. */
 const NARROW_VIEWPORT = 1100;
@@ -38,6 +40,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setCollapsed(readCollapsed());
   }, []);
 
+  const pathname = usePathname();
+
+  // The sign-in page gets no navigation: every destination behind it answers
+  // 401 until there is a session, so offering the rail would be a menu of
+  // dead ends.
+  if (pathname === "/login") {
+    return <>{children}</>;
+  }
+
   const toggle = () => {
     setCollapsed((previous) => {
       writeCollapsed(!previous);
@@ -50,7 +61,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <div className="app-shell__content">
         <RouteProgress />
-        <main className="app-shell__main">{children}</main>
+        <main className="app-shell__main">
+          <AuthGate>{children}</AuthGate>
+        </main>
         <Footer />
       </div>
     </div>

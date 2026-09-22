@@ -27,6 +27,7 @@ import {
 import BrandMark from "@/components/layout/BrandMark";
 import CorrelationAlerts from "@/components/layout/CorrelationAlerts";
 import NavIcon from "@/components/layout/NavIcons";
+import SessionControl from "@/components/layout/SessionControl";
 
 const STORAGE_KEY = "ta.sidebar.collapsed";
 
@@ -108,6 +109,7 @@ export default function Sidebar({
           </svg>
         </button>
         <CorrelationAlerts />
+        <SessionControl collapsed={collapsed} />
         <span className="app-sidebar__version">{APP_VERSION}</span>
       </div>
     </aside>

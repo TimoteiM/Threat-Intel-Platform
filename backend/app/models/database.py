@@ -313,6 +313,59 @@ class IOCRecord(Base):
     )
 
 
+class User(Base):
+    """Someone who can log in.
+
+    Passwords are stored as scrypt hashes with a per-user salt. scrypt is in the
+    standard library, so this costs no new dependency in an image that had no
+    password hashing of any kind.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # "admin" may manage users and API keys; "analyst" may use the platform.
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="analyst")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the password was generated for them, so the UI can insist on a
+    # change before the account is useful for anything else.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class ApiKey(Base):
+    """A credential for a machine caller — the alert ingest, mainly.
+
+    Only the hash is stored, so a leaked database does not hand over working
+    keys. `prefix` is the visible first characters, kept so a key can be
+    identified in a list and revoked without anyone having to reveal it.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="ingest")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class Exclusion(Base):
     """
     An indicator the platform is told to treat as benign without looking.

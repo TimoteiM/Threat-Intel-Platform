@@ -18,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
 from app.config import get_settings
+from app.middleware.auth import AuthenticationMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.db.session import async_engine
 
@@ -58,6 +59,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("Database schema verified / migrated")
 
+    # A session secret has to be settled before the first cookie is signed, and
+    # there has to be an account to sign in with before default-deny bites.
+    from app.security.bootstrap import ensure_bootstrap_credentials, resolve_session_secret
+
+    settings.session_secret = resolve_session_secret(settings)
+    ensure_bootstrap_credentials()
+    logger.info("Authentication mode: %s", settings.auth_mode)
+
     logger.info("Threat Investigation Platform starting")
     logger.info(f"Environment: {settings.app_env}")
     logger.info(f"Primary AI model: {settings.openai_model}")
@@ -79,6 +88,10 @@ app = FastAPI(
     # Disable auto-generated docs in production to avoid leaking schema
     docs_url="/api/docs" if settings.is_development else None,
     redoc_url=None,
+    # The schema lived at /openapi.json, outside /api, so the authentication
+    # middleware below would never have seen it and it was readable by anyone.
+    # Moved under /api so it is covered like everything else.
+    openapi_url="/api/openapi.json" if settings.is_development else None,
 )
 
 
@@ -100,6 +113,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
+# Added last so it runs first: an unauthenticated caller is turned away before
+# it can consume the rate limiter's per-IP memory or reach any route code.
+app.add_middleware(AuthenticationMiddleware)
 
 
 # ── CORS ──

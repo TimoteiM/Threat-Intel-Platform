@@ -143,6 +143,22 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = True
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
+
+    # ── Authentication ──
+    # "enforce" denies anything without a credential; "monitor" logs the same
+    # decision and lets the request through, so a live ingest can be migrated
+    # onto an API key before anything starts being rejected.
+    auth_mode: str = "enforce"
+    # Signs session cookies. Generated per boot when unset, which logs everyone
+    # out on restart — acceptable as a default, but set it in .env for real use.
+    session_secret: str = ""
+    session_ttl_seconds: int = 12 * 60 * 60
+    # Only over HTTPS; this deployment is plain HTTP, so it defaults off. A
+    # Secure cookie on http:// is simply never sent, which locks out the UI.
+    session_cookie_secure: bool = False
+    # Printed once on first boot so there is a way in. Leave empty to generate.
+    bootstrap_admin_username: str = "admin"
+    bootstrap_admin_password: str = ""
     log_level: str = "INFO"
 
     # —— Investigation Defaults ———

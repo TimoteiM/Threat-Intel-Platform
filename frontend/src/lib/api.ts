@@ -73,6 +73,10 @@ class ApiError extends Error {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
+    // The session cookie authenticates every call. Same-origin would cover the
+    // proxied path on its own, but the direct-to-backend upload fallback below
+    // is cross-origin and would otherwise send no credential at all.
+    credentials: "include",
     ...options,
   });
 
@@ -95,6 +99,7 @@ async function requestWithDirectFallback<T>(path: string, options?: RequestInit)
     try {
       const res = await fetch(endpoint, {
         headers: { "Content-Type": "application/json", ...options?.headers },
+        credentials: "include",
         ...options,
       });
 
@@ -477,6 +482,29 @@ export interface AISpend {
 }
 
 /** What our own AI calls cost. Not a provider balance — see the service docstring. */
+export interface AuthStatus {
+  mode: "monitor" | "enforce";
+  authenticated: boolean;
+  username?: string | null;
+  role?: string | null;
+}
+
+/** Public: is this caller signed in, and is signing in required yet. */
+export function getAuthStatus() {
+  return request<AuthStatus>("/auth/status");
+}
+
+export function login(username: string, password: string) {
+  return request<{ username: string; role: string; must_change_password: boolean }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function logout() {
+  return request<{ ok: boolean }>("/auth/logout", { method: "POST" });
+}
+
 export function getAISpend(days = 30) {
   return request<AISpend>(`/cost/ai-spend?days=${days}`);
 }
