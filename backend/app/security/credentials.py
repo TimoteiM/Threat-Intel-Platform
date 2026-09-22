@@ -9,9 +9,11 @@ fix ships slower and with a rebuild risk attached.
 Three credential kinds, deliberately distinct:
 
 * A **password** is hashed with a per-user salt and never leaves the database.
-* A **session token** is a signed, expiring statement that a browser holds in
-  an HttpOnly cookie. It carries the user id and an expiry, and is verified by
-  HMAC — no server-side session store to keep in sync or to leak.
+* A **session token** is a JWT: a signed, expiring statement that a browser
+  holds in an HttpOnly cookie, and that a script can equally send as
+  `Authorization: Bearer`. No server-side session store to keep in sync or to
+  leak, and the same shape Entra ID issues, so there is one kind of token in
+  the system rather than two.
 * An **API key** is for callers that cannot log in — the alert ingest. Only its
   SHA-256 is stored, so a dumped database hands over no working keys.
 """
@@ -21,6 +23,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -101,28 +104,113 @@ def hash_api_key(raw: str) -> str:
 # ── Session tokens ────────────────────────────────────────────────────────────
 
 
-def issue_session(user_id: str, secret: str, *, ttl_seconds: int) -> str:
-    """`<user id>.<expiry>.<hmac>` — stateless, so a restart does not log anyone out."""
-    expires = int(time.time()) + int(ttl_seconds)
-    body = f"{user_id}.{expires}"
-    return f"{body}.{_sign(body, secret)}"
+JWT_ISSUER = "threat-intel-platform"
+JWT_ALGORITHM = "HS256"
+
+
+def issue_session(
+    user_id: str,
+    secret: str,
+    *,
+    ttl_seconds: int,
+    username: str | None = None,
+    role: str | None = None,
+) -> str:
+    """A signed JWT naming the user, stateless so a restart logs nobody out.
+
+    `username` and `role` ride along for anything that wants to read the token
+    without a database round trip — a log line, a debugging session, a script.
+    Nothing in this platform authorises on them: the middleware looks the user
+    up on every request, so deactivating or demoting somebody takes effect on
+    their next call rather than whenever their token happens to expire.
+    """
+    now = int(time.time())
+    header = {"alg": JWT_ALGORITHM, "typ": "JWT"}
+    payload: dict = {
+        "iss": JWT_ISSUER,
+        "sub": str(user_id),
+        "iat": now,
+        "nbf": now,
+        "exp": now + int(ttl_seconds),
+        # Distinct per token, so two sessions issued in the same second are
+        # still distinguishable in a log.
+        "jti": secrets.token_urlsafe(9),
+    }
+    if username:
+        payload["username"] = str(username)
+    if role:
+        payload["role"] = str(role)
+
+    signing_input = f"{_b64(_json(header))}.{_b64(_json(payload))}"
+    return f"{signing_input}.{_sign(signing_input, secret)}"
 
 
 def read_session(token: str, secret: str) -> str | None:
     """The user id this token proves, or None if it is forged or expired."""
+    claims = read_session_claims(token, secret)
+    return str(claims["sub"]) if claims else None
+
+
+def read_session_claims(token: str, secret: str) -> dict | None:
+    """Verified claims, or None. Never raises — a bad token is just a refusal."""
     try:
-        user_id, expires_raw, signature = str(token).rsplit(".", 2)
+        header_b64, payload_b64, signature = str(token).split(".")
     except ValueError:
         return None
-    body = f"{user_id}.{expires_raw}"
-    if not hmac.compare_digest(_sign(body, secret), signature):
+
+    signing_input = f"{header_b64}.{payload_b64}"
+    # Signature first: nothing in the token is worth reading until it verifies.
+    if not hmac.compare_digest(_sign(signing_input, secret), signature):
         return None
+
     try:
-        if int(expires_raw) < int(time.time()):
-            return None
+        header = json.loads(_unb64(header_b64))
+        claims = json.loads(_unb64(payload_b64))
+    except Exception:
+        return None
+
+    # `alg` is part of the token, which means it is attacker-supplied. "none"
+    # and a swapped algorithm are the two classic JWT forgeries, so only the
+    # one algorithm this platform issues is accepted — never whatever the
+    # token asks for. The signature check above already used HS256 regardless,
+    # and this makes that explicit rather than incidental.
+    if str(header.get("alg", "")) != JWT_ALGORITHM:
+        return None
+    if str(claims.get("iss", "")) != JWT_ISSUER:
+        return None
+    if not str(claims.get("sub", "")):
+        return None
+
+    now = int(time.time())
+    exp = _as_int(claims.get("exp"))
+    if exp is None or exp < now:
+        return None
+    nbf = _as_int(claims.get("nbf"))
+    if nbf is not None and nbf > now:
+        return None
+    return claims
+
+
+def looks_like_session_token(value: str) -> bool:
+    """Tells a session JWT apart from an API key, for the Bearer header.
+
+    Both arrive as `Authorization: Bearer ...`. API keys carry a deliberate
+    `tip_` prefix; a JWT is three dot-separated segments. This only decides
+    which verifier to call — neither path trusts the answer.
+    """
+    candidate = str(value or "")
+    return not candidate.startswith(API_KEY_PREFIX) and candidate.count(".") == 2
+
+
+def _json(value: dict) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _as_int(value) -> int | None:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
-    return user_id
 
 
 def _sign(body: str, secret: str) -> str:

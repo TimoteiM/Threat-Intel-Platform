@@ -514,6 +514,84 @@ export function login(username: string, password: string) {
   });
 }
 
+/** The signed-in caller, as /auth/me reports them. */
+export interface Me {
+  kind: "user" | "api_key";
+  id: string;
+  username?: string;
+  role?: string;
+  auth_provider?: "local" | "microsoft";
+  email?: string | null;
+  display_name?: string | null;
+  must_change_password?: boolean;
+}
+
+export function getMe() {
+  return request<Me>("/auth/me");
+}
+
+/** An account on the platform, as the administrator list shows it. */
+export interface PlatformUser {
+  id: string;
+  username: string;
+  role: "admin" | "analyst";
+  active: boolean;
+  auth_provider: "local" | "microsoft";
+  email?: string | null;
+  display_name?: string | null;
+  must_change_password: boolean;
+  created_at?: string | null;
+  last_login_at?: string | null;
+}
+
+/** A password the server generated. Returned once and never stored in clear. */
+export interface IssuedPassword {
+  password?: string;
+  note?: string;
+}
+
+export function listUsers() {
+  return request<{ items: PlatformUser[] }>("/auth/users");
+}
+
+export function createUser(body: {
+  username: string;
+  role: string;
+  password?: string;
+  email?: string;
+  display_name?: string;
+}) {
+  return request<PlatformUser & IssuedPassword>("/auth/users", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateUser(id: string, body: { role?: string; active?: boolean }) {
+  return request<PlatformUser>(`/auth/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function resetUserPassword(id: string) {
+  return request<{ username: string } & IssuedPassword>(`/auth/users/${id}/password`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteUser(id: string) {
+  return request<{ deleted: string }>(`/auth/users/${id}`, { method: "DELETE" });
+}
+
+export function changeOwnPassword(current_password: string, new_password: string) {
+  return request<{ ok: boolean }>("/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+}
+
 export function logout() {
   return request<{ ok: boolean }>("/auth/logout", { method: "POST" });
 }

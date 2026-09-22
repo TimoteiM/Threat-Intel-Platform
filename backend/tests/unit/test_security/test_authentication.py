@@ -9,20 +9,38 @@ while the ingest integrations are being migrated onto a key.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from app.api.auth import _refuse_if_last_admin
 from app.middleware.auth import AuthenticationMiddleware
 from app.security.credentials import (
     generate_api_key,
     hash_api_key,
     hash_password,
     issue_session,
+    looks_like_session_token,
     read_session,
+    read_session_claims,
     verify_password,
 )
 
 SECRET = "test-secret-not-a-real-one"
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _unb64(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
 # ── Passwords ────────────────────────────────────────────────────────────────
@@ -59,8 +77,10 @@ def test_a_session_signed_with_another_secret_is_refused():
 def test_an_edited_session_is_refused():
     """The point of signing: the user id cannot be swapped for someone else's."""
     token = issue_session("user-1", SECRET, ttl_seconds=60)
-    _, expires, signature = token.rsplit(".", 2)
-    assert read_session(f"admin.{expires}.{signature}", SECRET) is None
+    header, _, signature = token.split(".")
+    forged = _b64(json.dumps({"iss": "threat-intel-platform", "sub": "admin",
+                              "exp": int(time.time()) + 60}).encode())
+    assert read_session(f"{header}.{forged}.{signature}", SECRET) is None
 
 
 def test_an_expired_session_is_refused():
@@ -330,3 +350,159 @@ def test_the_same_holds_for_me(monkeypatch):
 def test_a_public_path_with_no_credential_reports_nobody(monkeypatch):
     """Still public, and still honest: identification is best-effort, not required."""
     assert _identity_on(monkeypatch, "/api/auth/status", identity=None) is None
+
+
+# ── The session token is a JWT ───────────────────────────────────────────────
+#
+# It moved from an ad-hoc `<id>.<expiry>.<hmac>` string to a standard JWT, so
+# that a script, the UI and eventually Entra ID are all handling one shape of
+# token. The forgeries below are the reason a JWT verifier is worth testing at
+# all: the algorithm is named *inside the token*, by whoever sends it.
+
+
+def test_a_session_token_is_a_readable_jwt():
+    token = issue_session("user-1", SECRET, ttl_seconds=60, username="admin", role="admin")
+    header_b64, payload_b64, _ = token.split(".")
+    assert json.loads(_unb64(header_b64)) == {"alg": "HS256", "typ": "JWT"}
+
+    claims = json.loads(_unb64(payload_b64))
+    assert claims["sub"] == "user-1"
+    assert claims["iss"] == "threat-intel-platform"
+    assert claims["username"] == "admin" and claims["role"] == "admin"
+    assert claims["exp"] > claims["iat"]
+
+
+def test_verified_claims_come_back_whole():
+    token = issue_session("user-1", SECRET, ttl_seconds=60, role="analyst")
+    assert read_session_claims(token, SECRET)["role"] == "analyst"
+
+
+def test_an_unsigned_token_is_refused():
+    """alg=none, the oldest JWT forgery there is."""
+    header = _b64(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({"iss": "threat-intel-platform", "sub": "admin",
+                               "exp": int(time.time()) + 600}).encode())
+    assert read_session(f"{header}.{payload}.", SECRET) is None
+    assert read_session(f"{header}.{payload}.{_b64(b'')}", SECRET) is None
+
+
+def test_a_token_naming_another_algorithm_is_refused():
+    """Even signed correctly with our own secret, the header must say HS256.
+
+    Pinning the algorithm rather than believing the token is the habit that
+    stops the RS256-to-HS256 confusion attack the day an asymmetric key is
+    introduced — which is exactly what Entra ID sign-in brings.
+    """
+    header = _b64(json.dumps({"alg": "HS512", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({"iss": "threat-intel-platform", "sub": "admin",
+                               "exp": int(time.time()) + 600}).encode())
+    signing_input = f"{header}.{payload}"
+    signature = _b64(hmac.new(SECRET.encode(), signing_input.encode(), hashlib.sha256).digest())
+    assert read_session(f"{signing_input}.{signature}", SECRET) is None
+
+
+def test_a_token_from_another_issuer_is_refused():
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({"iss": "somewhere-else", "sub": "admin",
+                               "exp": int(time.time()) + 600}).encode())
+    signing_input = f"{header}.{payload}"
+    signature = _b64(hmac.new(SECRET.encode(), signing_input.encode(), hashlib.sha256).digest())
+    assert read_session(f"{signing_input}.{signature}", SECRET) is None
+
+
+def test_a_token_naming_nobody_is_refused():
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({"iss": "threat-intel-platform", "exp": int(time.time()) + 600}).encode())
+    signing_input = f"{header}.{payload}"
+    signature = _b64(hmac.new(SECRET.encode(), signing_input.encode(), hashlib.sha256).digest())
+    assert read_session(f"{signing_input}.{signature}", SECRET) is None
+
+
+def test_a_token_that_is_not_valid_yet_is_refused():
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    soon = int(time.time()) + 600
+    payload = _b64(json.dumps({"iss": "threat-intel-platform", "sub": "a",
+                               "nbf": soon, "exp": soon + 600}).encode())
+    signing_input = f"{header}.{payload}"
+    signature = _b64(hmac.new(SECRET.encode(), signing_input.encode(), hashlib.sha256).digest())
+    assert read_session(f"{signing_input}.{signature}", SECRET) is None
+
+
+def test_the_old_session_format_no_longer_verifies():
+    """The cutover is deliberate: everyone signs in once more, nothing lingers."""
+    legacy_body = f"user-1.{int(time.time()) + 600}"
+    legacy_signature = _b64(hmac.new(SECRET.encode(), legacy_body.encode(), hashlib.sha256).digest())
+    assert read_session(f"{legacy_body}.{legacy_signature}", SECRET) is None
+
+
+@pytest.mark.parametrize(
+    "value,is_session",
+    [
+        ("tip_abcdefghijklmnop", False),   # an API key, even with dots after it
+        ("eyJhbGc.eyJzdWI.sig", True),
+        ("not-a-token", False),
+        ("", False),
+    ],
+)
+def test_a_bearer_header_is_routed_to_the_right_verifier(value, is_session):
+    """Sessions and API keys share one header; the prefix decides which is which."""
+    assert looks_like_session_token(value) is is_session
+
+
+# ── Nobody can lock everybody out ────────────────────────────────────────────
+
+
+class _Result:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+
+class _CountingDB:
+    """Stands in for the session, answering only the count this guard asks for."""
+
+    def __init__(self, other_admins: int):
+        self._other_admins = other_admins
+
+    async def execute(self, *_args, **_kwargs):
+        return _Result(self._other_admins)
+
+
+class _Row:
+    def __init__(self, role="admin", row_id="11111111-1111-1111-1111-111111111111"):
+        self.role = role
+        self.id = row_id
+
+
+def _guard(row, db, identity):
+    import asyncio
+
+    return asyncio.run(_refuse_if_last_admin(row, db, identity, action="deactivate"))
+
+
+def test_the_last_administrator_cannot_be_deactivated():
+    """There is no way back from this short of editing the database by hand."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as caught:
+        _guard(_Row(), _CountingDB(other_admins=0), {"id": "someone-else"})
+    assert caught.value.status_code == 409
+
+
+def test_an_administrator_cannot_deactivate_their_own_account():
+    """The commonest way to do it by accident, and still a lockout."""
+    from fastapi import HTTPException
+
+    row = _Row()
+    with pytest.raises(HTTPException):
+        _guard(row, _CountingDB(other_admins=3), {"id": row.id})
+
+
+def test_another_administrator_may_be_deactivated_when_one_remains():
+    _guard(_Row(), _CountingDB(other_admins=1), {"id": "someone-else"})
+
+
+def test_an_analyst_is_not_protected_by_the_guard():
+    _guard(_Row(role="analyst"), _CountingDB(other_admins=0), {"id": "someone-else"})

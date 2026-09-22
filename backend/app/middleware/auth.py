@@ -36,7 +36,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import ApiKey, User
-from app.security.credentials import SESSION_COOKIE, hash_api_key, read_session
+from app.security.credentials import (
+    SESSION_COOKIE,
+    hash_api_key,
+    looks_like_session_token,
+    read_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,9 +187,20 @@ def _is_public(path: str) -> bool:
 def _identify(request: Request, settings) -> dict | None:
     """Who is calling, or None. Never raises — a lookup failure is a refusal."""
     try:
-        presented = _presented_api_key(request)
-        if presented:
-            return _identify_api_key(presented)
+        # Two kinds of credential arrive in the same `Authorization: Bearer`
+        # header, so the prefix decides which verifier runs. A session JWT that
+        # does not verify falls through to the cookie rather than short-
+        # circuiting, because a browser can legitimately carry both.
+        bearer = _presented_bearer(request)
+        if bearer:
+            if looks_like_session_token(bearer):
+                user_id = read_session(bearer, settings.session_secret)
+                if user_id:
+                    return _identify_user(user_id)
+            else:
+                identified = _identify_api_key(bearer)
+                if identified:
+                    return identified
 
         cookie = request.cookies.get(SESSION_COOKIE)
         if cookie:
@@ -196,7 +212,7 @@ def _identify(request: Request, settings) -> dict | None:
     return None
 
 
-def _presented_api_key(request: Request) -> str | None:
+def _presented_bearer(request: Request) -> str | None:
     header = request.headers.get("authorization") or ""
     if header.lower().startswith("bearer "):
         return header[7:].strip() or None
@@ -222,7 +238,18 @@ def _identify_user(user_id: str) -> dict | None:
         row = db.get(User, _as_uuid(user_id))
         if row is None or not row.active:
             return None
-        return {"kind": "user", "id": str(row.id), "username": row.username, "role": row.role}
+        return {
+            "kind": "user",
+            "id": str(row.id),
+            "username": row.username,
+            "role": row.role,
+            # How they get in, so the account page can offer a password change
+            # only to someone who actually has a password here.
+            "auth_provider": row.auth_provider or "local",
+            "email": row.email,
+            "display_name": row.display_name,
+            "must_change_password": bool(row.must_change_password),
+        }
 
 
 def _as_uuid(value: str):

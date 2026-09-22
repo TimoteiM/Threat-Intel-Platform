@@ -2,12 +2,14 @@
 
 import React from "react";
 
-import { getAPIHealth } from "@/lib/api";
+import { getAPIHealth, getMe, type Me } from "@/lib/api";
 import { APP_VERSION } from "@/lib/constants";
 import { type ListDensity, type ThemePreference } from "@/lib/settings";
 import type { APIHealthResponse, APIProviderHealth, APIHealthStatus } from "@/lib/types";
 import { useSettingsPreferences } from "@/components/settings/SettingsPreferencesProvider";
 import CostSection from "@/components/settings/CostSection";
+import AccountSection from "@/components/settings/AccountSection";
+import UsersSection from "@/components/settings/UsersSection";
 
 const STATUS_STYLES: Record<APIHealthStatus, { label: string; color: string; bg: string }> = {
   healthy: { label: "Healthy", color: "#2ecc71", bg: "rgba(46,204,113,0.12)" },
@@ -76,6 +78,24 @@ export default function SettingsPageClient() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Only to decide whether the People card belongs on this page. The API
+  // refuses these routes to an analyst regardless; this just avoids showing a
+  // panel that would only ever answer 403.
+  const [me, setMe] = React.useState<Me | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    getMe()
+      .then((who) => {
+        if (!cancelled) setMe(who);
+      })
+      .catch(() => {
+        /* not signed in, or the API is unreachable — the page says so already */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadHealth = React.useCallback(async (silent = false) => {
     if (silent) {
@@ -184,6 +204,28 @@ export default function SettingsPageClient() {
           </div>
         </div>
       </section>
+
+      {/* Where /login sends anybody carrying a generated password, so the
+          anchor has to exist and has to be the first thing they can act on. */}
+      <div id="account" style={{ scrollMarginTop: 80 }}>
+        <SectionCard
+          title="Your account"
+          description="Who you are signed in as, and the password you sign in with."
+        >
+          <AccountSection />
+        </SectionCard>
+      </div>
+
+      {me?.role === "admin" && (
+        <div id="people" style={{ scrollMarginTop: 80 }}>
+          <SectionCard
+            title="People"
+            description="Who can sign in to this platform, what they may do, and how they get in."
+          >
+            <UsersSection />
+          </SectionCard>
+        </div>
+      )}
 
       <SectionCard title="Appearance" description="Choose how the application should render on this browser.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>

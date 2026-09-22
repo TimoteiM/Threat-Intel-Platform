@@ -126,7 +126,13 @@ async def callback(
     response = _clear_flow(RedirectResponse(flow.next_path, status_code=302))
     response.set_cookie(
         SESSION_COOKIE,
-        issue_session(str(user.id), settings.session_secret, ttl_seconds=settings.session_ttl_seconds),
+        issue_session(
+            str(user.id),
+            settings.session_secret,
+            ttl_seconds=settings.session_ttl_seconds,
+            username=user.username,
+            role=user.role,
+        ),
         max_age=settings.session_ttl_seconds,
         httponly=True,
         samesite="lax",
