@@ -9,7 +9,7 @@ while the ingest integrations are being migrated onto a key.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.middleware.auth import AuthenticationMiddleware
@@ -276,3 +276,57 @@ def test_a_forwarded_for_header_cannot_claim_the_exemption(monkeypatch):
 def test_with_no_ranges_configured_nothing_is_exempt(monkeypatch):
     client = _ingest_client(monkeypatch, cidrs="", peer="172.23.10.16")
     assert client.post("/api/alert-investigations", json={}).status_code == 401
+
+
+# ── Public paths still have to recognise the caller ──────────────────────────
+#
+# /auth/status and /auth/me are public because the UI must be able to ask "am I
+# signed in" before it has anywhere to sign in from. But public was implemented
+# as "return immediately", which skipped identification — so both routes, whose
+# entire job is to report the caller, answered "nobody" to a request carrying a
+# valid session. The UI read that as signed-out, sent the user to /login, the
+# login succeeded, and the next status check said "nobody" again: a redirect
+# loop on a correct password.
+
+
+def _identity_on(monkeypatch, path: str, *, identity) -> object:
+    """What the route handler sees in request.state.identity on `path`."""
+    import app.middleware.auth as auth_mod
+
+    class _Settings:
+        auth_mode = "enforce"
+        session_secret = SECRET
+        ingest_trusted_networks: list = []
+        ingest_trusted_path_set: frozenset = frozenset()
+
+    monkeypatch.setattr(auth_mod, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(auth_mod, "_identify", lambda request, settings: identity)
+
+    api = FastAPI()
+    api.add_middleware(AuthenticationMiddleware)
+    seen: dict = {}
+
+    @api.get(path)
+    def route(request: Request):
+        seen["identity"] = getattr(request.state, "identity", "unset")
+        return {"ok": True}
+
+    response = TestClient(api).get(path)
+    assert response.status_code == 200, "a public path must stay reachable"
+    return seen["identity"]
+
+
+def test_a_public_path_reports_the_signed_in_caller(monkeypatch):
+    """The redirect loop: a valid session reaching /auth/status read as nobody."""
+    who = {"kind": "user", "username": "admin", "role": "admin"}
+    assert _identity_on(monkeypatch, "/api/auth/status", identity=who) == who
+
+
+def test_the_same_holds_for_me(monkeypatch):
+    who = {"kind": "user", "username": "admin", "role": "admin"}
+    assert _identity_on(monkeypatch, "/api/auth/me", identity=who) == who
+
+
+def test_a_public_path_with_no_credential_reports_nobody(monkeypatch):
+    """Still public, and still honest: identification is best-effort, not required."""
+    assert _identity_on(monkeypatch, "/api/auth/status", identity=None) is None

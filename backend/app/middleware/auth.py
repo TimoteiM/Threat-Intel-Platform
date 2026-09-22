@@ -72,7 +72,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # A public path still has to know who is calling, even though it does
+        # not require anyone. /auth/status and /auth/me exist precisely to
+        # report the caller, and returning early without looking meant both
+        # answered "nobody" to a request carrying a perfectly good session —
+        # which bounced the UI between the login page and the page behind it.
         if _is_public(path):
+            request.state.identity = _identify(request, settings)
             return await call_next(request)
 
         identity = _identify(request, settings)
