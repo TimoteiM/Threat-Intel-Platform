@@ -220,22 +220,74 @@ docker compose logs worker | grep -i cape
 
 ---
 
-## Still to be enabled server-side
+## Verified against the live instance (2026-09-22)
 
-This integration calls five CAPE routes. `cuckoo/status/` is confirmed working
-with a token. The other four have **not** been exercised against the live
-instance, because the reverse proxy does not exist yet:
+All five routes confirmed working through the reverse proxy at
+`https://172.16.45.10:8443/apiv2`, with full TLS verification against
+`CAPE_CA_BUNDLE`. No `-k`, no `verify=false`, no sample uploaded.
 
-- `GET /apiv2/tasks/search/sha256/{sha256}/`
-- `POST /apiv2/tasks/create/file/`
-- `GET /apiv2/tasks/view/{task_id}/`
-- `GET /apiv2/tasks/get/report/{task_id}/{json|lite}/`
+| Route | Result |
+|---|---|
+| `GET /cuckoo/status/` | 200 — CAPE 2.5, 6/6 machines idle; anonymous gives 401 |
+| `GET /tasks/search/sha256/{sha256}/` | 200, empty list for an unknown hash |
+| `POST /tasks/create/file/` | route present and permitted (GET returns 405, which creates nothing) |
+| `GET /tasks/view/{task_id}/` | 200 |
+| `GET /tasks/get/report/{task_id}/json/` | 200, 41 MB, parsed and normalized |
+| `GET /tasks/get/report/{task_id}/lite/` | **not served** — returns non-JSON on this instance |
 
-CAPEv2 gates apiv2 routes individually in `conf/api.conf`. Confirm each is
-enabled before relying on it. The report format matters most: the client tries
-`json` first and falls back to `lite`, and a `lite` result is flagged in the UI
-as carrying less detail.
+`json` is therefore the only usable report format here. The client tries it
+first and falls back to `lite`, so nothing needs changing; the fallback simply
+never fires.
 
-Deliberately **not** implemented: file download, process-memory dumps, and task
-deletion on CAPE. None is needed to analyse an alert, and each is a way to pull
-malware back out of the sandbox or destroy evidence.
+### The API is throttled — this is why polling is 30s
+
+Measured: **one request per ~5 seconds**, answered with `429` and a
+`Retry-After: 5` header, which the client honours.
+
+A 10-second poll interval is fine for one analysis and hopeless for six: the
+pool has six machines, so six concurrent analyses polling every 10s is well
+over the limit and every worker sits in backoff. `CAPE_POLL_INTERVAL_SECONDS`
+is set to **30** for that reason. A run takes minutes, so the cost is at most
+30 seconds of extra latency on noticing completion.
+
+If you raise CAPE's throttle, the interval can come back down. If you add
+machines, raise the interval proportionally.
+
+### Report size and worker memory
+
+The one report read was **41 MB of JSON** for a single task, against a 64 MB
+ceiling (`CAPE_MAX_REPORT_BYTES`). It is read in bounded chunks, but it is then
+parsed, and a parsed 41 MB JSON document is several hundred megabytes of Python
+objects.
+
+That is per concurrent analysis. With six running at once this is gigabytes.
+If worker memory becomes a problem, the options in order of preference are:
+lower Celery concurrency for the CAPE queue, ask CAPE to enable the `lite`
+report, or lower the ceiling and accept that very large reports are refused
+rather than ingested.
+
+### What the first real report showed, and why it matters
+
+Task 1 was `7z2602-x64.exe` — by its name, a 7-Zip installer. CAPE scored it
+**9.0/10, "malicious"**, with 25 signatures and 57 dropped files, and named
+**no malware family at all**. The signatures are `hardware_id_profiling`,
+`antivm_display`, `mass_file_modification_access`, `mouse_movement_detect` and
+similar: precisely what any installer does.
+
+This is a textbook sandbox false positive, and it arrived on the first report
+this integration ever read. It is the concrete reason this platform treats a
+CAPE score as evidence for an analyst and never acts on it: an automatic
+containment rule keyed on malscore would have quarantined 7-Zip.
+
+### Internet routing is per-analysis, and it shows
+
+The pre-existing tasks were run with `route: none`, and their reports contain
+**zero contacted domains and zero destinations**. Submissions from this
+platform always send `route=internet` (`CAPE_ROUTE`), because network behaviour
+is usually the whole point of detonating an alert sample.
+
+### Deliberately not implemented
+
+File download, process-memory dumps, and task deletion on CAPE. None is needed
+to analyse an alert, and each is a way to pull malware back out of the sandbox
+or destroy evidence.
