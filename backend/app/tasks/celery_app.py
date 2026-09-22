@@ -113,4 +113,11 @@ celery_app.autodiscover_tasks([
     "app.tasks.case_narrative_task",
     "app.tasks.anyrun_video_task",
     "app.tasks.sandbox_task",
+    # Third time this list has been the bug. The API queued the CAPE workflow
+    # happily and the worker answered "Received unregistered task", so every
+    # submission sat in `queued` for ever.
+    "app.tasks.cape_task",
+    # Third time this list has been the bug. The API queued the CAPE workflow
+    # happily and the worker answered "Received unregistered task", so every
+    # submission sat in `queued` for ever.
 ])

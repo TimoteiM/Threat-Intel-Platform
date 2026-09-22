@@ -247,7 +247,10 @@ class Settings(BaseSettings):
     # Fetch VT's sandbox behaviour summary for hash/file observables.
     # Costs one extra VT request per hash — disable on tight free-tier quotas.
     vt_fetch_file_behaviour: bool = True
-    default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis"
+    # `cape` included so a manual investigation or a file submission consults
+    # the on-premises sandbox without the analyst having to remember to tick
+    # it. It is a lookup, not a detonation — see app/collectors/cape_collector.
+    default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis,cape"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24

@@ -135,15 +135,11 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
         if investigation_id is None:
             investigation_id = artifact.investigation_id
 
-    if len(sha256) != 64:
-        raise HTTPException(400, "A SHA-256 is required: supply artifact_id, or sha256 directly.")
-
-    if sample_size and int(sample_size) > int(settings.cape_max_upload_bytes):
-        raise HTTPException(
-            413, f"That sample is larger than the {settings.cape_max_upload_bytes} byte submission limit."
-        )
-
-    # The tenant label, taken from whatever the analysis hangs off.
+    # The tenant label, taken from whatever the analysis hangs off. This runs
+    # BEFORE the SHA-256 is required, because for a hash investigation the
+    # digest is derived from the investigation itself — validating first made
+    # that derivation unreachable and rejected every submission from the UI,
+    # which sends only an investigation id.
     if investigation_id is not None:
         inv = (await db.execute(select(Investigation).where(Investigation.id == investigation_id))).scalars().first()
         if inv is None:
@@ -164,6 +160,18 @@ async def submit_analysis(body: SubmitRequest, request: Request, db: DBSession) 
         if run is None:
             raise HTTPException(404, "No such alert run.")
         client_label = client_label or run.alert_client
+
+    if len(sha256) != 64:
+        raise HTTPException(
+            400,
+            "No SHA-256 is available for this sample. Supply artifact_id or sha256, "
+            "or run this against a hash or file investigation.",
+        )
+
+    if sample_size and int(sample_size) > int(settings.cape_max_upload_bytes):
+        raise HTTPException(
+            413, f"That sample is larger than the {settings.cape_max_upload_bytes} byte submission limit."
+        )
 
     run_seq = 1
     if body.force_new:

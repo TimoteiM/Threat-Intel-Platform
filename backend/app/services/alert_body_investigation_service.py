@@ -77,7 +77,11 @@ ALERT_REPORT_SCHEMA_VERSION = "1.0"
 
 # Collectors that submit samples/scans or burn scarce quota are opt-in: an alert
 # body can carry dozens of indicators, so they are never run by default.
-OPT_IN_COLLECTORS = frozenset({"hybrid_analysis", "brave_osint"})
+# Offered but never run automatically on an alert body. CAPE joins them for a
+# measured reason: for a hash the collector queries CAPE, and CAPE throttles to
+# roughly one request every five seconds, so an alert carrying several hashes
+# would spend most of its run in backoff. An analyst can still tick it.
+OPT_IN_COLLECTORS = frozenset({"hybrid_analysis", "brave_osint", "cape"})
 
 # Collectors restricted to specific observable types regardless of what the
 # caller asks for. VirusTotal's free tier is 4 requests/min · 500/day, and an
