@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, get_settings
-from app.services.sandbox_context_service import summarize_sandbox_evidence
+from app.services.sandbox_context_service import summarize_cape_evidence, summarize_sandbox_evidence
 from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
@@ -163,6 +163,14 @@ def compact_case_context(*, detail: dict[str, Any], evidence: dict[str, Any], re
         # other field to the string "[truncated]".
         "sandbox": _bounded(
             summarize_sandbox_evidence(evidence),
+            depth=8,
+            list_limit=25,
+            string_limit=1200,
+        ),
+        # CAPE, projected for the same reason and kept as its own key so the
+        # writer can attribute a finding to the sandbox that produced it.
+        "cape_sandbox": _bounded(
+            summarize_cape_evidence(evidence),
             depth=8,
             list_limit=25,
             string_limit=1200,

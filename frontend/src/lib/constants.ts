@@ -174,6 +174,7 @@ export const COLLECTOR_NAMES: Record<string, string> = {
   screenshot: "SCREENSHOT",
   js_analysis: "JS ANALYSIS",
   opencti: "OPENCTI",
+  cape: "CAPE SANDBOX",
 };
 
 // Tabs

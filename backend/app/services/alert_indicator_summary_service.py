@@ -152,11 +152,23 @@ def _describe(report: dict[str, Any]) -> dict[str, Any] | None:
             "times_submitted": data.get("times_submitted"),
         })
 
-    for sandbox in ("hybrid_analysis", "vt"):
+    # CAPE first: it is an on-premises detonation of this estate's own sample,
+    # so when it has run it is the most direct evidence available. The others
+    # remain as fallbacks, and only one sandbox line is emitted per indicator.
+    for sandbox in ("cape", "hybrid_analysis", "vt"):
         behaviour = _finding(findings, sandbox, "sandbox_behaviour")
         if behaviour:
             parts.append(f"sandbox: {behaviour.get('summary')}")
             facts["sandbox"] = behaviour.get("summary")
+            if sandbox == "cape":
+                data = behaviour.get("data") or {}
+                facts["cape"] = {
+                    "task_id": data.get("task_id"),
+                    "malscore": data.get("malscore"),
+                    "verdict": data.get("verdict"),
+                    "families": data.get("families"),
+                    "contacted_domains": data.get("contacted_domains"),
+                }
             break
 
     if kind in ("ip", "ipv4", "ipv6", "ip_address"):

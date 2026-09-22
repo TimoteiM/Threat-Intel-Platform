@@ -10,6 +10,7 @@ import json
 from typing import Optional
 
 from app.analyst.system_prompt import ANALYST_SYSTEM_PROMPT
+from app.services.sandbox_context_service import summarize_cape_evidence
 from app.models.schemas import CollectedEvidence
 
 
@@ -294,6 +295,14 @@ def _build_supporting_evidence(evidence: CollectedEvidence) -> dict:
         # `hybrid_analysis` is a legacy internal storage key for our ANY.RUN
         # integration. Never expose that implementation name to the analyst.
         out["anyrun"] = _compact_value(anyrun_evidence, depth=0)
+
+    # CAPE is projected rather than passed through _compact_value: its findings
+    # sit four and five levels down, which is exactly where that walk writes
+    # "[truncated]" — the same trap ANY.RUN fell into. The projection also
+    # states a missing malscore as unknown rather than letting it read as zero.
+    cape_context = summarize_cape_evidence(data)
+    if cape_context:
+        out["cape_sandbox"] = cape_context
 
     return out
 

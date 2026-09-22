@@ -53,24 +53,29 @@ const COLLECTOR_DESCRIPTORS: { id: string; label: string; desc: string }[] = [
   { id: "urlscan",      label: "URLScan",      desc: "Full page scan, screenshot, network map" },
   { id: "hybrid_analysis", label: "AnyRun Analysis", desc: "Any.Run evidence" },
   { id: "opencti",     label: "OpenCTI",      desc: "Threat intel platform — indicators, reports, actors" },
+  { id: "cape",        label: "CAPE Sandbox", desc: "On-premises detonation — existing CAPE report for a hash or file; for a domain, any sample we detonated that contacted it" },
 ];
 
 // Which collectors support each observable type
 const COLLECTORS_PER_TYPE: Record<InvestigationInputType, string[]> = {
-  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
-  ip:     ["asn", "vt", "threat_feeds", "urlscan", "opencti"],
-  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti"],
-  hash:   ["vt", "threat_feeds", "hybrid_analysis", "opencti"],
-  file:   ["vt", "hybrid_analysis", "opencti"],
+  domain: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti", "cape"],
+  ip:     ["asn", "vt", "threat_feeds", "urlscan", "opencti", "cape"],
+  url:    ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "brave_osint", "urlscan", "hybrid_analysis", "opencti", "cape"],
+  hash:   ["vt", "threat_feeds", "hybrid_analysis", "opencti", "cape"],
+  file:   ["vt", "hybrid_analysis", "opencti", "cape"],
   // An alert body yields mixed indicator types; each extracted indicator only
   // runs the collectors that support it.
-  alert_body: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "opencti"],
+  alert_body: ["dns", "http", "tls", "whois", "asn", "intel", "vt", "threat_feeds", "urlscan", "opencti", "cape"],
 };
 
 // Sensible defaults per type — alert bodies fan out across many indicators, so
 // only the reputation collectors are pre-selected.
 const DEFAULT_COLLECTORS_PER_TYPE: Record<InvestigationInputType, string[]> = {
   ...COLLECTORS_PER_TYPE,
+  // CAPE is offered for an alert body but not pre-selected. For a hash it
+  // queries CAPE itself, and that API throttles to roughly one request every
+  // five seconds — an alert carrying several hashes would spend most of its
+  // run in backoff. Tick it when the alert is worth the wait.
   alert_body: ["dns", "whois", "asn", "vt", "threat_feeds", "opencti"],
 };
 
@@ -79,6 +84,7 @@ const DEFAULT_COLLECTORS_PER_TYPE: Record<InvestigationInputType, string[]> = {
 // IPs go through the DNS/WHOIS/ASN/intel/threat-feed/URLScan/OpenCTI chain.
 const ALERT_BODY_COLLECTOR_NOTES: Record<string, string> = {
   vt: "File hashes only — VT quota is 4/min · 500/day",
+  cape: "Rate-limited to ~1 request/5s — slow on alerts with many hashes",
 };
 
 export default function InvestigationInput({ onSubmit, loading }: Props) {

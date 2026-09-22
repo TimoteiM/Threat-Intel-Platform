@@ -220,6 +220,60 @@ docker compose logs worker | grep -i cape
 
 ---
 
+## Where CAPE appears
+
+### In the analyzer selector
+
+`cape` is a collector like any other, so it is in the **Analyzers** list when
+you start an investigation or upload a file. Pre-selected for domain, IP, URL,
+hash and file; offered but **not** pre-selected for an alert body.
+
+That last one is deliberate. For a hash the collector queries CAPE itself, and
+CAPE throttles to roughly one request every five seconds — an alert carrying
+several hashes would spend most of its run in backoff. The checkbox carries
+that note in the UI. Tick it when the alert is worth the wait.
+
+What the collector does depends on the observable:
+
+* **hash / file** — this platform's own stored analysis first, then CAPE's
+  `tasks/search/sha256/`. It never detonates: submission is the asynchronous
+  workflow, started deliberately.
+* **domain / IP / URL** — searches the network indicators of samples detonated
+  *here*. CAPE has no endpoint that answers "which analyses contacted this
+  host", so this is a local JSONB lookup against a GIN index, and the result
+  says so rather than implying CAPE was asked.
+
+### In what the AI reads
+
+Three models see sandbox evidence, and all three now get CAPE:
+
+| Consumer | Key |
+|---|---|
+| Classification analyst (`app/analyst/prompt_builder.py`) | `cape_sandbox` |
+| Case story writer (`investigation_case_story_service.py`) | `cape_sandbox` |
+| Alert digest (`alert_indicator_summary_service.py`) | a `sandbox:` line per indicator |
+
+It is **projected**, not passed through the generic evidence walk. A CAPE
+report's findings sit four and five levels down — `cape → report → network →
+domains → []` — which is exactly where that walk writes `"[truncated]"`. The
+ANY.RUN integration hit this first; the projection lives beside it in
+`sandbox_context_service.py`.
+
+Three things the projection is careful about, because each is a way a sandbox
+summary misleads a reader:
+
+* **A missing malscore is stated as "not scored — treat as unknown, not as
+  clean"**, never as a bare number a model can read as zero.
+* **An empty network section is qualified by the route.** A report run with
+  `route=none` has no C2 traffic by construction, and the projection says so
+  instead of letting "no domains contacted" imply a quiet sample.
+* **Truncated lists carry their real length**, so the model can say "80
+  domains contacted, 15 shown" rather than implying fifteen.
+
+For alerts, CAPE is preferred over the other sandboxes on an indicator line: an
+on-premises detonation of this estate's own sample is more direct evidence than
+a third-party lookup. Only one sandbox line is emitted per indicator.
+
 ## Verified against the live instance (2026-09-22)
 
 All five routes confirmed working through the reverse proxy at

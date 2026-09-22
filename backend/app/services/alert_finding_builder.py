@@ -42,6 +42,7 @@ def build_indicator_findings(
     findings.extend(_urlscan_findings(_as_dict(evidence.get("urlscan"))))
     findings.extend(_opencti_findings(_as_dict(evidence.get("opencti"))))
     findings.extend(_anyrun_findings(_as_dict(evidence.get("hybrid_analysis"))))
+    findings.extend(_cape_findings(_as_dict(evidence.get("cape"))))
     findings.extend(_intel_findings(_as_dict(evidence.get("intel"))))
     findings.extend(_osint_findings(_as_dict(evidence.get("brave_osint"))))
     findings.extend(_dns_findings(_as_dict(evidence.get("dns"))))
@@ -442,6 +443,72 @@ def _anyrun_findings(anyrun: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     return out
+
+
+def _cape_findings(cape: dict[str, Any]) -> list[dict[str, Any]]:
+    """What the on-premises sandbox says about this indicator.
+
+    Two shapes, deliberately both reported:
+
+    * A detonation of *this* sample — the indicator is a file or a hash and
+      CAPE has run it.
+    * A detonation that *contacted* this indicator — the indicator is a domain
+      or an address, and a sample analysed here reached out to it. CAPE has no
+      endpoint that answers this, so it comes from our own stored analyses; the
+      summary says so, because "our sandbox saw this domain" is a different
+      claim from "CAPE has a report on this domain".
+
+    A missing malscore never becomes a benign finding. CAPE omits it routinely,
+    and an unknown score is reported as unknown.
+    """
+    if not cape.get("available"):
+        return []
+    report = cape.get("report")
+    if not isinstance(report, dict):
+        return []
+
+    verdict = str(report.get("verdict") or "unknown").lower()
+    malscore = report.get("malscore")
+    task_id = report.get("task_id")
+    severity = {"malicious": "high", "suspicious": "medium"}.get(verdict, "info")
+
+    score_text = f"{malscore}/10" if malscore is not None else "not scored"
+    detections = [d for d in (report.get("detections") or []) if str(d).strip()]
+    summary = f"CAPE sandbox verdict: {verdict} ({score_text})"
+    if detections:
+        summary += " — " + ", ".join(str(d) for d in detections[:3])
+
+    network = report.get("network") if isinstance(report.get("network"), dict) else {}
+    behaviour = report.get("behaviour") if isinstance(report.get("behaviour"), dict) else {}
+    dropped = report.get("dropped_files") if isinstance(report.get("dropped_files"), list) else []
+
+    return [
+        _finding(
+            "CAPE", "cape", "sandbox_behaviour", severity, summary,
+            _clean({
+                "task_id": task_id,
+                "malscore": malscore,
+                # A None malscore is stripped by _clean, leaving no key at all —
+                # and an absent key is exactly what a consumer defaults to zero.
+                # This flag is a boolean, so it survives cleaning and says
+                # plainly that CAPE did not score the sample.
+                "scored": malscore is not None,
+                "verdict": verdict,
+                "families": detections[:5] or None,
+                "signatures": [
+                    s.get("name") for s in (report.get("signatures") or [])[:8]
+                    if isinstance(s, dict) and s.get("name")
+                ] or None,
+                "contacted_domains": (network.get("domains") or [])[:8] or None,
+                "destinations": (network.get("destinations") or [])[:8] or None,
+                "process_count": behaviour.get("process_count"),
+                "dropped_file_count": len(dropped) or None,
+                "machine": report.get("machine"),
+                "route": report.get("route"),
+                "limitations": (report.get("limitations") or [])[:2] or None,
+            }),
+        )
+    ]
 
 
 def _intel_findings(intel: dict[str, Any]) -> list[dict[str, Any]]:
