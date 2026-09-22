@@ -37,6 +37,54 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Host firewall for the published API port ──
+  # Docker publishes ports by DNAT in the nat table, which never traverses the
+  # INPUT chain — so a ufw or iptables INPUT rule for 8000 looks applied and
+  # filters nothing. The rules belong in DOCKER-USER, which sits at the top of
+  # FORWARD, and Docker flushes that chain whenever the daemon restarts. Hence a
+  # container rather than a one-off command: it re-applies on every boot and on
+  # every daemon restart, and the rules live in version control instead of in
+  # somebody's shell history.
+  #
+  # Filtering is by *interface*, not by container address. Container IPs change
+  # on recreate, and a stale address rule either reopens the port silently or
+  # starts dropping the frontend's own traffic. Only packets arriving on a
+  # non-container interface are considered; frontend-to-api rides the compose
+  # bridge and is never touched.
+  firewall:
+    image: alpine:3.20
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    environment:
+      # The alert sender. Everything else reaching 8000 from outside is dropped.
+      INGEST_CIDR: "172.23.10.16/32"
+      EXTERNAL_IFACES: "enp6s18 virbr0"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache iptables >/dev/null
+        apply() {
+          for IF in $$EXTERNAL_IFACES; do
+            # Remove first so re-running never stacks duplicates.
+            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN 2>/dev/null; do :; done
+            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP 2>/dev/null; do :; done
+            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP
+            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN
+          done
+          echo "[firewall] DOCKER-USER rules applied for: $$EXTERNAL_IFACES (allow $$INGEST_CIDR)"
+        }
+        apply
+        # Docker rebuilds its chains on daemon restart without restarting this
+        # container, so the rules are re-asserted rather than applied once.
+        while true; do
+          sleep 300
+          iptables -C DOCKER-USER -i $${EXTERNAL_IFACES%% *} -p tcp --dport 8000 -j DROP 2>/dev/null || apply
+        done
+
   # ── Backend API ──
   api:
     build:
