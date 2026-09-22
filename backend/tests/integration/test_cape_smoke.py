@@ -48,6 +48,8 @@ def test_cape_status_is_reachable_and_authenticated():
 
 def test_an_anonymous_request_is_rejected():
     """The other half of the documented check: no token must mean 401."""
+    import ssl
+
     import httpx
 
     from app.config import get_settings
@@ -56,7 +58,10 @@ def test_an_anonymous_request_is_rejected():
     if not settings.cape_configured:
         pytest.skip("CAPE is not configured.")
 
-    with httpx.Client(verify=settings.cape_tls_verify, follow_redirects=False, timeout=15) as client:
+    verify = settings.cape_tls_verify
+    if isinstance(verify, str) and verify.strip():
+        verify = ssl.create_default_context(cafile=verify.strip())
+    with httpx.Client(verify=verify, follow_redirects=False, timeout=15) as client:
         response = client.get(f"{settings.cape_base_url}/cuckoo/status/")
 
     assert response.status_code == 401, (

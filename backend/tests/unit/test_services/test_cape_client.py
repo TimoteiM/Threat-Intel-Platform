@@ -93,17 +93,21 @@ def test_all_three_present_is_configured():
 
 
 def test_a_ca_bundle_becomes_the_verify_argument():
+    """Every field is set explicitly: Settings reads .env, so a test that omits
+    one asserts against whatever the deployment happens to be configured with.
+    This exact test passed until CAPE_CA_BUNDLE was filled in for real."""
     from app.config import Settings
 
     assert Settings(cape_ca_bundle="/etc/ssl/internal.pem").cape_tls_verify == "/etc/ssl/internal.pem"
-    assert Settings(cape_verify_tls=True).cape_tls_verify is True
-    assert Settings(cape_verify_tls=False).cape_tls_verify is False
+    assert Settings(cape_verify_tls=True, cape_ca_bundle="").cape_tls_verify is True
+    assert Settings(cape_verify_tls=False, cape_ca_bundle="").cape_tls_verify is False
 
 
 def test_tls_verification_is_on_by_default():
+    """The field's own default, independent of what this deployment sets."""
     from app.config import Settings
 
-    assert Settings().cape_verify_tls is True
+    assert Settings.model_fields["cape_verify_tls"].default is True
 
 
 def test_disabling_tls_verification_warns(monkeypatch, caplog):

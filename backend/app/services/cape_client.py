@@ -260,9 +260,10 @@ class CapeClient:
         # Correlates the lines this integration logs for one workflow. Random,
         # carries no sample or tenant identity, and is safe to show an analyst.
         self.request_id = request_id or uuid.uuid4().hex[:12]
+        self._ssl_context: ssl.SSLContext | None = None
         self._session = self._build_session()
 
-        if not self._verify:
+        if self.settings.cape_tls_verify is False:
             logger.warning(
                 "CAPE TLS verification is DISABLED (CAPE_VERIFY_TLS=false). "
                 "This is a development-only setting: responses from the sandbox "
@@ -274,7 +275,35 @@ class CapeClient:
 
     @property
     def _verify(self):
-        return self.settings.cape_tls_verify
+        """What httpx should be given for `verify`.
+
+        A CA bundle is turned into an SSLContext rather than passed as a path:
+        httpx deprecated `verify=<str>`, and this integration's whole point is
+        an internally-issued certificate, so the string form is the case that
+        would break on the next httpx upgrade. Built once per client.
+        """
+        configured = self.settings.cape_tls_verify
+        if isinstance(configured, str) and configured.strip():
+            path = configured.strip()
+            if self._ssl_context is None:
+                try:
+                    self._ssl_context = ssl.create_default_context(cafile=path)
+                except OSError as exc:
+                    # The commonest deployment failure: the bundle was not
+                    # mounted, or was mounted as a directory because the bind
+                    # source did not exist when the container was created.
+                    # A bare FileNotFoundError names nothing useful.
+                    raise CapeNotConfigured(
+                        f"CAPE_CA_BUNDLE points at {path!r}, which cannot be read "
+                        f"inside this container ({exc.strerror}). Check that the file is "
+                        f"mounted read-only and is a regular file, not a directory."
+                    ) from None
+                except ssl.SSLError as exc:
+                    raise CapeNotConfigured(
+                        f"CAPE_CA_BUNDLE at {path!r} is not a usable PEM certificate bundle: {exc}"
+                    ) from None
+            return self._ssl_context
+        return bool(configured)
 
     def _build_session(self) -> httpx.Client:
         return httpx.Client(
