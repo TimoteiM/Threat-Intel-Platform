@@ -564,14 +564,140 @@ body.process-graph-fullscreen .app-shell__main {
 
 .app-sidebar__foot {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--shell-border);
 }
 
-.app-sidebar--collapsed .app-sidebar__foot {
+/* The controls that used to crowd the account out of its own footer. */
+.app-sidebar__footrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-sidebar--collapsed .app-sidebar__footrow {
   flex-direction: column;
+}
+
+/* ── Signed-in account ──────────────────────────────────────────────────── */
+
+.app-account {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.app-account__who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--shell-radius-sm);
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-account__who:hover {
+  background: var(--shell-surface-hover);
+  border-color: var(--shell-border);
+}
+
+.app-account__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--shell-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* A generated password that has not been replaced yet. The dot is on the
+   avatar because the avatar is the one part that survives collapsing. */
+.app-account__avatar--attention::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-warning);
+  border: 2px solid var(--shell-surface-strong);
+}
+
+.app-account__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.app-account__name,
+.app-account__role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-account__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.app-account__role {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.app-account__role--attention {
+  color: var(--status-warning);
+}
+
+.app-account__signout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--shell-radius-sm);
+  border: 1px solid var(--shell-border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.app-account__signout:hover {
+  color: var(--status-danger);
+  background: var(--shell-surface-hover);
+  border-color: var(--status-danger);
+}
+
+.app-sidebar--collapsed .app-account {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-sidebar--collapsed .app-account__who {
+  flex: none;
+  padding: 0;
+  justify-content: center;
 }
 
 .app-sidebar__toggle {

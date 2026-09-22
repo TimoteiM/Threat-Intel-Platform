@@ -97,20 +97,25 @@ export default function Sidebar({
       </nav>
 
       <div className="app-sidebar__foot">
-        <button
-          type="button"
-          className="app-sidebar__toggle"
-          onClick={onToggle}
-          aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-          title={collapsed ? "Expand navigation" : "Collapse navigation"}
-        >
-          <svg className="app-sidebar__icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d={collapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"} />
-          </svg>
-        </button>
-        <CorrelationAlerts />
+        {/* The account gets its own row. Sharing one with the toggle, the bell
+            and the version badge left it about 118px wide, which truncated
+            most real names into something nobody would read. */}
         <SessionControl collapsed={collapsed} />
-        <span className="app-sidebar__version">{APP_VERSION}</span>
+        <div className="app-sidebar__footrow">
+          <button
+            type="button"
+            className="app-sidebar__toggle"
+            onClick={onToggle}
+            aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+            title={collapsed ? "Expand navigation" : "Collapse navigation"}
+          >
+            <svg className="app-sidebar__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d={collapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"} />
+            </svg>
+          </button>
+          <CorrelationAlerts />
+          <span className="app-sidebar__version">{APP_VERSION}</span>
+        </div>
       </div>
     </aside>
   );
