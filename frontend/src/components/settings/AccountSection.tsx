@@ -61,7 +61,7 @@ export default function AccountSection() {
       <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13 }}>
         <Fact label="Signed in as" value={me.display_name || me.username || "—"} />
         <Fact label="Username" value={me.username || "—"} />
-        <Fact label="Role" value={me.role === "admin" ? "Administrator" : "Analyst"} />
+        <Fact label="Role" value={api.roleLabel(me.role)} />
         <Fact label="Signs in with" value={microsoft ? "Microsoft account" : "Password"} />
       </div>
 

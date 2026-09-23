@@ -651,6 +651,20 @@ export function retrySandboxAnalysis(id: string) {
 }
 
 /** Statuses that are still moving, so the panel knows when to keep polling. */
+/** Roles that may manage users and keys. Mirrors ADMIN_ROLES in the backend. */
+export const ADMIN_ROLES = ["owner", "admin"];
+
+export function hasAdminRights(role?: string | null): boolean {
+  return ADMIN_ROLES.includes(String(role || ""));
+}
+
+/** How a role is written for a person. */
+export function roleLabel(role?: string | null): string {
+  if (role === "owner") return "Owner";
+  if (role === "admin") return "Administrator";
+  return "Analyst";
+}
+
 export const SANDBOX_ACTIVE_STATUSES: SandboxStatus[] = [
   "queued", "submitting", "submitted", "pending", "running", "processing",
 ];
@@ -675,7 +689,8 @@ export function getMe() {
 export interface PlatformUser {
   id: string;
   username: string;
-  role: "admin" | "analyst";
+  /** "owner" carries administrator rights and cannot be deleted by anyone. */
+  role: "owner" | "admin" | "analyst";
   active: boolean;
   auth_provider: "local" | "microsoft";
   email?: string | null;

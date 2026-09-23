@@ -2,7 +2,7 @@
 
 import React from "react";
 
-import { getAPIHealth, getMe, type Me } from "@/lib/api";
+import { getAPIHealth, getMe, hasAdminRights, type Me } from "@/lib/api";
 import { APP_VERSION } from "@/lib/constants";
 import { type ListDensity, type ThemePreference } from "@/lib/settings";
 import type { APIHealthResponse, APIProviderHealth, APIHealthStatus } from "@/lib/types";
@@ -216,7 +216,7 @@ export default function SettingsPageClient() {
         </SectionCard>
       </div>
 
-      {me?.role === "admin" && (
+      {hasAdminRights(me?.role) && (
         <div id="people" style={{ scrollMarginTop: 80 }}>
           <SectionCard
             title="People"

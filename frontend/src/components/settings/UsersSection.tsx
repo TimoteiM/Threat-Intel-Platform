@@ -24,6 +24,9 @@ export default function UsersSection() {
   const [error, setError] = useState<string | null>(null);
   const [issued, setIssued] = useState<{ username: string; password: string } | null>(null);
   const [adding, setAdding] = useState(false);
+  // Granting owner is an owner's privilege, except on a platform that has none
+  // — the backend enforces both halves; this only decides what to offer.
+  const [me, setMe] = useState<api.Me | null>(null);
 
   const [username, setUsername] = useState("");
   const [role, setRole] = useState("analyst");
@@ -44,7 +47,11 @@ export default function UsersSection() {
 
   useEffect(() => {
     load();
+    api.getMe().then(setMe).catch(() => setMe(null));
   }, [load]);
+
+  const noOwnerYet = users.length > 0 && !users.some((u) => u.role === "owner");
+  const mayGrantOwner = me?.role === "owner" || noOwnerYet;
 
   const act = async (run: () => Promise<unknown>, failure: string) => {
     setError(null);
@@ -157,17 +164,26 @@ export default function UsersSection() {
                   )}
                 </Td>
                 <Td>
-                  <select
-                    value={user.role}
-                    onChange={(e) =>
-                      act(() => api.updateUser(user.id, { role: e.target.value }), "Could not change that role.")
-                    }
-                    style={{ ...fieldStyle, padding: "4px 6px", fontSize: 12 }}
-                    aria-label={`Role for ${user.username}`}
-                  >
-                    <option value="analyst">Analyst</option>
-                    <option value="admin">Administrator</option>
-                  </select>
+                  {user.role === "owner" ? (
+                    // Not a dropdown: an owner cannot be demoted, so offering
+                    // the choice would only produce a refusal.
+                    <span title="An owner cannot be demoted or removed." style={ownerPill()}>
+                      Owner
+                    </span>
+                  ) : (
+                    <select
+                      value={user.role}
+                      onChange={(e) =>
+                        act(() => api.updateUser(user.id, { role: e.target.value }), "Could not change that role.")
+                      }
+                      style={{ ...fieldStyle, padding: "4px 6px", fontSize: 12 }}
+                      aria-label={`Role for ${user.username}`}
+                    >
+                      <option value="analyst">Analyst</option>
+                      <option value="admin">Administrator</option>
+                      {mayGrantOwner && <option value="owner">Owner</option>}
+                    </select>
+                  )}
                 </Td>
                 <Td>{user.auth_provider === "microsoft" ? "Microsoft" : "Password"}</Td>
                 <Td>
@@ -183,19 +199,26 @@ export default function UsersSection() {
                 <Td>{formatWhen(user.last_login_at)}</Td>
                 <Td align="right">
                   <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        act(
-                          () => api.updateUser(user.id, { active: !user.active }),
-                          "Could not change that account.",
-                        )
-                      }
-                      style={smallButtonStyle()}
-                    >
-                      {user.active ? "Disable" : "Enable"}
-                    </button>
-                    {user.auth_provider !== "microsoft" && (
+                    {user.role === "owner" ? (
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        Protected — cannot be disabled or removed
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          act(
+                            () => api.updateUser(user.id, { active: !user.active }),
+                            "Could not change that account.",
+                          )
+                        }
+                        style={smallButtonStyle()}
+                      >
+                        {user.active ? "Disable" : "Enable"}
+                      </button>
+                    )}
+                    {user.auth_provider !== "microsoft" &&
+                      (user.role !== "owner" || me?.role === "owner") && (
                       <button
                         type="button"
                         onClick={() =>
@@ -211,17 +234,19 @@ export default function UsersSection() {
                         Reset password
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm(`Remove ${user.username}? This cannot be undone.`)) {
-                          act(() => api.deleteUser(user.id), "Could not remove that user.");
-                        }
-                      }}
-                      style={smallButtonStyle("danger")}
-                    >
-                      Remove
-                    </button>
+                    {user.role !== "owner" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Remove ${user.username}? This cannot be undone.`)) {
+                            act(() => api.deleteUser(user.id), "Could not remove that user.");
+                          }
+                        }}
+                        style={smallButtonStyle("danger")}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 </Td>
               </tr>
@@ -283,6 +308,9 @@ export default function UsersSection() {
             <select id="new-role" value={role} onChange={(e) => setRole(e.target.value)} style={fieldStyle}>
               <option value="analyst">Analyst — use the platform</option>
               <option value="admin">Administrator — also manage users and keys</option>
+              {mayGrantOwner && (
+                <option value="owner">Owner — administrator rights, and cannot be removed</option>
+              )}
             </select>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -315,6 +343,19 @@ function Td({ children, align }: { children: React.ReactNode; align?: "right" })
       {children}
     </td>
   );
+}
+
+function ownerPill(): React.CSSProperties {
+  return {
+    display: "inline-block",
+    padding: "3px 9px",
+    borderRadius: 999,
+    border: "1px solid var(--shell-accent)",
+    color: "var(--shell-accent)",
+    fontSize: 11,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  };
 }
 
 function formatWhen(value?: string | null): string {

@@ -6,6 +6,16 @@ GET    /api/auth/me         → who am I (401 when nobody)
 GET    /api/auth/status     → public; whether this caller is signed in
 
 GET    /api/auth/users      → list, admin only
+
+Three roles: `owner`, `admin`, `analyst`. Owner carries every administrator
+right and adds one property — the account cannot be deleted, demoted or
+deactivated by anyone, including another owner and itself. Only an owner may
+grant the role, except on a platform that has none, where the first one has to
+come from an administrator.
+
+The consequence is worth stating: an owner whose credentials are lost can only
+be recovered by another owner resetting its password, or by editing the
+database directly. Keep two.
 POST   /api/auth/users      → add somebody, admin only; password returned once
 PATCH  /api/auth/users/{id} → role and active, admin only
 POST   /api/auth/users/{id}/password → reset somebody else's, admin only
@@ -230,7 +240,52 @@ async def revoke_api_key(key_id: str, request: Request, db: DBSession) -> dict[s
     return {"id": key_id, "active": False}
 
 
-ROLES = ("admin", "analyst")
+ROLE_OWNER = "owner"
+ROLE_ADMIN = "admin"
+ROLE_ANALYST = "analyst"
+ROLES = (ROLE_OWNER, ROLE_ADMIN, ROLE_ANALYST)
+
+# Roles that may manage users and keys. One tuple rather than a literal in each
+# check, because a role added to the vocabulary and forgotten in one of those
+# checks is a role with fewer rights than intended and no error to say so.
+ADMIN_ROLES = (ROLE_OWNER, ROLE_ADMIN)
+
+
+def has_admin_rights(role: str | None) -> bool:
+    return str(role or "").strip() in ADMIN_ROLES
+
+
+def _is_owner(identity_or_row) -> bool:
+    role = (
+        identity_or_row.get("role")
+        if isinstance(identity_or_row, dict)
+        else getattr(identity_or_row, "role", None)
+    )
+    return str(role or "").strip() == ROLE_OWNER
+
+
+async def _refuse_if_owner(row: User, *, action: str) -> None:
+    """The whole point of the role: an owner is not removable.
+
+    Refused for everybody, including another owner and the owner themselves.
+    "Deleted by nobody" has to mean nobody, or the protection is a convention
+    rather than a rule — and the account it protects is the one an administrator
+    would reach for if they wanted this platform's administration to belong to
+    them instead.
+
+    Deactivation and demotion are refused by the same rule. Either would strip
+    an owner of everything the role carries while leaving the row in place,
+    which is deletion in all but name.
+    """
+    if _is_owner(row):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"An owner account cannot be {action}. This is deliberate and applies to "
+                "everyone, including other owners. Change the role in the database if this "
+                "is genuinely required."
+            ),
+        )
 
 
 @router.get("/users")
@@ -242,11 +297,12 @@ async def list_users(request: Request, db: DBSession) -> dict[str, Any]:
 
 @router.post("/users", status_code=201)
 async def create_user(body: UserRequest, request: Request, db: DBSession) -> dict[str, Any]:
-    _require_admin(request)
+    identity = _require_admin(request)
     username = body.username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="A username is required.")
     _check_role(body.role)
+    await _refuse_if_granting_owner(body.role, identity, db)
 
     # Case-insensitively, so "Admin" and "admin" cannot both exist — two
     # accounts that look identical in a list are an audit problem.
@@ -288,11 +344,14 @@ async def update_user(user_id: str, body: UserUpdate, request: Request, db: DBSe
     if body.role is not None:
         _check_role(body.role)
         if body.role.strip() != row.role:
+            await _refuse_if_owner(row, action="demoted")
+            await _refuse_if_granting_owner(body.role, identity, db)
             await _refuse_if_last_admin(row, db, identity, action="change the role of")
             row.role = body.role.strip()
 
     if body.active is not None and bool(body.active) != bool(row.active):
         if not body.active:
+            await _refuse_if_owner(row, action="deactivated")
             await _refuse_if_last_admin(row, db, identity, action="deactivate")
         row.active = bool(body.active)
 
@@ -306,8 +365,16 @@ async def reset_user_password(
     user_id: str, body: PasswordReset, request: Request, db: DBSession
 ) -> dict[str, Any]:
     """An administrator resetting somebody else's password."""
-    _require_admin(request)
+    identity = _require_admin(request)
     row = await _load_user(user_id, db)
+    if _is_owner(row) and not _is_owner(identity):
+        # Otherwise the protection is trivially bypassed: set the owner's
+        # password, sign in as them, and the account nobody may delete is
+        # yours. Another owner may still do it, which is the recovery path.
+        raise HTTPException(
+            status_code=403,
+            detail="Only an owner may reset an owner's password.",
+        )
     if row.auth_provider == "microsoft":
         raise HTTPException(
             status_code=409,
@@ -330,6 +397,7 @@ async def reset_user_password(
 async def delete_user(user_id: str, request: Request, db: DBSession) -> dict[str, Any]:
     identity = _require_admin(request)
     row = await _load_user(user_id, db)
+    await _refuse_if_owner(row, action="deleted")
     await _refuse_if_last_admin(row, db, identity, action="delete")
     username = row.username
     await db.delete(row)
@@ -369,6 +437,36 @@ async def _load_user(user_id: str, db) -> User:
     return row
 
 
+async def _refuse_if_granting_owner(role: str | None, identity: dict[str, Any], db) -> None:
+    """Owner is granted by an owner, not taken by an administrator.
+
+    Without this the protection inverts: any administrator could make
+    themselves an owner and become the one account nobody may remove. The
+    exception is a platform that has no owner at all — the first one has to
+    come from somewhere, and until it exists an administrator is the highest
+    authority there is.
+    """
+    if str(role or "").strip() != ROLE_OWNER:
+        return
+    if _is_owner(identity):
+        return
+
+    existing = (
+        await db.execute(select(func.count()).select_from(User).where(User.role == ROLE_OWNER))
+    ).scalar() or 0
+    if existing == 0:
+        logger.warning(
+            "First owner granted by administrator %s — no owner existed yet",
+            identity.get("username"),
+        )
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Only an owner may grant the owner role.",
+    )
+
+
 async def _refuse_if_last_admin(row: User, db, identity: dict, *, action: str) -> None:
     """Stop the change that locks everybody out of administration.
 
@@ -377,14 +475,14 @@ async def _refuse_if_last_admin(row: User, db, identity: dict, *, action: str) -
     users and API keys nobody can manage any more, and no way back in short of
     editing the database by hand — so both are refused rather than warned about.
     """
-    if row.role != "admin":
+    if not has_admin_rights(row.role):
         return
 
     remaining = (
         await db.execute(
             select(func.count())
             .select_from(User)
-            .where(User.role == "admin", User.active.is_(True), User.id != row.id)
+            .where(User.role.in_(ADMIN_ROLES), User.active.is_(True), User.id != row.id)
         )
     ).scalar() or 0
 
@@ -425,6 +523,6 @@ def _require_admin(request: Request) -> dict[str, Any]:
     identity = getattr(request.state, "identity", None)
     if not identity:
         raise HTTPException(status_code=401, detail="Sign in first.")
-    if str(identity.get("role") or "") != "admin":
+    if not has_admin_rights(identity.get("role")):
         raise HTTPException(status_code=403, detail="Administrator access is required.")
     return identity

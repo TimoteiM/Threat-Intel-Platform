@@ -338,7 +338,9 @@ class User(Base):
     external_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    # "admin" may manage users and API keys; "analyst" may use the platform.
+    # "owner" and "admin" may manage users and API keys; "analyst" may use the
+    # platform. An owner additionally cannot be deleted, demoted or deactivated
+    # by anyone — see _refuse_if_owner in app/api/auth.py.
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="analyst")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -40,7 +40,12 @@ from app.config import get_settings
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, Artifact, Investigation, SandboxAnalysis
 from app.services import cape_analysis_service as svc
+from app.api.auth import ROLE_ANALYST, ADMIN_ROLES, has_admin_rights
 from app.services import cape_client as cape
+
+# Who may ask for a detonation. Derived from the shared role vocabulary rather
+# than a literal tuple, so a new role with admin rights is not silently denied.
+SUBMIT_ROLES = tuple(ADMIN_ROLES) + (ROLE_ANALYST,)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cape", tags=["cape"])
@@ -422,13 +427,13 @@ def _require_human(request: Request) -> dict[str, Any]:
     identity = _require_signed_in(request)
     if identity.get("kind") != "user":
         raise HTTPException(403, "Sandbox submission requires a signed-in user account.")
-    if str(identity.get("role") or "") not in ("admin", "analyst"):
+    if str(identity.get("role") or "") not in SUBMIT_ROLES:
         raise HTTPException(403, "Your role may not submit samples to the sandbox.")
     return identity
 
 
 def _require_admin(request: Request) -> dict[str, Any]:
     identity = _require_signed_in(request)
-    if identity.get("kind") != "user" or str(identity.get("role") or "") != "admin":
+    if identity.get("kind") != "user" or not has_admin_rights(identity.get("role")):
         raise HTTPException(403, "Administrator access is required.")
     return identity

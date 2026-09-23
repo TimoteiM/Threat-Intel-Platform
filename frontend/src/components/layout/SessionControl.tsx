@@ -50,7 +50,7 @@ export default function SessionControl({ collapsed }: { collapsed: boolean }) {
   if (!me || me.kind !== "user") return null;
 
   const name = me.display_name || me.username || "Signed in";
-  const role = me.role === "admin" ? "Administrator" : "Analyst";
+  const role = api.roleLabel(me.role);
   const needsPassword = Boolean(me.must_change_password);
   const subtitle = needsPassword ? "Password change needed" : role;
 
