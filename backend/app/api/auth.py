@@ -16,6 +16,11 @@ come from an administrator.
 The consequence is worth stating: an owner whose credentials are lost can only
 be recovered by another owner resetting its password, or by editing the
 database directly. Keep two.
+
+Removal follows the hierarchy. An administrator may delete, deactivate or
+demote **analysts only**; acting on another administrator is an owner's
+privilege. All three are restricted together, because demotion is otherwise
+the way round the other two.
 POST   /api/auth/users      → add somebody, admin only; password returned once
 PATCH  /api/auth/users/{id} → role and active, admin only
 POST   /api/auth/users/{id}/password → reset somebody else's, admin only
@@ -346,13 +351,20 @@ async def update_user(user_id: str, body: UserUpdate, request: Request, db: DBSe
         if body.role.strip() != row.role:
             await _refuse_if_owner(row, action="demoted")
             await _refuse_if_granting_owner(body.role, identity, db)
+            # Only a demotion is restricted. Promoting an analyst is not a way
+            # to remove anyone, so an administrator may still do it.
+            if not has_admin_rights(body.role):
+                await _refuse_if_peer(row, identity, action="demote")
             await _refuse_if_last_admin(row, db, identity, action="change the role of")
             row.role = body.role.strip()
 
     if body.active is not None and bool(body.active) != bool(row.active):
         if not body.active:
             await _refuse_if_owner(row, action="deactivated")
+            await _refuse_if_peer(row, identity, action="deactivate")
             await _refuse_if_last_admin(row, db, identity, action="deactivate")
+        # Re-enabling a disabled account takes nothing away, so it is not
+        # restricted — an administrator can undo a lockout.
         row.active = bool(body.active)
 
     await db.commit()
@@ -398,6 +410,7 @@ async def delete_user(user_id: str, request: Request, db: DBSession) -> dict[str
     identity = _require_admin(request)
     row = await _load_user(user_id, db)
     await _refuse_if_owner(row, action="deleted")
+    await _refuse_if_peer(row, identity, action="delete")
     await _refuse_if_last_admin(row, db, identity, action="delete")
     username = row.username
     await db.delete(row)
@@ -435,6 +448,34 @@ async def _load_user(user_id: str, db) -> User:
     if row is None:
         raise HTTPException(status_code=404, detail="User not found.")
     return row
+
+
+async def _refuse_if_peer(row: User, identity: dict[str, Any], *, action: str) -> None:
+    """An administrator may remove analysts, and nobody above them.
+
+    Only an owner may act destructively on an account that itself carries
+    administrator rights. Administrators are peers: letting one delete another
+    means the platform's administration belongs to whoever moves first, and a
+    single compromised admin account can empty the rest.
+
+    "Destructive" covers deletion, deactivation and demotion together, because
+    demotion is the way round the other two: drop a peer to analyst and they
+    are deletable by the rule that was supposed to protect them.
+    """
+    if _is_owner(identity):
+        return
+    if not has_admin_rights(row.role):
+        return
+    if str(row.id) == str(identity.get("id")):
+        # Falls to the lockout guard instead, which has a better message for it.
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Administrators may only {action} analysts. "
+            f"Ask an owner to {action} another administrator."
+        ),
+    )
 
 
 async def _refuse_if_granting_owner(role: str | None, identity: dict[str, Any], db) -> None:

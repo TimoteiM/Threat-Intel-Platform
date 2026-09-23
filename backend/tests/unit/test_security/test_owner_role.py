@@ -199,3 +199,76 @@ def test_an_owner_counts_as_an_administrator_for_the_last_admin_guard():
                 Row(role=ROLE_ADMIN, row_id="x"), _CountingDB(0), {"id": "other"}, action="delete"
             )
         )
+
+
+# ── Who may remove whom ──────────────────────────────────────────────────────
+#
+# An administrator may remove analysts and nobody above them. All three
+# destructive actions are restricted together: demotion is the way round the
+# other two, since a peer dropped to analyst becomes deletable by the very rule
+# that was protecting them.
+
+
+def _peer(row, identity, action="delete"):
+    return asyncio.run(auth_api._refuse_if_peer(row, identity, action=action))
+
+
+@pytest.mark.parametrize("action", ["delete", "deactivate", "demote"])
+def test_an_administrator_may_not_act_on_another_administrator(action):
+    with pytest.raises(HTTPException) as caught:
+        _peer(Row(role=ROLE_ADMIN, row_id="other"), ADMIN, action)
+    assert caught.value.status_code == 403
+    assert action in caught.value.detail
+    assert "owner" in caught.value.detail.lower()
+
+
+@pytest.mark.parametrize("action", ["delete", "deactivate", "demote"])
+def test_an_administrator_may_act_on_an_analyst(action):
+    _peer(Row(role=ROLE_ANALYST, row_id="other"), ADMIN, action)  # must not raise
+
+
+def test_an_administrator_may_not_act_on_an_owner_either():
+    """Belt and braces: _refuse_if_owner already stops this, but the hierarchy
+    must not be the thing that lets it through if that check ever moves."""
+    with pytest.raises(HTTPException):
+        _peer(Row(role=ROLE_OWNER, row_id="other"), ADMIN, "delete")
+
+
+@pytest.mark.parametrize("target_role", [ROLE_ADMIN, ROLE_ANALYST])
+def test_an_owner_may_act_on_anyone_below(target_role):
+    _peer(Row(role=target_role, row_id="other"), OWNER, "delete")  # must not raise
+
+
+def test_acting_on_your_own_account_falls_to_the_lockout_guard():
+    """Which has a better message for it than 'ask an owner'."""
+    row = Row(role=ROLE_ADMIN, row_id="2")   # same id as ADMIN
+    _peer(row, ADMIN, "delete")  # must not raise here
+
+
+# ── The bypass this closes ───────────────────────────────────────────────────
+
+
+def test_demotion_is_restricted_because_it_is_the_route_to_deletion():
+    """Without this an administrator demotes a peer to analyst and then deletes
+    them, and the delete rule protects nobody."""
+    with pytest.raises(HTTPException):
+        _peer(Row(role=ROLE_ADMIN, row_id="other"), ADMIN, "demote")
+
+
+def test_promoting_an_analyst_is_not_a_removal_and_stays_allowed():
+    """Only demotion is restricted — promotion takes nothing away from anyone."""
+    from app.api.auth import has_admin_rights as rights
+
+    assert rights(ROLE_ADMIN) is True          # target role has admin rights
+    _peer(Row(role=ROLE_ANALYST, row_id="other"), ADMIN, "demote")
+
+
+def test_reactivating_someone_is_not_restricted():
+    """Re-enabling a disabled account takes nothing away, so an administrator
+    can undo a lockout without needing an owner."""
+    import inspect
+
+    source = inspect.getsource(auth_api.update_user)
+    guarded = source.split("if body.active is not None")[1]
+    assert "if not body.active:" in guarded
+    assert guarded.index("_refuse_if_peer") > guarded.index("if not body.active:")

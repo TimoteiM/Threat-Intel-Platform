@@ -52,6 +52,15 @@ export default function UsersSection() {
 
   const noOwnerYet = users.length > 0 && !users.some((u) => u.role === "owner");
   const mayGrantOwner = me?.role === "owner" || noOwnerYet;
+  const viewerIsOwner = me?.role === "owner";
+
+  /**
+   * Removing, disabling or demoting someone who carries administrator rights
+   * is an owner's privilege. Shown as a state rather than a disabled button,
+   * because a control that exists only to be refused is worse than no control.
+   */
+  const mayRemove = (user: api.PlatformUser) =>
+    viewerIsOwner || !api.hasAdminRights(user.role);
 
   const act = async (run: () => Promise<unknown>, failure: string) => {
     setError(null);
@@ -173,10 +182,22 @@ export default function UsersSection() {
                   ) : (
                     <select
                       value={user.role}
+                      disabled={!mayRemove(user)}
+                      title={
+                        mayRemove(user)
+                          ? undefined
+                          : "Only an owner may change another administrator's role."
+                      }
                       onChange={(e) =>
                         act(() => api.updateUser(user.id, { role: e.target.value }), "Could not change that role.")
                       }
-                      style={{ ...fieldStyle, padding: "4px 6px", fontSize: 12 }}
+                      style={{
+                        ...fieldStyle,
+                        padding: "4px 6px",
+                        fontSize: 12,
+                        opacity: mayRemove(user) ? 1 : 0.55,
+                        cursor: mayRemove(user) ? "pointer" : "not-allowed",
+                      }}
                       aria-label={`Role for ${user.username}`}
                     >
                       <option value="analyst">Analyst</option>
@@ -202,6 +223,10 @@ export default function UsersSection() {
                     {user.role === "owner" ? (
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                         Protected — cannot be disabled or removed
+                      </span>
+                    ) : !mayRemove(user) ? (
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        Owner only
                       </span>
                     ) : (
                       <button
@@ -234,7 +259,7 @@ export default function UsersSection() {
                         Reset password
                       </button>
                     )}
-                    {user.role !== "owner" && (
+                    {mayRemove(user) && user.role !== "owner" && (
                       <button
                         type="button"
                         onClick={() => {
