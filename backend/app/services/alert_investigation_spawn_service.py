@@ -126,7 +126,14 @@ def spawn_investigation(
             # licence allowance on one ticket, and they queue one at a time so
             # the analyst waits for all of them. The results page offers the
             # sandbox per indicator instead.
-            external_context={"sandbox_suppressed": True},
+            external_context={
+                "sandbox_suppressed": True,
+                # Says where this run came from, rather than naming another
+                # collector to hold back. The task drops whatever
+                # ALERT_EXCLUDED_COLLECTORS lists, so the next per-request
+                # provider needs a setting change and not a code change.
+                "origin": "alert",
+            },
         )
         _store_investigation_task_id(investigation_id, getattr(task, "id", None))
     except Exception as exc:

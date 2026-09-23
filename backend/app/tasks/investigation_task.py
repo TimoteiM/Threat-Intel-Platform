@@ -175,6 +175,20 @@ def run_investigation(
                 c for c in settings.default_collectors_list if c in supported_for_type
             ]
 
+        # An investigation spawned from an alert takes the platform defaults,
+        # which is how a per-request provider ends up being billed dozens of
+        # times for one ticket. Analysts asking for it by hand still get it:
+        # only the automatic path is trimmed, and only when nothing was
+        # explicitly requested.
+        if str((external_context or {}).get("origin") or "") == "alert":
+            excluded = settings.alert_excluded_collector_set
+            dropped = [c for c in collectors_to_run if c in excluded]
+            if dropped:
+                collectors_to_run = [c for c in collectors_to_run if c not in excluded]
+                logger.info(
+                    f"[{investigation_id}] alert-spawned: holding back {', '.join(dropped)}"
+                )
+
         if not collectors_to_run:
             logger.error(f"[{investigation_id}] No valid collectors for type={observable_type}")
             _update_state(investigation_id, InvestigationState.FAILED)

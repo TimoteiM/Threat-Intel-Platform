@@ -251,6 +251,17 @@ class Settings(BaseSettings):
     # the on-premises sandbox without the analyst having to remember to tick
     # it. It is a lookup, not a detonation — see app/collectors/cape_collector.
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis,cape"
+    # Collectors that never run on the automatic alert path, however they would
+    # otherwise be selected. An alert fans out over many indicators, so a
+    # per-request provider that is worth it once for an analyst investigating a
+    # domain by hand is not worth it dozens of times a ticket.
+    #
+    # This is the third mechanism of its kind and the most general: ANY.RUN is
+    # held back by external_context["sandbox_suppressed"], and the alert
+    # service's own OPT_IN_COLLECTORS covers inline indicator triage. This one
+    # covers full investigations *spawned* from an alert, which take the
+    # platform defaults and were the gap.
+    alert_excluded_collectors: str = "brave_osint"
     intel_crtsh_timeout_seconds: int = 8
     intel_urlhaus_timeout_seconds: int = 6
     intel_cache_ttl_hours: int = 24
@@ -417,6 +428,12 @@ class Settings(BaseSettings):
     @property
     def default_collectors_list(self) -> list[str]:
         return [c.strip() for c in self.default_collectors.split(",")]
+
+    @property
+    def alert_excluded_collector_set(self) -> frozenset[str]:
+        return frozenset(
+            c.strip() for c in str(self.alert_excluded_collectors or "").split(",") if c.strip()
+        )
 
     @property
     def is_development(self) -> bool:
