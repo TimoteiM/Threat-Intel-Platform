@@ -371,8 +371,11 @@ class InvestigationService:
         # Dispatch pipeline with file_artifact_id
         try:
             supported_for_type = set(get_collectors_for_type(observable_type))
+            # `cape` included: an uploaded file is exactly what the sandbox is
+            # for, and without it here the collector never ran on the upload
+            # path however the platform defaults were configured.
             default_file_collectors = [
-                c for c in ("vt", "hybrid_analysis") if c in supported_for_type
+                c for c in ("vt", "hybrid_analysis", "cape") if c in supported_for_type
             ]
             effective_collectors = (
                 [c for c in (request.requested_collectors or []) if c in supported_for_type]
@@ -392,6 +395,17 @@ class InvestigationService:
             await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
             await self.session.commit()
             raise RuntimeError(f"Failed to queue file investigation task: {exc}") from exc
+
+        # Detonation is a separate, longer-running workflow than the collector
+        # pipeline, so it is queued alongside rather than inside it. Failing to
+        # queue it must not fail the upload: the investigation is still valid,
+        # and the panel still offers the button.
+        try:
+            from app.tasks.cape_task import detonate_uploaded_sample
+
+            detonate_uploaded_sample.delay(investigation_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not queue automatic detonation for %s: %s", investigation_id, exc)
 
         return {
             "investigation_id": investigation_id,

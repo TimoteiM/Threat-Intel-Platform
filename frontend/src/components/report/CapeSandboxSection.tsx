@@ -35,6 +35,9 @@ import * as api from "@/lib/api";
 import type { CollectedEvidence } from "@/lib/types";
 
 const POLL_MS = 6000;
+// Roughly a minute of waiting for the worker to create an auto-queued
+// analysis, then the panel settles on the manual offer.
+const AUTO_START_POLLS = 10;
 
 export default function CapeSandboxSection({
   investigationId,
@@ -51,6 +54,7 @@ export default function CapeSandboxSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [waited, setWaited] = useState(0);
   const timer = useRef<number | null>(null);
 
   // CAPE runs a file and fetches a URL, so both are submittable — they just
@@ -97,14 +101,25 @@ export default function CapeSandboxSection({
 
   // Poll only while something is actually moving. A finished analysis is
   // finished; polling it forever would be a request per tab per six seconds.
+  //
+  // The exception is an eligible sample with no analysis yet: an uploaded file
+  // has one queued by the worker moments after the page first loads, so a few
+  // polls avoid showing "not been detonated" about a detonation already under
+  // way. Bounded, or an observable CAPE will never analyse polls for ever.
   useEffect(() => {
     const status = analysis?.status;
-    if (!status || !api.SANDBOX_ACTIVE_STATUSES.includes(status)) return;
-    timer.current = window.setTimeout(load, POLL_MS);
+    const moving = status && api.SANDBOX_ACTIVE_STATUSES.includes(status);
+    const awaitingAutoStart = !analysis && eligible && waited < AUTO_START_POLLS;
+    if (!moving && !awaitingAutoStart) return;
+
+    timer.current = window.setTimeout(() => {
+      if (!analysis) setWaited((n) => n + 1);
+      load();
+    }, POLL_MS);
     return () => {
       if (timer.current) window.clearTimeout(timer.current);
     };
-  }, [analysis?.status, load]);
+  }, [analysis, analysis?.status, eligible, waited, load]);
 
   const submit = async (force = false) => {
     setBusy(true);
@@ -180,11 +195,13 @@ export default function CapeSandboxSection({
           <Muted>
             {!eligible
               ? "CAPE analyses files and URLs. There is nothing to submit for this observable."
+              : waited < AUTO_START_POLLS && !isUrlTarget
+              ? "Starting a sandbox analysis…"
               : isUrlTarget
               ? "This has not been detonated in the CAPE sandbox. CAPE can fetch it and run whatever it returns."
               : "This sample has not been detonated in the CAPE sandbox."}
           </Muted>
-          {eligible && !confirming && (
+          {eligible && !confirming && (isUrlTarget || waited >= AUTO_START_POLLS) && (
             <button type="button" onClick={() => setConfirming(true)} disabled={busy} style={primaryButton(busy)}>
               {isUrlTarget ? "Detonate URL in sandbox" : "Submit to sandbox"}
             </button>

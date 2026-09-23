@@ -325,3 +325,122 @@ def test_a_missing_file_is_not_mistaken_for_a_sample(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "Session", lambda _engine: DB())
     assert mod._resolve_sample("a1", None, "a" * 64)[0] is None
+
+
+# ── Uploads detonate without a second click ──────────────────────────────────
+#
+# Uploading a sample to a malware analysis platform is the request; asking
+# again afterwards only adds latency to something that takes minutes. Scoped to
+# uploads: an alert-spawned investigation has no file to submit, so this cannot
+# fan out across a ticket.
+
+
+class _UploadDB:
+    def __init__(self, investigation=None, artifact=None):
+        self._investigation = investigation
+        self._artifact = artifact
+        self.created = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def get(self, _model, _pk):
+        return self._investigation
+
+    def execute(self, *_a, **_k):
+        art = self._artifact
+
+        class R:
+            def scalars(self_inner):
+                return self_inner
+
+            def first(self_inner):
+                return art
+
+        return R()
+
+
+class _Inv:
+    def __init__(self):
+        self.id = "33333333-3333-3333-3333-333333333333"
+        self.client_domain = "acme"
+
+
+class _Art:
+    def __init__(self):
+        self.id = "44444444-4444-4444-4444-444444444444"
+        self.sha256_hash = "A" * 64
+        self.artifact_name = "sample.exe"
+        self.size_bytes = 1024
+
+
+def _run_upload(monkeypatch, *, enabled=True, configured=True, artifact=_Art(), created=True):
+    class S:
+        cape_configured = configured
+        cape_auto_detonate_uploads = enabled
+
+    monkeypatch.setattr(cape_task, "get_settings", lambda: S())
+    monkeypatch.setattr(cape_task, "Session", lambda _e: _UploadDB(_Inv(), artifact))
+
+    row = type("Row", (), {"id": "55555555-5555-5555-5555-555555555555", "status": "queued"})()
+    monkeypatch.setattr(cape_task.svc, "get_or_create", lambda db, **kw: (row, created))
+
+    queued = []
+    monkeypatch.setattr(cape_task.run_cape_analysis, "delay", lambda aid: queued.append(aid))
+    return cape_task.detonate_uploaded_sample("33333333-3333-3333-3333-333333333333"), queued
+
+
+def test_an_uploaded_file_is_detonated_without_a_second_click(monkeypatch):
+    result, queued = _run_upload(monkeypatch)
+    assert result["queued"] is True
+    assert queued == ["55555555-5555-5555-5555-555555555555"]
+
+
+def test_the_setting_turns_it_off(monkeypatch):
+    result, queued = _run_upload(monkeypatch, enabled=False)
+    assert result == {"queued": False, "reason": "disabled"}
+    assert queued == []
+
+
+def test_nothing_happens_when_cape_is_not_configured(monkeypatch):
+    result, queued = _run_upload(monkeypatch, configured=False)
+    assert result["queued"] is False and queued == []
+
+
+def test_a_hash_typed_by_hand_has_no_file_to_detonate(monkeypatch):
+    """The collector has already asked CAPE whether it knows the hash; there is
+    nothing to submit, and that is not a failure."""
+    result, queued = _run_upload(monkeypatch, artifact=None)
+    assert result == {"queued": False, "reason": "no_uploaded_file"}
+    assert queued == []
+
+
+def test_a_second_upload_of_the_same_sample_does_not_occupy_a_second_machine(monkeypatch):
+    """get_or_create returning created=False means somebody already asked."""
+    result, queued = _run_upload(monkeypatch, created=False)
+    assert result["queued"] is False
+    assert result["reason"] == "already_exists"
+    assert queued == []
+
+
+def test_the_upload_path_asks_for_the_cape_collector(monkeypatch):
+    """Separate from detonation: the collector is what reports an analysis CAPE
+    already has. It was missing from the upload path's hardcoded list."""
+    import inspect
+
+    from app.services import investigation_service
+
+    source = inspect.getsource(investigation_service)
+    assert '("vt", "hybrid_analysis", "cape")' in source
+
+
+def test_the_upload_path_queues_the_detonation(monkeypatch):
+    import inspect
+
+    from app.services import investigation_service
+
+    source = inspect.getsource(investigation_service)
+    assert "detonate_uploaded_sample" in source

@@ -469,6 +469,63 @@ def _fail(analysis_id: uuid.UUID, headline: str, exc: Exception) -> None:
 # ── resume after a restart ───────────────────────────────────────────────────
 
 
+@celery_app.task(name="app.tasks.cape_task.detonate_uploaded_sample", max_retries=0)
+def detonate_uploaded_sample(investigation_id: str) -> dict[str, Any]:
+    """Queue a detonation for a file an analyst has just uploaded.
+
+    Runs in the worker rather than the request, because creating the analysis
+    needs a synchronous session and the upload response should not wait on it.
+    Idempotent through the usual key, so a double-submitted upload converges on
+    one analysis instead of occupying two machines.
+    """
+    settings = get_settings()
+    if not (settings.cape_configured and settings.cape_auto_detonate_uploads):
+        return {"queued": False, "reason": "disabled"}
+
+    try:
+        inv_id = uuid.UUID(str(investigation_id))
+    except ValueError:
+        return {"queued": False, "reason": "bad_investigation_id"}
+
+    with Session(sync_engine) as db:
+        inv = db.get(Investigation, inv_id)
+        if inv is None:
+            return {"queued": False, "reason": "investigation_missing"}
+
+        artifact = (
+            db.execute(
+                select(Artifact)
+                .where(Artifact.investigation_id == inv_id, Artifact.collector_name == "upload")
+                .order_by(Artifact.created_at.asc())
+            ).scalars().first()
+        )
+        if artifact is None:
+            # A hash typed in by hand rather than a file. Nothing to submit,
+            # and the collector has already asked CAPE whether it knows it.
+            return {"queued": False, "reason": "no_uploaded_file"}
+
+        row, created = svc.get_or_create(
+            db,
+            sha256=str(artifact.sha256_hash or "").lower(),
+            client=inv.client_domain,
+            sample_name=artifact.artifact_name,
+            sample_size=artifact.size_bytes,
+            investigation_id=inv_id,
+            artifact_id=artifact.id,
+            requested_by="upload",
+        )
+        analysis_id = str(row.id)
+        already = row.status
+
+    if created:
+        logger.info("Auto-detonating uploaded sample for investigation %s", investigation_id)
+        run_cape_analysis.delay(analysis_id)
+        return {"queued": True, "analysis_id": analysis_id}
+
+    logger.info("Upload already has analysis %s (%s); not queueing another", analysis_id, already)
+    return {"queued": False, "analysis_id": analysis_id, "reason": "already_exists"}
+
+
 @celery_app.task(name="app.tasks.cape_task.resume_sandbox_analyses")
 def resume_sandbox_analyses() -> dict[str, Any]:
     """Pick up analyses a killed worker left in flight.

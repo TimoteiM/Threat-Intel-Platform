@@ -206,6 +206,16 @@ class Settings(BaseSettings):
     # "this was not opened" about a file that was opened is worse than none,
     # so it is off — set true again if the reader is removed from the image.
     cape_pdf_dynamic_unsupported: bool = False
+    # Detonate a file the moment an analyst uploads it, rather than waiting for
+    # a second click. Uploading a sample to a malware analysis platform is the
+    # request; asking again afterwards only adds latency to an analysis that
+    # takes minutes anyway.
+    #
+    # Scoped to uploads on purpose. An alert-spawned investigation has no file
+    # to submit — it works from hashes and hostnames extracted from alert text
+    # — so this cannot fan out across a ticket. Reuse still applies: a sample
+    # CAPE has already analysed is adopted, and no machine is occupied.
+    cape_auto_detonate_uploads: bool = True
     # Report formats to try, in order. The full JSON report is authoritative for
     # malscore, signatures and network indicators; `lite` is the smaller
     # fallback for an instance that only has that one enabled.

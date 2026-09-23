@@ -146,6 +146,27 @@ It never uploads anything.
 
 ---
 
+## Uploaded files detonate automatically
+
+Uploading a sample to a malware analysis platform *is* the request, so a file
+submitted through the UI is queued for detonation as soon as it lands — no
+second click. `CAPE_AUTO_DETONATE_UPLOADS=false` turns it off.
+
+Scoped to uploads on purpose. An alert-spawned investigation has no file to
+submit — it works from hashes and hostnames extracted from alert text — so this
+cannot fan out across a ticket and occupy the machine pool. A domain or URL is
+still detonated deliberately, because that makes the sandbox visit a live site.
+
+Reuse still applies: a sample CAPE has already analysed is adopted rather than
+run again, so re-uploading something familiar costs no machine and returns at
+once. A double-submitted upload converges on one analysis through the same
+idempotency key.
+
+The upload path also runs the `cape` **collector** now. It had a hardcoded
+list of `vt` and `hybrid_analysis`, so the collector never ran on an uploaded
+file however `DEFAULT_COLLECTORS` was configured — which is why a file
+investigation showed no "What CAPE already knows" section.
+
 ## How an analysis runs
 
 ```
