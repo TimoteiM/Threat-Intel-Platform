@@ -328,18 +328,45 @@ is set to **30** for that reason. A run takes minutes, so the cost is at most
 If you raise CAPE's throttle, the interval can come back down. If you add
 machines, raise the interval proportionally.
 
-### Report size and worker memory
+### Report size, and the IOC fallback
 
-The one report read was **41 MB of JSON** for a single task, against a 64 MB
-ceiling (`CAPE_MAX_REPORT_BYTES`). It is read in bounded chunks, but it is then
-parsed, and a parsed 41 MB JSON document is several hundred megabytes of Python
-objects.
+Report size varies by three orders of magnitude. Measured on this instance:
 
-That is per concurrent analysis. With six running at once this is gigabytes.
-If worker memory becomes a problem, the options in order of preference are:
-lower Celery concurrency for the CAPE queue, ask CAPE to enable the `lite`
-report, or lower the ceiling and accept that very large reports are refused
-rather than ingested.
+| Task | `report/json` | `get/iocs` |
+|---|---|---|
+| 7 (exe) | 121 KB | — |
+| 8 (PDF, 287s, internet) | **139 MB** | **116 KB** |
+
+139 MB is double `CAPE_MAX_REPORT_BYTES`, and parsing it would be well over a
+gigabyte of Python objects per concurrent analysis. So an oversized report is
+not an error any more: the workflow falls back to `GET /apiv2/tasks/get/iocs/`,
+which CAPE assembles itself and which carries the score, network indicators,
+dropped files and behaviour. Task 8 went from "failed, nothing" to `malicious
+10.0/10, 11 domains, 24 hosts, 41 dropped files, 4 processes`.
+
+What the IOC summary does **not** carry is behavioural signatures and CAPE's
+payload/config extraction. That is recorded as a limitation on the analysis so
+an empty signature list is never read as "nothing suspicious found".
+
+It also uses different shapes for the same facts, all of which returned empty
+on the first attempt: `process_tree` is a single dict whose children are under
+`spawned_processes`, and `registry`/`files` are `{modified, deleted}` dicts
+rather than lists.
+
+**`lite` is not a JSON report.** It is a ZIP archive — 16.5 MB for task 8,
+containing `dump.pcap`. It was in the format list on the assumption that it was
+a reduced report; it can never parse, and has been removed.
+
+### PDFs are detonated after all
+
+The brief said PDF dynamic execution was unavailable because no reader was
+installed, and the panel warned so on every PDF. Task 8 disproves it: the guest
+ran `C:\Program Files\Adobe\Acrobat DC\Acrobat\AcroCEF.exe` for 287
+seconds with `route=internet`, and CAPE scored the document **10/10**.
+
+The warning is therefore off by default (`CAPE_PDF_DYNAMIC_UNSUPPORTED=false`).
+Set it true again if the reader is removed from the image — a warning that says
+a file "was not opened" about a file that was opened is worse than none.
 
 ### What the first real report showed, and why it matters
 

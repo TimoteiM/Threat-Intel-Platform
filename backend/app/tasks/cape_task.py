@@ -341,7 +341,18 @@ def _store_report(client: cape.CapeClient, analysis_id: uuid.UUID, task_id: str,
     `tasks/view` is never treated as the result: it carries the lifecycle, and
     on this CAPE it does not reliably carry malscore. The report is the source.
     """
-    report = client.fetch_report(task_id, formats=settings.cape_report_format_list)
+    try:
+        report = client.fetch_report(task_id, formats=settings.cape_report_format_list)
+    except cape.CapeResponseTooLarge as exc:
+        # A finished analysis whose report will not fit is still a finished
+        # analysis. Measured: one PDF produced a 139MB JSON report against a
+        # 64MB ceiling, while CAPE's own IOC summary for the same task was
+        # 116KB and carried the score, network, dropped files and behaviour.
+        # Failing here threw all of that away and told the analyst nothing,
+        # while CAPE's own UI showed a completed run.
+        logger.warning("CAPE report for task %s too large (%s); falling back to the IOC summary",
+                       task_id, exc)
+        report = client.fetch_iocs(task_id)
     normalized = normalize_report(
         report.payload,
         task_id=int(task_id),

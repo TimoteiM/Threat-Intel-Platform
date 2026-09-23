@@ -234,30 +234,59 @@ def test_the_public_view_never_carries_the_credential():
     assert payload["provider_task_id"] == "501"
 
 
-def test_the_public_view_carries_the_audit_trail_and_limitations():
+def test_the_public_view_carries_the_audit_trail_and_limitations(monkeypatch):
+    class _Settings:
+        cape_pdf_dynamic_unsupported = True
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
     row = Row(sample_name="invoice.pdf")
     svc.transition(FakeDB(), row, svc.STATUS_RUNNING, actor="worker")
     payload = svc.to_public_dict(row)
     assert payload["state_history"][-1]["status"] == svc.STATUS_RUNNING
-    assert payload["limitations"], "a PDF must carry its guest-image limitation"
+    assert payload["limitations"], "a configured guest-image limitation must reach the API"
+
+
+def test_the_public_view_has_a_limitations_field_even_when_empty(monkeypatch):
+    """The field is always present, so the UI never has to distinguish
+    "no limitations" from "this payload predates the field"."""
+    class _Settings:
+        cape_pdf_dynamic_unsupported = False
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    payload = svc.to_public_dict(Row(sample_name="invoice.pdf"))
+    assert payload["limitations"] == []
 
 
 # ── Guest-image limitations ──────────────────────────────────────────────────
 
 
-def test_a_pdf_is_flagged_because_no_reader_is_installed():
+def test_no_pdf_warning_while_the_guest_has_a_reader(monkeypatch):
+    """Task 8 ran Acrobat for 287s and scored 10/10, so the warning that the
+    document "will not be opened" was false on this deployment."""
+    class _Settings:
+        cape_pdf_dynamic_unsupported = False
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
+    assert svc.sample_limitations(sample_name="statement.PDF") == []
+
+
+def test_the_pdf_warning_returns_if_the_reader_is_removed(monkeypatch):
+    class _Settings:
+        cape_pdf_dynamic_unsupported = True
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
     notes = svc.sample_limitations(sample_name="statement.PDF")
     assert notes and "PDF" in notes[0]
     assert "not evidence that the file is safe" in notes[0]
 
 
-def test_other_file_types_are_not_blocked_by_the_pdf_limitation():
+def test_other_file_types_are_never_flagged(monkeypatch):
+    class _Settings:
+        cape_pdf_dynamic_unsupported = True
+
+    monkeypatch.setattr(svc, "get_settings", lambda: _Settings())
     for name in ("invoice.exe", "macro.docm", "script.js", "archive.zip"):
         assert svc.sample_limitations(sample_name=name) == []
-
-
-def test_the_limitation_is_found_by_declared_type_too():
-    assert svc.sample_limitations(sample_name="blob", sample_type="PDF document") != []
 
 
 # ── URL targets ──────────────────────────────────────────────────────────────

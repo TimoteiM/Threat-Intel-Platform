@@ -125,6 +125,9 @@ def sample_limitations(*, sample_name: str | None, sample_type: str | None = Non
     name = str(sample_name or "").strip().lower()
     declared = str(sample_type or "").strip().lower()
     notes: list[str] = []
+    if not getattr(get_settings(), "cape_pdf_dynamic_unsupported", False):
+        # The guest image has a reader; see the setting for the evidence.
+        return notes
     for extension, note in _LIMITED_EXTENSIONS.items():
         if name.endswith(extension) or extension.lstrip(".") in declared:
             notes.append(note)

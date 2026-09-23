@@ -199,10 +199,21 @@ class Settings(BaseSettings):
     # its network behaviour — the part an alert is usually about — is missing.
     cape_route: str = "internet"
     cape_reuse_existing_analysis: bool = True
+    # The brief said PDFs could not be detonated because no reader was
+    # installed, and the panel warned so on every PDF. Task 8 disproves it:
+    # the guest ran C:\Program Files\Adobe\Acrobat DC\Acrobat\AcroCEF.exe
+    # for 287 seconds and CAPE scored the document 10/10. A warning that says
+    # "this was not opened" about a file that was opened is worse than none,
+    # so it is off — set true again if the reader is removed from the image.
+    cape_pdf_dynamic_unsupported: bool = False
     # Report formats to try, in order. The full JSON report is authoritative for
     # malscore, signatures and network indicators; `lite` is the smaller
     # fallback for an instance that only has that one enabled.
-    cape_report_formats: str = "json,lite"
+    # `json` only. `lite` was in this list on the assumption it was a reduced
+    # JSON report; measured against the live instance it is a ZIP archive
+    # (16MB, containing dump.pcap), so it can never parse. When the JSON report
+    # is too large the fallback is /tasks/get/iocs/, not another report format.
+    cape_report_formats: str = "json"
     # A report is analyst evidence, not a stream to ingest unbounded. CAPE
     # reports for a busy sample reach tens of megabytes.
     cape_max_report_bytes: int = 64 * 1024 * 1024

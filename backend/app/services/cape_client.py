@@ -70,6 +70,11 @@ PATH_CREATE_FILE = "/tasks/create/file/"
 PATH_CREATE_URL = "/tasks/create/url/"
 PATH_VIEW_TASK = "/tasks/view/{task_id}/"
 PATH_REPORT = "/tasks/get/report/{task_id}/{fmt}/"
+# A compact, purpose-built summary: malscore, info, target, network, dropped
+# files and behaviour. Measured on the live instance at 116KB for a task whose
+# full JSON report was 139MB — 1,200x smaller, and it carries the findings this
+# platform actually normalizes.
+PATH_IOCS = "/tasks/get/iocs/{task_id}/"
 
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 _TASK_ID_RE = re.compile(r"^[0-9]{1,18}$")
@@ -652,6 +657,34 @@ class CapeClient:
         if task is None:
             raise CapeValidationError("CAPE task view carried no status", request_id=self.request_id)
         return task
+
+    def fetch_iocs(self, task_id: int | str) -> CapeReport:
+        """CAPE's own IOC summary for a task.
+
+        The fallback when the full report will not fit. It is not a lesser
+        format so much as a different one — CAPE assembles the indicators
+        rather than the whole analysis — so most of what this platform stores
+        survives, and what does not is recorded as a limitation rather than
+        quietly missing.
+        """
+        tid = _validate_task_id(task_id, self.request_id)
+        response = self._request("GET", PATH_IOCS.format(task_id=tid), stream=True)
+        try:
+            raw, size = _read_bounded(response, int(self.settings.cape_max_report_bytes), self.request_id)
+        finally:
+            response.close()
+
+        import json as _json_mod
+
+        try:
+            payload = _json_mod.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError as exc:
+            raise CapeValidationError(f"CAPE IOC summary was not JSON: {exc}", request_id=self.request_id) from None
+
+        payload = self._unwrap(payload)
+        if not isinstance(payload, dict):
+            raise CapeValidationError("CAPE IOC summary was not an object", request_id=self.request_id)
+        return CapeReport(task_id=int(tid), fmt="iocs", payload=payload, size_bytes=size)
 
     def fetch_report(self, task_id: int | str, formats: list[str] | None = None) -> CapeReport:
         """The authoritative analysis result, in the first format that works.

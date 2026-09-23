@@ -74,7 +74,7 @@ def normalize_report(
     machine = _dict(info.get("machine"))
     signatures = _signatures(payload.get("signatures"))
     network = _network(payload.get("network"))
-    behaviour = _behaviour(payload.get("behavior") or payload.get("behaviour"))
+    behaviour = _behaviour(payload.get("behavior") or payload.get("behaviour"), payload)
     dropped = _dropped(payload)
     configs = _configs(payload)
 
@@ -85,7 +85,15 @@ def normalize_report(
             "No process activity and no network activity were recorded. "
             "The sample may not have executed in the guest."
         )
-    if report_format and report_format != "json":
+    if report_format == "iocs":
+        # Said plainly, because the missing parts are ones an analyst would
+        # otherwise read as absent rather than unfetched.
+        limitations.append(
+            "Read from CAPE's IOC summary because the full JSON report exceeded the size "
+            "this platform will buffer. Behavioural signatures and CAPE's payload/config "
+            "extraction are not included; open the task in CAPE for the complete report."
+        )
+    elif report_format and report_format != "json":
         limitations.append(
             f"Parsed from CAPE's '{report_format}' report, which carries less detail than the full JSON report."
         )
@@ -279,40 +287,83 @@ def _network(raw: Any) -> CapeNetworkIndicators:
     )
 
 
-def _behaviour(raw: Any) -> CapeBehaviourSummary:
+def _behaviour(raw: Any, payload: dict | None = None) -> CapeBehaviourSummary:
+    """Behaviour from either report shape.
+
+    The full report nests it as `behavior.summary.{mutex,keys,write_files,...}`
+    with `behavior.processtree`. CAPE's IOC summary puts the same facts at the
+    top level as `mutexes`, `registry`, `files`, `executed_commands` and
+    `process_tree`. Both are read, so a report and an IOC summary normalize to
+    the same structure and nothing downstream has to know which it came from.
+    """
     behavior = _dict(raw)
     summary = _dict(behavior.get("summary"))
+    flat = _dict(payload)
 
-    tree_raw = behavior.get("processtree") or behavior.get("process_tree")
+    def pick(*keys: str) -> Any:
+        for key in keys:
+            if summary.get(key) is not None:
+                return summary[key]
+        for key in keys:
+            if flat.get(key) is not None:
+                return flat[key]
+        return None
+
+    tree_raw = (
+        behavior.get("processtree")
+        or behavior.get("process_tree")
+        or flat.get("process_tree")
+        or flat.get("processtree")
+    )
     tree = _process_tree(tree_raw)
 
-    processes = behavior.get("processes")
-    process_count = len(processes) if isinstance(processes, list) else len(tree)
+    processes = behavior.get("processes") or flat.get("processes")
+    if isinstance(processes, list):
+        process_count = len(processes)
+    else:
+        process_count = _count_tree(tree)
 
     return CapeBehaviourSummary(
-        mutexes=_dedupe(_strings(summary.get("mutex") or summary.get("mutexes"))),
+        mutexes=_dedupe(_strings(pick("mutex", "mutexes"))),
         registry_keys=_dedupe(
-            _strings(summary.get("keys"))
+            _strings(pick("keys", "registry"))
             + _strings(summary.get("write_keys"))
             + _strings(summary.get("read_keys"))
         ),
-        files_written=_dedupe(_strings(summary.get("write_files") or summary.get("files_written"))),
+        # Process count from the tree when the summary carries no process list,
+        # counting every node rather than only the roots.
+        # CAPE's IOC summary groups file activity as {modified, deleted}, and
+        # both are writes — mapping the whole `files` dict onto files_read, as
+        # the first pass did, reported 497 modified paths as zero writes.
+        files_written=_dedupe(
+            _strings(pick("write_files", "files_written"))
+            + _strings(_dict(flat.get("files")).get("modified"))
+            + _strings(_dict(flat.get("files")).get("deleted"))
+        ),
         files_read=_dedupe(_strings(summary.get("read_files") or summary.get("files"))),
-        commands=_dedupe(_strings(summary.get("executed_commands") or summary.get("commands"))),
+        commands=_dedupe(_strings(pick("executed_commands", "commands"))),
         process_tree=tree,
         process_count=process_count,
     )
 
 
 def _process_tree(raw: Any, depth: int = 0) -> list[dict]:
-    """Flattened to name/pid/children-count: enough to read, not a memory dump."""
+    """Flattened to name/pid/children: enough to read, not a memory dump.
+
+    Two shapes again. The full report gives a list of roots with `children`;
+    CAPE's IOC summary gives a single root dict whose children are under
+    `spawned_processes`. Both are accepted, or the IOC path silently reports
+    zero processes for an analysis that ran dozens.
+    """
+    if isinstance(raw, dict):
+        raw = [raw]
     if not isinstance(raw, list) or depth > 6:
         return []
     out: list[dict] = []
     for node in raw:
         if not isinstance(node, dict):
             continue
-        children = node.get("children")
+        children = node.get("children") or node.get("spawned_processes")
         out.append(
             {
                 "name": _text(node.get("name") or node.get("process_name")) or "unknown",
@@ -325,6 +376,18 @@ def _process_tree(raw: Any, depth: int = 0) -> list[dict]:
         if len(out) >= _MAX_PROCESS_TREE:
             break
     return out
+
+
+def _count_tree(nodes: list[dict]) -> int:
+    """Every process in the tree, not just the roots.
+
+    The IOC summary gives one root with its children nested, so counting the
+    top level reported "1 process" for an analysis that ran several."""
+    total = 0
+    for node in nodes or []:
+        total += 1
+        total += _count_tree(node.get("children") or [])
+    return total
 
 
 def _dropped(payload: dict) -> list[CapeDroppedFile]:
@@ -386,8 +449,21 @@ def _dict(value: Any) -> dict:
 
 
 def _strings(value: Any) -> list[str]:
+    """Strings out of a string, a list, or a dict of lists.
+
+    The last case is CAPE's IOC summary, which groups registry and file
+    activity as `{"modified": [...], "deleted": [...]}` rather than a flat
+    list. Without it those sections normalize to empty and an analyst reads
+    "no registry activity" from a report that recorded plenty.
+    """
     if isinstance(value, str):
         return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for key in sorted(value):
+            for item in _strings(value[key]):
+                out.append(item)
+        return out
     if not isinstance(value, list):
         return []
     out: list[str] = []

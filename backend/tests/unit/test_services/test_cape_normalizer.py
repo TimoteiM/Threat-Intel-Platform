@@ -179,3 +179,69 @@ def test_indicator_lists_are_capped():
 def test_the_score_threshold_is_a_display_boundary_not_an_action():
     """Documented explicitly: nothing in this platform acts on it by itself."""
     assert SCORE_MALICIOUS == 7.0
+
+
+# ── CAPE's IOC summary ───────────────────────────────────────────────────────
+#
+# The fallback when a report will not fit — one PDF produced 139MB of JSON
+# against a 64MB ceiling, while the IOC summary for the same task was 116KB.
+# It uses different shapes for the same facts, and every one of them returned
+# empty on the first attempt.
+
+
+def ioc_payload() -> dict:
+    """Reduced from the real task-8 response."""
+    return {
+        "info": {"id": 8, "machine": "cuckoo1", "route": "internet", "duration": 287},
+        "target": {"file": {"name": "report.pdf", "type": "PDF document, version 1.7"}},
+        "malscore": 10.0,
+        "network": {"domains": [{"domain": "a.test"}], "hosts": ["1.2.3.4"]},
+        # A single root dict, children under spawned_processes — not a list.
+        "process_tree": {"pid": 792, "name": "svchost.exe",
+                         "spawned_processes": [{"pid": 3816, "name": "WmiPrvSE.exe",
+                                                "spawned_processes": [{"pid": 99, "name": "acro.exe"}]}]},
+        # Dicts of lists, not flat lists.
+        "registry": {"modified": ["HKCU\\A", "HKCU\\B"], "deleted": ["HKCU\\C"]},
+        "files": {"modified": ["C:\\a.json", "C:\\b.json"], "deleted": ["C:\\c.tmp"]},
+        "mutexes": ["Global\\One", "Global\\Two"],
+        "executed_commands": ["acrocef.exe --x"],
+        "dropped": [{"sha256": "d" * 64, "name": "x.bin"}],
+        "signatures": [],
+    }
+
+
+def test_the_ioc_summary_normalizes_like_a_report():
+    r = normalize_report(ioc_payload(), task_id=8, report_format="iocs")
+    assert r.malscore == 10.0 and r.verdict == "malicious"
+    assert r.file_name == "report.pdf"
+    assert r.machine == "cuckoo1" and r.route == "internet"
+    assert r.network.domains == ["a.test"]
+    assert len(r.dropped_files) == 1
+
+
+def test_a_single_root_process_tree_is_understood():
+    """A dict root with spawned_processes, counted through the whole tree —
+    the first pass reported 1 process for an analysis that ran four."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    assert r.behaviour.process_count == 3
+    assert r.behaviour.process_tree[0]["name"] == "svchost.exe"
+    assert r.behaviour.process_tree[0]["children"][0]["name"] == "WmiPrvSE.exe"
+
+
+def test_registry_and_file_activity_grouped_as_dicts_are_read():
+    """{modified, deleted} rather than a flat list. Both are writes; mapping
+    the whole dict onto files_read reported 497 modified paths as zero."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    assert sorted(r.behaviour.registry_keys) == ["HKCU\\A", "HKCU\\B", "HKCU\\C"]
+    assert sorted(r.behaviour.files_written) == ["C:\\a.json", "C:\\b.json", "C:\\c.tmp"]
+    assert r.behaviour.mutexes == ["Global\\One", "Global\\Two"]
+    assert r.behaviour.commands == ["acrocef.exe --x"]
+
+
+def test_the_reduced_source_is_declared():
+    """An analyst must not read "no signatures" as "nothing suspicious" when
+    signatures simply are not in this payload."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    note = " ".join(r.limitations)
+    assert "IOC summary" in note
+    assert "signatures" in note.lower()
