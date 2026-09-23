@@ -419,7 +419,7 @@ function Result({ report }: { report: api.SandboxReport }) {
             <div style={{ marginTop: 8 }}>
               <div style={labelStyle}>HTTP requests</div>
               <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-                {(network.http_requests || []).slice(0, 10).map((r, i) => (
+                {(network.http_requests || []).slice(0, 25).map((r, i) => (
                   <li key={i} style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
                     {r.method} {r.host}{r.uri}{r.status ? ` → ${r.status}` : ""}
                   </li>
@@ -432,6 +432,16 @@ function Result({ report }: { report: api.SandboxReport }) {
 
       {(behaviour.process_count || 0) > 0 && (
         <Block title={`Behaviour (${behaviour.process_count} processes)`}>
+          {/* The tree itself, which was collected and normalized but never
+              drawn — the Behaviour block showed only the flat lists. */}
+          {(behaviour.process_tree?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={labelStyle}>Process tree</div>
+              <div style={{ marginTop: 4 }}>
+                <ProcessNodes nodes={behaviour.process_tree as ProcessNode[]} depth={0} />
+              </div>
+            </div>
+          )}
           <ListRow label="Commands" values={behaviour.commands} mono />
           <ListRow label="Mutexes" values={behaviour.mutexes} mono />
           <ListRow label="Files written" values={behaviour.files_written} mono />
@@ -512,6 +522,41 @@ function Fact({ label, value, mono }: { label: string; value: React.ReactNode; m
   );
 }
 
+interface ProcessNode {
+  name: string;
+  pid?: number | null;
+  command_line?: string;
+  children?: ProcessNode[];
+}
+
+function ProcessNodes({ nodes, depth }: { nodes: ProcessNode[]; depth: number }) {
+  // Indented rather than a drawn graph: the shape is what matters — what
+  // spawned what — and six levels of nesting still fits a report column.
+  if (!nodes?.length || depth > 6) return null;
+  return (
+    <div style={{ display: "grid", gap: 2, paddingLeft: depth ? 14 : 0,
+                  borderLeft: depth ? "1px solid var(--border)" : undefined }}>
+      {nodes.map((node, i) => (
+        <div key={`${node.pid ?? "?"}-${i}`}>
+          <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+            <span style={{ color: "var(--text)" }}>{node.name || "unknown"}</span>
+            {node.pid !== null && node.pid !== undefined && (
+              <span style={{ color: "var(--text-muted)" }}> (pid {node.pid})</span>
+            )}
+          </div>
+          {node.command_line && (
+            <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)",
+                          wordBreak: "break-all", paddingLeft: 8 }}>
+              {node.command_line}
+            </div>
+          )}
+          <ProcessNodes nodes={node.children || []} depth={depth + 1} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function IdRow({ label, value, mono }: { label: string; value?: string | number | null; mono?: boolean }) {
   if (value === null || value === undefined || value === "") return null;
   return (
@@ -534,21 +579,37 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
+const LIST_PREVIEW = 20;
+
 function ListRow({ label, values, mono }: { label: string; values?: string[]; mono?: boolean }) {
+  // "+46 more" hid the ones an analyst was looking for, with no way to reach
+  // them. The tail is one click away now, and stays collapsed by default so a
+  // sample that contacted hundreds of hosts does not bury everything else.
+  const [expanded, setExpanded] = useState(false);
   if (!values || values.length === 0) return null;
+  const shown = expanded ? values : values.slice(0, LIST_PREVIEW);
+  const hidden = values.length - shown.length;
+
   return (
     <div style={{ marginTop: 6 }}>
       <div style={labelStyle}>{label} ({values.length})</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 3 }}>
-        {values.slice(0, 20).map((v) => (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 3, alignItems: "center" }}>
+        {shown.map((v) => (
           <span key={v} style={{ ...chip("var(--border)"), color: "var(--text-secondary)",
                                  fontFamily: mono ? "var(--font-mono)" : undefined, maxWidth: "100%",
                                  overflow: "hidden", textOverflow: "ellipsis" }}>
             {v}
           </span>
         ))}
-        {values.length > 20 && (
-          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>+{values.length - 20} more</span>
+        {(hidden > 0 || expanded) && (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                     fontSize: 11, color: "var(--accent)", textDecoration: "underline" }}
+          >
+            {expanded ? "show fewer" : `show all ${values.length}`}
+          </button>
         )}
       </div>
     </div>

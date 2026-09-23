@@ -444,3 +444,98 @@ def test_the_upload_path_queues_the_detonation(monkeypatch):
 
     source = inspect.getsource(investigation_service)
     assert "detonate_uploaded_sample" in source
+
+
+# ── A throttled CAPE is not a failed analysis ────────────────────────────────
+#
+# Task 13 reached `completed` on CAPE, hit the rate limit while its report was
+# being fetched, and was recorded as failed — while CAPE's own UI showed it
+# reported. Marking a transient fault terminal loses finished work.
+
+
+class _RetryRow:
+    def __init__(self, status="running", expired=False):
+        self.id = "77777777-7777-7777-7777-777777777777"
+        self.status = status
+        self.state_history = []
+        self.error = None
+        self.completed_at = None
+        self.deadline_at = None
+        self._expired = expired
+
+
+def _retry(monkeypatch, exc, *, status="running", expired=False):
+    row = _RetryRow(status=status, expired=expired)
+    committed = {"status": None}
+
+    class DB:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def commit(self): committed["status"] = row.status
+        def rollback(self): pass
+
+    monkeypatch.setattr(cape_task, "Session", lambda _e: DB())
+    monkeypatch.setattr(cape_task.svc, "claim_for_work", lambda db, aid: row)
+    monkeypatch.setattr(cape_task.svc, "is_expired", lambda r: expired)
+
+    scheduled = []
+    monkeypatch.setattr(cape_task.run_cape_analysis, "apply_async",
+                        lambda args, countdown: scheduled.append((args[0], countdown)))
+    result = cape_task._retry_later(row.id, exc)
+    return result, row, scheduled
+
+
+def test_a_rate_limit_keeps_the_analysis_alive(monkeypatch):
+    result, row, scheduled = _retry(monkeypatch, cape.CapeRateLimited("throttled", retry_after=5))
+    assert row.status == "running", "the status must not become failed"
+    assert result["status"] == "running"
+    assert scheduled, "it must be driven again"
+
+
+def test_the_retry_delay_respects_retry_after(monkeypatch):
+    _, _, scheduled = _retry(monkeypatch, cape.CapeRateLimited("throttled", retry_after=30))
+    assert scheduled[0][1] == 120          # 30 * 4, inside the bounds
+    _, _, scheduled = _retry(monkeypatch, cape.CapeRateLimited("throttled", retry_after=1))
+    assert scheduled[0][1] == 30           # floored
+    _, _, scheduled = _retry(monkeypatch, cape.CapeRateLimited("throttled", retry_after=999))
+    assert scheduled[0][1] == 300          # capped
+
+
+def test_the_interruption_is_recorded_rather_than_silent(monkeypatch):
+    _, row, _ = _retry(monkeypatch, cape.CapeRateLimited("throttled", retry_after=5))
+    assert row.state_history, "an operator must see the pause in the trail"
+    assert "paused" in row.state_history[-1]["note"]
+
+
+def test_a_deadline_still_ends_it(monkeypatch):
+    """Otherwise an unreachable CAPE keeps an analysis alive for ever."""
+    result, row, scheduled = _retry(
+        monkeypatch, cape.CapeRateLimited("throttled"), expired=True
+    )
+    assert row.status == svc.STATUS_TIMED_OUT
+    assert result["status"] == svc.STATUS_TIMED_OUT
+    assert scheduled == []
+
+
+def test_an_already_finished_analysis_is_left_alone(monkeypatch):
+    result, row, scheduled = _retry(monkeypatch, cape.CapeRateLimited("x"), status=svc.STATUS_REPORTED)
+    assert row.status == svc.STATUS_REPORTED
+    assert scheduled == []
+
+
+@pytest.mark.parametrize("exc", [
+    cape.CapeRateLimited("throttled"),
+    cape.CapeTimeout("slow"),
+    cape.CapeConnectionError("unreachable"),
+])
+def test_every_transient_fault_is_treated_the_same(monkeypatch, exc):
+    _, row, scheduled = _retry(monkeypatch, exc)
+    assert row.status == "running" and scheduled
+
+
+def test_a_tls_failure_is_not_transient():
+    """A certificate problem will not fix itself, and retrying hides it."""
+    assert issubclass(cape.CapeTLSError, cape.CapeConnectionError)
+    import inspect
+    source = inspect.getsource(cape_task.run_cape_analysis)
+    assert "isinstance(exc, cape.CapeTLSError)" in source

@@ -82,6 +82,19 @@ def run_cape_analysis(self, analysis_id: str) -> dict[str, Any]:
                 return {"analysis_id": analysis_id, "status": svc.STATUS_FAILED}
             return _poll_and_store(client, analysis_uuid, task_id, settings)
 
+    # ── Transient, and therefore not a verdict ──────────────────────────────
+    #
+    # A throttled or briefly unreachable CAPE says nothing about the analysis.
+    # Marking these failed lost completed work: task 13 reached `completed` on
+    # CAPE, hit the rate limit while its report was being fetched, and was
+    # recorded as failed while CAPE's own UI showed it reported. The analysis
+    # keeps its current state and is driven again, bounded by deadline_at.
+    except (cape.CapeRateLimited, cape.CapeTimeout, cape.CapeConnectionError) as exc:
+        if isinstance(exc, cape.CapeTLSError):
+            _fail(analysis_uuid, "TLS verification failed", exc)
+            return {"analysis_id": analysis_id, "status": svc.STATUS_FAILED}
+        return _retry_later(analysis_uuid, exc)
+
     except cape.CapeNotConfigured as exc:
         _fail(analysis_uuid, "CAPE is not configured", exc)
     except cape.CapeAuthError as exc:
@@ -366,6 +379,10 @@ def _store_report(client: cape.CapeClient, analysis_id: uuid.UUID, task_id: str,
             return {"analysis_id": str(analysis_id), "status": "missing"}
 
         row.normalized_json = normalized.model_dump(mode="json")
+        # An analysis that recovered still carried the message from the attempt
+        # that failed, so a reported result showed a red "CAPE analysis failed"
+        # banner describing something that had since worked.
+        row.error = None
         row.verdict = normalized.verdict
         row.malscore = normalized.malscore
         row.sha1 = normalized.sha1 or row.sha1
@@ -457,6 +474,42 @@ def _terminal(analysis_id: uuid.UUID, status: str, *, error: str, note: str) -> 
         row = svc.claim_for_work(db, analysis_id)
         if row is not None and row.status not in svc.TERMINAL_STATUSES:
             svc.transition(db, row, status, actor="worker", note=note, error=cape.redact(error))
+
+
+def _retry_later(analysis_id: uuid.UUID, exc: Exception) -> dict[str, Any]:
+    """Leave the analysis alive and come back to it.
+
+    The status is not changed, so the record still says what CAPE last told us
+    and `resume_sandbox_analyses` treats it as in flight. A countdown re-drive
+    recovers in about a minute rather than waiting for the next beat tick, and
+    `deadline_at` is what stops this going round for ever — an analysis past
+    its deadline is retired as timed_out by the resume task.
+    """
+    with Session(sync_engine) as db:
+        row = svc.claim_for_work(db, analysis_id)
+        if row is None:
+            return {"analysis_id": str(analysis_id), "status": "missing"}
+        if row.status in svc.TERMINAL_STATUSES:
+            db.rollback()
+            return {"analysis_id": str(analysis_id), "status": row.status}
+        if svc.is_expired(row):
+            svc.transition(
+                db, row, svc.STATUS_TIMED_OUT, actor="worker",
+                note="deadline reached while CAPE was unavailable",
+                error=cape.redact(f"CAPE remained unavailable until the deadline: {exc}"),
+            )
+            return {"analysis_id": str(analysis_id), "status": svc.STATUS_TIMED_OUT}
+        current = row.status
+        # Recorded, so an operator reading the trail sees the interruption
+        # rather than an unexplained gap between polls.
+        svc.transition(db, row, current, actor="worker",
+                       note=f"paused: {cape.redact(str(exc))[:160]}")
+
+    delay = getattr(exc, "retry_after", None) or 60
+    delay = max(30, min(int(delay) * 4, 300))
+    logger.warning("CAPE unavailable for analysis %s; retrying in %ss (%s)", analysis_id, delay, exc)
+    run_cape_analysis.apply_async(args=[str(analysis_id)], countdown=delay)
+    return {"analysis_id": str(analysis_id), "status": current, "retry_in": delay}
 
 
 def _fail(analysis_id: uuid.UUID, headline: str, exc: Exception) -> None:

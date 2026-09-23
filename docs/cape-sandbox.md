@@ -335,6 +335,28 @@ only other errors are raised.
 first and falls back to `lite`, so nothing needs changing; the fallback simply
 never fires.
 
+### A throttled CAPE is not a failed analysis
+
+With six machines and a 30-second poll each, plus report fetches, the combined
+rate sits right on CAPE's ~1 request/5s limit, so a 429 mid-analysis is normal
+rather than exceptional.
+
+It used to be terminal. Task 13 reached `completed` on CAPE, was throttled
+while its report was fetched, and was recorded as **failed** while CAPE's own
+UI showed it reported — finished work, thrown away.
+
+Rate limits, timeouts and connection failures now leave the analysis in its
+current state and re-drive it after a delay derived from `Retry-After`
+(bounded to 30–300s), with the interruption recorded in the state history so
+the pause is visible rather than an unexplained gap. `deadline_at` still ends
+it: an analysis that stays unreachable is retired as `timed_out`.
+
+TLS failures are deliberately excluded — a certificate problem will not fix
+itself, and retrying hides it.
+
+A recovered analysis also clears its error, which otherwise left a red
+"CAPE analysis failed" banner on a result that had since succeeded.
+
 ### The API is throttled — this is why polling is 30s
 
 Measured: **one request per ~5 seconds**, answered with `429` and a
