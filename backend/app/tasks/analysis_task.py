@@ -28,7 +28,12 @@ from app.tasks.celery_app import celery_app
 from app.collectors.signals import generate_signals, detect_data_gaps
 from app.models.enums import InvestigationState
 from app.config import get_settings
-from app.services.decision_engine import community_listing_weight, apply_decision_to_report, build_decision_report
+from app.services.decision_engine import (
+    community_listing_weight,
+    apply_decision_to_report,
+    build_decision_report,
+    weak_signals_affect_score,
+)
 from app.services.proxy_profiles import selected_proxy_summary
 from app.services.provider_branding import normalize_anyrun_branding
 from app.utils.domain_utils import extract_registered_domain
@@ -1283,12 +1288,12 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             confidence = "low"
             risk_score = 40
             recommended_action = "investigate"
-        elif weak_signal_score >= 4:
+        elif weak_signal_score >= 4 and weak_signals_affect_score():
             classification = "suspicious"
             confidence = "medium"
             risk_score = 50
             recommended_action = "investigate"
-        elif weak_signal_score >= 3:
+        elif weak_signal_score >= 3 and weak_signals_affect_score():
             classification = "suspicious"
             confidence = "low"
             risk_score = 40
@@ -1389,11 +1394,18 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             })
 
         if weak_signal_score >= 3:
+            _scoring = weak_signals_affect_score()
             findings.append({
                 "id": "weak_signal_cluster",
                 "title": "Suspicious weak-signal cluster",
-                "description": "Multiple medium-confidence signals combine into suspicious context: " + "; ".join(weak_signal_evidence[:6]),
-                "severity": "medium" if weak_signal_score >= 4 else "low",
+                "description": (
+                    "Multiple medium-confidence signals combine into suspicious context: "
+                    + "; ".join(weak_signal_evidence[:6])
+                    + ("" if _scoring else
+                       " — reported for review only; these signals key on URL shape and did not "
+                       "affect the risk score.")
+                ),
+                "severity": ("medium" if weak_signal_score >= 4 else "low") if _scoring else "informational",
                 "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
             })
 
@@ -1937,17 +1949,21 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     existing = report_data.get("findings")
     findings = existing if isinstance(existing, list) else []
     if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
+        _scoring = weak_signals_affect_score()
         sev = "high" if lexical_label == "high" else ("medium" if lexical_label == "medium" else "low")
         findings.append(
             {
                 "id": "lexical_ml_contribution",
-                "title": "URL lexical ML risk contribution",
+                "title": "URL lexical ML observation" if not _scoring else "URL lexical ML risk contribution",
                 "description": (
                     f"Lexical model ({model_source}) scored this target as {lexical_label.upper()} "
                     f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}, weight={lexical_weight:.2f}). "
                     f"Top features: {', '.join(top[:5]) if top else 'not available'}."
+                    + ("" if _scoring else
+                       " Reported for review only: the model reads URL shape, so long legitimate "
+                       "links score MEDIUM, and it did not affect the risk score.")
                 ),
-                "severity": sev,
+                "severity": sev if _scoring else "informational",
                 "evidence_refs": ["url_lexical_ml.score", "url_lexical_ml.top_features"],
             }
         )

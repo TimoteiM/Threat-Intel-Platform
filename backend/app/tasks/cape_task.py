@@ -422,23 +422,122 @@ def _store_report(client: cape.CapeClient, analysis_id: uuid.UUID, task_id: str,
 
 
 def _annotate_investigation(investigation_id: uuid.UUID | None, normalized) -> None:
-    """Surface the detonation where the analyst is already looking.
+    """Put the detonation into the investigation, and think again.
 
-    Deliberately additive: the sandbox does not overwrite a classification or
-    drive an action. A score is evidence for a person, and this platform does
-    not contain or remediate on the strength of one detonation.
+    A detonation takes minutes; the collector pipeline and the AI analyst
+    finish in seconds. So the verdict was always written before the sandbox
+    had said anything, and the sandbox result arrived afterwards as a panel
+    nothing had read. An analyst saw "benign" beside a CAPE score of 10.
+
+    Blocking the pipeline on CAPE would be worse — it would hold every
+    investigation for the length of the slowest sandbox. So the evidence is
+    written when it arrives and the analyst is re-run over the complete set.
+
+    Still additive: re-running the analyst is not the same as letting the
+    sandbox set a verdict. It gets a vote alongside everything else.
     """
     if investigation_id is None:
         return
     try:
-        with Session(sync_engine) as db:
-            inv = db.get(Investigation, investigation_id)
-            if inv is None:
-                return
-            inv.updated_at = datetime.now(timezone.utc)
-            db.commit()
+        _store_cape_evidence(investigation_id, normalized)
+        _reanalyse(investigation_id)
     except Exception as exc:  # noqa: BLE001 — annotation must not fail the analysis
         logger.warning("Could not annotate investigation %s after CAPE: %s", investigation_id, exc)
+
+
+def _store_cape_evidence(investigation_id: uuid.UUID, normalized) -> None:
+    """Write the report where the collector's own output would have gone.
+
+    Same shape as CapeEvidence, so the analyst prompt, the findings builder
+    and the Technical Evidence panel all read it without knowing it arrived
+    late.
+    """
+    from app.models.database import CollectorResult, Evidence
+
+    payload = {
+        "meta": {"collector": "cape", "status": "completed", "version": "1.0.0"},
+        "available": True,
+        "reason": None,
+        "report": normalized.model_dump(mode="json"),
+    }
+
+    with Session(sync_engine) as db:
+        inv = db.get(Investigation, investigation_id)
+        if inv is None:
+            return
+
+        row = db.execute(
+            select(CollectorResult).where(
+                CollectorResult.investigation_id == investigation_id,
+                CollectorResult.collector_name == "cape",
+            )
+        ).scalars().first()
+        if row is None:
+            row = CollectorResult(
+                investigation_id=investigation_id,
+                collector_name="cape",
+                status="completed",
+                version="1.0.0",
+            )
+            db.add(row)
+        row.status = "completed"
+        row.evidence_json = payload
+        row.completed_at = datetime.now(timezone.utc)
+
+        evidence = db.execute(
+            select(Evidence).where(Evidence.investigation_id == investigation_id)
+        ).scalars().first()
+        if evidence is not None:
+            merged = dict(evidence.evidence_json or {})
+            merged["cape"] = payload
+            # Reassigned, not mutated: SQLAlchemy does not see an in-place
+            # change to a JSONB column and would never persist it.
+            evidence.evidence_json = merged
+
+        inv.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    logger.info("Stored CAPE evidence on investigation %s", investigation_id)
+
+
+def _reanalyse(investigation_id: uuid.UUID) -> None:
+    """Re-run the analyst over the evidence now that the sandbox has reported."""
+    from app.models.database import CollectorResult
+
+    with Session(sync_engine) as db:
+        inv = db.get(Investigation, investigation_id)
+        if inv is None:
+            return
+        rows = db.execute(
+            select(CollectorResult).where(CollectorResult.investigation_id == investigation_id)
+        ).scalars().all()
+        collector_results = [
+            {
+                "collector": r.collector_name,
+                "status": r.status,
+                "evidence": dict(r.evidence_json or {}),
+                "meta": (r.evidence_json or {}).get("meta") or {"status": r.status},
+            }
+            for r in rows
+        ]
+        domain = str(inv.domain or "")
+        observable_type = str(inv.observable_type or "domain")
+        context = inv.context
+        client_domain = inv.client_domain
+
+    if not collector_results:
+        return
+
+    from app.tasks.analysis_task import run_analysis
+
+    run_analysis.delay(
+        collector_results=collector_results,
+        domain=domain,
+        investigation_id=str(investigation_id),
+        observable_type=observable_type,
+        context=context,
+        client_domain=client_domain,
+    )
+    logger.info("Re-running the analyst for %s with the sandbox result included", investigation_id)
 
 
 # ── small state helpers ──────────────────────────────────────────────────────

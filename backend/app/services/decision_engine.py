@@ -505,9 +505,9 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         # A medium lexical score, shared hosting, or a brand word found in a
         # CSP/resource list must not outweigh several direct clean controls.
         classification, confidence, risk_score, action = "benign", "high", 15, "monitor"
-    elif weak_score >= 4:
+    elif weak_score >= 4 and weak_signals_affect_score():
         classification, confidence, risk_score, action = "suspicious", "medium", 50, "investigate"
-    elif weak_score >= 3:
+    elif weak_score >= 3 and weak_signals_affect_score():
         classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"
     else:
         classification, confidence, risk_score, action = "benign", "medium", 15, "monitor"
@@ -691,15 +691,27 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "severity": "high" if high_conf_http else ("medium" if strong_http else "low"),
             "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
         })
-    if weak_score >= 3 and classification != "benign":
+    # Two findings, independently decided. Folding them into one if/elif meant
+    # that reporting the cluster when it no longer scores swallowed the
+    # "clean controls won" finding entirely, because the first branch then
+    # always matched.
+    _weak_scoring = weak_signals_affect_score()
+    if weak_score >= 3 and (classification != "benign" or not _weak_scoring):
+        scoring = _weak_scoring
         findings.append({
             "id": "weak_signal_cluster",
             "title": "Suspicious weak-signal cluster",
-            "description": "Multiple medium-confidence signals combine into suspicious context: " + "; ".join(weak_evidence[:6]),
-            "severity": "medium" if weak_score >= 4 else "low",
+            "description": (
+                "Multiple medium-confidence signals combine into suspicious context: "
+                + "; ".join(weak_evidence[:6])
+                + ("" if scoring else
+                   " — reported for review only; these signals key on URL shape and did not "
+                   "affect the risk score.")
+            ),
+            "severity": ("medium" if weak_score >= 4 else "low") if scoring else "informational",
             "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
         })
-    elif weak_score >= 3 and observable_clean:
+    if weak_score >= 3 and observable_clean and classification == "benign":
         findings.append({
             "id": "weak_signals_overridden_by_clean_controls",
             "title": "Weak signals did not outweigh direct clean evidence",
@@ -807,6 +819,31 @@ def _anyrun_heuristic_observations(hybrid: dict[str, Any]) -> list[str]:
             if "javascript obfuscation" in lower and "parseint" in lower:
                 add("JavaScript Obfuscation (ParseInt)")
     return observations
+
+
+def weak_signals_affect_score(settings: Any = None) -> bool:
+    """Whether the weak-signal cluster may move a verdict.
+
+    Off by default. The cluster's largest contributors key on URL *shape* —
+    lexical entropy, dot count, length, subdomain depth — and a legitimate
+    deep link into SharePoint or Office scores MEDIUM on all of them. That was
+    enough, with a shared-hosting observation and a registrar pivot, to reach
+    the three points that make a domain "suspicious" with nothing actually
+    suspicious having been found.
+
+    The evidence is still collected and still reported; it just no longer
+    decides. Both scoring paths — here and the deterministic one in
+    analysis_task — read this, so they cannot disagree.
+
+    `settings` is injectable so a test need not monkeypatch a dotted path into
+    app.config: this suite reloads `app` through importlib in places, and a
+    string target like "app.config.get_settings" then fails to resolve.
+    """
+    if settings is None:
+        from app.config import get_settings
+
+        settings = get_settings()
+    return bool(getattr(settings, "weak_signals_affect_score", False))
 
 
 def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http: bool = False) -> tuple[int, list[str]]:

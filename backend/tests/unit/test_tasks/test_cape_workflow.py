@@ -539,3 +539,49 @@ def test_a_tls_failure_is_not_transient():
     import inspect
     source = inspect.getsource(cape_task.run_cape_analysis)
     assert "isinstance(exc, cape.CapeTLSError)" in source
+
+
+# ── The sandbox result reaches the analyst ───────────────────────────────────
+#
+# A detonation takes minutes; the collector pipeline and the analyst finish in
+# seconds. So the verdict was always written before the sandbox had said
+# anything, and an analyst saw "benign" beside a CAPE score of 10.
+
+
+def test_the_report_is_written_where_the_collector_would_have_put_it(monkeypatch):
+    """Same shape as CapeEvidence, so the analyst prompt, the findings builder
+    and the Technical Evidence panel read it without knowing it arrived late."""
+    import inspect
+
+    source = inspect.getsource(cape_task._store_cape_evidence)
+    assert '"available": True' in source
+    assert '"report":' in source
+    assert 'collector_name == "cape"' in source
+    # And the JSONB column is reassigned, not mutated — SQLAlchemy would never
+    # persist an in-place change.
+    assert "evidence.evidence_json = merged" in source
+
+
+def test_the_analyst_is_re_run_once_the_sandbox_reports(monkeypatch):
+    import inspect
+
+    source = inspect.getsource(cape_task._reanalyse)
+    assert "run_analysis.delay" in source
+    # Over the whole evidence set, not the sandbox alone.
+    assert "CollectorResult.investigation_id == investigation_id" in source
+
+
+def test_annotation_failure_never_fails_the_analysis(monkeypatch):
+    """The detonation succeeded; losing the re-analysis must not undo that."""
+    def boom(*_a, **_k):
+        raise RuntimeError("database gone")
+
+    monkeypatch.setattr(cape_task, "_store_cape_evidence", boom)
+    cape_task._annotate_investigation("11111111-1111-1111-1111-111111111111", object())
+
+
+def test_no_investigation_means_nothing_to_annotate(monkeypatch):
+    called = []
+    monkeypatch.setattr(cape_task, "_store_cape_evidence", lambda *a: called.append(1))
+    cape_task._annotate_investigation(None, object())
+    assert called == []

@@ -276,7 +276,18 @@ def test_decision_engine_does_not_treat_generic_clean_anyrun_tags_as_malicious()
     assert decision["recommended_action"] == "monitor"
 
 
-def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious():
+def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious(monkeypatch):
+    """Reported always; escalating only when configured to.
+
+    This hostname is the case the cluster was built for — a sensitive keyword,
+    high spoofability, a registrant pivot. It is also the shape that made long
+    legitimate URLs suspicious, because entropy and subdomain depth reach the
+    same three points on their own. So the default reports it and leaves the
+    verdict alone, and WEAK_SIGNALS_AFFECT_SCORE restores the escalation.
+    """
+    import app.services.decision_engine as _de
+
+    monkeypatch.setattr(_de, "weak_signals_affect_score", lambda *_a: True)
     decision = build_decision_report(
         {
             "domain": "secure-louise.cole.activelyintimate.com",
@@ -306,6 +317,7 @@ def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious():
     )
 
     assert decision["classification"] == "suspicious"
+    assert any(f["id"] == "weak_signal_cluster" for f in decision["findings"])
     assert decision["confidence"] == "medium"
     assert decision["risk_score"] == 50
     assert any(f["id"] == "weak_signal_cluster" for f in decision["findings"])
@@ -439,7 +451,21 @@ def test_real_signals_still_reach_suspicious_and_malicious():
             "registrant_pivots": [{"domains": ["expertware.net", "other-investigated.com"]}],
         },
     )
-    assert build_decision_report(weak_but_real, "domain")["classification"] == "suspicious"
+    # A weak-signal cluster no longer decides on its own; it is still reported.
+    # WEAK_SIGNALS_AFFECT_SCORE restores the previous behaviour, asserted here
+    # so the capability is pinned rather than merely removed.
+    report = build_decision_report(weak_but_real, "domain")
+    assert report["classification"] == "benign"
+    assert any(f["id"] == "weak_signal_cluster" for f in report["findings"])
+
+    import app.services.decision_engine as _de
+
+    _original = _de.weak_signals_affect_score
+    _de.weak_signals_affect_score = lambda: True
+    try:
+        assert build_decision_report(weak_but_real, "domain")["classification"] == "suspicious"
+    finally:
+        _de.weak_signals_affect_score = _original
 
 
 def test_missing_spf_and_dmarc_alone_does_not_make_a_domain_suspicious():

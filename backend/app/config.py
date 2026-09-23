@@ -271,6 +271,16 @@ class Settings(BaseSettings):
     # `cape` included so a manual investigation or a file submission consults
     # the on-premises sandbox without the analyst having to remember to tick
     # it. It is a lookup, not a detonation — see app/collectors/cape_collector.
+    # The weak-signal cluster and the lexical URL model are reported but do not
+    # move the verdict. Both key heavily on URL shape — length, dot count,
+    # subdomain depth — and legitimate deep links score MEDIUM on all three, so
+    # they were escalating ordinary SharePoint and Office URLs to suspicious on
+    # their own. They remain visible as findings, because the observation is
+    # still worth an analyst's eye; what they no longer do is decide.
+    #
+    # Set true to restore the previous behaviour.
+    weak_signals_affect_score: bool = False
+
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis,cape"
     # Collectors that never run on the automatic alert path, however they would
     # otherwise be selected. An alert fans out over many indicators, so a
