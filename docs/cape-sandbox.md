@@ -198,6 +198,38 @@ driving it. `cape-resume-in-flight` runs every five minutes, resumes anything
 unfinished by polling the CAPE task it already recorded, and retires anything
 past its polling deadline.
 
+### The verdict is re-made when the report lands
+
+A detonation takes minutes; the collector pipeline and the classification
+analyst finish in seconds. So for the first version of this integration the
+verdict was *always* written before the sandbox had said anything, and the
+report arrived afterwards as a panel that nothing had read — an analyst could
+see a verdict of "benign" sitting beside a CAPE malscore of 10.
+
+The obvious fix, holding the pipeline until CAPE finishes, is the wrong one: it
+would delay every investigation by the length of the slowest sandbox, including
+the investigations that never submitted anything.
+
+Instead, when a report is normalized, `_annotate_investigation`
+(`app/tasks/cape_task.py`) does two things:
+
+1. **Writes the report where the collector's own output would have gone** — a
+   `CollectorResult(collector_name="cape")` row, merged into
+   `Evidence.evidence_json` under the `cape` key. Anything that reads collector
+   evidence now finds the sandbox there, including the AI projection above.
+2. **Re-runs the analyst** over the complete evidence set, reassembled from the
+   `CollectorResult` rows rather than from whatever was in memory when the
+   investigation started.
+
+The second verdict replaces the first, and the state history on the
+investigation shows both. This is additive, in the sense that matters: the
+sandbox gets a vote, not a veto. A CAPE score never produces containment on its
+own — see *Deliberately not implemented*.
+
+`evidence_json` is JSONB, so the merge **reassigns** the attribute rather than
+mutating the dict in place; an in-place mutation is not seen by SQLAlchemy and
+the write is silently lost.
+
 ---
 
 ## API
