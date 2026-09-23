@@ -1084,6 +1084,11 @@ class CapeSignature(BaseModel):
     confidence: Optional[int] = None
     # ATT&CK ids CAPE attached, when it did.
     ttps: list[str] = []
+    # What the signature actually matched. CAPE puts it in `data`, and without
+    # it a signature reads as a category rather than a finding: "binary_yara —
+    # Binary file triggered YARA rule" says nothing, while "Binary triggered
+    # YARA rule: multiple_versions" is something an analyst can act on.
+    details: list[str] = []
 
 
 class CapeNormalizedReport(BaseModel):
@@ -1104,6 +1109,16 @@ class CapeNormalizedReport(BaseModel):
     file_name: Optional[str] = None
     file_type: Optional[str] = None
     file_size: Optional[int] = None
+    # Fuzzy and structural hashes. Not identity — these are for pivoting, so a
+    # near-identical sample under a different name can still be recognised.
+    ssdeep: Optional[str] = None
+    tlsh: Optional[str] = None
+    crc32: Optional[str] = None
+    # YARA rules that matched the file itself, with whatever the rule author
+    # wrote about them. The `binary_yara` signature refers to these.
+    yara_matches: list[dict] = []
+    # ClamAV's verdict, when CAPE ran it and it said something.
+    clamav: Optional[str] = None
 
     started_at: Optional[str] = None
     ended_at: Optional[str] = None

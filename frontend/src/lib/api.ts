@@ -557,11 +557,22 @@ export interface SandboxReport {
   malscore?: number | null;
   verdict: string;
   detections: string[];
-  signatures: Array<{ name: string; description: string; severity: number; ttps: string[] }>;
+  signatures: Array<{
+    name: string; description: string; severity: number; ttps: string[];
+    /** What the signature matched — the substance of the finding. */
+    details?: string[];
+  }>;
   sha256?: string | null;
+  sha1?: string | null;
+  md5?: string | null;
   file_name?: string | null;
   file_type?: string | null;
   file_size?: number | null;
+  ssdeep?: string | null;
+  tlsh?: string | null;
+  crc32?: string | null;
+  clamav?: string | null;
+  yara_matches?: Array<{ name: string; description?: string; author?: string | null; source?: string }>;
   started_at?: string | null;
   ended_at?: string | null;
   duration_seconds?: number | null;

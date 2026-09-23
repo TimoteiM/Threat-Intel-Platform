@@ -366,3 +366,85 @@ def test_a_traceback_source_line_is_not_preferred_over_the_real_message():
     r = normalize_report(payload)
     assert "Acrobat.exe" in r.errors[0]
     assert "{application}" not in r.errors[0]
+
+
+# ── What survives a failed detonation ────────────────────────────────────────
+#
+# CAPE hashes, YARA-scans and classifies a file even when the guest never opens
+# it. For a PDF that failed to launch that is the entire result, and all of it
+# was being dropped: the panel showed a generic signature name and nothing else.
+
+
+def static_payload() -> dict:
+    return {
+        "info": {"id": 3, "package": "pdf", "machine": {"name": "cuckoo3"}},
+        "malscore": 1.6,
+        "behavior": {"processes": []},
+        "network": {},
+        "debug": {"errors": [], "log": ""},
+        "target": {"file": {
+            "name": "ShieldOps_Ghid_Opera.pdf",
+            "type": "PDF document, version 1.7, 25 page(s)",
+            "size": 271672,
+            "md5": "a" * 32, "sha1": "b" * 40, "sha256": "c" * 64,
+            "ssdeep": "3072:UzK28oq/2mxNQZi1GQ5x",
+            "tlsh": "T114447131A49C8CCDE88ED839",
+            "crc32": "6BC0CAD7",
+            "clamav": "",
+            "yara": [{"name": "multiple_versions",
+                      "meta": {"author": "Glenn Edwards", "description": "Written very generically"}}],
+        }},
+        "signatures": [{
+            "name": "binary_yara",
+            "description": "Binary file triggered YARA rule",
+            "severity": 3, "confidence": 80,
+            "data": [{"Binary triggered YARA rule": "multiple_versions"}],
+        }],
+    }
+
+
+def test_a_signature_carries_what_it_matched():
+    """"binary_yara — Binary file triggered YARA rule" is a category. The rule
+    name is the finding, and it was being discarded."""
+    r = normalize_report(static_payload())
+    sig = r.signatures[0]
+    assert sig.name == "binary_yara"
+    assert sig.details == ["Binary triggered YARA rule: multiple_versions"]
+
+
+def test_yara_matches_are_reported_with_the_rule_author_s_description():
+    r = normalize_report(static_payload())
+    assert len(r.yara_matches) == 1
+    match = r.yara_matches[0]
+    assert match["name"] == "multiple_versions"
+    assert "generically" in match["description"]
+    assert match["author"] == "Glenn Edwards"
+
+
+def test_fuzzy_hashes_are_kept_for_pivoting():
+    """Not identity — these let a near-identical sample under another name be
+    recognised, which is most of what is left when nothing executed."""
+    r = normalize_report(static_payload())
+    assert r.ssdeep.startswith("3072:")
+    assert r.tlsh.startswith("T1")
+    assert r.crc32 == "6BC0CAD7"
+    assert r.file_type == "PDF document, version 1.7, 25 page(s)"
+
+
+def test_an_empty_clamav_verdict_is_not_reported_as_one():
+    assert normalize_report(static_payload()).clamav is None
+
+
+def test_a_traceback_source_echo_never_reaches_the_error_list():
+    """Ranked last was not enough — it was still displayed."""
+    payload = static_payload()
+    payload["debug"] = {"errors": [], "log": (
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+        "raise CuckooError(f'The package \"{self.package_name}\" start function raised an error: {e}') from e\n"
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any AcroRd32.exe executable\n'
+    )}
+    r = normalize_report(payload)
+    assert all("{" not in e for e in r.errors), r.errors
+    assert all(not e.startswith("raise ") for e in r.errors), r.errors
+    assert any("AcroRd32.exe" in e for e in r.errors)

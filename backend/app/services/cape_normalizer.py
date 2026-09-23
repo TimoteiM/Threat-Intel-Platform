@@ -130,6 +130,11 @@ def normalize_report(
         file_name=_text(target_file.get("name")),
         file_type=_text(target_file.get("type")),
         file_size=_as_int(target_file.get("size")),
+        ssdeep=_text(target_file.get("ssdeep")),
+        tlsh=_text(target_file.get("tlsh")),
+        crc32=_text(target_file.get("crc32")),
+        yara_matches=_yara(target_file),
+        clamav=_text(target_file.get("clamav")) or None,
         started_at=_text(info.get("started")),
         ended_at=_text(info.get("ended")),
         duration_seconds=_as_int(info.get("duration")),
@@ -187,6 +192,12 @@ def _launch_failures(log: Any) -> list[str]:
             continue
         if not any(marker in cleaned for marker in _LAUNCH_FAILURE_MARKERS):
             continue
+        # A traceback echoes the source that raised, so the log carries both
+        # `raise CuckooPackageError(f"... {application} ...")` and the resolved
+        # message. The template names nothing and is noise in a report — drop
+        # it rather than merely ranking it last, which still showed it.
+        if cleaned.startswith("raise ") or "{" in cleaned:
+            continue
         # Strip the exception class and module path, which add nothing for a
         # reader: what matters is the sentence after the colon.
         for prefix in ("CuckooPackageError: ", "CuckooError: "):
@@ -195,13 +206,6 @@ def _launch_failures(log: Any) -> list[str]:
         found.append(cleaned)
 
     def informativeness(line: str) -> int:
-        # A traceback echoes the source that raised, so the log contains both
-        # `raise CuckooPackageError(f"Unable to find any {application} ...")`
-        # and the resolved `... Unable to find any Acrobat.exe executable`.
-        # The template names nothing; prefer the message that says Acrobat.
-        source_echo = line.startswith("raise ") or "{" in line
-        if source_echo:
-            return 9
         if "Unable to find any" in line or "Unable to execute" in line:
             return 0
         if "raised an error" in line:
@@ -263,12 +267,33 @@ def _signatures(raw: Any) -> list[CapeSignature]:
                 severity=_as_int(item.get("severity")) or 0,
                 confidence=_as_int(item.get("confidence")),
                 ttps=_ttps(item),
+                details=_signature_details(item.get("data")),
             )
         )
         if len(out) >= _MAX_SIGNATURES:
             break
     out.sort(key=lambda s: s.severity, reverse=True)
     return out
+
+
+def _signature_details(raw: Any) -> list[str]:
+    """What a signature matched, flattened to readable lines.
+
+    CAPE's `data` is a list of single-entry dicts — [{"Binary triggered YARA
+    rule": "multiple_versions"}] — which carries the whole substance of the
+    finding. Dropping it left every signature reading as its own category.
+    """
+    out: list[str] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, dict):
+            for key, value in entry.items():
+                if isinstance(value, (list, tuple)):
+                    value = ", ".join(str(v) for v in value[:8])
+                text = f"{key}: {value}" if key else str(value)
+                out.append(_trim(text, 300))
+        elif isinstance(entry, str):
+            out.append(_trim(entry, 300))
+    return _dedupe(out)[:12]
 
 
 def _ttps(item: dict) -> list[str]:
@@ -289,6 +314,32 @@ def _ttps(item: dict) -> list[str]:
         elif isinstance(value, dict):
             found.extend(str(k) for k in value.keys())
     return _dedupe(found)[:20]
+
+
+def _yara(target_file: dict) -> list[dict]:
+    """YARA rules that matched the file, with the author's own description."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for key in ("yara", "cape_yara"):
+        for entry in target_file.get(key) if isinstance(target_file.get(key), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            name = _text(entry.get("name"))
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            meta = _dict(entry.get("meta"))
+            out.append(
+                {
+                    "name": name,
+                    "description": _trim(meta.get("description") or "", 300),
+                    "author": _text(meta.get("author")),
+                    "source": "cape" if key == "cape_yara" else "yara",
+                }
+            )
+            if len(out) >= 20:
+                return out
+    return out
 
 
 def _network(raw: Any) -> CapeNetworkIndicators:
@@ -576,6 +627,12 @@ def _dedupe(values: Iterable[str]) -> list[str]:
         if len(out) >= _MAX_ITEMS:
             break
     return out
+
+
+def _trim(value: Any, limit: int) -> str:
+    """Bounded text. A signature detail can carry a whole command line."""
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _text(value: Any) -> str | None:

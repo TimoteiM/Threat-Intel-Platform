@@ -340,6 +340,37 @@ function Result({ report }: { report: api.SandboxReport }) {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      {/* Survives a failed detonation: CAPE hashes and scans the file even when
+          the guest never opens it, which is exactly when this is all there is. */}
+      {(report.sha256 || report.ssdeep || report.tlsh || report.file_type) && (
+        <Block title="File identity">
+          <div style={{ display: "grid", gap: 4 }}>
+            <IdRow label="Type" value={report.file_type} />
+            <IdRow label="Size" value={report.file_size ? `${report.file_size.toLocaleString()} bytes` : null} />
+            <IdRow label="SHA-256" value={report.sha256} mono />
+            <IdRow label="MD5" value={report.md5} mono />
+            <IdRow label="ssdeep" value={report.ssdeep} mono />
+            <IdRow label="TLSH" value={report.tlsh} mono />
+            <IdRow label="CRC32" value={report.crc32} mono />
+            <IdRow label="ClamAV" value={report.clamav} />
+          </div>
+        </Block>
+      )}
+
+      {(report.yara_matches?.length ?? 0) > 0 && (
+        <Block title={`YARA matches (${report.yara_matches!.length})`}>
+          <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+            {report.yara_matches!.map((y) => (
+              <li key={y.name} style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                <strong style={{ color: "var(--text)", fontFamily: "var(--font-mono)" }}>{y.name}</strong>
+                {y.description ? ` — ${y.description}` : ""}
+                {y.author && <span style={{ color: "var(--text-muted)" }}> · {y.author}</span>}
+              </li>
+            ))}
+          </ul>
+        </Block>
+      )}
+
       {detections.length > 0 && (
         <Block title="Detections">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -359,6 +390,18 @@ function Result({ report }: { report: api.SandboxReport }) {
                 {s.description ? ` — ${s.description}` : ""}
                 {s.ttps.length > 0 && (
                   <span style={{ color: "var(--text-muted)" }}> [{s.ttps.join(", ")}]</span>
+                )}
+                {/* What it actually matched. Without this a signature reads as
+                    a category rather than a finding. */}
+                {(s.details?.length ?? 0) > 0 && (
+                  <ul style={{ margin: "3px 0 0", paddingLeft: 16 }}>
+                    {s.details!.slice(0, 6).map((d, j) => (
+                      <li key={j} style={{ fontSize: 11.5, color: "var(--text-muted)",
+                                           fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
+                        {d}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </li>
             ))}
@@ -465,6 +508,19 @@ function Fact({ label, value, mono }: { label: string; value: React.ReactNode; m
                     fontFamily: mono ? "var(--font-mono)" : undefined }}>
         {value}
       </div>
+    </div>
+  );
+}
+
+function IdRow({ label, value, mono }: { label: string; value?: string | number | null; mono?: boolean }) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
+      <span style={{ color: "var(--text-muted)", minWidth: 74 }}>{label}</span>
+      <span style={{ color: "var(--text-secondary)", wordBreak: "break-all",
+                     fontFamily: mono ? "var(--font-mono)" : undefined }}>
+        {value}
+      </span>
     </div>
   );
 }

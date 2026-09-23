@@ -399,12 +399,35 @@ executed the **verdict is withheld** — `unknown`, not `likely_benign` — with
 benign" pill on a document that was never opened is the single most dangerous
 thing this integration could display.
 
+### What is kept when nothing executes
+
+CAPE hashes, YARA-scans and classifies a file whether or not the guest opens
+it, and for a failed detonation that is the whole result. It was being thrown
+away, so a PDF that never launched showed one generic signature line and
+nothing else.
+
+Now kept from `target.file`:
+
+| | |
+|---|---|
+| Signature **details** | CAPE's `data` per signature. "binary_yara — Binary file triggered YARA rule" is a category; "Binary triggered YARA rule: **multiple_versions**" is a finding. |
+| YARA matches | rule name, the author's own description, and who wrote it |
+| Fuzzy hashes | `ssdeep`, `TLSH`, `CRC32` — for pivoting to a near-identical sample under another name |
+| Full file type | "PDF document, version 1.7, **25 page(s)**" rather than "PDF document" |
+| ClamAV | when CAPE ran it and it said something |
+
+Traceback source echoes are also dropped from the error list rather than
+merely ranked last — `raise CuckooPackageError(f"Unable to find any
+{application} executable")` names nothing, and was being displayed alongside
+the resolved message that names AcroRd32.
+
 ### The machine pool is not uniform
 
 Same PDF package, two different outcomes:
 
 | Task | Machine | Result |
 |---|---|---|
+| 3 | `cuckoo3` | `Unable to find any AcroRd32.exe executable` — nothing ran |
 | 7 | `cuckoo4` | `Unable to find any AcroRd32.exe executable` — nothing ran |
 | 8 | `cuckoo1` | Acrobat ran 287s, malscore 10/10 |
 
