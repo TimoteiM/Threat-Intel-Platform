@@ -378,6 +378,44 @@ rather than lists.
 containing `dump.pcap`. It was in the format list on the assumption that it was
 a reduced report; it can never parse, and has been removed.
 
+### A sample that never ran is not a clean sample
+
+Task 7 reported **malscore 0.0, "likely benign"** for a PDF named
+`Ghid_Telenet_True_Positive.pdf`. The score was real; what it measured was
+nothing at all. CAPE's analyser log said why:
+
+```
+CuckooError: The package "modules.packages.pdf" start function raised an error:
+             Unable to find any AcroRd32.exe executable
+```
+
+CAPE leaves `debug.errors` empty and puts launch failures in `debug.log`, so
+that line was being dropped and the report said only that nothing happened.
+
+Two changes. The failure is now extracted from the log and shown, preferring
+the resolved message over the traceback's own source line. And when nothing
+executed the **verdict is withheld** — `unknown`, not `likely_benign` — with
+`executed: false` on the report and a red banner on the panel. A green "likely
+benign" pill on a document that was never opened is the single most dangerous
+thing this integration could display.
+
+### The machine pool is not uniform
+
+Same PDF package, two different outcomes:
+
+| Task | Machine | Result |
+|---|---|---|
+| 7 | `cuckoo4` | `Unable to find any AcroRd32.exe executable` — nothing ran |
+| 8 | `cuckoo1` | Acrobat ran 287s, malscore 10/10 |
+
+**Acrobat is installed on cuckoo1 and not on cuckoo4.** CAPE schedules across
+the pool, so whether a PDF is analysed at all is currently down to which
+machine is free. Worth levelling the image across all six, or pinning the
+`pdf` package to machines that have a reader.
+
+Until then, an empty PDF result should be re-run rather than trusted — which
+is what the banner now says.
+
 ### PDFs are detonated after all
 
 The brief said PDF dynamic execution was unavailable because no reader was

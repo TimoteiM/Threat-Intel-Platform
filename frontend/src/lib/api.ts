@@ -567,6 +567,9 @@ export interface SandboxReport {
   duration_seconds?: number | null;
   machine?: string | null;
   route?: string | null;
+  package?: string | null;
+  /** False when CAPE started the sample and nothing ran. */
+  executed?: boolean;
   network: {
     domains: string[];
     dns_queries: string[];

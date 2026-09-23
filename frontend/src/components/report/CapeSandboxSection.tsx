@@ -246,6 +246,18 @@ export default function CapeSandboxSection({
           <SubHeading>Detonation</SubHeading>
           <Header analysis={analysis} result={result} />
 
+          {result && result.executed === false && (
+            // Above the limitations, and in the danger tone: a score of zero
+            // from a sample that never started is the absence of an analysis,
+            // and reads as a clean result unless something says otherwise.
+            <Banner tone="danger">
+              <strong>The sample did not execute.</strong> This analysis is not
+              evidence about the file — the score reflects an analysis that never
+              ran, not a clean one. Re-run it, or check the guest image has a
+              handler for this file type.
+            </Banner>
+          )}
+
           {analysis.limitations?.length > 0 && (
             <Banner tone="warning">
               {analysis.limitations.map((note, i) => (
@@ -306,6 +318,7 @@ function Header({
       )}
       {analysis.reused_existing && <Fact label="Source" value="Existing CAPE analysis" />}
       {result?.machine && <Fact label="Machine" value={result.machine} mono />}
+      {result?.package && <Fact label="Package" value={result.package} mono />}
       {result?.route && <Fact label="Network route" value={result.route} />}
       <Fact label="Submitted" value={formatWhen(analysis.submitted_at || analysis.created_at)} />
       {analysis.completed_at && <Fact label="Completed" value={formatWhen(analysis.completed_at)} />}
@@ -411,7 +424,7 @@ function Result({ report }: { report: api.SandboxReport }) {
       )}
 
       {errors.length > 0 && (
-        <Block title="Analysis errors">
+        <Block title="What CAPE reported going wrong">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {errors.map((e, i) => (
               <li key={i} style={{ fontSize: 12, color: "var(--status-warning)" }}>{e}</li>
@@ -438,7 +451,9 @@ function VerdictChip({ verdict }: { verdict: string }) {
     verdict === "malicious" ? "var(--status-danger)"
       : verdict === "suspicious" ? "var(--status-warning)"
       : verdict === "likely_benign" ? "var(--status-success)"
-      : "var(--text-muted)";
+      // Not muted grey: unknown here usually means the sample never ran, and a
+      // faint pill reads as "nothing to see".
+      : "var(--status-warning)";
   return <span style={chip(colour)}>{verdict.replace("_", " ")}</span>;
 }
 

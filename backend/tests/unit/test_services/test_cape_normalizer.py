@@ -245,3 +245,124 @@ def test_the_reduced_source_is_declared():
     note = " ".join(r.limitations)
     assert "IOC summary" in note
     assert "signatures" in note.lower()
+
+
+# ── A sample that never ran is not a clean sample ────────────────────────────
+#
+# Task 7 on the live instance: a PDF named "..._True_Positive.pdf" reported
+# malscore 0.0 and "likely benign", because CAPE picked a machine with no
+# Acrobat installed and the package never started. The score was real; what it
+# measured was nothing at all.
+
+
+def unexecuted_payload(**overrides) -> dict:
+    base = {
+        "info": {"id": 7, "package": "pdf", "duration": 72, "route": "none",
+                 "machine": {"name": "cuckoo4"}},
+        "target": {"file": {"name": "Ghid_True_Positive.pdf", "type": "PDF document"}},
+        "malscore": 0.0,
+        "signatures": [],
+        "network": {},
+        "behavior": {"processes": []},
+        "debug": {
+            "errors": [],
+            "log": (
+                "2026-09-23 06:09:40,100 [root] INFO: Starting analyzer\n"
+                "Traceback (most recent call last):\n"
+                '  File "C:\\x\\analyzer.py", line 695, in run\n'
+                "lib.common.exceptions.CuckooError: The package "
+                '"modules.packages.pdf" start function raised an error: '
+                "Unable to find any Acrobat.exe executable\n"
+                "2026-09-23 06:09:40,609 [root] INFO: Analysis completed\n"
+            ),
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_the_verdict_is_withheld_when_nothing_executed():
+    """Not "likely benign". A zero from an analysis that never happened is the
+    absence of evidence, and a green pill on it misrepresents that."""
+    r = normalize_report(unexecuted_payload(), task_id=7)
+    assert r.malscore == 0.0          # the score is reported honestly
+    assert r.verdict == "unknown"     # but it is not read as benign
+    assert r.executed is False
+
+
+def test_capes_own_reason_is_surfaced_from_the_analyser_log():
+    """CAPE leaves debug.errors empty and puts the failure in debug.log, so the
+    one line explaining an empty analysis was being dropped."""
+    r = normalize_report(unexecuted_payload(), task_id=7)
+    assert any("Acrobat.exe" in e for e in r.errors)
+    assert any("did not execute" in note for note in r.limitations)
+    assert any("Acrobat.exe" in note for note in r.limitations)
+
+
+def test_routine_log_lines_are_not_mistaken_for_failures():
+    r = normalize_report(unexecuted_payload(debug={"errors": [], "log":
+        "INFO: Starting analyzer\nINFO: Analysis completed\nINFO: all good\n"}))
+    assert r.errors == []
+
+
+def test_a_sample_that_did_run_keeps_its_verdict():
+    payload = unexecuted_payload(
+        behavior={"processes": [{"pid": 1}, {"pid": 2}], "summary": {}},
+        malscore=8.0,
+        debug={"errors": [], "log": "INFO: fine"},
+    )
+    r = normalize_report(payload)
+    assert r.executed is True
+    assert r.verdict == "malicious"
+
+
+def test_a_genuinely_clean_run_is_still_likely_benign():
+    """The rule keys on execution, not on the score — a sample that ran and
+    scored low is still reported as likely benign."""
+    payload = unexecuted_payload(
+        behavior={"processes": [{"pid": 1}], "summary": {}},
+        malscore=0.0,
+        debug={"errors": [], "log": "INFO: fine"},
+    )
+    r = normalize_report(payload)
+    assert r.executed is True and r.verdict == "likely_benign"
+
+
+def test_the_analysis_package_is_reported():
+    """A PDF analysed with the wrong package, or on a machine without the
+    reader, is the difference between a result and an empty one."""
+    assert normalize_report(unexecuted_payload()).package == "pdf"
+
+
+def test_the_most_explanatory_failure_line_comes_first():
+    """A caller quoting errors[0] must get the reason, not a timestamped note
+    that the pdf package was selected — which is what happened first time."""
+    payload = unexecuted_payload(debug={"errors": [], "log": (
+        '2026-09-23 06:09:15,944 [root] INFO: analysis package specified: "pdf"\n'
+        '2026-09-23 06:09:15,944 [root] DEBUG: importing analysis package module\n'
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any Acrobat.exe executable\n'
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+    )})
+    r = normalize_report(payload)
+    assert r.errors, "a launch failure must be extracted"
+    assert "Unable to find any" in r.errors[0]
+    # Routine progress lines are not failures.
+    assert not any("analysis package specified" in e for e in r.errors)
+    assert not any("importing analysis package" in e for e in r.errors)
+    # And the limitation quotes the useful line.
+    assert any("Acrobat.exe" in note for note in r.limitations)
+
+
+def test_a_traceback_source_line_is_not_preferred_over_the_real_message():
+    """The log carries both the `raise ...(f"...{application}...")` source and
+    the resolved exception. The template names nothing; the message names
+    Acrobat, and that is the line an analyst needs."""
+    payload = unexecuted_payload(debug={"errors": [], "log": (
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any Acrobat.exe executable\n'
+    )})
+    r = normalize_report(payload)
+    assert "Acrobat.exe" in r.errors[0]
+    assert "{application}" not in r.errors[0]

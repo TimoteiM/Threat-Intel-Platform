@@ -1110,6 +1110,13 @@ class CapeNormalizedReport(BaseModel):
     duration_seconds: Optional[int] = None
     machine: Optional[str] = None
     route: Optional[str] = None
+    # CAPE's analysis package — "pdf", "exe", "doc". Worth showing: a PDF
+    # analysed with the wrong package, or on a machine lacking the reader, is
+    # the difference between a real result and an empty one.
+    package: Optional[str] = None
+    # True when CAPE started the sample and nothing ran. Distinct from a clean
+    # run, and the reason the verdict is withheld.
+    executed: bool = True
 
     network: CapeNetworkIndicators = Field(default_factory=CapeNetworkIndicators)
     behaviour: CapeBehaviourSummary = Field(default_factory=CapeBehaviourSummary)

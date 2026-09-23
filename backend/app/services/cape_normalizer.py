@@ -68,7 +68,13 @@ def normalize_report(
     if malscore is None:
         malscore = _as_float(info.get("malscore"))
 
-    errors = _strings(_dict(payload.get("debug")).get("errors"))[:20]
+    debug = _dict(payload.get("debug"))
+    errors = _strings(debug.get("errors"))[:20]
+    # CAPE records a failed launch in debug.log and leaves debug.errors empty,
+    # so the one line that explains an empty analysis — "Unable to find any
+    # Acrobat.exe executable" — was being dropped. Without it the report says
+    # nothing happened and never says why.
+    errors = (errors + _launch_failures(debug.get("log")))[:20]
     limitations: list[str] = []
 
     machine = _dict(info.get("machine"))
@@ -78,13 +84,20 @@ def normalize_report(
     dropped = _dropped(payload)
     configs = _configs(payload)
 
-    if not behaviour.process_count and not network.domains and not network.hosts:
+    executed = bool(behaviour.process_count) or bool(network.domains) or bool(network.hosts)
+    if not executed:
         # Nothing executed and nothing was contacted. Said out loud, because an
         # empty report reads exactly like a clean one otherwise.
-        limitations.append(
-            "No process activity and no network activity were recorded. "
-            "The sample may not have executed in the guest."
-        )
+        if errors:
+            limitations.append(
+                "The sample did not execute in the guest, so this analysis is not evidence "
+                "about the file. CAPE reported: " + errors[0]
+            )
+        else:
+            limitations.append(
+                "No process activity and no network activity were recorded. "
+                "The sample may not have executed in the guest."
+            )
     if report_format == "iocs":
         # Said plainly, because the missing parts are ones an analyst would
         # otherwise read as absent rather than unfetched.
@@ -102,7 +115,13 @@ def normalize_report(
         task_id=task_id or _as_int(info.get("id")),
         status=str(payload.get("status") or info.get("status") or "reported").strip().lower(),
         malscore=malscore,
-        verdict=verdict_for(malscore),
+        # A score of zero from a sample that never ran is not evidence that the
+        # file is safe — it is the absence of an analysis. Withholding the
+        # verdict here is the difference between "we looked and found nothing"
+        # and "we never got to look", which a green "likely benign" pill on an
+        # unopened document actively misrepresents.
+        verdict="unknown" if not executed else verdict_for(malscore),
+        executed=executed,
         detections=_detections(payload),
         signatures=signatures,
         sha256=_lower(target_file.get("sha256")),
@@ -116,6 +135,7 @@ def normalize_report(
         duration_seconds=_as_int(info.get("duration")),
         machine=_text(machine.get("name") or machine.get("label")) if machine else _text(info.get("machine")),
         route=_text(info.get("route")),
+        package=_text(info.get("package")),
         network=network,
         behaviour=behaviour,
         dropped_files=dropped,
@@ -127,6 +147,68 @@ def normalize_report(
         errors=errors,
         limitations=limitations,
     )
+
+
+# Lines in CAPE's analyser log that mean the sample was never started. Matched
+# on the exception text rather than the whole log, which runs to thousands of
+# lines of routine progress.
+_LAUNCH_FAILURE_MARKERS = (
+    "CuckooError",
+    "CuckooPackageError",
+    "start function raised an error",
+    "Unable to find any",
+    "Unable to execute",
+    "could not be executed",
+)
+
+# Routine progress. "analysis package specified: pdf" is an INFO line and was
+# matching a broader marker, so the limitation quoted it instead of the
+# exception — the one line that explains the empty analysis ended up fifth.
+_ROUTINE_LOG_LEVELS = ("] INFO:", "] DEBUG:", "] WARNING:")
+
+
+def _launch_failures(log: Any) -> list[str]:
+    """The reason an analysis produced nothing, out of CAPE's analyser log.
+
+    Ordered so the most explanatory line comes first: a caller quoting
+    `errors[0]` should get "Unable to find any Acrobat.exe executable", not a
+    timestamped note that the pdf package was selected.
+    """
+    text = str(log or "")
+    if not text:
+        return []
+
+    found: list[str] = []
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned or len(cleaned) > 400:
+            continue
+        if any(level in cleaned for level in _ROUTINE_LOG_LEVELS):
+            continue
+        if not any(marker in cleaned for marker in _LAUNCH_FAILURE_MARKERS):
+            continue
+        # Strip the exception class and module path, which add nothing for a
+        # reader: what matters is the sentence after the colon.
+        for prefix in ("CuckooPackageError: ", "CuckooError: "):
+            if prefix in cleaned:
+                cleaned = cleaned.split(prefix, 1)[1]
+        found.append(cleaned)
+
+    def informativeness(line: str) -> int:
+        # A traceback echoes the source that raised, so the log contains both
+        # `raise CuckooPackageError(f"Unable to find any {application} ...")`
+        # and the resolved `... Unable to find any Acrobat.exe executable`.
+        # The template names nothing; prefer the message that says Acrobat.
+        source_echo = line.startswith("raise ") or "{" in line
+        if source_echo:
+            return 9
+        if "Unable to find any" in line or "Unable to execute" in line:
+            return 0
+        if "raised an error" in line:
+            return 1
+        return 2
+
+    return _dedupe(sorted(found, key=informativeness))[:5]
 
 
 def verdict_for(malscore: float | None) -> str:
