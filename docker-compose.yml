@@ -59,8 +59,18 @@ services:
       - NET_RAW
     restart: unless-stopped
     environment:
-      # The alert sender. Everything else reaching 8000 from outside is dropped.
-      INGEST_CIDR: "172.23.10.16/32"
+      # The alert senders. Everything else reaching 8000 from outside is dropped.
+      #
+      # Space-separated, and looped over below. It was a single value, which
+      # silently supported exactly one sender: a second TraceCat at
+      # 172.20.30.35 was dropped for a day with nothing in the API log,
+      # because a dropped packet leaves no trace on this side at all.
+      #
+      # Keep this to exact hosts. Anything able to occupy or spoof one of
+      # these addresses inherits an unauthenticated route to the ingest
+      # endpoint — weaker than an API key, and only used because these
+      # appliances cannot carry one.
+      INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32"
       EXTERNAL_IFACES: "enp6s18 virbr0"
     command:
       - sh
@@ -70,7 +80,9 @@ services:
         apply() {
           for IF in $$EXTERNAL_IFACES; do
             # Remove first so re-running never stacks duplicates.
-            while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN 2>/dev/null; do :; done
+            for CIDR in $$INGEST_CIDRS; do
+              while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$CIDR -j RETURN 2>/dev/null; do :; done
+            done
             while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -j DROP 2>/dev/null; do :; done
             while iptables -D DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP " 2>/dev/null; do :; done
             # Inserted in reverse, so the chain ends up RETURN, LOG, DROP.
@@ -79,9 +91,11 @@ services:
             # out" and "the sender was blocked" look identical from the outside.
             # Rate-limited so a port scan cannot flood the kernel log.
             iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -m limit --limit 60/min --limit-burst 60 -j LOG --log-prefix "TIP8000DROP "
-            iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$INGEST_CIDR -j RETURN
+            for CIDR in $$INGEST_CIDRS; do
+              iptables -I DOCKER-USER -i $$IF -p tcp --dport 8000 -s $$CIDR -j RETURN
+            done
           done
-          echo "[firewall] DOCKER-USER rules applied for: $$EXTERNAL_IFACES (allow $$INGEST_CIDR)"
+          echo "[firewall] DOCKER-USER rules applied for: $$EXTERNAL_IFACES (allow $$INGEST_CIDRS)"
         }
         apply
         # Docker rebuilds its chains on daemon restart without restarting this

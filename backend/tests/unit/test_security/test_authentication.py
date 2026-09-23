@@ -541,3 +541,36 @@ def test_another_administrator_may_be_deactivated_when_one_remains():
 
 def test_an_analyst_is_not_protected_by_the_guard():
     _guard(_Row(role="analyst"), _CountingDB(other_admins=0), {"id": "someone-else"})
+
+
+def test_more_than_one_sender_can_be_exempted(monkeypatch):
+    """There is never only one appliance.
+
+    The firewall half of this allowlist was written as a single value, and a
+    second TraceCat at 172.20.30.35 was dropped for a day — silently, because a
+    dropped packet leaves nothing in the application log to find. The auth half
+    always took a list; this pins that, so the two halves cannot drift apart
+    again.
+    """
+    client = _ingest_client(
+        monkeypatch, cidrs="172.23.10.16/32, 172.20.30.35/32", peer="172.20.30.35"
+    )
+    assert client.post("/api/alert-investigations", json={}).status_code == 200
+
+
+def test_each_exempted_sender_is_still_delivery_only(monkeypatch):
+    """Adding a sender grants POST to the ingest route and nothing else."""
+    for peer in ("172.23.10.16", "172.20.30.35"):
+        client = _ingest_client(
+            monkeypatch, cidrs="172.23.10.16/32,172.20.30.35/32", peer=peer
+        )
+        assert client.post("/api/alert-investigations", json={}).status_code == 200
+        assert client.get("/api/investigations").status_code == 401
+        assert client.delete("/api/clients/abc").status_code == 401
+
+
+def test_a_sender_outside_the_list_is_still_refused(monkeypatch):
+    client = _ingest_client(
+        monkeypatch, cidrs="172.23.10.16/32,172.20.30.35/32", peer="172.20.30.36"
+    )
+    assert client.post("/api/alert-investigations", json={}).status_code == 401

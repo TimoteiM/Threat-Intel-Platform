@@ -175,3 +175,79 @@ throughout — which is how the firewall was ruled out.
 `INGEST_CIDR` is a single host, `172.23.10.16/32`. If TraceCat ever gains a
 second egress address, everything from it is dropped and looks exactly like
 this again — the kernel log above is what distinguishes the two.
+
+---
+
+## A second sender, silently dropped (September 2026)
+
+TraceCat at **172.20.30.35** had never once reached the application. Not a
+single line in 72 hours of API logs, while the sender at 172.23.10.16 showed
+151. The alerts were not rejected, not queued and not lost in the app — they
+never arrived.
+
+The firewall allowlist added with authentication took a **single** address:
+
+```yaml
+INGEST_CIDR: "172.23.10.16/32"      # one sender, by construction
+```
+
+Everything else reaching port 8000 from outside was dropped. 194 packets from
+172.20.30.35 sat in the kernel log, arriving on `enp6s18` to dport 8000, from
+2026-09-22 12:01 through 2026-09-23 00:13.
+
+This is the failure mode the drop logging was added for. A dropped packet is
+silent on this side by design, so from the application there is nothing at all
+to find — no 401, no connection error, no log line. The sender sees a connect
+timeout and everyone reasonably suspects the application.
+
+```bash
+grep TIP8000DROP /var/log/kern.log | sed -E 's/.*SRC=([0-9.]+).*/\1/' | sort | uniq -c | sort -rn
+#   194 172.20.30.35     <- never reached the API
+#    15 10.10.126.151
+```
+
+### Fixed at both layers
+
+There are two independent gates, and a sender has to pass both:
+
+| Layer | Setting | Effect if missing |
+|---|---|---|
+| Host firewall (`DOCKER-USER`) | `INGEST_CIDRS` in `docker-compose.yml` | packet dropped, connect timeout, nothing logged by the app |
+| Authentication middleware | `INGEST_TRUSTED_CIDRS` in `.env` | request arrives and gets 401 |
+
+`INGEST_CIDR` became `INGEST_CIDRS`, space-separated and looped over, because
+the singular form is what made one sender the structural maximum. The auth
+half always took a comma-separated list; a test now pins the multi-sender case
+so the two halves cannot drift apart again.
+
+Adding a sender grants **POST to the ingest routes and nothing else** — the
+same address is still refused on GET and DELETE. Verified for both senders.
+
+### Adding another sender
+
+```yaml
+# docker-compose.yml, firewall service
+INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32 <new>/32"
+```
+```bash
+# .env
+INGEST_TRUSTED_CIDRS=172.23.10.16/32,172.20.30.35/32,<new>/32
+```
+```bash
+docker compose up -d --force-recreate firewall api worker beat
+```
+
+Both layers, or it fails in one of the two ways above. Check it landed:
+
+```bash
+docker compose exec firewall iptables -L DOCKER-USER -n -v   # a RETURN per sender, above the DROP
+docker compose logs api | grep "Ingest exemption active"
+```
+
+### Worth saying about this mechanism
+
+An IP allowlist is weaker than a credential: anything able to occupy or spoof
+one of these addresses inherits an unauthenticated route to the ingest
+endpoint. It exists only because these appliances cannot carry a header. If
+either sender can be given one, an API key is strictly better and the address
+can come back off both lists.
