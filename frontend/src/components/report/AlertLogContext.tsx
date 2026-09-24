@@ -26,6 +26,34 @@ import {
 
 const STEP_DEFAULT = 5;
 
+/**
+ * The same 4-chars-per-token rule the server budgets with. An estimate, and
+ * labelled as one — the point is that an analyst selecting thirty events can
+ * see they are over budget before they spend a model call finding out.
+ */
+const CHARS_PER_TOKEN = 4;
+
+function estimateTokens(events: AlertLogEvent[]): number {
+  let chars = 0;
+  for (const e of events) {
+    chars +=
+      JSON.stringify({
+        ref: e.key,
+        time: e.timestamp,
+        device: e.agent?.name,
+        user: e.users?.[0],
+        rule: e.rule?.description,
+        rule_id: e.rule?.id,
+        level: e.rule?.level,
+        event_id: e.event_id,
+        process: e.process,
+        network: e.network,
+        log: e.full_log?.slice(0, 400),
+      }).length;
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
 function ts(value?: string | null): string {
   if (!value) return "—";
   const parsed = new Date(String(value).replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
@@ -74,6 +102,32 @@ export function AlertLogContext({ runId }: { runId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Every event currently on screen, in the order it is drawn. "Select all"
+  // means exactly what is displayed — expanding the window and selecting again
+  // adds the newly shown ones rather than silently re-selecting everything.
+  const displayed: AlertLogEvent[] = page
+    ? [...[...page.after].reverse(), page.anchor, ...[...page.before].reverse()].filter(
+        (e) => !(e as { synthetic?: boolean }).synthetic,
+      )
+    : [];
+  const displayedKeys = displayed.map((e) => e.key);
+  const allDisplayedPinned =
+    displayedKeys.length > 0 && displayedKeys.every((k) => pinned.has(k));
+  const someDisplayedPinned = displayedKeys.some((k) => pinned.has(k));
+
+  const toggleAllDisplayed = () =>
+    setPinned((current) => {
+      const next = new Set(current);
+      if (allDisplayedPinned) displayedKeys.forEach((k) => next.delete(k));
+      else displayedKeys.forEach((k) => next.add(k));
+      return next;
+    });
+
+  const selectedEvents = displayed.filter((e) => pinned.has(e.key));
+  const selectedTokens = estimateTokens(selectedEvents);
+  const budget = page?.ai_budget_tokens ?? 6000;
+  const overBudget = selectedTokens > budget;
 
   const togglePin = (key: string) =>
     setPinned((current) => {
@@ -133,17 +187,48 @@ export function AlertLogContext({ runId }: { runId: string }) {
           <Muted>{page.analysis_note}</Muted>
           <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
             <button type="button" onClick={requestReanalysis} disabled={busy} style={primaryBtn(busy)}>
-              {busy
-                ? "Queueing…"
-                : pinned.size > 0
-                ? `Re-analyse with ${pinned.size} selected`
-                : "Re-analyse with the complete context"}
+              {busy ? "Queueing…" : "Re-analyse with the complete context"}
             </button>
             <Muted>The current verdict is kept, not overwritten.</Muted>
           </div>
-          {note && <Muted>{note}</Muted>}
         </div>
       )}
+
+      {/* Selection. Always present once something is picked, rather than only
+          when the window is still filling — sending chosen events to the model
+          is a thing an analyst does on any alert. */}
+      {pinned.size > 0 && (
+        <div
+          style={{
+            ...panel,
+            borderColor: overBudget ? "var(--danger, #f85149)" : "var(--accent, #1f6feb)",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <strong style={{ color: "var(--text)" }}>
+            {pinned.size} event{pinned.size === 1 ? "" : "s"} selected
+          </strong>
+          <span style={{ color: overBudget ? "var(--danger, #f85149)" : "var(--text-muted)", fontSize: 13 }}>
+            ≈{selectedTokens.toLocaleString()} of {budget.toLocaleString()} token budget
+            {overBudget ? " — over budget, the lowest-ranked will not fit" : ""}
+          </span>
+          <button type="button" onClick={() => setPinned(new Set())} style={secondaryBtn}>
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={requestReanalysis}
+            disabled={busy}
+            style={{ ...primaryBtn(busy), marginLeft: "auto" }}
+          >
+            {busy ? "Queueing…" : `Send ${pinned.size} event${pinned.size === 1 ? "" : "s"} to the AI`}
+          </button>
+        </div>
+      )}
+      {note && <Muted>{note}</Muted>}
 
       {/* Newer end. */}
       <LoadBar
@@ -158,6 +243,24 @@ export function AlertLogContext({ runId }: { runId: string }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
+              <th style={{ ...th, width: 28 }}>
+                <input
+                  type="checkbox"
+                  checked={allDisplayedPinned}
+                  ref={(el) => {
+                    // Indeterminate when only some of what is on screen is
+                    // picked, so the control never claims more than it means.
+                    if (el) el.indeterminate = someDisplayedPinned && !allDisplayedPinned;
+                  }}
+                  onChange={toggleAllDisplayed}
+                  aria-label="Select every event shown"
+                  title={
+                    allDisplayedPinned
+                      ? "Clear the events shown"
+                      : `Select all ${displayedKeys.length} events shown`
+                  }
+                />
+              </th>
               {["", "Time", "Δ", "Agent", "Agent IP", "Domain", "System Channel", "Rule Description", ""].map(
                 (h, i) => (
                   <th key={`${h}-${i}`} style={th}>
@@ -223,9 +326,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
           the alert itself, placed at its event time.
         </Muted>
       )}
-      {pinned.size > 0 && (
-        <Muted>{pinned.size} event(s) selected — re-analyse above to include them.</Muted>
-      )}
+
     </div>
   );
 }
@@ -311,7 +412,17 @@ function Row({
   return (
     <>
       <tr onClick={onToggle} style={rowStyle}>
-        <td style={{ ...td, width: 28, color: "var(--text-muted)" }} aria-hidden>
+        <td style={{ ...td, width: 28 }} onClick={(e) => e.stopPropagation()}>
+          {!event.synthetic && (
+            <input
+              type="checkbox"
+              checked={pinned}
+              onChange={onPin}
+              aria-label="Select this event for the AI"
+            />
+          )}
+        </td>
+        <td style={{ ...td, width: 20, color: "var(--text-muted)" }} aria-hidden>
           {expanded ? "⌄" : "›"}
         </td>
         <td style={{ ...td, whiteSpace: "nowrap", fontFamily: "var(--font-mono, monospace)" }}>
@@ -338,7 +449,7 @@ function Row({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={9} style={{ ...td, background: "var(--surface-2, transparent)" }}>
+          <td colSpan={10} style={{ ...td, background: "var(--surface-2, transparent)" }}>
             <div style={{ display: "grid", gap: 6 }}>
               {!event.synthetic && <Fact label="OpenSearch reference" value={event.key} mono />}
               {event.rule?.id && (
@@ -363,15 +474,6 @@ function Row({
               {event.rule?.groups?.length ? (
                 <Fact label="Rule groups" value={event.rule.groups.join(", ")} />
               ) : null}
-              {!event.synthetic && (
-                <label
-                  style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--text-muted)", fontSize: 12 }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <input type="checkbox" checked={pinned} onChange={onPin} />
-                  Include this event in a re-analysis
-                </label>
-              )}
               {event.fields && event.fields.length > 0 && (
                 <div style={{ marginTop: 4 }}>
                   <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>

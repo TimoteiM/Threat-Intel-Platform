@@ -495,6 +495,7 @@ export interface AlertLogContextPage {
   analysis_basis?: "complete" | "partial" | "unknown";
   new_logs_since_analysis?: number | null;
   analysis_note?: string | null;
+  ai_budget_tokens?: number;
 }
 
 /** The alert with N events either side of it, the way Discover shows context. */

@@ -334,3 +334,38 @@ def test_sanitising_many_records_does_not_leak_state_between_them():
         assert secret not in blob
     assert counts
 
+
+
+# --- selecting a whole screenful --------------------------------------------
+
+def test_every_selected_event_is_sent_when_they_fit():
+    """The common case: an analyst ticks the seven events on screen."""
+    events = [_event(f"e{i}", offset=i * 3, desc=f"distinct {i}", rule_id=str(i)) for i in range(7)]
+    result = select_for_ai(
+        events, pivots=AlertPivots(), alert_time=ALERT_TIME, budget_tokens=6000,
+        pinned_keys=[e["key"] for e in events],
+    )
+    assert len(result.summary()["analyst_pinned"]) == 7
+    assert result.summary()["analyst_pinned_dropped"] == []
+    refs = {s["ref"] for s in result.selected}
+    assert all(e["key"] in refs for e in events)
+
+
+def test_an_oversized_selection_keeps_the_highest_ranked_and_says_what_it_dropped():
+    """Which picks survive an overflow must be the interesting ones, not
+    whichever happened to be iterated last — and the analyst is entitled to
+    know which the model never saw."""
+    strong = _event("strong", agent="EXP-01", event_id="4672", level=10, desc="privileges assigned")
+    weak = [
+        _event(f"w{i}", agent="OTHER", level=1, offset=i * 30, desc=f"quiet {i}" + "x" * 300, rule_id=str(i))
+        for i in range(20)
+    ]
+    result = select_for_ai(
+        [strong] + weak, pivots=AlertPivots(hosts={"exp-01"}), alert_time=ALERT_TIME,
+        budget_tokens=400, pinned_keys=[strong["key"]] + [w["key"] for w in weak],
+    )
+    summary = result.summary()
+    assert strong["key"] in summary["analyst_pinned"]
+    assert summary["analyst_pinned_dropped"], "an overflow must be reported, not silent"
+    assert strong["key"] not in summary["analyst_pinned_dropped"]
+    assert result.used_tokens <= 400

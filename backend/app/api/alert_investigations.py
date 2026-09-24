@@ -920,6 +920,10 @@ async def get_run_log_context(
             payload["sent_to_ai_total"] = len(selected_refs)
             payload["alert_time"] = alert_time.isoformat() if alert_time else None
             payload["tenant_id"] = run.tenant_id
+            # So the view can show a selection against the budget it will
+            # actually be charged to, rather than against a number the UI
+            # invented.
+            payload["ai_budget_tokens"] = int(get_settings().alert_log_ai_budget_tokens)
             return payload
 
     return await run_in_threadpool(_read)
@@ -982,7 +986,15 @@ async def reanalyse_with_log_context(
         "run_id": str(run_id),
         "status": "queued",
         "pinned_refs": pinned,
-        "note": "Re-analysis queued. The previous verdict is kept under previous_analyses.",
+        "budget_tokens": int(get_settings().alert_log_ai_budget_tokens),
+        "note": (
+            f"Re-analysis queued with {len(pinned)} selected event(s). "
+            "They are placed in the context first, ahead of anything the ranking chose; "
+            "any that do not fit the token budget are reported on the finished analysis. "
+            "The previous verdict is kept under previous_analyses."
+            if pinned else
+            "Re-analysis queued. The previous verdict is kept under previous_analyses."
+        ),
     }
 
 

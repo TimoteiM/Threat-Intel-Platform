@@ -183,6 +183,29 @@ many to store whole — so anything already stored lacked it, and
 replaces rather than merges, because the merge keeps the record it already has,
 which is the poorer one here.
 
+### Sending events to the model
+
+A checkbox on every row, and one in the header that takes **everything
+currently displayed** — seven rows on screen means seven picks, not seven
+expand-and-tick actions. The header box goes indeterminate when only part of
+the screenful is selected, so it never claims more than it means, and "all
+displayed" means exactly that: widening the window and selecting again adds the
+newly shown events rather than silently re-selecting the whole retrieval.
+
+The selection bar shows the estimated cost against the budget the request will
+actually be charged to — `ALERT_LOG_AI_BUDGET_TOKENS`, sent to the view rather
+than guessed by it — and turns red when the selection is over. Seven typical
+events run about 1,150 tokens against a 6,000 budget, so the common case is
+nowhere near it.
+
+Picks are placed in the context **first**, ahead of anything the ranking chose,
+and when they overflow the budget they are taken highest-ranked first. That
+ordering matters only in the overflow, and then it is the difference between
+dropping the least interesting of someone's picks and dropping whichever
+happened to be iterated last. Anything that did not fit is recorded as
+`analyst_pinned_dropped` on the analysis: someone who selected thirty events is
+entitled to know which seven the model never saw.
+
 ### What an expanded row shows
 
 The event's **own** fields, whatever they are for its event id — a Document

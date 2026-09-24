@@ -344,6 +344,10 @@ class SelectionResult:
     budget_tokens: int = DEFAULT_BUDGET_TOKENS
     used_tokens: int = 0
     pinned: list[str] = field(default_factory=list)
+    # Analyst picks that did not fit the budget. Recorded rather than dropped
+    # quietly: someone who selected thirty events is entitled to know which
+    # seven the model never saw.
+    pinned_dropped: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -359,6 +363,7 @@ class SelectionResult:
             "budget_tokens": self.budget_tokens,
             "used_tokens": self.used_tokens,
             "analyst_pinned": list(self.pinned),
+            "analyst_pinned_dropped": list(self.pinned_dropped),
             "selected_refs": [s.get("key") for s in self.selected],
             "note": (
                 "Selection is deterministic and rank-ordered. A low rank means an event was "
@@ -434,11 +439,20 @@ def select_for_ai(
         used += cost
         return True
 
-    # 1. Analyst choices first, against the whole budget.
-    for item in representatives:
-        if item.key in pinned_set and item.key not in chosen:
-            _take(item, budget_tokens)
+    # 1. Analyst choices first, against the whole budget, highest-ranked first.
+    #    Ordering matters only when the selection overflows — and then it is the
+    #    difference between dropping the least interesting of their picks and
+    #    dropping whichever happened to be iterated last.
+    for item in sorted(
+        (r for r in representatives if r.key in pinned_set),
+        key=lambda s: (-s.score, abs(s.offset_seconds)),
+    ):
+        if item.key in chosen:
+            continue
+        if _take(item, budget_tokens):
             result.pinned.append(item.key)
+        else:
+            result.pinned_dropped.append(item.key)
 
     # 2. Lane by lane, so before/after are both represented.
     for lane, share in LANE_SHARES:
