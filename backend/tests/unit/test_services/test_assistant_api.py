@@ -3,7 +3,6 @@ import os
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from app.api.assistant import router
-from app.api.assistant import _graph_needs_repair
 
 
 def test_assistant_router_exposes_expected_paths() -> None:
@@ -22,43 +21,24 @@ def test_assistant_router_exposes_expected_paths() -> None:
     ) in routes
 
 
-def test_stale_two_node_graph_with_rich_interpretation_needs_repair() -> None:
-    class Session:
-        report_markdown = """
-# Event Interpretation
-Multiple sources 93.123.109.214, 45.148.10.62, 221.159.119.6, and 35.216.140.3 targeted /.env.bak.
-venus25-vm ens18 entered promiscuous mode. Rule 1002 fired 8945+ times.
-"""
-        result_json = {
-            "incident_graph": {
-                "summary": {"interpretation": report_markdown},
-                "nodes": [
-                    {"id": "alert-unknown", "label": "Unknown problem somewhere in the system."},
-                    {"id": "endpoint-smbfront-c31", "label": "smbfront-c31"},
-                ],
-                "edges": [{"from": "alert-unknown", "to": "endpoint-smbfront-c31", "label": "generated"}],
-            }
-        }
+def test_the_graph_repair_path_is_gone() -> None:
+    """The incident graph was removed. Its repair ran on *every* session read
+    and could rebuild and commit a payload up to 1.8 MB, which is a large part
+    of why reading a session got slower as the estate grew."""
+    import app.api.assistant as assistant
 
-    assert _graph_needs_repair(Session())
+    assert not hasattr(assistant, "_graph_needs_repair")
+    assert not hasattr(assistant, "_repair_stale_incident_graph")
 
 
-def test_stale_two_node_graph_with_azure_interpretation_needs_repair() -> None:
-    class Session:
-        report_markdown = """
-# Event Interpretation
-Azure AD successful OAuth2 login for vanessa.schockaert@oost-vlaanderen.be to Office 365 from 193.190.147.2.
-Kerberos service ticket requests and OneDrive SyncEngine managed device access were observed.
-"""
-        result_json = {
-            "incident_graph": {
-                "summary": {"interpretation": report_markdown},
-                "nodes": [
-                    {"id": "alert-process", "label": "process"},
-                    {"id": "ip-193-190-147-2", "label": "193.190.147.2"},
-                ],
-                "edges": [{"from": "alert-process", "to": "ip-193-190-147-2", "label": "generated"}],
-            }
-        }
+def test_no_module_still_builds_a_graph() -> None:
+    import importlib
 
-    assert _graph_needs_repair(Session())
+    for name in (
+        "app.services.assistant_service",
+        "app.services.alert_body_ai_service",
+        "app.services.alert_report_export_service",
+    ):
+        source = importlib.import_module(name).__file__
+        with open(source, encoding="utf-8") as handle:
+            assert "incident_graph" not in handle.read(), name

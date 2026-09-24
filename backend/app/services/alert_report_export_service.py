@@ -115,7 +115,6 @@ def executive_summary_document(payload: dict[str, Any]) -> dict[str, Any]:
         "ai_analysis": {
             "status": ai_report.get("status") or "skipped",
             "report_markdown": ai_report.get("report_markdown"),
-            "incident_graph": ai_report.get("incident_graph"),
             "assistant_session_id": ai_report.get("assistant_session_id"),
             "assistant_session_url": ai_report.get("assistant_session_url"),
             "sanitization_summary": ai_report.get("sanitization_summary"),

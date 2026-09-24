@@ -1811,7 +1811,6 @@ export interface AlertAIReport {
   title?: string;
   generated_at?: string | null;
   report_markdown?: string;
-  incident_graph?: Record<string, any>;
   sanitization_summary?: Record<string, number>;
   started_at?: string;
   completed_at?: string;
@@ -2001,8 +2000,7 @@ export interface AlertExecutiveSummaryDocument {
   ai_analysis?: {
     status?: string;
     report_markdown?: string;
-    incident_graph?: Record<string, any>;
-    assistant_session_id?: string;
+      assistant_session_id?: string;
     error?: string | null;
   };
 }

@@ -21,7 +21,6 @@ from app.services.assistant_prompt_service import (
     build_incident_correlation_prompt,
 )
 from app.services.assistant_sanitizer_service import sanitize_entries
-from app.services.assistant_incident_graph_service import build_assistant_incident_graph
 from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
@@ -280,12 +279,10 @@ class AssistantService:
                 restored = self._ensure_alert_key_observables(restored, raw_entries)
             final_report = self._append_resolved_identifiers(restored, merged_token_map)
 
-            incident_graph = build_assistant_incident_graph(assistant_session, final_report)
             assistant_session.result_json = {
                 "mode": assistant_session.mode,
                 "title": assistant_session.title,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "incident_graph": incident_graph,
             }
             assistant_session.report_markdown = final_report
             # The same report before its tokens were resolved. Kept so a later

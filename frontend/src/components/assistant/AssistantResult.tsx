@@ -28,43 +28,9 @@ export default function AssistantResult({
   // before rendering — we display it ourselves below as structured UI.
   const resolvedSection = parseResolvedIdentifiers(session.report_markdown ?? "");
   const reportBody = stripResolvedSection(session.report_markdown ?? "");
-  const incidentGraph = session.result_json?.incident_graph;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {incidentGraph?.nodes?.length ? (
-        <ConsoleModule
-          eyebrow="SOC investigation graph"
-          title="Log interpretation graph"
-          description="Open the deterministic evidence graph in a dedicated workspace with more room to inspect, pan, zoom, and move nodes."
-          tone={riskTone(incidentGraph?.summary?.risk)}
-          compact
-          actions={
-            <Link href={`/assistant/${session.id}/graph`} style={graphLinkStyle}>
-              Open graph
-            </Link>
-          }
-        >
-          <div style={graphLaunchStyle}>
-            <GraphStat label="Type" value={typeLabel(incidentGraph?.summary?.investigationType || "generic_multi_cluster_investigation")} />
-            <GraphStat label="Nodes" value={incidentGraph.nodes.length} />
-            <GraphStat label="Edges" value={Array.isArray(incidentGraph.edges) ? incidentGraph.edges.length : 0} />
-            <GraphStat label="Risk" value={incidentGraph?.summary?.risk || "Medium"} />
-          </div>
-        </ConsoleModule>
-      ) : incidentGraph ? (
-        <ConsoleModule
-          eyebrow="SOC investigation graph"
-          title="Graph unavailable"
-          description="The session has a graph payload, but no graph nodes were generated. Reopen or rerun the session to rebuild deterministic graph data from the logs."
-          tone="warning"
-          compact
-        >
-          <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
-            Graph data checks will appear once the backend extracts source IPs, targeted accounts, and event relationships from the submitted logs.
-          </div>
-        </ConsoleModule>
-      ) : null}
 
       <ConsoleModule
         title="Assistant output"
