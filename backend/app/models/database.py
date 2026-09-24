@@ -344,6 +344,11 @@ class User(Base):
     # by anyone — see _refuse_if_owner in app/api/auth.py.
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="analyst")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Internal staff see every tenant and the unassigned backlog. A
+    # client-restricted account has this false and an explicit tenant list, and
+    # cannot reach another tenant's data by changing a filter, a URL or a body.
+    all_tenants: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    tenant_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -377,6 +382,9 @@ class ApiKey(Base):
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Which tenants this integration may submit alerts for. Empty means none:
+    # a key cannot acquire a tenant by naming one in a request body.
+    tenant_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
 
 class Exclusion(Base):
@@ -491,6 +499,28 @@ class WatchlistAlert(Base):
 
     __table_args__ = (
         Index("idx_watchlist_alerts_wl", "watchlist_id"),
+    )
+
+
+class Tenant(Base):
+    """A client estate: whose alerts these are, and whose analysts may read them.
+
+    Distinct from `Client`, which is the brand-monitoring register — whose name
+    to watch for in a phishing kit. This is the opposite direction, and the two
+    must not be the same row: deleting a monitored brand would otherwise destroy
+    an access boundary.
+    """
+
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # What the sending integration puts in `tenant_id`.
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 
@@ -689,6 +719,14 @@ class AlertBodyInvestigationRun(Base):
     # or when it was forwarded by the manager rather than seen on an endpoint.
     entity_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     entity_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Whose estate this alert is from, verified by the platform rather than
+    # asserted by the payload. NULL means unassigned — visible only to internal
+    # users, never to a client-restricted one. `alert_client` below is the
+    # sender's own claim and is not a boundary.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # How the tenant was decided: declared | marker | manager_source | api_key.
+    # Kept so a dispute about an assignment is settled by reading the row.
+    tenant_assignment: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # Which platform sent it. Correlation partitions on this: two senders name
     # hosts their own way, and a chain assembled across them is a fabrication.
     alert_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -737,6 +775,7 @@ class AlertBodyInvestigationRun(Base):
         Index("idx_alert_body_runs_hash_created", "alert_body_hash", "created_at"),
         Index("idx_alert_body_runs_extref_created", "external_ref", "created_at"),
         Index("idx_alert_body_runs_rule_created", "detection_rule_id", "created_at"),
+        Index("idx_alert_body_runs_tenant_created", "tenant_id", "created_at"),
     )
 
 

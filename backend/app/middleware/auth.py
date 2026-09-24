@@ -234,7 +234,17 @@ def _identify_api_key(presented: str) -> dict | None:
         row.last_used_at = datetime.now(timezone.utc)
         row.use_count = int(row.use_count or 0) + 1
         db.commit()
-        return {"kind": "api_key", "id": str(row.id), "label": row.label, "role": row.role}
+        return {
+            "kind": "api_key",
+            "id": str(row.id),
+            "label": row.label,
+            "role": row.role,
+            # Which tenants this integration may submit for. An ingest key is
+            # never all-tenants: a machine credential that can write under any
+            # client is the boundary failing at its widest point.
+            "tenant_ids": list(row.tenant_ids or []),
+            "all_tenants": False,
+        }
 
 
 def _identify_user(user_id: str) -> dict | None:
@@ -253,6 +263,10 @@ def _identify_user(user_id: str) -> dict | None:
             "email": row.email,
             "display_name": row.display_name,
             "must_change_password": bool(row.must_change_password),
+            # Internal staff see every tenant and the unassigned backlog; a
+            # client-restricted account sees exactly what it was granted.
+            "all_tenants": bool(row.all_tenants),
+            "tenant_ids": list(row.tenant_ids or []),
         }
 
 

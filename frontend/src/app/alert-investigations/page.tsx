@@ -32,6 +32,11 @@ export default function AlertInvestigationsPage() {
   // would put a quarter-second lag on every Next click for no reason.
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [verdict, setVerdict] = useState("all");
+  // Which client's alerts are on screen. "all" means every tenant this account
+  // may see, which for a client-restricted account is only their own — the
+  // server decides that, not this selector.
+  const [tenant, setTenant] = useState("all");
+  const [scope, setScope] = useState<{ all_tenants: boolean; tenant_ids: string[] } | null>(null);
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -58,16 +63,21 @@ export default function AlertInvestigationsPage() {
         offset,
         search: debouncedSearch,
         verdict,
+        tenant,
       });
       setItems(data.items || []);
       setTotal(data.total || 0);
+      // The server says which clients this account may see; the selector is
+      // built from that answer rather than from a client-side list, so it
+      // cannot offer a tenant the caller would be refused.
+      if (data.scope) setScope({ all_tenants: data.scope.all_tenants, tenant_ids: data.scope.tenant_ids });
     } catch {
       setItems([]);
       setTotal(0);
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, verdict, pageSize, offset]);
+  }, [debouncedSearch, verdict, tenant, pageSize, offset]);
 
   useEffect(() => {
     load();
@@ -150,6 +160,35 @@ export default function AlertInvestigationsPage() {
                 outline: "none",
               }}
             />
+            <select
+              value={tenant}
+              onChange={(e) => {
+                setTenant(e.target.value);
+                setOffset(0);
+              }}
+              style={{
+                padding: "7px 10px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+                background: "var(--bg-input)",
+                color: "var(--text)",
+                fontSize: 12,
+                outline: "none",
+              }}
+              aria-label="Client"
+            >
+              <option value="all">
+                {scope?.all_tenants ? "All clients" : "My clients"}
+              </option>
+              {(scope?.tenant_ids ?? []).map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+              {scope?.all_tenants && (
+                <option value="__unassigned__">Unassigned (legacy)</option>
+              )}
+            </select>
             <select
               value={verdict}
               onChange={(e) => {

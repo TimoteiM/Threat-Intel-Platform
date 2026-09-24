@@ -84,8 +84,15 @@ def run_alert_body_investigation_task(
     _update_run(parsed_id, status="processing")
 
     try:
+        # Before the analyst, not after. Retrieving the window afterwards is
+        # what left every verdict written without the logs beside it — the same
+        # ordering mistake the CAPE sandbox made, and with the same symptom: a
+        # populated panel next to a conclusion that never read it.
+        log_context, log_row_id = _collect_log_context(parsed_id, run)
+
         payload = run_alert_body_investigation(
             alert_body=alert_body,
+            log_context=log_context,
             run_id=run_id,
             title=title,
             context=context,
@@ -127,11 +134,10 @@ def run_alert_body_investigation_task(
         ):
             if carried in (run.result_json or {}):
                 payload[carried] = (run.result_json or {})[carried]
-        # What else the device or the account was doing, ten minutes either
-        # side. Attached to the payload so the analysis can be traced back to
-        # the events behind it, and stored in its own row so a live alert's
-        # unfinished window can be read again without duplicating anything.
-        payload["log_context"] = _attach_log_context(parsed_id, run, payload)
+        # The stored summary, now that the analysis has run over it. Marking it
+        # analysed here — after the verdict exists — is what makes
+        # `new_logs_since_analysis` mean something later.
+        payload["log_context"] = _finalise_log_context(parsed_id, log_row_id, payload)
 
         _update_run(
             parsed_id,
@@ -174,13 +180,12 @@ def _dispatch_callback(run_uuid: uuid.UUID) -> None:
         logger.warning("Could not queue callback for alert run %s: %s", run_uuid, exc)
 
 
-def _attach_log_context(run_uuid: uuid.UUID, run: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    """Retrieve the logs around this alert, store them, and chase the rest.
+def _collect_log_context(run_uuid: uuid.UUID, run: Any) -> tuple[dict[str, Any] | None, Any]:
+    """Retrieve the window and persist it, before anything analyses the alert.
 
-    Wrapped whole in a try/except on purpose: this is enrichment. A log store
-    that is down, slow, or reindexing must leave the alert analysed and the
-    verdict written, because the alternative is that an outage in a search
-    cluster stops security alerts being processed.
+    Returns (context for the analyst, stored row id). Both are None-safe: this
+    is enrichment, and a log store that is down, unconfigured for this tenant,
+    or still filling must leave the alert analysed and the verdict written.
     """
     from app.services import alert_log_context_store as store
     from app.services.alert_log_context_service import collect_for_alert
@@ -188,35 +193,48 @@ def _attach_log_context(run_uuid: uuid.UUID, run: Any, payload: dict[str, Any]) 
 
     try:
         context = collect_for_alert(
+            tenant_id=run.tenant_id,
             event_time=run.event_time,
             entity_host=run.entity_host,
             entity_user=run.entity_user,
             alert_body=run.alert_body,
             alert_fields=(run.result_json or {}).get("alert_fields") or {},
         )
+        row_id = None
         with Session(sync_engine) as db:
             row = store.save(db, run_uuid, context)
             if row is not None:
-                # Summary only. The logs themselves stay in their own table and
-                # are served by /alert-investigations/{id}/logs: result_json is
-                # scanned whole by the detection-quality, ATT&CK and cost
-                # rollups, and 500 log lines per run would put half a megabyte
-                # into a payload those reads pay for on every row.
-                stored = store.as_payload(row, include_logs=False)
-                stored["logs_endpoint"] = f"/api/alert-investigations/{run_uuid}/logs"
+                row_id = row.id
                 if row.status in ("partial", "unavailable"):
-                    # The window has not closed yet, or the cluster was down.
-                    # Either way something is still owed.
-                    stored["followup_task_id"] = schedule_followup(row)
-                return stored
-        summary = context.as_dict()
-        summary.pop("logs", None)
-        return summary
+                    schedule_followup(row)
+
+        payload = context.as_dict()
+        # What the selector needs and the retrieval does not carry.
+        payload["alert_time"] = run.event_time.isoformat() if run.event_time else None
+        payload["entity_host"] = run.entity_host
+        payload["entity_user"] = run.entity_user
+        return payload, row_id
     except Exception as exc:  # noqa: BLE001 — enrichment never fails an alert
-        logger.warning("Log context for run %s could not be attached: %s", run_uuid, exc)
-        return {
-            "status": "unavailable",
-            "reason": "The surrounding logs could not be retrieved; the alert was analysed without them.",
-            "log_count": 0,
-            "logs": [],
-        }
+        logger.warning("Log context for run %s could not be collected: %s", run_uuid, exc)
+        return None, None
+
+
+def _finalise_log_context(run_uuid: uuid.UUID, row_id: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """The summary that travels on the run, once the analysis has been written."""
+    from app.services import alert_log_context_store as store
+
+    try:
+        with Session(sync_engine) as db:
+            row = store.for_run(db, run_uuid)
+            if row is None:
+                return {"status": "unavailable", "log_count": 0}
+            # The verdict now exists and was formed over exactly these events.
+            store.mark_analysed(db, row)
+            summary = store.as_payload(row, include_logs=False)
+            summary["logs_endpoint"] = f"/api/alert-investigations/{run_uuid}/logs"
+            summary["ai_selection"] = (payload.get("assistant_report") or {}).get("log_selection") \
+                or payload.get("log_selection")
+            return summary
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Log context for run %s could not be finalised: %s", run_uuid, exc)
+        return {"status": "unavailable", "log_count": 0}

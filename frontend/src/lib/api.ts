@@ -362,15 +362,108 @@ export function listAlertInvestigations(params?: {
   offset?: number;
   search?: string;
   verdict?: string;
+  /** A tenant id, or "__unassigned__". Omit for every client you may see. */
+  tenant?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   if (params?.search?.trim()) qs.set("search", params.search.trim());
   if (params?.verdict && params.verdict !== "all") qs.set("verdict", params.verdict);
+  if (params?.tenant && params.tenant !== "all") qs.set("tenant", params.tenant);
   const query = qs.toString();
-  return request<PaginatedResponse<AlertInvestigationRun>>(
+  return request<PaginatedResponse<AlertInvestigationRun> & { scope?: TenantScope }>(
     `/alert-investigations${query ? `?${query}` : ""}`,
+  );
+}
+
+export interface TenantScope {
+  all_tenants: boolean;
+  tenant_ids: string[];
+  include_unassigned: boolean;
+}
+
+export interface AlertLogEvent {
+  key: string;
+  index: string;
+  id: string;
+  timestamp: string | null;
+  agent?: { id?: string | null; name?: string | null; ip?: string | null };
+  manager?: string | null;
+  rule?: {
+    id?: string | null;
+    level?: number | null;
+    description?: string | null;
+    groups?: string[] | null;
+    mitre_technique?: string[] | null;
+  };
+  event_id?: string | null;
+  users?: string[];
+  process?: { image?: string | null; command_line?: string | null; parent_image?: string | null };
+  network?: { src_ip?: string | null; dst_ip?: string | null };
+  decoder?: string | null;
+  location?: string | null;
+  full_log?: string | null;
+  matched_on?: string[];
+  /** Whether this event was in the subset sent to the model. */
+  sent_to_ai?: boolean;
+}
+
+export interface AlertLogPage {
+  status: string;
+  reason?: string | null;
+  tenant_id?: string | null;
+  logs: AlertLogEvent[];
+  log_count: number;
+  retrieved_total: number;
+  filtered_total: number;
+  sent_to_ai_total: number;
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  alert_time?: string | null;
+  window?: { start: string; end: string; covered_until: string; complete: boolean };
+  selectors?: Record<string, any>;
+  sources?: Record<string, any>;
+  analysis_basis?: "complete" | "partial" | "unknown";
+  analysis_saw_logs?: number | null;
+  new_logs_since_analysis?: number | null;
+  analysis_note?: string | null;
+}
+
+export function getAlertLogs(
+  runId: string,
+  params?: {
+    limit?: number;
+    offset?: number;
+    q?: string;
+    device?: string;
+    user?: string;
+    rule_id?: string;
+    min_level?: number;
+    side?: "before" | "after" | "all";
+    only_sent_to_ai?: boolean;
+  },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.q?.trim()) qs.set("q", params.q.trim());
+  if (params?.device?.trim()) qs.set("device", params.device.trim());
+  if (params?.user?.trim()) qs.set("user", params.user.trim());
+  if (params?.rule_id?.trim()) qs.set("rule_id", params.rule_id.trim());
+  if (params?.min_level !== undefined) qs.set("min_level", String(params.min_level));
+  if (params?.side && params.side !== "all") qs.set("side", params.side);
+  if (params?.only_sent_to_ai) qs.set("only_sent_to_ai", "true");
+  const query = qs.toString();
+  return request<AlertLogPage>(`/alert-investigations/${runId}/logs${query ? `?${query}` : ""}`);
+}
+
+export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []) {
+  return request<{ run_id: string; status: string; pinned_refs: string[]; note: string }>(
+    `/alert-investigations/${runId}/reanalyse`,
+    { method: "POST", body: JSON.stringify({ pinned_refs: pinnedRefs }) },
   );
 }
 

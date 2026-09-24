@@ -45,6 +45,7 @@ from typing import Any, Iterable, Sequence
 
 from app.config import get_settings
 from app.services import opensearch_client as osc
+from app.services import opensearch_tenants
 from app.services.alert_field_service import MANAGER_AGENT_ID, looks_like_host
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,7 @@ class LogContext:
 
     status: str = "unavailable"          # collected | partial | empty | unavailable | skipped
     reason: str | None = None
+    tenant_id: str | None = None
     logs: list[dict[str, Any]] = field(default_factory=list)
     window: dict[str, Any] = field(default_factory=dict)
     sources: dict[str, Any] = field(default_factory=dict)
@@ -426,6 +428,7 @@ class LogContext:
     def as_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "tenant_id": self.tenant_id,
             "reason": self.reason,
             "log_count": len(self.logs),
             "truncated": self.truncated,
@@ -441,6 +444,7 @@ def collect_for_alert(
     event_time: datetime | None,
     entity_host: str | None,
     entity_user: str | None,
+    tenant_id: str | None = None,
     alert_body: str | None = None,
     alert_fields: dict[str, Any] | None = None,
     window_minutes: int | None = None,
@@ -459,8 +463,23 @@ def collect_for_alert(
     down — comes back as a `LogContext` with a status and a reason, because an
     alert must be analysed whether or not its logs could be read.
     """
-    settings = settings or get_settings()
+    base_settings = settings or get_settings()
     context = LogContext()
+    context.tenant_id = tenant_id
+
+    # The connection belongs to the tenant, and there is no shared default to
+    # fall through to. A C00 query run for another client would not error — it
+    # would return C00's logs under their alert.
+    if settings is None:
+        integration = opensearch_tenants.integration_for(tenant_id, settings=base_settings)
+        if integration is None or not integration.configured:
+            context.status = "unavailable"
+            context.reason = opensearch_tenants.unavailable_reason(tenant_id)
+            return context
+        settings = integration
+    # An explicitly supplied `settings` *is* the integration — that is how a
+    # caller reads one tenant's cluster deliberately, and how tests inject one.
+    # Production callers pass none and are routed by tenant above.
 
     if not getattr(settings, "alert_log_context_enabled", True):
         context.status = "skipped"

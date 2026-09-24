@@ -78,6 +78,7 @@ def complete_one(row_id: uuid.UUID) -> dict[str, object]:
         )
 
         context = collect_for_alert(
+            tenant_id=run.tenant_id,
             event_time=event_time,
             entity_host=run.entity_host,
             entity_user=run.entity_user,

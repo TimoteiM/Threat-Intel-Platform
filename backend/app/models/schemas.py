@@ -1416,6 +1416,12 @@ class AlertBodyInvestigationCreate(BaseModel):
     # Give extracted domains/URLs a full investigation (all collectors + AI
     # analyst) instead of the inline collector run. None → ALERT_SPAWN_INVESTIGATIONS.
     spawn_investigations: Optional[bool] = None
+    # Whose estate this alert is from. Mandatory under the multi-client
+    # contract and authorised against the sending credential — a caller cannot
+    # acquire a tenant by naming one here. Omitted only by the configured
+    # legacy single-tenant integration, or by an internal user pasting an alert
+    # they will file later.
+    tenant_id: Optional[str] = Field(default=None, max_length=64)
     # ── Machine-to-machine ingest ──
     # Which platform this came from. Correlation groups alerts by entity and
     # must never join across senders: two platforms watching the same estate

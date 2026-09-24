@@ -148,6 +148,11 @@ def run_alert_body_investigation(
     *,
     alert_body: str,
     run_id: str | None = None,
+    # Log events already retrieved for this alert, plus everything needed to
+    # rank them. Passed in rather than fetched here so the ordering is explicit:
+    # the logs must exist before the analyst runs, or the verdict is written
+    # without them — which is exactly what used to happen.
+    log_context: dict | None = None,
     title: str | None = None,
     context: str | None = None,
     requested_collectors: list[str] | None = None,
@@ -318,6 +323,11 @@ def run_alert_body_investigation(
     # narrative most of all — there is no collector output to fall back on.
     # This used to skip the analysis whenever nothing was collected, which is
     # why those runs show no assistant report at all.
+    # Built before the call so the selection summary is recorded whether or not
+    # the model answers: "what did we decide to send" is an audit fact, not a
+    # by-product of a successful analysis.
+    log_digest, log_selection = _build_log_digest(log_context, alert_body, alert_fields)
+
     if run_ai:
         try:
             ai_report = run_alert_body_ai_analysis(
@@ -331,7 +341,11 @@ def run_alert_body_investigation(
                     event_reports,
                     {"overall_verdict": _provisional_verdict(reports, event_reports)},
                 ),
+                log_context_digest=log_digest,
             )
+            if isinstance(ai_report, dict):
+                # What was sent, recorded next to what came back.
+                ai_report["log_selection"] = log_selection
         except Exception as exc:  # run_alert_body_ai_analysis traps its own errors
             logger.exception("Alert-body AI analysis crashed: %s", exc)
             ai_report = {
@@ -1102,3 +1116,61 @@ def _verdict(
         "reasons": reasons,
         "sources": sources or [],
     }
+
+
+def _build_log_digest(
+    log_context: dict | None, alert_body: str, alert_fields: dict | None
+) -> tuple[str, dict]:
+    """Select and format the SIEM events the model will read.
+
+    Never raises: log enrichment is additional evidence, and an alert must be
+    analysed whether or not it could be gathered.
+    """
+    if not isinstance(log_context, dict):
+        return "", {"status": "absent"}
+    records = log_context.get("logs") or []
+    if not records:
+        return "", {
+            "status": log_context.get("status") or "empty",
+            "reason": log_context.get("reason"),
+            "events_found": 0,
+        }
+
+    try:
+        from datetime import timezone
+
+        from app.services import alert_log_prompt
+        from app.services.alert_log_selection import pivots_from_alert
+
+        alert_time = log_context.get("alert_time")
+        if isinstance(alert_time, str):
+            alert_time = datetime.fromisoformat(alert_time.replace("Z", "+00:00"))
+        if alert_time is None:
+            return "", {"status": "no_alert_time", "events_found": len(records)}
+        if alert_time.tzinfo is None:
+            alert_time = alert_time.replace(tzinfo=timezone.utc)
+
+        settings = get_settings()
+        pivots = pivots_from_alert(
+            entity_host=log_context.get("entity_host"),
+            entity_user=log_context.get("entity_user"),
+            alert_body=alert_body,
+            alert_fields=alert_fields,
+        )
+        digest, selection, redactions = alert_log_prompt.build(
+            records,
+            pivots=pivots,
+            alert_time=alert_time,
+            window_seconds=float(settings.alert_log_window_minutes) * 60.0,
+            budget_tokens=int(settings.alert_log_ai_budget_tokens),
+            pinned_keys=log_context.get("pinned_keys") or (),
+            window_complete=bool((log_context.get("window") or {}).get("complete", True)),
+        )
+        summary = selection.summary()
+        summary["status"] = "selected" if digest else "nothing_selected"
+        summary["secrets_redacted"] = redactions
+        summary["digest_tokens"] = alert_log_prompt.measure(digest) if digest else 0
+        return digest, summary
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Log context could not be prepared for the analyst: %s", exc)
+        return "", {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}

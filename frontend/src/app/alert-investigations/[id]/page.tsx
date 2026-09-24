@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
+import { AlertLogView } from "@/components/report/AlertLogView";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
 import PageHero from "@/components/ui/PageHero";
 import { MenuItem, OverflowMenu } from "@/components/ui/Primitives";
@@ -289,6 +290,7 @@ export default function AlertInvestigationDetailPage() {
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
       {runCase && <CaseBanner runCase={runCase} currentRunId={runId} />}
+      <LogContextSection runId={runId} />
       {suppressOpen && (
         <SuppressDialog
           runId={runId}
@@ -1468,3 +1470,51 @@ function CaseBanner({ runCase, currentRunId }: { runCase: CorrelatedCase; curren
   );
 }
 
+
+/**
+ * The SIEM events around this alert, collapsed by default.
+ *
+ * Collapsed because it is reference material rather than the verdict: an
+ * analyst opens it when they want to check what else was happening, and a few
+ * hundred rows above the findings would bury them.
+ */
+function LogContextSection({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section
+      style={{
+        border: "1px solid var(--panel-divider-strong)",
+        borderRadius: 10,
+        background: "var(--panel-outline-bg)",
+        padding: "10px 12px",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        style={{
+          all: "unset",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "baseline",
+          gap: 10,
+          width: "100%",
+        }}
+        aria-expanded={open}
+      >
+        <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>
+          SIEM log context
+        </span>
+        <span style={{ fontSize: 11.5, color: "var(--text-dim)", flex: 1 }}>
+          Ten minutes either side of this alert, for the device and the account it names.
+        </span>
+        <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <AlertLogView runId={runId} />
+        </div>
+      )}
+    </section>
+  );
+}

@@ -493,7 +493,7 @@ def test_ai_report_leads_the_exported_report_list(stub_collectors, monkeypatch):
     stub_collectors["vt"] = _fake_collector("vt", {"found": False, "total_vendors": 0})
     seen: dict[str, Any] = {}
 
-    def fake_ai(*, alert_body, title, context, model, schema_version, findings_digest=None):
+    def fake_ai(*, alert_body, title, context, model, schema_version, findings_digest=None, log_context_digest=None):
         seen['findings_digest'] = findings_digest
         seen.update(alert_body=alert_body, title=title, context=context)
         return {
@@ -636,7 +636,7 @@ def test_the_ai_receives_what_the_collectors_found(stub_collectors, vt_everywher
     )
     captured: dict[str, Any] = {}
 
-    def fake_ai(*, alert_body, title, context, model, schema_version, findings_digest=None):
+    def fake_ai(*, alert_body, title, context, model, schema_version, findings_digest=None, log_context_digest=None):
         captured["digest"] = findings_digest or ""
         captured["alert_body"] = alert_body
         return {"report_type": "ai_assistant", "status": "completed", "report_markdown": "ok"}

@@ -38,6 +38,7 @@ def run_alert_body_ai_analysis(
     model: str | None = None,
     schema_version: str = "1.0",
     findings_digest: str | None = None,
+    log_context_digest: str | None = None,
 ) -> dict[str, Any]:
     """
     Analyse the alert body with the AI assistant. Never raises — a failed
@@ -54,6 +55,7 @@ def run_alert_body_ai_analysis(
                 context=context,
                 model=model,
                 findings_digest=findings_digest,
+                log_context_digest=log_context_digest,
             )
         )
         status = "completed"
@@ -84,6 +86,7 @@ async def _analyse(
     context: str | None,
     model: str | None,
     findings_digest: str | None = None,
+    log_context_digest: str | None = None,
 ) -> dict[str, Any]:
     entry_text = alert_body
     if (context or "").strip():
@@ -93,6 +96,11 @@ async def _analyse(
     # this join, so a hostname is tokenised the same way in both halves.
     if (findings_digest or "").strip():
         entry_text = f"{entry_text}\n\n{findings_digest.strip()}"
+    # Last, and fenced by its own builder: SIEM events are evidence the model
+    # reads, never instructions it follows. Already sanitised server-side —
+    # this join is the last point before the request is constructed.
+    if (log_context_digest or "").strip():
+        entry_text = f"{entry_text}\n\n{log_context_digest.strip()}"
 
     # A dedicated, unpooled engine for this loop. Celery runs each task in a
     # worker thread and `asyncio.run()` builds a fresh event loop every time —

@@ -307,6 +307,18 @@ class Settings(BaseSettings):
     opensearch_tenant_field: str = "manager.name"
     opensearch_tenant_values: str = ""
 
+    # ── Alert tenancy ────────────────────────────────────────────────────────
+    #
+    # The one tenant an existing single-tenant ingest credential may still post
+    # to without naming it. Confined to a credential holding exactly this
+    # tenant and nothing else; everything else must send tenant_id. Set to ""
+    # to end the transition and make tenant_id mandatory for every sender.
+    alert_ingest_legacy_tenant: str = "c00"
+    # How many tokens of SIEM log context the analyst prompt may carry. 6,000 is
+    # the starting point; measured against a real 297-event window the selection
+    # saturates at about 3,400, so this has headroom for a busier host.
+    alert_log_ai_budget_tokens: int = 6000
+
     @property
     def opensearch_tenant_value_list(self) -> list[str]:
         return [v.strip() for v in str(self.opensearch_tenant_values or "").split(",") if v.strip()]

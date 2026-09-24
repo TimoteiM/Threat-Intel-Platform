@@ -1,0 +1,223 @@
+"""One client must not be able to reach another's alerts.
+
+Every test here is a way someone tries: changing a query parameter, changing a
+URL, putting a tenant in a request body, or simply having an account that was
+misconfigured. The rule they all test is that widening is impossible and
+narrowing is the only thing a caller can do.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import Column, String, select
+from sqlalchemy.orm import declarative_base
+
+from app.services import tenant_scope as ts
+
+Base = declarative_base()
+
+
+class Row(Base):
+    __tablename__ = "rows"
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=True)
+
+
+INTERNAL = {"kind": "user", "username": "tim", "all_tenants": True, "tenant_ids": []}
+CLIENT_A = {"kind": "user", "username": "a", "all_tenants": False, "tenant_ids": ["c00"]}
+CLIENT_B = {"kind": "user", "username": "b", "all_tenants": False, "tenant_ids": ["lin"]}
+BROKEN = {"kind": "user", "username": "x", "all_tenants": False, "tenant_ids": []}
+
+
+def _sql(scope: ts.TenantScope) -> str:
+    return str(ts.apply(select(Row), Row.tenant_id, scope).compile(
+        compile_kwargs={"literal_binds": True}))
+
+
+# --- who sees what -----------------------------------------------------------
+
+def test_internal_staff_see_every_tenant_and_the_unassigned_backlog():
+    scope = ts.scope_of(INTERNAL)
+    assert scope.may_read("c00") and scope.may_read("lin") and scope.may_read(None)
+    assert "WHERE" not in _sql(scope)
+
+
+def test_a_client_user_sees_only_their_own():
+    scope = ts.scope_of(CLIENT_A)
+    assert scope.may_read("c00")
+    assert not scope.may_read("lin")
+    # And not the unassigned backlog, which would leak other clients' alerts.
+    assert not scope.may_read(None)
+
+
+def test_an_account_with_no_tenants_matches_nothing_rather_than_everything():
+    """The classic scoped-query failure: an empty IN () list drops the filter
+    and the query silently becomes unscoped."""
+    sql = _sql(ts.scope_of(BROKEN))
+    assert "false" in sql.lower()
+
+
+def test_an_unauthenticated_caller_is_restricted_not_privileged():
+    scope = ts.scope_of(None)
+    assert not scope.all_tenants
+    assert not scope.may_read("c00")
+    assert "false" in _sql(scope).lower()
+
+
+# --- trying to widen ---------------------------------------------------------
+
+def test_a_client_user_cannot_widen_by_naming_another_tenant():
+    with pytest.raises(ts.TenantForbidden):
+        ts.requested_scope(ts.scope_of(CLIENT_A), "lin")
+
+
+def test_a_client_user_cannot_ask_for_the_unassigned_view():
+    """Unassigned holds runs from every channel, including other clients'."""
+    with pytest.raises(ts.TenantForbidden):
+        ts.requested_scope(ts.scope_of(CLIENT_A), ts.UNASSIGNED)
+
+
+def test_refusal_is_not_silently_substituted_with_their_own_data():
+    """Substituting would put one client's alerts on screen under another
+    client's name, which is worse than an error."""
+    try:
+        ts.requested_scope(ts.scope_of(CLIENT_B), "c00")
+    except ts.TenantForbidden as exc:
+        assert "c00" in str(exc)
+    else:
+        pytest.fail("widening must raise")
+
+
+def test_internal_staff_can_narrow_to_one_tenant():
+    scope = ts.requested_scope(ts.scope_of(INTERNAL), "lin")
+    assert scope.may_read("lin")
+    assert not scope.may_read("c00")
+    assert not scope.may_read(None)
+
+
+# --- single-object reads -----------------------------------------------------
+
+def test_another_tenants_run_is_404_not_403():
+    """403 confirms the run exists, which is the fact a client-restricted caller
+    is not entitled to. Enumerating ids against a 403 counts a competitor's
+    alerts."""
+    with pytest.raises(HTTPException) as caught:
+        ts.assert_can_read(ts.scope_of(CLIENT_A), "lin")
+    assert caught.value.status_code == 404
+    assert "not found" in str(caught.value.detail).lower()
+
+
+def test_an_unassigned_run_is_invisible_to_a_client_user():
+    with pytest.raises(HTTPException) as caught:
+        ts.assert_can_read(ts.scope_of(CLIENT_A), None)
+    assert caught.value.status_code == 404
+
+
+# --- submitting --------------------------------------------------------------
+
+def test_a_credential_cannot_acquire_a_tenant_by_naming_it():
+    key = {"kind": "api_key", "tenant_ids": ["c00"], "all_tenants": False}
+    ts.assert_can_submit(key, "c00")
+    with pytest.raises(HTTPException) as caught:
+        ts.assert_can_submit(key, "lin")
+    assert caught.value.status_code == 403
+
+
+class _Settings:
+    alert_ingest_legacy_tenant = "c00"
+
+
+def test_the_existing_c00_integration_still_posts_without_a_tenant_id():
+    """The transition requirement: the current flow must not break."""
+    key = {"kind": "api_key", "tenant_ids": ["c00"], "all_tenants": False}
+    assignment = ts.resolve_for_ingest(identity=key, declared=None, settings=_Settings())
+    assert assignment.tenant_id == "c00"
+    assert assignment.assignment == "legacy_fallback"
+
+
+def test_the_fallback_does_not_extend_to_a_multi_tenant_key():
+    """A key holding two tenants and naming neither is ambiguous, and guessing
+    is how one client's alerts land in another client's list."""
+    key = {"kind": "api_key", "tenant_ids": ["c00", "lin"], "all_tenants": False}
+    with pytest.raises(HTTPException) as caught:
+        ts.resolve_for_ingest(identity=key, declared=None, settings=_Settings())
+    assert caught.value.status_code == 400
+    assert "tenant_id is required" in str(caught.value.detail)
+
+
+def test_a_new_integration_must_send_tenant_id():
+    key = {"kind": "api_key", "tenant_ids": [], "all_tenants": False}
+    with pytest.raises(HTTPException):
+        ts.resolve_for_ingest(identity=key, declared=None, settings=_Settings())
+
+
+def test_an_internal_paste_without_a_tenant_is_filed_unassigned_not_defaulted():
+    assignment = ts.resolve_for_ingest(identity=INTERNAL, declared=None, settings=_Settings())
+    assert assignment.tenant_id is None
+    assert assignment.assignment == "unassigned"
+
+
+def test_turning_the_fallback_off_makes_tenant_id_mandatory_for_everyone():
+    class NoLegacy:
+        alert_ingest_legacy_tenant = ""
+
+    key = {"kind": "api_key", "tenant_ids": ["c00"], "all_tenants": False}
+    with pytest.raises(HTTPException):
+        ts.resolve_for_ingest(identity=key, declared=None, settings=NoLegacy())
+
+
+# --- the routes themselves ---------------------------------------------------
+
+def test_every_run_route_is_tenant_scoped():
+    """Isolation re-implemented per endpoint holds only on the endpoints someone
+    remembered. Every per-run route must reach its run through the one scoped
+    loader, or assert the scope itself."""
+    import inspect
+    import re
+
+    import app.api.alert_investigations as api
+
+    source = inspect.getsource(api)
+    # Each `@router.<verb>("/{run_id}...")` block, up to the next decorator.
+    blocks = re.split(r"\n@router\.", source)[1:]
+    unscoped = []
+    for block in blocks:
+        header = block.split("\n", 1)[0]
+        if "{run_id}" not in header:
+            continue
+        if "_get_run_scoped(" in block or "assert_can_read(" in block:
+            continue
+        unscoped.append(header.strip())
+    assert not unscoped, f"these per-run routes bypass tenant scoping: {unscoped}"
+
+
+def test_the_list_route_scopes_the_count_as_well_as_the_page():
+    """A total that counts rows the caller may not open leaks how many there
+    are, which is most of what a competitor wanted to know."""
+    import inspect
+
+    import app.api.alert_investigations as api
+
+    source = inspect.getsource(api.list_alert_investigations)
+    assert source.count("tenant_scope.apply(") == 2
+    assert "count_query" in source
+
+
+def test_an_in_process_call_is_only_possible_without_an_http_request():
+    """The direct-call path the service tests use. It is reachable only when
+    FastAPI supplied no Request at all, which cannot happen over HTTP."""
+    import app.api.alert_investigations as api
+
+    class _NoState:
+        pass
+
+    assert api._identity(None)["all_tenants"] is True
+    assert api._identity(_NoState())["all_tenants"] is True
+
+    class _Authed:
+        class state:
+            identity = {"kind": "user", "all_tenants": False, "tenant_ids": ["c00"]}
+
+    assert api._identity(_Authed())["tenant_ids"] == ["c00"]
+

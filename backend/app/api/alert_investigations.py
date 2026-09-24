@@ -30,6 +30,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
+
+from app.services import tenant_scope
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -85,6 +87,34 @@ from app.tasks.cancellation import find_task_ids, revoke_task_ids
 
 router = APIRouter(prefix="/api/alert-investigations", tags=["alert-investigations"])
 logger = logging.getLogger(__name__)
+
+
+# What an in-process caller counts as. Reachable only when there is no HTTP
+# request at all — FastAPI always injects one, and the auth middleware always
+# sets `state.identity` or rejects the call before a handler runs — so this is
+# the direct-call path used by the service tests, not a way in from outside.
+# `test_every_route_takes_a_request` pins that invariant.
+_IN_PROCESS = {"kind": "internal", "all_tenants": True, "tenant_ids": []}
+
+
+def _identity(request: Request | None) -> dict[str, Any] | None:
+    """The authenticated caller, as the auth middleware left it."""
+    if request is None:
+        return dict(_IN_PROCESS)
+    state = getattr(request, "state", None)
+    if state is None:
+        # A request-shaped object with no state never went through the auth
+        # middleware — the in-process path again, not an anonymous caller.
+        return dict(_IN_PROCESS)
+    return getattr(state, "identity", None)
+
+
+def _scope(request: Request, tenant: str | None = None) -> "tenant_scope.TenantScope":
+    try:
+        return tenant_scope.requested_scope(tenant_scope.scope_of(_identity(request)), tenant)
+    except tenant_scope.TenantForbidden as exc:
+        raise HTTPException(403, str(exc)) from None
+
 
 ACTIVE_STATUSES = {"queued", "processing", "running"}
 
@@ -144,6 +174,7 @@ async def create_alert_investigation(
     spawn_investigations: bool | None = None,
     wait: bool = True,
     wait_timeout: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
+    http_request: Request = None,  # type: ignore[assignment]
 ) -> Any:
     """
     Investigate an alert body and return its report.
@@ -183,6 +214,7 @@ async def create_alert_investigation(
             spawn_investigations=spawn_investigations,
         ),
         db,
+        _identity(http_request),
     )
     if not wait:
         return queued
@@ -219,6 +251,9 @@ def _request_from_payload(payload: dict[str, Any], **options: Any) -> AlertBodyI
         )
     return AlertBodyInvestigationCreate(
         alert_body=normalized["alert_body"],
+        # Taken from the request body only; never from the alert text, which is
+        # attacker-influenced content and must not choose its own tenant.
+        tenant_id=supplied.get("tenant_id"),
         title=supplied.get("title") or normalized.get("title"),
         external_ref=supplied.get("external_ref") or normalized.get("external_ref"),
         detection_rule_id=supplied.get("detection_rule_id") or normalized.get("detection_rule_id"),
@@ -285,6 +320,7 @@ async def create_alert_investigation_from_raw_text(
             ),
         ),
         db,
+        _identity(http_request),
     )
     if not wait:
         return queued
@@ -294,6 +330,7 @@ async def create_alert_investigation_from_raw_text(
 async def _create_alert_run(
     request: AlertBodyInvestigationCreate,
     db: DBSession,
+    identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Queue an investigation for every indicator found in the alert body.
@@ -396,8 +433,18 @@ async def _create_alert_run(
     # The only genuinely empty case — no payload at all — is already refused by
     # _validated_alert_body above, which is where that check belongs.
 
+    # Whose alert this is, decided before the row exists. Refuses rather than
+    # guesses: a credential that names a tenant it does not hold is rejected,
+    # and one that names none is accepted only under the configured legacy
+    # grant. See services/tenant_scope.resolve_for_ingest.
+    assignment = tenant_scope.resolve_for_ingest(
+        identity=identity, declared=getattr(request, "tenant_id", None)
+    )
+
     run = AlertBodyInvestigationRun(
         title=_run_title(request.title, alert_body),
+        tenant_id=assignment.tenant_id,
+        tenant_assignment=assignment.assignment,
         alert_body=alert_body,
         context=(request.context or "").strip() or None,
         status="queued",
@@ -503,17 +550,31 @@ async def _create_alert_run(
 
 @router.get("")
 async def list_alert_investigations(
+    request: Request,
     db: DBSession,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None),
     verdict: str | None = Query(default=None),
+    tenant: str | None = Query(
+        default=None,
+        description="Narrow to one tenant, or '__unassigned__'. Omit for every tenant you may see.",
+    ),
 ) -> dict[str, Any]:
     # The body is deferred, not selected. _list_item never reads it, and now
     # that any size is accepted a page of 25 rows would otherwise detoast 25
     # arbitrarily large logs to render a list that shows none of them.
     query = select(AlertBodyInvestigationRun).options(defer(AlertBodyInvestigationRun.alert_body))
     count_query = select(func.count(AlertBodyInvestigationRun.id))
+
+    # Before any other filter, and applied to the count as well as the page:
+    # a total that counts rows the caller may not open leaks how many there are.
+    try:
+        scope = tenant_scope.requested_scope(tenant_scope.scope_of(_identity(request)), tenant)
+    except tenant_scope.TenantForbidden as exc:
+        raise HTTPException(403, str(exc)) from None
+    query = tenant_scope.apply(query, AlertBodyInvestigationRun.tenant_id, scope)
+    count_query = tenant_scope.apply(count_query, AlertBodyInvestigationRun.tenant_id, scope)
 
     normalized_search = (search or "").strip()
     if normalized_search:
@@ -546,6 +607,7 @@ async def list_alert_investigations(
         "total": total,
         "limit": limit,
         "offset": offset,
+        "scope": scope.describe(),
     }
 
 
@@ -554,6 +616,7 @@ async def get_run_case(
     run_id: uuid.UUID,
     db: DBSession,
     hours: int = Query(default=48, ge=1, le=720),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """
     The correlated case this alert belongs to, or nothing.
@@ -561,7 +624,34 @@ async def get_run_case(
     An analyst reading one alert has no way to know it is the third detection on
     that machine tonight, and that is the fact which changes what they do next.
     """
+    scope = _scope(request)
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(scope, run.tenant_id)
+
     case = await case_for_run(db, run_id, hours=hours)
+    if case is not None:
+        # Correlation partitions on source and client, not on tenant, so a case
+        # is *not* guaranteed to be single-tenant. Members the caller may not
+        # read are removed and counted rather than shown, because a case whose
+        # member list silently shrinks reads as a smaller incident.
+        members = case.get("alerts") or []
+        visible, hidden = [], 0
+        if scope.is_restricted and members:
+            ids = [uuid.UUID(str(m["run_id"])) for m in members if m.get("run_id")]
+            rows = (await db.execute(
+                select(AlertBodyInvestigationRun.id, AlertBodyInvestigationRun.tenant_id)
+                .where(AlertBodyInvestigationRun.id.in_(ids))
+            )).all()
+            tenants = {str(r[0]): r[1] for r in rows}
+            for member in members:
+                if scope.may_read(tenants.get(str(member.get("run_id")))):
+                    visible.append(member)
+                else:
+                    hidden += 1
+            case["alerts"] = visible
+            case["members_outside_your_tenants"] = hidden
     if case is not None:
         # The union of every member's log window, deduplicated. Reads rows this
         # platform already stored, so it costs nothing against the log cluster
@@ -586,44 +676,194 @@ async def get_run_case(
 async def get_run_logs(
     run_id: uuid.UUID,
     db: DBSession,
-    limit: int = Query(default=200, ge=1, le=2000),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None, description="Substring match over message, rule, device, user."),
+    device: str | None = Query(default=None),
+    user: str | None = Query(default=None),
+    rule_id: str | None = Query(default=None),
+    min_level: int | None = Query(default=None, ge=0, le=16),
+    side: str | None = Query(default=None, description="before | after | all"),
+    only_sent_to_ai: bool = Query(default=False),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """The logs retrieved around this alert, and where they came from.
+    """Every log event retrieved around this alert, for an analyst to read.
 
     Served from this platform's own store rather than from the log cluster: they
     were fetched once, when the alert was analysed, and re-reading the cluster
-    on every page load would both be slower and return a different answer as
+    on every page load would be slower and would return a different answer as
     indices roll over.
 
-    Paged because a single alert can carry the 500-line cap, and a case view
-    asking for six of those at once is a response nothing renders well.
+    Deliberately *not* limited to what was sent to the model. The set an analyst
+    inspects is the full retrieval; the AI context is a ranked subset of it, and
+    `sent_to_ai` marks which events were in that subset so the two can be
+    compared rather than confused.
     """
     run = await db.get(AlertBodyInvestigationRun, run_id)
     if run is None:
         raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
 
     from sqlalchemy.orm import Session as _SyncSession
 
     from app.db.session import sync_engine
     from app.services import alert_log_context_store as _log_store
 
+    alert_time = run.event_time
+    selected_refs = set(
+        ((run.result_json or {}).get("assistant_report") or {})
+        .get("log_selection", {})
+        .get("selected_refs")
+        or []
+    )
+
+    def _matches(event: dict[str, Any]) -> bool:
+        if only_sent_to_ai and event.get("key") not in selected_refs:
+            return False
+        if device and str((event.get("agent") or {}).get("name") or "").casefold() != device.casefold():
+            return False
+        if user:
+            users = [str(u).casefold() for u in (event.get("users") or [])]
+            if not any(user.casefold() in u for u in users):
+                return False
+        rule = event.get("rule") or {}
+        if rule_id and str(rule.get("id") or "") != str(rule_id):
+            return False
+        if min_level is not None:
+            try:
+                if int(rule.get("level") or 0) < min_level:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        if side in ("before", "after") and alert_time is not None:
+            stamp = _event_time(event)
+            if stamp is None:
+                return False
+            delta = (stamp - alert_time).total_seconds()
+            if side == "before" and delta > 0:
+                return False
+            if side == "after" and delta < 0:
+                return False
+        if q:
+            needle = q.casefold()
+            haystack = " ".join(str(x) for x in (
+                event.get("full_log") or "",
+                rule.get("description") or "",
+                (event.get("agent") or {}).get("name") or "",
+                " ".join(str(u) for u in (event.get("users") or [])),
+                (event.get("process") or {}).get("command_line") or "",
+            )).casefold()
+            if needle not in haystack:
+                return False
+        return True
+
     def _read() -> dict[str, Any]:
         with _SyncSession(sync_engine) as sync_db:
             row = _log_store.for_run(sync_db, run_id)
             payload = _log_store.as_payload(row, include_logs=False)
-            logs = (row.logs if row else []) or []
-            payload["logs"] = logs[offset:offset + limit]
+            events = (row.logs if row else []) or []
+
+            payload["retrieved_total"] = len(events)
+            filtered = [e for e in events if _matches(e)]
+            page = filtered[offset:offset + limit]
+            for event in page:
+                # Marked, never filtered away by default: a low rank is not a
+                # statement that the event is uninteresting.
+                event = event  # noqa: PLW2901
+                event["sent_to_ai"] = event.get("key") in selected_refs
+            payload["logs"] = page
+            payload["filtered_total"] = len(filtered)
             payload["offset"] = offset
             payload["limit"] = limit
-            payload["has_more"] = offset + limit < len(logs)
+            payload["has_more"] = offset + limit < len(filtered)
+            payload["alert_time"] = alert_time.isoformat() if alert_time else None
+            payload["sent_to_ai_total"] = len(selected_refs)
+            payload["tenant_id"] = run.tenant_id
             return payload
 
     return await run_in_threadpool(_read)
 
 
+@router.post("/{run_id}/reanalyse")
+async def reanalyse_with_log_context(
+    run_id: uuid.UUID,
+    db: DBSession,
+    body: dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Run the analyst again over the completed log context, or over chosen events.
+
+    Explicitly requested, never automatic. Two reasons it is a button rather
+    than a trigger: a model call per completed window is a real cost at this
+    volume, and re-analysis rewrites the run payload — which is how a CAPE
+    report written into an investigation's evidence was lost. The previous
+    analysis is kept under `previous_analyses` rather than replaced.
+
+    `pinned_refs` are `index:id` values an analyst picked from the log view.
+    They are placed in the context first, ahead of anything the ranking chose.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    scope = _scope(request)
+    tenant_scope.assert_can_read(scope, run.tenant_id)
+
+    identity = _identity(request)
+    if not identity or identity.get("kind") != "user":
+        raise HTTPException(403, "Re-analysis is an analyst action and needs a signed-in account.")
+
+    pinned = [str(r) for r in (body.get("pinned_refs") or []) if str(r).strip()][:50]
+
+    from app.tasks.alert_body_task import run_alert_body_investigation_task
+
+    # Preserved before the re-run overwrites it.
+    existing = dict(run.result_json or {})
+    history = list(existing.get("previous_analyses") or [])
+    history.append({
+        "superseded_at": datetime.now(timezone.utc).isoformat(),
+        "by": str(identity.get("username") or "unknown"),
+        "reason": "reanalysis with log context",
+        "assistant_report": existing.get("assistant_report"),
+        "log_context": existing.get("log_context"),
+    })
+    existing["previous_analyses"] = history[-5:]
+    existing["reanalysis"] = {
+        "requested_by": str(identity.get("username") or "unknown"),
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "pinned_refs": pinned,
+    }
+    run.result_json = existing
+    run.status = "queued"
+    await db.commit()
+
+    run_alert_body_investigation_task.delay(str(run_id))
+    return {
+        "run_id": str(run_id),
+        "status": "queued",
+        "pinned_refs": pinned,
+        "note": "Re-analysis queued. The previous verdict is kept under previous_analyses.",
+    }
+
+
+def _event_time(event: dict[str, Any]):
+    from datetime import datetime as _dt
+
+    raw = str(event.get("timestamp") or "").strip()
+    if not raw:
+        return None
+    raw = raw.replace("Z", "+00:00")
+    if re.search(r"[+-]\d{4}$", raw):
+        raw = raw[:-5] + raw[-5:-2] + ":" + raw[-2:]
+    try:
+        parsed = _dt.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 @router.get("/{run_id}/suppression-candidate")
-async def get_suppression_candidate(run_id: uuid.UUID, db: DBSession) -> dict[str, Any]:
+async def get_suppression_candidate(
+    run_id: uuid.UUID, db: DBSession) -> dict[str, Any]:
     """
     The fields this alert could be suppressed on, and a proposed selection.
 
@@ -639,6 +879,7 @@ async def get_suppression_candidate(run_id: uuid.UUID, db: DBSession) -> dict[st
     run = await db.get(AlertBodyInvestigationRun, run_id)
     if run is None:
         raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
 
     stored = (run.result_json or {}).get("alert_fields")
     fields = stored if isinstance(stored, dict) and stored else extract_alert_fields(
@@ -680,8 +921,9 @@ async def get_suppression_candidate(run_id: uuid.UUID, db: DBSession) -> dict[st
 async def get_alert_investigation(
     db: DBSession,
     run_id: str = FastAPIPath(...),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    run = await _get_run(db, run_id)
+    run = await _get_run_scoped(db, run_id, request)
     return await _hydrated_run_payload(db, run)
 
 
@@ -696,6 +938,7 @@ async def export_alert_investigation(
     pretty: bool = True,
     ndjson: bool = False,
     evidence: bool = True,
+    request: Request = None,  # type: ignore[assignment]
 ) -> Response:
     """
     Export the run's JSON reports for consumption by another platform.
@@ -729,7 +972,7 @@ async def export_alert_investigation(
     `ndjson=true` (or format=ndjson) serialises the chosen list one document per
     line; `download=false` serves the same bytes inline.
     """
-    run = await _get_run(db, run_id)
+    run = await _get_run_scoped(db, run_id, request)
     payload = await _hydrated_run_payload(db, run)
 
     shape = "reports" if format == "ndjson" else format
@@ -773,8 +1016,9 @@ async def export_alert_investigation(
 async def cancel_alert_investigation(
     db: DBSession,
     run_id: str = FastAPIPath(...),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    run = await _get_run(db, run_id)
+    run = await _get_run_scoped(db, run_id, request)
     if str(run.status or "").lower() not in ACTIVE_STATUSES:
         raise HTTPException(status_code=409, detail="Only queued or running investigations can be cancelled.")
 
@@ -809,6 +1053,7 @@ async def sandbox_selected_indicators(
     body: SandboxSelectionRequest,
     db: DBSession,
     run_id: str = FastAPIPath(...),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Detonate the selected indicators from this run in ANY.RUN.
 
@@ -821,7 +1066,7 @@ async def sandbox_selected_indicators(
     from app.collectors.registry import get_collector
     from app.tasks.sandbox_task import run_sandbox_batch
 
-    run = await _get_run(db, run_id)
+    run = await _get_run_scoped(db, run_id, request)
     payload = _run_payload(run)
 
     # Only indicators this run actually produced. Without this the endpoint
@@ -905,6 +1150,7 @@ async def sandbox_selected_indicators(
 async def delete_alert_investigation(
     db: DBSession,
     run_id: str = FastAPIPath(...),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """
     Delete an alert-body run and the investigations it started.
@@ -914,7 +1160,7 @@ async def delete_alert_investigation(
     run still references — deleting those would leave that run's reports pointing
     at nothing.
     """
-    run = await _get_run(db, run_id)
+    run = await _get_run_scoped(db, run_id, request)
     payload = _run_payload(run)
 
     spawned = _spawned_investigation_ids(payload)
@@ -950,6 +1196,7 @@ async def _wait_for_report(
     queued: dict[str, Any],
     *,
     timeout: int,
+    request: Request | None = None,
 ) -> Any:
     """
     Hold the request until the run finishes, then return its report list.
@@ -970,7 +1217,7 @@ async def _wait_for_report(
 
     while True:
         db.expire_all()  # the run is written by the worker, not by this session
-        run = await _get_run(db, run_id)
+        run = await _get_run_scoped(db, run_id, request)
         if str(run.status or "").lower() not in ACTIVE_STATUSES:
             break
         if time.monotonic() >= deadline:
@@ -1375,6 +1622,25 @@ def _run_title(title: str | None, alert_body: str) -> str:
         return explicit[:255]
     first_line = next((line.strip() for line in alert_body.splitlines() if line.strip()), "")
     return (first_line or "Alert body")[:255]
+
+
+async def _get_run_scoped(
+    db: DBSession, run_id: str, request: Request | None
+) -> AlertBodyInvestigationRun:
+    """`_get_run`, refused when the caller's tenant scope does not cover it.
+
+    The single enforcement point for every per-run route. A route added later
+    that loads a run through this is scoped by construction; one that reaches
+    past it is caught by `test_every_run_route_is_tenant_scoped`.
+
+    404, not 403 — a 403 confirms the run exists, which is exactly the fact a
+    client-restricted caller is not entitled to.
+    """
+    run = await _get_run(db, run_id)
+    # getattr: a stubbed or legacy run object without the column is treated as
+    # unassigned, which only an all-tenants caller can read.
+    tenant_scope.assert_can_read(_scope(request), getattr(run, "tenant_id", None))
+    return run
 
 
 async def _get_run(db: DBSession, run_id: str) -> AlertBodyInvestigationRun:
