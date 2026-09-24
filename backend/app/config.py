@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import AliasChoices, Field, ValidationError, model_validator
+from pydantic import SecretStr, AliasChoices, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -232,6 +232,49 @@ class Settings(BaseSettings):
     # 30s cadence is right for a background poll and too slow for a 120s window.
     # Floor of 5s because CAPE throttles at roughly one request per five.
     cape_inline_poll_seconds: int = 5
+
+    # ── OpenSearch: the log store the alerts come from ───────────────────────
+    #
+    # Read-only, and read with an admin account, which is why the password is a
+    # SecretStr: pydantic renders it as `**********` in a repr, a traceback and
+    # a model_dump, so a validation error or a debug log cannot leak it. Reach
+    # the value with .get_secret_value(), which only opensearch_client does.
+    opensearch_node1: str = ""
+    opensearch_node2: str = ""
+    opensearch_node3: str = ""
+    opensearch_username: str = ""
+    opensearch_password: SecretStr = SecretStr("")
+    opensearch_enabled: bool = True
+    # Verification is on by default and the cluster presents an internal CA, so
+    # a bundle has to be supplied the way CAPE's was. See docs/alert-log-context.md.
+    opensearch_verify_tls: bool = True
+    opensearch_ca_bundle: str = ""
+    opensearch_connect_timeout_seconds: int = 5
+    opensearch_request_timeout_seconds: int = 20
+    # One index per UTC day; a 20-minute window names the one or two it needs
+    # rather than fanning out across all 120.
+    opensearch_index_pattern: str = "wazuh-alerts-4.x-*"
+    # Wazuh writes both. `timestamp` is the alert's own clock and `@timestamp`
+    # is Filebeat's; measured on this cluster they differ by about a second.
+    # The event clock is the one every other time question here reads.
+    opensearch_timestamp_field: str = "timestamp"
+
+    # ── Log context around an alert ──────────────────────────────────────────
+    alert_log_context_enabled: bool = True
+    alert_log_window_minutes: int = 10
+    # A caller can ask for more, but not for an unbounded read: this cluster
+    # takes 23 million documents a day, so a 20-minute window on a busy host is
+    # six figures of logs and no analyst reads those.
+    alert_log_max_hits: int = 500
+    alert_log_page_size: int = 100
+    # How long a case may spend gathering logs for its members before it stops
+    # and reports what it has.
+    alert_log_case_max_hits: int = 2000
+    # A real-time alert's window ends in the future. The follow-up runs this
+    # long after the window closes, late enough that the tail has been indexed.
+    alert_log_followup_delay_seconds: int = 120
+    alert_log_followup_max_attempts: int = 5
+
     # Report formats to try, in order. The full JSON report is authoritative for
     # malscore, signatures and network indicators; `lite` is the smaller
     # fallback for an instance that only has that one enabled.

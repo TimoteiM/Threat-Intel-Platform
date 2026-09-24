@@ -153,6 +153,11 @@ services:
       # Docker silently creates a directory at a missing bind source, and a
       # directory named cape-internal-ca.crt then blocks the real file.
       - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
     # --timeout-graceful-shutdown bounds how long a stop can take. Without it
     # uvicorn waits for open connections to close, and /api/sse streams stay
     # open for as long as a browser tab is watching an investigation — with a
@@ -206,6 +211,11 @@ services:
       # Docker silently creates a directory at a missing bind source, and a
       # directory named cape-internal-ca.crt then blocks the real file.
       - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
     command: celery -A app.tasks.celery_app worker --loglevel=info
 
   # ── Celery Beat (scheduler) ──
@@ -240,6 +250,11 @@ services:
       # Docker silently creates a directory at a missing bind source, and a
       # directory named cape-internal-ca.crt then blocks the real file.
       - ./secrets/cape-internal-ca.crt:/run/secrets/cape-internal-ca.crt:ro
+      # The whole directory, read-only, for certificates added later. A bind
+      # to a *file* that does not exist yet makes Docker create a directory in
+      # its place, which then blocks the real file; the directory itself always
+      # exists, so a cert dropped into secrets/ is simply there next time.
+      - ./secrets:/run/secrets/tip:ro
     command: celery -A app.tasks.celery_app beat --loglevel=info
 
   # ── Frontend ──

@@ -63,6 +63,16 @@ celery_app.conf.update(
             "task": "app.tasks.cape_task.resume_sandbox_analyses",
             "schedule": crontab(minute="*/5"),
         },
+        # The per-alert follow-up is dispatched with a countdown, and a countdown
+        # lives in the broker: a Redis restart or a worker killed mid-flight
+        # drops it with no trace. This sweep reads the same due rows, so the
+        # guarantee is "the window gets read", not "the window usually gets
+        # read". Running both is safe — the read starts from a stored
+        # high-water mark and merges on each document's own id.
+        "alert-log-context-sweep": {
+            "task": "app.tasks.alert_log_followup_task.sweep_alert_log_context",
+            "schedule": crontab(minute="*"),
+        },
         "watchlist-scheduled-checks": {
             "task": "tasks.watchlist_check",
             "schedule": crontab(minute=0),  # Every hour, on the hour
@@ -117,6 +127,11 @@ celery_app.autodiscover_tasks([
     # happily and the worker answered "Received unregistered task", so every
     # submission sat in `queued` for ever.
     "app.tasks.cape_task",
+    # Fourth time. The log-context follow-up is the task that reads the half of
+    # a live alert's window that had not happened yet; unregistered, every
+    # real-time alert would keep the logs it managed to grab in the first
+    # second and silently never get the rest.
+    "app.tasks.alert_log_followup_task",
     # Third time this list has been the bug. The API queued the CAPE workflow
     # happily and the worker answered "Received unregistered task", so every
     # submission sat in `queued` for ever.

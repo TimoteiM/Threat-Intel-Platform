@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -736,6 +737,49 @@ class AlertBodyInvestigationRun(Base):
         Index("idx_alert_body_runs_hash_created", "alert_body_hash", "created_at"),
         Index("idx_alert_body_runs_extref_created", "external_ref", "created_at"),
         Index("idx_alert_body_runs_rule_created", "detection_rule_id", "created_at"),
+    )
+
+
+class AlertLogContext(Base):
+    """The logs retrieved around one alert, and how much of the window is read.
+
+    Separate from the run's `result_json` on purpose: that payload is rewritten
+    whole every time a run is re-analysed, and follow-up state a second writer
+    can replace is not durable. See migration 028.
+    """
+
+    __tablename__ = "alert_log_context"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("alert_body_investigation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="partial")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Where the next read starts. Never moves backwards.
+    covered_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    logs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    selectors: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    sources: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_alert_log_context_run"),
+        Index("idx_alert_log_context_due", "next_attempt_at",
+              postgresql_where=text("status IN ('partial', 'unavailable')")),
     )
 
 

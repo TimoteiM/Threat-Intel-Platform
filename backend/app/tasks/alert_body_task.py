@@ -127,6 +127,12 @@ def run_alert_body_investigation_task(
         ):
             if carried in (run.result_json or {}):
                 payload[carried] = (run.result_json or {})[carried]
+        # What else the device or the account was doing, ten minutes either
+        # side. Attached to the payload so the analysis can be traced back to
+        # the events behind it, and stored in its own row so a live alert's
+        # unfinished window can be read again without duplicating anything.
+        payload["log_context"] = _attach_log_context(parsed_id, run, payload)
+
         _update_run(
             parsed_id,
             status="completed",
@@ -166,3 +172,51 @@ def _dispatch_callback(run_uuid: uuid.UUID) -> None:
         deliver_alert_callback.delay(str(run_uuid))
     except Exception as exc:
         logger.warning("Could not queue callback for alert run %s: %s", run_uuid, exc)
+
+
+def _attach_log_context(run_uuid: uuid.UUID, run: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Retrieve the logs around this alert, store them, and chase the rest.
+
+    Wrapped whole in a try/except on purpose: this is enrichment. A log store
+    that is down, slow, or reindexing must leave the alert analysed and the
+    verdict written, because the alternative is that an outage in a search
+    cluster stops security alerts being processed.
+    """
+    from app.services import alert_log_context_store as store
+    from app.services.alert_log_context_service import collect_for_alert
+    from app.tasks.alert_log_followup_task import schedule_followup
+
+    try:
+        context = collect_for_alert(
+            event_time=run.event_time,
+            entity_host=run.entity_host,
+            entity_user=run.entity_user,
+            alert_body=run.alert_body,
+            alert_fields=(run.result_json or {}).get("alert_fields") or {},
+        )
+        with Session(sync_engine) as db:
+            row = store.save(db, run_uuid, context)
+            if row is not None:
+                # Summary only. The logs themselves stay in their own table and
+                # are served by /alert-investigations/{id}/logs: result_json is
+                # scanned whole by the detection-quality, ATT&CK and cost
+                # rollups, and 500 log lines per run would put half a megabyte
+                # into a payload those reads pay for on every row.
+                stored = store.as_payload(row, include_logs=False)
+                stored["logs_endpoint"] = f"/api/alert-investigations/{run_uuid}/logs"
+                if row.status in ("partial", "unavailable"):
+                    # The window has not closed yet, or the cluster was down.
+                    # Either way something is still owed.
+                    stored["followup_task_id"] = schedule_followup(row)
+                return stored
+        summary = context.as_dict()
+        summary.pop("logs", None)
+        return summary
+    except Exception as exc:  # noqa: BLE001 — enrichment never fails an alert
+        logger.warning("Log context for run %s could not be attached: %s", run_uuid, exc)
+        return {
+            "status": "unavailable",
+            "reason": "The surrounding logs could not be retrieved; the alert was analysed without them.",
+            "log_count": 0,
+            "logs": [],
+        }

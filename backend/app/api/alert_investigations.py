@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
+from starlette.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -561,7 +562,64 @@ async def get_run_case(
     that machine tonight, and that is the fact which changes what they do next.
     """
     case = await case_for_run(db, run_id, hours=hours)
+    if case is not None:
+        # The union of every member's log window, deduplicated. Reads rows this
+        # platform already stored, so it costs nothing against the log cluster
+        # and cannot fail the case view if that cluster is down.
+        from sqlalchemy.orm import Session as _SyncSession
+
+        from app.db.session import sync_engine
+        from app.services import alert_log_context_store as _log_store
+
+        def _attach() -> dict[str, Any]:
+            with _SyncSession(sync_engine) as sync_db:
+                return _log_store.attach_to_case(sync_db, case)
+
+        try:
+            case = await run_in_threadpool(_attach)
+        except Exception as exc:  # noqa: BLE001 — enrichment never fails the view
+            logger.warning("Case log context unavailable for run %s: %s", run_id, exc)
     return {"case": case}
+
+
+@router.get("/{run_id}/logs")
+async def get_run_logs(
+    run_id: uuid.UUID,
+    db: DBSession,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """The logs retrieved around this alert, and where they came from.
+
+    Served from this platform's own store rather than from the log cluster: they
+    were fetched once, when the alert was analysed, and re-reading the cluster
+    on every page load would both be slower and return a different answer as
+    indices roll over.
+
+    Paged because a single alert can carry the 500-line cap, and a case view
+    asking for six of those at once is a response nothing renders well.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+
+    from sqlalchemy.orm import Session as _SyncSession
+
+    from app.db.session import sync_engine
+    from app.services import alert_log_context_store as _log_store
+
+    def _read() -> dict[str, Any]:
+        with _SyncSession(sync_engine) as sync_db:
+            row = _log_store.for_run(sync_db, run_id)
+            payload = _log_store.as_payload(row, include_logs=False)
+            logs = (row.logs if row else []) or []
+            payload["logs"] = logs[offset:offset + limit]
+            payload["offset"] = offset
+            payload["limit"] = limit
+            payload["has_more"] = offset + limit < len(logs)
+            return payload
+
+    return await run_in_threadpool(_read)
 
 
 @router.get("/{run_id}/suppression-candidate")
