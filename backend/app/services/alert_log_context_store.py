@@ -285,11 +285,26 @@ def mark_analysed(db: Session, row: AlertLogContext) -> AlertLogContext:
 RECOVERABLE_MARKERS = (
     "ca bundle", "certificate", "tls", "ssl",
     "no opensearch node answered", "not configured", "connecterror", "timeout",
+    # A run that had no verified tenant when its window was read has no cluster
+    # it is entitled to query — correctly, at that moment. But a tenant can be
+    # assigned afterwards, by a backfill or by an analyst, and then the same
+    # window is readable. Found live: 15 contexts failed this way while their
+    # runs sat in the deploy gap, and migration 031 gave every one of them a
+    # tenant minutes later.
+    "no verified tenant",
 )
 
 
-def recoverable(row: AlertLogContext) -> bool:
+def recoverable(row: AlertLogContext, *, tenant_id: str | None = None) -> bool:
+    """Whether retrying could now produce a different answer.
+
+    `tenant_id` is the run's tenant *as it stands today*, which is the whole
+    point for the no-tenant case: the failure is only recoverable once the run
+    actually has one.
+    """
     text = f"{row.reason or ''} {row.last_error or ''}".casefold()
+    if "no verified tenant" in text:
+        return bool(tenant_id)
     return any(marker in text for marker in RECOVERABLE_MARKERS)
 
 
@@ -308,9 +323,23 @@ def reopen_for_retry(db: Session, rows: Sequence[AlertLogContext], *, now: datet
     now = now or _now()
     horizon = now - timedelta(days=int(getattr(settings, "opensearch_retention_days", 120)))
 
+    # One query rather than one per row: the run's tenant is what decides a
+    # no-tenant failure, and these are swept in batches of hundreds.
+    from app.models.database import AlertBodyInvestigationRun
+
+    tenants: dict[Any, str | None] = {}
+    if rows:
+        tenants = {
+            run_id: tenant
+            for run_id, tenant in db.execute(
+                select(AlertBodyInvestigationRun.id, AlertBodyInvestigationRun.tenant_id)
+                .where(AlertBodyInvestigationRun.id.in_([r.run_id for r in rows]))
+            ).all()
+        }
+
     reopened, expired, skipped = 0, 0, 0
     for row in rows:
-        if not recoverable(row):
+        if not recoverable(row, tenant_id=tenants.get(row.run_id)):
             skipped += 1
             continue
         if _aware(row.window_end) < horizon:
@@ -340,7 +369,7 @@ def retryable(db: Session, *, limit: int = 500) -> list[AlertLogContext]:
     return list(
         db.execute(
             select(AlertLogContext)
-            .where(AlertLogContext.status.in_(("unavailable", "failed")))
+            .where(AlertLogContext.status.in_(("unavailable", "failed", "skipped")))
             .order_by(AlertLogContext.window_end.desc())
             .limit(limit)
         ).scalars().all()

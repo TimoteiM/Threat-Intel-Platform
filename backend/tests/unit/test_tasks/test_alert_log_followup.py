@@ -52,14 +52,26 @@ class Row:
 
 
 class FakeDB:
-    def __init__(self):
+    def __init__(self, tenants: dict | None = None):
         self.commits = 0
+        self._tenants = tenants or {}
 
     def commit(self):
         self.commits += 1
 
     def refresh(self, _row):
         pass
+
+    def execute(self, _stmt):
+        """Answers the (run_id, tenant_id) lookup reopen_for_retry makes."""
+        rows = list(self._tenants.items())
+
+        class _Result:
+            @staticmethod
+            def all():
+                return rows
+
+        return _Result()
 
 
 def _log(doc_id, ts="2026-09-23T12:05:00+0000"):
@@ -323,3 +335,23 @@ def test_the_setting_can_turn_automatic_re_analysis_on(monkeypatch):
 
     assert task._maybe_reanalyse(Row(logs=[_log("a"), _log("b")]), before=0) == "reanalysis_queued"
     assert queued
+
+
+def test_a_run_given_a_tenant_after_it_failed_becomes_retryable():
+    """Found live. 15 contexts failed with "no verified tenant" while their runs
+    sat in the gap between the tenancy migration and the ingest deploy; a
+    backfill gave every one of them a tenant minutes later, and the same window
+    was then readable."""
+    row = Row(status="failed", attempts=5,
+              reason="Gave up after 5 attempts. This alert has no verified tenant, so there is no cluster.")
+    assert store.recoverable(row, tenant_id="c00") is True
+    assert store.recoverable(row, tenant_id=None) is False
+
+
+def test_a_still_untenanted_run_is_not_retried():
+    """Retrying it produces the same answer, for as long as it has no client."""
+    row = Row(status="failed", reason="This alert has no verified tenant.")
+    outcome = store.reopen_for_retry(FakeDB(), [row], now=END)
+    assert outcome["skipped_not_recoverable"] == 1
+    assert row.status == "failed"
+

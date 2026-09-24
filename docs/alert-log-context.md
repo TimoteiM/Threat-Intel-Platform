@@ -165,6 +165,11 @@ that. Then, per row:
 * window older than `OPENSEARCH_RETENTION_DAYS` (120) → marked `expired`, not
   retried, because the indices that held those logs have rolled away and
   `expired` is distinguishable from "never tried";
+* a run that had **no verified tenant** when its window was read → retried once
+  it has one. Correct at the time and recoverable later: 15 contexts failed this
+  way while their runs sat in the gap between the tenancy migration and the
+  ingest deploy, and a backfill gave every one of them a tenant minutes
+  afterwards;
 * a failure retrying cannot fix (no queryable entity, a refused query) → left
   alone.
 
@@ -280,7 +285,7 @@ ALERT_LOG_WINDOW_MINUTES    10
 ALERT_LOG_MAX_HITS          500
 ```
 
-### TLS — the one thing still outstanding
+### TLS — installed 2026-09-24
 
 The cluster presents a certificate issued by an internal CA
 (`L=Suceava, O=Expertware, OU=Siembiot`) which it does **not** include in the
@@ -298,10 +303,18 @@ the file is picked up with no further change. A bind mount to a *file* that does
 not exist would make Docker create a directory in its place, which then blocks
 the real file — the directory is mounted for that reason.
 
-Until the CA is in place the status is `unavailable` and the reason says exactly
-this. That is the intended failure, not a bug. `OPENSEARCH_VERIFY_TLS=false`
-exists and works, but it sends the admin password over a connection nobody has
-checked, so it is not the configuration to leave in place.
+**Done.** The CA is installed and verification is on in the deployed
+configuration — `ca_bundle_present: true`, `reachable: true`, cluster
+`C00-Indexer`, no override anywhere. The certificate arrived DER-encoded, as a
+Windows `.cer` usually does, and was converted with
+`openssl x509 -inform DER -in <file> -out secrets/opensearch-internal-ca.crt`;
+OpenSSL will not read DER as a CA bundle. It is the self-signed root
+`OU=Siembiot, O=Expertware, L=Suceava`, `CA:TRUE`, valid to 2034-03-31, and it
+verifies all three nodes.
+
+`OPENSEARCH_VERIFY_TLS=false` still exists for a one-off diagnostic, but it
+sends the admin password over a connection nobody has checked and is not a
+configuration to leave in place.
 
 ## The password
 
