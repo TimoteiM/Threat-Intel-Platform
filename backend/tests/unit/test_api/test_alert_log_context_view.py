@@ -188,3 +188,49 @@ def test_the_context_view_hands_over_every_relevant_ref():
 
     source = inspect.getsource(api.get_run_log_context)
     assert 'payload["relevant_refs"]' in source
+
+
+def test_the_superseded_report_is_actually_kept():
+    """The endpoint promised to keep the previous verdict and preserved a null:
+    it read `assistant_report` while the pipeline writes `ai_report`. So an
+    analyst asking "did my events change anything?" had nothing to compare."""
+    import inspect
+
+    source = inspect.getsource(api.reanalyse_with_log_context)
+    assert 'existing.get("ai_report")' in source
+    assert '"report_markdown": superseded.get("report_markdown")' in source
+    assert '"verdict"' in source
+
+
+def test_the_status_says_whether_the_answer_changed():
+    """A model that read the added events and kept its conclusion has answered
+    the question. Silence makes that look like a failed request."""
+    now = {
+        "ai_report": {"report_markdown": "new wording"},
+        "overall_verdict": "benign",
+        "previous_analyses": [
+            {"superseded_at": "2026-09-24T15:00:00+00:00", "by": "tim",
+             "verdict": "suspicious", "report_markdown": "old wording"}
+        ],
+    }
+    previous = api._previous_analysis(now)
+    assert previous["verdict"] == "suspicious"
+    assert previous["interpretation_changed"] is True
+
+    same = dict(now)
+    same["previous_analyses"] = [{"report_markdown": "new wording", "verdict": "benign"}]
+    assert api._previous_analysis(same)["interpretation_changed"] is False
+
+
+def test_an_unrecorded_earlier_report_is_not_claimed_to_be_unchanged():
+    """Runs written before the key was fixed have no earlier text. Saying "the
+    wording is the same" about a blank is worse than saying nothing."""
+    result = {
+        "ai_report": {"report_markdown": "new"},
+        "previous_analyses": [{"report_markdown": None, "verdict": "benign"}],
+    }
+    assert api._previous_analysis(result)["interpretation_changed"] is None
+
+
+def test_no_history_means_no_comparison():
+    assert api._previous_analysis({"ai_report": {"report_markdown": "x"}}) is None

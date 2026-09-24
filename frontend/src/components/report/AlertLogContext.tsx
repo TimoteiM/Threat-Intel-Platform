@@ -301,6 +301,9 @@ export function AlertLogContext({ runId }: { runId: string }) {
               <Muted>
                 {job.log_selection.analyst_pinned.length} selected event
                 {job.log_selection.analyst_pinned.length === 1 ? "" : "s"} considered
+                {job.log_selection.events_found
+                  ? ` of ${job.log_selection.events_found} retrieved`
+                  : ""}
                 {job.log_selection.analyst_pinned_dropped.length > 0
                   ? `, ${job.log_selection.analyst_pinned_dropped.length} did not fit the token budget`
                   : ""}
@@ -322,6 +325,43 @@ export function AlertLogContext({ runId }: { runId: string }) {
                 <Fact label="Risk" value={job.highest_risk_score != null ? `${job.highest_risk_score}/100` : "—"} />
                 <Fact label="Earlier analyses kept" value={String(job.previous_analyses)} />
               </div>
+              {/* Said plainly. A model that considered the added events and
+                  kept its conclusion has answered the question; leaving the
+                  analyst to compare two paragraphs by eye makes a real answer
+                  look like a failed request. */}
+              {job.previous && (
+                <div
+                  style={{
+                    ...panel,
+                    borderColor:
+                      job.previous.verdict && job.previous.verdict !== job.overall_verdict
+                        ? "var(--warning, #d29922)"
+                        : "var(--border)",
+                    gap: 4,
+                  }}
+                >
+                  <strong style={{ color: "var(--text)" }}>
+                    {job.previous.verdict && job.previous.verdict !== job.overall_verdict
+                      ? `Verdict changed: ${job.previous.verdict} → ${job.overall_verdict}`
+                      : `Verdict unchanged (${job.overall_verdict ?? "—"})`}
+                  </strong>
+                  <Muted>
+                    {job.previous.interpretation_changed === null
+                      ? "The earlier wording was not kept, so the two cannot be compared."
+                      : job.previous.interpretation_changed
+                      ? "The interpretation was rewritten with your events in it."
+                      : "The model read your events and reached the same conclusion in the same words."}
+                  </Muted>
+                  {job.previous.report_markdown && (
+                    <details>
+                      <summary style={{ cursor: "pointer", color: "var(--text-muted)", fontSize: 12 }}>
+                        Show the earlier interpretation
+                      </summary>
+                      <div style={{ ...reportBox, marginTop: 6 }}>{job.previous.report_markdown}</div>
+                    </details>
+                  )}
+                </div>
+              )}
               {job.report_markdown ? (
                 <div style={{ marginTop: 4 }}>
                   <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>

@@ -1009,6 +1009,30 @@ async def get_analysis_status(
             "pinned_refs": requested.get("pinned_refs") or [],
         },
         "previous_analyses": len(result.get("previous_analyses") or []),
+        # Whether the re-run reached a different conclusion, stated rather than
+        # left for an analyst to infer by re-reading two paragraphs. "The model
+        # considered your events and did not change its mind" is a real answer;
+        # silence looks like a failure.
+        "previous": _previous_analysis(result),
+    }
+
+
+def _previous_analysis(result: dict[str, Any]) -> dict[str, Any] | None:
+    history = result.get("previous_analyses") or []
+    if not history:
+        return None
+    last = history[-1] or {}
+    current_md = ((result.get("ai_report") or {}).get("report_markdown") or "").strip()
+    previous_md = (last.get("report_markdown") or "").strip()
+    return {
+        "superseded_at": last.get("superseded_at"),
+        "by": last.get("by"),
+        "verdict": last.get("verdict"),
+        "risk_score": last.get("risk_score"),
+        "report_markdown": previous_md,
+        # None when the earlier text was never stored, so the UI can say "not
+        # comparable" instead of claiming the wording is unchanged.
+        "interpretation_changed": (None if not previous_md else previous_md != current_md),
     }
 
 
@@ -1047,12 +1071,19 @@ async def reanalyse_with_log_context(
     # Preserved before the re-run overwrites it.
     existing = dict(run.result_json or {})
     history = list(existing.get("previous_analyses") or [])
+    # `ai_report` is the key the pipeline writes. Reading `assistant_report`
+    # here preserved a null for every re-analysis, so "the previous verdict is
+    # kept" was true of the row and false of its contents — and an analyst
+    # asking "did this change?" had nothing to compare against.
+    superseded = existing.get("ai_report") or existing.get("assistant_report") or {}
     history.append({
         "superseded_at": datetime.now(timezone.utc).isoformat(),
         "by": str(identity.get("username") or "unknown"),
         "reason": "reanalysis with log context",
-        "assistant_report": existing.get("assistant_report"),
-        "log_context": existing.get("log_context"),
+        "verdict": existing.get("overall_verdict") or (existing.get("summary") or {}).get("overall_verdict"),
+        "risk_score": (existing.get("summary") or {}).get("highest_risk_score"),
+        "report_markdown": superseded.get("report_markdown"),
+        "log_selection": superseded.get("log_selection"),
     })
     existing["previous_analyses"] = history[-5:]
     existing["reanalysis"] = {

@@ -535,6 +535,15 @@ export interface AnalysisStatus {
   };
   reanalysis: { requested_by?: string | null; requested_at?: string | null; pinned_refs: string[] };
   previous_analyses: number;
+  previous?: {
+    superseded_at?: string | null;
+    by?: string | null;
+    verdict?: string | null;
+    risk_score?: number | null;
+    report_markdown: string;
+    /** null when the earlier text was never stored, so it cannot be compared. */
+    interpretation_changed: boolean | null;
+  } | null;
 }
 
 /** Small enough to poll while a progress bar is ticking. */
