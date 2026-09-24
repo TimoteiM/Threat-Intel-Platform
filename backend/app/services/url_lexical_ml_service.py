@@ -53,6 +53,71 @@ FEATURE_ORDER = [
     "brand_keyword_count",
 ]
 
+# The features that assert something about a URL's *intent or identity*, as
+# opposed to its size and structure. Only these are allowed to move a risk
+# score; everything else in FEATURE_ORDER — length, depth, entropy, counts —
+# grows with any long legitimate URL, which is how ordinary SharePoint and
+# Office links came to score MEDIUM and drag investigations to "suspicious".
+#
+# Two features that look semantic are deliberately left out, because both fire
+# on this estate's own legitimate traffic:
+#
+#   brand_keyword_count — the search area includes the subdomain, so
+#     `outlook.office.com` counts "outlook"; and a registrable label is counted
+#     as a lookalike whenever it *contains* a brand without equalling it, so
+#     `office365` counts as a lookalike of `office`.
+#   has_abnormal_port — any internal service not on 80/443 trips it, and there
+#     are plenty here.
+#
+# Both remain in the model and still contribute to the reported score. They
+# just cannot escalate a verdict on their own.
+SEMANTIC_FEATURES = frozenset({
+    "has_ip_host",
+    "has_at_symbol",
+    "has_punycode",
+    "has_sensitive_keyword",
+    "has_suspicious_tld",
+    "is_shortener",
+})
+
+
+# How each semantic feature reads in an analyst-facing finding.
+SEMANTIC_FEATURE_LABELS = {
+    "has_ip_host": "hostname is a raw IP address",
+    "has_at_symbol": "URL contains an @, which hides the real host",
+    "has_punycode": "hostname uses punycode, which can imitate another name",
+    "has_sensitive_keyword": "a sensitive keyword such as secure/login/account",
+    "has_suspicious_tld": "a TLD commonly used for disposable domains",
+    "is_shortener": "hostname is a URL shortener",
+}
+
+
+def semantic_features_present(lexical: Any) -> list[str]:
+    """The semantic features this lexical assessment actually found, in FEATURE_ORDER.
+
+    Reads the raw `features` vector first and only falls back to `top_features`,
+    because `top_features` is capped at five: a URL long enough to fill that list
+    with shape features would otherwise hide its own punycode hostname.
+    """
+    if not isinstance(lexical, dict) or not lexical:
+        return []
+
+    features = lexical.get("features")
+    if isinstance(features, dict) and features:
+        found = []
+        for name in FEATURE_ORDER:
+            if name not in SEMANTIC_FEATURES:
+                continue
+            try:
+                if float(features.get(name, 0.0)) > 0:
+                    found.append(name)
+            except (TypeError, ValueError):
+                continue
+        return found
+
+    top = {str(x).lower() for x in (lexical.get("top_features") or [])}
+    return [name for name in FEATURE_ORDER if name in SEMANTIC_FEATURES and name in top]
+
 _SUSPICIOUS_TLDS = {
     "top",
     "xyz",

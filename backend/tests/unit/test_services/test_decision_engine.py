@@ -277,17 +277,18 @@ def test_decision_engine_does_not_treat_generic_clean_anyrun_tags_as_malicious()
 
 
 def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious(monkeypatch):
-    """Reported always; escalating only when configured to.
+    """The case the cluster was built for: a sensitive keyword, high
+    spoofability, a registrant pivot.
 
-    This hostname is the case the cluster was built for — a sensitive keyword,
-    high spoofability, a registrant pivot. It is also the shape that made long
-    legitimate URLs suspicious, because entropy and subdomain depth reach the
-    same three points on their own. So the default reports it and leaves the
-    verdict alone, and WEAK_SIGNALS_AFFECT_SCORE restores the escalation.
+    A sensitive keyword is semantic — it says something about what the hostname
+    is pretending to be — so it still scores. What no longer scores is the URL's
+    shape, which reached the same three points on entropy and subdomain depth
+    alone. Forcing the shape gate on here keeps this test honest about which
+    half it is exercising.
     """
     import app.services.decision_engine as _de
 
-    monkeypatch.setattr(_de, "weak_signals_affect_score", lambda *_a: True)
+    monkeypatch.setattr(_de, "url_shape_affects_score", lambda *_a: True)
     decision = build_decision_report(
         {
             "domain": "secure-louise.cole.activelyintimate.com",
@@ -401,10 +402,13 @@ def test_shared_hosting_corroborates_a_real_signal():
 
     evidence = _clean_business_site(
         infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
-        url_lexical_ml={"label": "high", "score": 0.8},
+        # A semantic lexical verdict, because the aggregate score no longer
+        # counts. The rule under test is the corroboration one, not the lexical
+        # one: shared hosting scores only alongside something that already did.
+        url_lexical_ml={"label": "high", "score": 0.8, "top_features": ["has_sensitive_keyword"]},
     )
     score, reasons = _domain_weak_signal_score(evidence)
-    assert score == 3  # lexical high (2) + shared hosting (1)
+    assert score == 2  # sensitive keyword (1) + shared hosting corroborating (1)
     assert any("Shared hosting or crowded" in reason for reason in reasons)
 
 
@@ -451,21 +455,36 @@ def test_real_signals_still_reach_suspicious_and_malicious():
             "registrant_pivots": [{"domains": ["expertware.net", "other-investigated.com"]}],
         },
     )
-    # A weak-signal cluster no longer decides on its own; it is still reported.
-    # WEAK_SIGNALS_AFFECT_SCORE restores the previous behaviour, asserted here
-    # so the capability is pinned rather than merely removed.
+    # This cluster still escalates, and that is the point of scoring semantic
+    # features rather than switching the cluster off wholesale: the lexical
+    # verdict rests on a sensitive keyword, not on the URL being long.
     report = build_decision_report(weak_but_real, "domain")
-    assert report["classification"] == "benign"
+    assert report["classification"] == "suspicious"
     assert any(f["id"] == "weak_signal_cluster" for f in report["findings"])
 
+    # The same cluster with its lexical verdict driven by shape instead. No
+    # pivot here, deliberately: a pivot to another investigated domain scores on
+    # its own and would carry this case to three points without the lexical
+    # model contributing anything, which would make the assertion below prove
+    # nothing about shape.
+    shape_only = _clean_business_site(
+        url_lexical_ml={"label": "high", "score": 0.82,
+                        "top_features": ["url_length", "entropy", "subdomain_depth"]},
+        email_security={"spoofability_score": "high"},
+        infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
+    )
+    assert build_decision_report(shape_only, "domain")["classification"] == "benign"
+
+    # URL_SHAPE_AFFECTS_SCORE restores the old behaviour, pinned here so the
+    # capability is kept rather than merely removed.
     import app.services.decision_engine as _de
 
-    _original = _de.weak_signals_affect_score
-    _de.weak_signals_affect_score = lambda: True
+    _original = _de.url_shape_affects_score
+    _de.url_shape_affects_score = lambda *_a: True
     try:
-        assert build_decision_report(weak_but_real, "domain")["classification"] == "suspicious"
+        assert build_decision_report(shape_only, "domain")["classification"] == "suspicious"
     finally:
-        _de.weak_signals_affect_score = _original
+        _de.url_shape_affects_score = _original
 
 
 def test_missing_spf_and_dmarc_alone_does_not_make_a_domain_suspicious():
@@ -489,10 +508,10 @@ def test_spoofability_still_corroborates_a_real_signal():
     evidence = _clean_business_site(
         email_security={"spoofability_score": "high"},
         infrastructure_pivot={"shared_hosting_detected": False, "registrant_pivots": []},
-        url_lexical_ml={"label": "high", "score": 0.8},
+        url_lexical_ml={"label": "high", "score": 0.8, "top_features": ["has_sensitive_keyword"]},
     )
     score, _reasons = _domain_weak_signal_score(evidence)
-    assert score == 3  # lexical high (2) + spoofability corroborating (1)
+    assert score == 2  # sensitive keyword (1) + spoofability corroborating (1)
 
 
 # ── Sources that were collected but never consulted ───────────────────────────

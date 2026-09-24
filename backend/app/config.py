@@ -279,7 +279,11 @@ class Settings(BaseSettings):
     # still worth an analyst's eye; what they no longer do is decide.
     #
     # Set true to restore the previous behaviour.
-    weak_signals_affect_score: bool = False
+    # Whether URL-*shape* signals (length, entropy, depth, dot count, and the
+    # lexical model's aggregate score, which they dominate) may move a verdict.
+    # Off: they are reported, and only semantic features escalate. See
+    # docs/weak-signals.md.
+    url_shape_affects_score: bool = False
 
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis,cape"
     # Collectors that never run on the automatic alert path, however they would

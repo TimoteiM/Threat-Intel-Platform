@@ -505,9 +505,9 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         # A medium lexical score, shared hosting, or a brand word found in a
         # CSP/resource list must not outweigh several direct clean controls.
         classification, confidence, risk_score, action = "benign", "high", 15, "monitor"
-    elif weak_score >= 4 and weak_signals_affect_score():
+    elif weak_score >= 4:
         classification, confidence, risk_score, action = "suspicious", "medium", 50, "investigate"
-    elif weak_score >= 3 and weak_signals_affect_score():
+    elif weak_score >= 3:
         classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"
     else:
         classification, confidence, risk_score, action = "benign", "medium", 15, "monitor"
@@ -692,26 +692,40 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
         })
     # Two findings, independently decided. Folding them into one if/elif meant
-    # that reporting the cluster when it no longer scores swallowed the
-    # "clean controls won" finding entirely, because the first branch then
-    # always matched.
-    _weak_scoring = weak_signals_affect_score()
-    if weak_score >= 3 and (classification != "benign" or not _weak_scoring):
-        scoring = _weak_scoring
+    # that the first branch always matched and swallowed the "clean controls
+    # won" finding entirely.
+    # Clean controls beat the observations: reported whenever there were
+    # observations to beat, not only when they were numerous enough to score.
+    # Keying it on the score meant that excluding URL shape silently removed the
+    # analyst's explanation for why a flagged-looking domain came back benign.
+    _clean_override = bool(weak_evidence) and observable_clean and classification == "benign"
+
+    if weak_score >= 3:
         findings.append({
             "id": "weak_signal_cluster",
             "title": "Suspicious weak-signal cluster",
             "description": (
                 "Multiple medium-confidence signals combine into suspicious context: "
                 + "; ".join(weak_evidence[:6])
-                + ("" if scoring else
-                   " — reported for review only; these signals key on URL shape and did not "
-                   "affect the risk score.")
             ),
-            "severity": ("medium" if weak_score >= 4 else "low") if scoring else "informational",
+            "severity": "medium" if weak_score >= 4 else "low",
             "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
         })
-    if weak_score >= 3 and observable_clean and classification == "benign":
+    elif weak_evidence and not _clean_override:
+        # Below the threshold there is still something to show an analyst — most
+        # often a shape-driven lexical verdict that was reported and not counted.
+        # Unless the finding below already says it better.
+        findings.append({
+            "id": "weak_signal_observations",
+            "title": "Weak signals observed, below the threshold to score",
+            "description": (
+                "Reported for review only; these did not affect the risk score: "
+                + "; ".join(weak_evidence[:6])
+            ),
+            "severity": "informational",
+            "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
+        })
+    if _clean_override:
         findings.append({
             "id": "weak_signals_overridden_by_clean_controls",
             "title": "Weak signals did not outweigh direct clean evidence",
@@ -821,19 +835,24 @@ def _anyrun_heuristic_observations(hybrid: dict[str, Any]) -> list[str]:
     return observations
 
 
-def weak_signals_affect_score(settings: Any = None) -> bool:
-    """Whether the weak-signal cluster may move a verdict.
+def url_shape_affects_score(settings: Any = None) -> bool:
+    """Whether URL-*shape* signals may move a verdict.
 
-    Off by default. The cluster's largest contributors key on URL *shape* —
-    lexical entropy, dot count, length, subdomain depth — and a legitimate
-    deep link into SharePoint or Office scores MEDIUM on all of them. That was
-    enough, with a shared-hosting observation and a registrar pivot, to reach
-    the three points that make a domain "suspicious" with nothing actually
-    suspicious having been found.
+    Off by default. Shape means the features that grow with any URL: length,
+    entropy, dot count, subdomain depth, path depth — plus the lexical model's
+    aggregate score, which those features dominate. A legitimate deep link into
+    SharePoint or Office scores MEDIUM on all of them, and that was enough,
+    with a shared-hosting observation and a registrar pivot, to reach the three
+    points that make a domain "suspicious" with nothing suspicious found.
 
-    The evidence is still collected and still reported; it just no longer
-    decides. Both scoring paths — here and the deterministic one in
-    analysis_task — read this, so they cannot disagree.
+    What this does *not* switch off is the semantic half. A sensitive keyword,
+    punycode, a raw-IP host, an @ in the URL, a shortener, a throwaway TLD —
+    those assert something about intent rather than size, and they still score.
+    The list is SEMANTIC_FEATURES in url_lexical_ml_service, which is the one
+    place it is defined.
+
+    Both scoring paths — here and the deterministic one in analysis_task — read
+    this, so they cannot disagree.
 
     `settings` is injectable so a test need not monkeypatch a dotted path into
     app.config: this suite reloads `app` through importlib in places, and a
@@ -843,10 +862,17 @@ def weak_signals_affect_score(settings: Any = None) -> bool:
         from app.config import get_settings
 
         settings = get_settings()
-    return bool(getattr(settings, "weak_signals_affect_score", False))
+    return bool(getattr(settings, "url_shape_affects_score", False))
 
 
 def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http: bool = False) -> tuple[int, list[str]]:
+    # Imported here rather than at module scope: this module deliberately has no
+    # app-level imports at the top, so it stays importable on its own.
+    from app.services.url_lexical_ml_service import (
+        SEMANTIC_FEATURE_LABELS,
+        semantic_features_present,
+    )
+
     score = 0
     reasons: list[str] = []
 
@@ -859,16 +885,35 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
             lexical_score = float(lexical.get("score") or lexical.get("phishing_probability") or 0.0)
         except Exception:
             lexical_score = 0.0
-        top_features = [str(x).lower() for x in (lexical.get("top_features") or [])]
+
+        # The model's aggregate verdict is dominated by shape, so by default it
+        # is reported and not counted. Its semantic features are counted either
+        # way — see url_shape_affects_score.
         if label == "high" or lexical_score >= 0.65:
-            score += 2
-            reasons.append(f"Lexical model high risk ({lexical_score:.2f})")
+            aggregate, aggregate_points = f"Lexical model high risk ({lexical_score:.2f})", 2
         elif label == "medium" or lexical_score >= 0.45:
-            score += 1
-            reasons.append(f"Lexical model medium risk ({lexical_score:.2f})")
-        if "has_sensitive_keyword" in top_features:
-            score += 1
-            reasons.append("Hostname contains a sensitive keyword such as secure/login/account")
+            aggregate, aggregate_points = f"Lexical model medium risk ({lexical_score:.2f})", 1
+        else:
+            aggregate, aggregate_points = "", 0
+        # Capped at two so this block can never contribute more than the
+        # aggregate used to, and so a single long URL tripping several of them
+        # cannot escalate on its own.
+        semantic = semantic_features_present(lexical)
+
+        if aggregate and url_shape_affects_score():
+            score += aggregate_points
+            reasons.append(aggregate)
+        elif aggregate and semantic:
+            reasons.append(f"{aggregate} — aggregate not scored, but see below")
+        elif aggregate:
+            reasons.append(f"{aggregate} — driven by URL shape, not scored")
+
+        if semantic:
+            score += 2 if len(semantic) > 1 else 1
+            reasons.append(
+                "Lexical model found "
+                + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
+            )
 
     age_days = (evidence_data.get("whois") or {}).get("domain_age_days")
     if isinstance(age_days, (int, float)) and NEWLY_REGISTERED_DAYS < int(age_days) <= YOUNG_DOMAIN_DAYS:

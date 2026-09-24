@@ -32,7 +32,16 @@ from app.services.decision_engine import (
     community_listing_weight,
     apply_decision_to_report,
     build_decision_report,
-    weak_signals_affect_score,
+    url_shape_affects_score,
+    # This module carried its own fork of the weak-signal scorer. The fork had
+    # drifted: no domain-age rule, no self-pivot check, and shared hosting and
+    # spoofability still scoring on their own. The two paths returned different
+    # scores for identical evidence. One scorer now, imported.
+    _domain_weak_signal_score,
+)
+from app.services.url_lexical_ml_service import (
+    SEMANTIC_FEATURE_LABELS,
+    semantic_features_present,
 )
 from app.services.proxy_profiles import selected_proxy_summary
 from app.services.provider_branding import normalize_anyrun_branding
@@ -1288,12 +1297,12 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             confidence = "low"
             risk_score = 40
             recommended_action = "investigate"
-        elif weak_signal_score >= 4 and weak_signals_affect_score():
+        elif weak_signal_score >= 4:
             classification = "suspicious"
             confidence = "medium"
             risk_score = 50
             recommended_action = "investigate"
-        elif weak_signal_score >= 3 and weak_signals_affect_score():
+        elif weak_signal_score >= 3:
             classification = "suspicious"
             confidence = "low"
             risk_score = 40
@@ -1394,18 +1403,25 @@ def _generate_automated_report(evidence_data: dict, observable_type: str) -> dic
             })
 
         if weak_signal_score >= 3:
-            _scoring = weak_signals_affect_score()
             findings.append({
                 "id": "weak_signal_cluster",
                 "title": "Suspicious weak-signal cluster",
                 "description": (
                     "Multiple medium-confidence signals combine into suspicious context: "
                     + "; ".join(weak_signal_evidence[:6])
-                    + ("" if _scoring else
-                       " — reported for review only; these signals key on URL shape and did not "
-                       "affect the risk score.")
                 ),
-                "severity": ("medium" if weak_signal_score >= 4 else "low") if _scoring else "informational",
+                "severity": "medium" if weak_signal_score >= 4 else "low",
+                "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
+            })
+        elif weak_signal_evidence:
+            findings.append({
+                "id": "weak_signal_observations",
+                "title": "Weak signals observed, below the threshold to score",
+                "description": (
+                    "Reported for review only; these did not affect the risk score: "
+                    + "; ".join(weak_signal_evidence[:6])
+                ),
+                "severity": "informational",
                 "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
             })
 
@@ -1924,15 +1940,32 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     top = [str(x) for x in (lexical.get("top_features") or []) if str(x).strip()]
     model_source = str(lexical.get("model_source") or "unknown")
     calibrated = bool(lexical.get("calibration_applied"))
-    lexical_weight = 0.25
+
+    # This blend is where the lexical model actually moved the number, and it ran
+    # regardless of how the weak-signal cluster was gated: a long legitimate URL
+    # scoring 0.55 pulled a 20/100 reputation result up to 29/100 on shape alone.
+    # It now contributes only when the model found something semantic — a
+    # sensitive keyword, punycode, a raw-IP host, an @, a shortener, a throwaway
+    # TLD. Shape-only verdicts are still reported, and still shown in key
+    # evidence; they just stop arithmetic.
+    semantic = semantic_features_present(lexical)
+    shape_only = not semantic and not url_shape_affects_score()
+    lexical_weight = 0.0 if shape_only else 0.25
 
     rep_score = report_data.get("risk_score")
     rep_norm = 0.5 if rep_score is None else max(0.0, min(1.0, float(rep_score) / 100.0))
-    blended = (1.0 - lexical_weight) * rep_norm + lexical_weight * lexical_score
-    blended_score = int(round(blended * 100))
+    if shape_only:
+        blended = rep_norm
+        # None rather than 50 when nothing upstream produced a score: inventing a
+        # midpoint from a signal we just declined to count is worse than leaving
+        # the field as we found it.
+        blended_score = None if rep_score is None else int(round(rep_norm * 100))
+    else:
+        blended = (1.0 - lexical_weight) * rep_norm + lexical_weight * lexical_score
+        blended_score = int(round(blended * 100))
 
     floor_score, floor_reasons = _trusted_external_risk_floor(evidence_data)
-    if floor_score and blended_score < floor_score:
+    if floor_score and (blended_score is None or blended_score < floor_score):
         blended_score = floor_score
         cls = str(report_data.get("classification") or "").lower()
         if floor_score >= 85:
@@ -1949,21 +1982,24 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     existing = report_data.get("findings")
     findings = existing if isinstance(existing, list) else []
     if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
-        _scoring = weak_signals_affect_score()
         sev = "high" if lexical_label == "high" else ("medium" if lexical_label == "medium" else "low")
         findings.append(
             {
                 "id": "lexical_ml_contribution",
-                "title": "URL lexical ML observation" if not _scoring else "URL lexical ML risk contribution",
+                "title": "URL lexical ML observation" if shape_only else "URL lexical ML risk contribution",
                 "description": (
                     f"Lexical model ({model_source}) scored this target as {lexical_label.upper()} "
                     f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}, weight={lexical_weight:.2f}). "
                     f"Top features: {', '.join(top[:5]) if top else 'not available'}."
-                    + ("" if _scoring else
-                       " Reported for review only: the model reads URL shape, so long legitimate "
-                       "links score MEDIUM, and it did not affect the risk score.")
+                    + (" Reported for review only: every feature behind this score describes the "
+                       "URL's size and structure, which long legitimate links share, so it did not "
+                       "affect the risk score."
+                       if shape_only else
+                       " Scored because the model found "
+                       + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
+                       + ".")
                 ),
-                "severity": sev if _scoring else "informational",
+                "severity": "informational" if shape_only else sev,
                 "evidence_refs": ["url_lexical_ml.score", "url_lexical_ml.top_features"],
             }
         )
@@ -1976,6 +2012,7 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}"
         + (", calibration=on" if calibrated else ", calibration=off")
         + ")"
+        + (" \u2014 shape-driven, not scored" if shape_only else "")
     )
     if lexical_line not in key_evidence:
         key_evidence.append(lexical_line)
@@ -1989,12 +2026,20 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         report_data["key_evidence"] = key_evidence
 
     # Apply blended score only when a numeric score exists or can be inferred.
-    report_data["risk_score"] = _score_within_classification_band(blended_score, report_data)
+    if blended_score is not None:
+        report_data["risk_score"] = _score_within_classification_band(blended_score, report_data)
     rationale = str(report_data.get("risk_rationale") or "").strip()
-    blend_note = (
-        f"Final risk uses blended scoring: reputation_weight=0.75, lexical_weight=0.25, "
-        f"reputation_component={rep_norm:.4f}, lexical_component={lexical_score:.4f}, final={blended:.4f}."
-    )
+    if shape_only:
+        blend_note = (
+            f"Lexical model excluded from scoring: lexical_component={lexical_score:.4f} rests on "
+            f"URL shape alone, so final risk is reputation only ({rep_norm:.4f})."
+        )
+    else:
+        blend_note = (
+            f"Final risk uses blended scoring: reputation_weight={1.0 - lexical_weight:.2f}, "
+            f"lexical_weight={lexical_weight:.2f}, reputation_component={rep_norm:.4f}, "
+            f"lexical_component={lexical_score:.4f}, final={blended:.4f}."
+        )
     if floor_reasons:
         blend_note += f" External intelligence floor enforced at {blended_score}/100."
     report_data["risk_rationale"] = (rationale + " " + blend_note).strip()
@@ -2119,65 +2164,6 @@ def _is_high_confidence_http_phishing_signal(signal: object) -> bool:
             "paste/run a command",
         )
     )
-
-
-def _domain_weak_signal_score(evidence_data: dict, *, contextual_http: bool = False) -> tuple[int, list[str]]:
-    score = 0
-    reasons: list[str] = []
-
-    lexical = evidence_data.get("url_lexical_ml") or {}
-    if not isinstance(lexical, dict) or not lexical:
-        lexical = (evidence_data.get("ml_url_score") or {}).get("raw") or evidence_data.get("ml_url_score") or {}
-    if isinstance(lexical, dict):
-        label = str(lexical.get("label") or lexical.get("risk_level") or "").lower()
-        try:
-            lexical_score = float(lexical.get("score") or lexical.get("phishing_probability") or 0.0)
-        except Exception:
-            lexical_score = 0.0
-        top_features = [str(x).lower() for x in (lexical.get("top_features") or [])]
-        if label == "high" or lexical_score >= 0.65:
-            score += 2
-            reasons.append(f"Lexical model high risk ({lexical_score:.2f})")
-        elif label == "medium" or lexical_score >= 0.45:
-            score += 1
-            reasons.append(f"Lexical model medium risk ({lexical_score:.2f})")
-        if "has_sensitive_keyword" in top_features:
-            score += 1
-            reasons.append("Hostname contains a sensitive keyword such as secure/login/account")
-
-    email = evidence_data.get("email_security") or {}
-    if isinstance(email, dict) and str(email.get("spoofability_score") or "").lower() == "high":
-        score += 1
-        reasons.append("High email spoofability")
-
-    infra = evidence_data.get("infrastructure_pivot") or {}
-    if isinstance(infra, dict):
-        if infra.get("shared_hosting_detected"):
-            score += 1
-            reasons.append("Shared hosting or crowded infrastructure observed")
-        if infra.get("registrant_pivots"):
-            score += 1
-            reasons.append("Registrant/registrar pivot links to other investigated domains")
-
-    signals = evidence_data.get("signals") or []
-    if isinstance(signals, list):
-        signal_ids = {
-            str(sig.get("id") or "")
-            for sig in signals
-            if isinstance(sig, dict)
-        }
-        if "sig_high_spoofability" in signal_ids and "High email spoofability" not in reasons:
-            score += 1
-            reasons.append("High email spoofability")
-        if {"sig_shared_hosting", "sig_registrant_pivot"} & signal_ids and not any("infrastructure" in r for r in reasons):
-            score += 1
-            reasons.append("Infrastructure pivot signal observed")
-
-    if contextual_http:
-        score += 1
-        reasons.append("Static HTTP brand/input observation present")
-
-    return score, reasons
 
 
 def _has_domain_suspicion_context(evidence_data: dict) -> bool:
