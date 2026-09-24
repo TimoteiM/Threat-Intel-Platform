@@ -372,9 +372,19 @@ export function listAlertInvestigations(params?: {
   if (params?.verdict && params.verdict !== "all") qs.set("verdict", params.verdict);
   if (params?.tenant && params.tenant !== "all") qs.set("tenant", params.tenant);
   const query = qs.toString();
-  return request<PaginatedResponse<AlertInvestigationRun> & { scope?: TenantScope }>(
-    `/alert-investigations${query ? `?${query}` : ""}`,
-  );
+  return request<
+    PaginatedResponse<AlertInvestigationRun> & {
+      scope?: TenantScope;
+      available_tenants?: TenantOption[];
+    }
+  >(`/alert-investigations${query ? `?${query}` : ""}`);
+}
+
+export interface TenantOption {
+  tenant_id: string;
+  name: string;
+  status: string;
+  run_count: number;
 }
 
 export interface TenantScope {

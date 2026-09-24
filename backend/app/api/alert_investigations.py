@@ -608,7 +608,48 @@ async def list_alert_investigations(
         "limit": limit,
         "offset": offset,
         "scope": scope.describe(),
+        # What this caller may actually pick. An all-tenants identity carries an
+        # *empty* tenant_ids — "everything" is not a list — so a selector built
+        # from the scope alone offered internal staff no client to choose. The
+        # server names the options, because it is the only side that can.
+        "available_tenants": await _selectable_tenants(db, request),
     }
+
+
+async def _selectable_tenants(db: DBSession, request: Request | None) -> list[dict[str, Any]]:
+    """The tenants this caller may filter to, with how many runs each holds.
+
+    Counts come from the same scoped query the list uses, so a client-restricted
+    caller cannot learn another client's volume from the selector — the one
+    place a count would otherwise leak after the list itself was locked down.
+    """
+    from app.models.database import Tenant
+
+    scope = _scope(request)
+    rows = (await db.execute(select(Tenant).order_by(Tenant.name))).scalars().all()
+
+    counts_stmt = tenant_scope.apply(
+        select(AlertBodyInvestigationRun.tenant_id, func.count(AlertBodyInvestigationRun.id))
+        .group_by(AlertBodyInvestigationRun.tenant_id),
+        AlertBodyInvestigationRun.tenant_id,
+        scope,
+    )
+    counts = {tid: int(n) for tid, n in (await db.execute(counts_stmt)).all()}
+
+    options = [
+        {"tenant_id": row.tenant_id, "name": row.name, "status": row.status,
+         "run_count": counts.get(row.tenant_id, 0)}
+        for row in rows
+        if scope.may_read(row.tenant_id)
+    ]
+    if scope.include_unassigned:
+        options.append({
+            "tenant_id": tenant_scope.UNASSIGNED,
+            "name": "Unassigned (legacy)",
+            "status": "legacy",
+            "run_count": counts.get(None, 0),
+        })
+    return options
 
 
 @router.get("/{run_id}/case")

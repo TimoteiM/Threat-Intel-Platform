@@ -5,11 +5,7 @@ import { useRouter } from "next/navigation";
 
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import PageHero from "@/components/ui/PageHero";
-import {
-  alertInvestigationExportUrl,
-  deleteAlertInvestigation,
-  listAlertInvestigations,
-} from "@/lib/api";
+import { alertInvestigationExportUrl, deleteAlertInvestigation, listAlertInvestigations, type TenantOption } from "@/lib/api";
 import type { AlertInvestigationRun } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
@@ -37,6 +33,10 @@ export default function AlertInvestigationsPage() {
   // server decides that, not this selector.
   const [tenant, setTenant] = useState("all");
   const [scope, setScope] = useState<{ all_tenants: boolean; tenant_ids: string[] } | null>(null);
+  // Named by the server, not derived from the scope: an all-tenants account
+  // carries an empty tenant_ids, so building the list here showed internal
+  // staff no client to select.
+  const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -71,6 +71,7 @@ export default function AlertInvestigationsPage() {
       // built from that answer rather than from a client-side list, so it
       // cannot offer a tenant the caller would be refused.
       if (data.scope) setScope({ all_tenants: data.scope.all_tenants, tenant_ids: data.scope.tenant_ids });
+      if (data.available_tenants) setTenantOptions(data.available_tenants);
     } catch {
       setItems([]);
       setTotal(0);
@@ -179,15 +180,13 @@ export default function AlertInvestigationsPage() {
             >
               <option value="all">
                 {scope?.all_tenants ? "All clients" : "My clients"}
+                {total ? ` (${total.toLocaleString()})` : ""}
               </option>
-              {(scope?.tenant_ids ?? []).map((id) => (
-                <option key={id} value={id}>
-                  {id}
+              {tenantOptions.map((option) => (
+                <option key={option.tenant_id} value={option.tenant_id}>
+                  {option.name} ({option.run_count.toLocaleString()})
                 </option>
               ))}
-              {scope?.all_tenants && (
-                <option value="__unassigned__">Unassigned (legacy)</option>
-              )}
             </select>
             <select
               value={verdict}

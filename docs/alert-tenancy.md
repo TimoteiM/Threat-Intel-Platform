@@ -60,6 +60,16 @@ carry it. Two rules, each recorded on the row it assigned:
 | `manager_source` | `alert_source` is the C00 manager hostname | 5 |
 | — | everything else | 631 left unassigned |
 
+Migration **031** re-runs those same two rules over anything still unclassified.
+It exists because 030 classified what existed when it ran, while the code that
+classifies an alert *at ingest* went live a few minutes later — 15 alerts
+arrived in that gap, all `alert_source='Siembiot'` carrying the marker, and
+nothing assigned them. They are deploy timing, not legacy data. It touches only
+rows where `tenant_id` **and** `tenant_assignment` are both NULL, so a run the
+ingest path deliberately filed as `unassigned` is never swept up, and it is safe
+to run again. The gap cannot recur: every ingest now records an assignment,
+including `unassigned`.
+
 The unassigned 631 are Cloudflare, Office 365, Skyformation, SentinelOne,
 Exabeam and raw Windows event XML — a TraceCat-shaped mix of **channels**, and a
 channel is not a tenant. 22 of them mention "siembiot" somewhere and 9 mention
@@ -69,6 +79,15 @@ appear in a log forwarded from anywhere. They sit in a labelled *Unassigned
 
 The single run declaring `Codex Desktop` *does* carry the marker. The rule
 refuses it rather than resolving the contradiction silently.
+
+### Why the selector showed no client
+
+An all-tenants identity carries an **empty** `tenant_ids` — "everything" is not
+a list — so a selector built from the scope offered internal staff only *All
+clients* and *Unassigned*, and no way to pick C00. The options are named by the
+server instead, which is the only side that knows what exists, and their counts
+go through the same scoped query as the list so the selector cannot leak another
+client's volume after the list itself was locked down.
 
 ## The request contract
 

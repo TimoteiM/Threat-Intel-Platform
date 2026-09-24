@@ -221,3 +221,36 @@ def test_an_in_process_call_is_only_possible_without_an_http_request():
 
     assert api._identity(_Authed())["tenant_ids"] == ["c00"]
 
+
+# --- the client selector -----------------------------------------------------
+
+def test_an_all_tenants_identity_carries_no_tenant_list():
+    """The bug behind the missing C00 option, pinned as the fact that caused it.
+
+    "Everything" is not a list, so an internal account's `tenant_ids` is empty.
+    A selector built from the scope therefore offered internal staff no client
+    to choose — only "All clients" and "Unassigned". The options have to be
+    named by the server, which is the only side that knows what exists."""
+    scope = ts.scope_of(INTERNAL)
+    assert scope.all_tenants is True
+    assert scope.tenant_ids == ()
+    # And it may nonetheless read a tenant it does not list.
+    assert scope.may_read("c00")
+
+
+def test_the_selector_is_built_from_the_servers_answer():
+    import inspect
+
+    import app.api.alert_investigations as api
+
+    source = inspect.getsource(api.list_alert_investigations)
+    assert "available_tenants" in source
+
+    helper = inspect.getsource(api._selectable_tenants)
+    # Only tenants the caller may read are offered...
+    assert "scope.may_read(" in helper
+    # ...and the counts beside them go through the same scoped filter, so the
+    # selector cannot leak another client's volume after the list was locked.
+    assert "tenant_scope.apply(" in helper
+    assert "include_unassigned" in helper
+
