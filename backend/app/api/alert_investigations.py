@@ -746,7 +746,10 @@ async def get_run_logs(
     rule_id: str | None = Query(default=None),
     min_level: int | None = Query(default=None, ge=0, le=16),
     side: str | None = Query(default=None, description="before | after | all"),
-    only_sent_to_ai: bool = Query(default=False),
+    only_relevant: bool = Query(
+        default=False,
+        description="Only the events the ranking judged relevant. Advice, not a verdict.",
+    ),
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Every log event retrieved around this alert, for an analyst to read.
@@ -772,10 +775,12 @@ async def get_run_logs(
     from app.services import alert_log_context_store as _log_store
 
     alert_time = run.event_time
-    selected_refs = set(_log_selection(run.result_json).get("selected_refs") or [])
+    _selection = _log_selection(run.result_json)
+    relevant_refs = set(_selection.get("relevant_refs") or _selection.get("selected_refs") or [])
+    sent_refs = set(_selection.get("sent_refs") or [])
 
     def _matches(event: dict[str, Any]) -> bool:
-        if only_sent_to_ai and event.get("key") not in selected_refs:
+        if only_relevant and event.get("key") not in relevant_refs:
             return False
         if device and str((event.get("agent") or {}).get("name") or "").casefold() != device.casefold():
             return False
@@ -826,15 +831,16 @@ async def get_run_logs(
             for event in page:
                 # Marked, never filtered away by default: a low rank is not a
                 # statement that the event is uninteresting.
-                event = event  # noqa: PLW2901
-                event["sent_to_ai"] = event.get("key") in selected_refs
+                event["relevant"] = event.get("key") in relevant_refs
+                event["sent_to_ai"] = event.get("key") in sent_refs
             payload["logs"] = page
             payload["filtered_total"] = len(filtered)
             payload["offset"] = offset
             payload["limit"] = limit
             payload["has_more"] = offset + limit < len(filtered)
             payload["alert_time"] = alert_time.isoformat() if alert_time else None
-            payload["sent_to_ai_total"] = len(selected_refs)
+            payload["relevant_total"] = len(relevant_refs)
+            payload["sent_to_ai_total"] = len(sent_refs)
             payload["tenant_id"] = run.tenant_id
             return payload
 
@@ -872,7 +878,12 @@ async def get_run_log_context(
     from app.db.session import sync_engine
     from app.services import alert_log_context_store as _log_store
 
-    selected_refs = set(_log_selection(run.result_json).get("selected_refs") or [])
+    _selection = _log_selection(run.result_json)
+    # Two different marks. "Relevant" is the ranking's advice and is free;
+    # "sent" is what actually reached the provider. An analyst must be able to
+    # tell them apart, or they will believe the model read something it did not.
+    relevant_refs = set(_selection.get("relevant_refs") or _selection.get("selected_refs") or [])
+    sent_refs = set(_selection.get("sent_refs") or [])
     external_ref = str(run.external_ref or "").strip()
     alert_time = run.event_time
 
@@ -885,7 +896,8 @@ async def get_run_log_context(
                 key=lambda e: (str(e.get("timestamp") or ""), str(e.get("key") or "")),
             )
             for event in events:
-                event["sent_to_ai"] = event.get("key") in selected_refs
+                event["relevant"] = event.get("key") in relevant_refs
+                event["sent_to_ai"] = event.get("key") in sent_refs
 
             anchor_index = next(
                 (i for i, e in enumerate(events) if external_ref and e.get("id") == external_ref),
@@ -922,7 +934,8 @@ async def get_run_log_context(
             payload["available_before"] = len(head)
             payload["available_after"] = len(tail)
             payload["retrieved_total"] = len(events)
-            payload["sent_to_ai_total"] = len(selected_refs)
+            payload["relevant_total"] = len(relevant_refs)
+            payload["sent_to_ai_total"] = len(sent_refs)
             payload["alert_time"] = alert_time.isoformat() if alert_time else None
             payload["tenant_id"] = run.tenant_id
             # So the view can show a selection against the budget it will

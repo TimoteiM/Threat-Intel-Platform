@@ -1157,17 +1157,36 @@ def _build_log_digest(
             alert_body=alert_body,
             alert_fields=alert_fields,
         )
+        pinned = list(log_context.get("pinned_keys") or ())
+        autosend = bool(getattr(settings, "alert_log_ai_autosend", False))
+
         digest, selection, redactions = alert_log_prompt.build(
             records,
             pivots=pivots,
             alert_time=alert_time,
             window_seconds=float(settings.alert_log_window_minutes) * 60.0,
             budget_tokens=int(settings.alert_log_ai_budget_tokens),
-            pinned_keys=log_context.get("pinned_keys") or (),
+            pinned_keys=pinned,
             window_complete=bool((log_context.get("window") or {}).get("complete", True)),
+            # Off by default. The ranking still runs — its picks are what the
+            # log view marks "relevant" — but sending them costs about 16% more
+            # input tokens on *every* alert, including the overwhelming
+            # majority that are noise. An analyst choosing costs nothing and
+            # aims better than a ranking does.
+            only_pinned=not autosend,
         )
         summary = selection.summary()
-        summary["status"] = "selected" if digest else "nothing_selected"
+        summary["autosend"] = autosend
+        # Two different lists, because they answer different questions. What
+        # the ranking considers worth reading is advice; what actually went to
+        # the provider is a fact, and conflating them is how an analyst comes
+        # to believe the model saw something it did not.
+        summary["relevant_refs"] = list(summary.get("relevant_refs") or [])
+        summary["sent_refs"] = list(summary.get("selected_refs") or []) if digest else []
+        summary["status"] = (
+            "selected" if digest
+            else ("advisory_only" if summary["relevant_refs"] else "nothing_selected")
+        )
         summary["secrets_redacted"] = redactions
         summary["digest_tokens"] = alert_log_prompt.measure(digest) if digest else 0
         return digest, summary

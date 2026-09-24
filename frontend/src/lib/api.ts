@@ -423,7 +423,9 @@ export interface AlertLogEvent {
    */
   fields?: { name: string; value: string }[];
   matched_on?: string[];
-  /** Whether this event was in the subset sent to the model. */
+  /** The ranking judged this worth an analyst's attention. Advice, not a verdict. */
+  relevant?: boolean;
+  /** This event actually reached the model. Only true once someone sent it. */
   sent_to_ai?: boolean;
 }
 
@@ -435,6 +437,7 @@ export interface AlertLogPage {
   log_count: number;
   retrieved_total: number;
   filtered_total: number;
+  relevant_total: number;
   sent_to_ai_total: number;
   truncated: boolean;
   offset: number;
@@ -461,7 +464,7 @@ export function getAlertLogs(
     rule_id?: string;
     min_level?: number;
     side?: "before" | "after" | "all";
-    only_sent_to_ai?: boolean;
+    only_relevant?: boolean;
   },
 ) {
   const qs = new URLSearchParams();
@@ -473,7 +476,7 @@ export function getAlertLogs(
   if (params?.rule_id?.trim()) qs.set("rule_id", params.rule_id.trim());
   if (params?.min_level !== undefined) qs.set("min_level", String(params.min_level));
   if (params?.side && params.side !== "all") qs.set("side", params.side);
-  if (params?.only_sent_to_ai) qs.set("only_sent_to_ai", "true");
+  if (params?.only_relevant) qs.set("only_relevant", "true");
   const query = qs.toString();
   return request<AlertLogPage>(`/alert-investigations/${runId}/logs${query ? `?${query}` : ""}`);
 }
@@ -488,6 +491,7 @@ export interface AlertLogContextPage {
   available_before: number;
   available_after: number;
   retrieved_total: number;
+  relevant_total: number;
   sent_to_ai_total: number;
   truncated: boolean;
   alert_time?: string | null;

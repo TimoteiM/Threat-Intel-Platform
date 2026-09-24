@@ -335,6 +335,39 @@ A low rank is not a verdict. `events_found`, `events_selected`,
 `events_represented` and `events_omitted` travel with the analysis, and the
 prompt says in words that omission is not exoneration.
 
+### Nothing is sent automatically
+
+`ALERT_LOG_AI_AUTOSEND` is **off**. The ranking still runs and its picks are
+marked *relevant* in the log view; nothing reaches the model unless an analyst
+selects it.
+
+Measured after a day of sending automatically:
+
+```
+before (13-day mean) : 5,877 input tokens per call
+with log context     : 6,794 input tokens per call   +15.6%
+```
+
+Real, though the signal is not clean — day-to-day variance is ±20% on its own,
+and 2026-09-23 was already 7,118 *before* log context shipped. What settles it
+is not the exact percentage: that increase was being paid on **every alert**,
+including the overwhelming majority that are noise, to send a ranking's guess.
+An analyst deciding costs nothing and aims better.
+
+So the two marks are kept apart, because conflating them is how someone comes to
+believe the model read something it did not:
+
+| Mark | Means |
+|---|---|
+| `RELEVANT` | the ranking judged it worth your attention — advice, free, sent nowhere |
+| `SENT` | it actually reached the provider |
+
+The filter is **"Only relevant events"**. A relevant row also carries an amber
+rail, so it reads as flagged before you reach the chip at the far right of a
+wide table.
+
+Turning `ALERT_LOG_AI_AUTOSEND` on restores automatic context.
+
 ### Token budget
 
 `ALERT_LOG_AI_BUDGET_TOKENS`, default **6,000**. Measured over eight real C00

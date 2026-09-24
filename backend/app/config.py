@@ -318,6 +318,17 @@ class Settings(BaseSettings):
     # the starting point; measured against a real 297-event window the selection
     # saturates at about 3,400, so this has headroom for a busier host.
     alert_log_ai_budget_tokens: int = 6000
+    # Whether the ranked log events are sent to the model automatically.
+    #
+    # Off. The ranking still runs and its picks are marked "relevant" in the log
+    # view, but nothing is sent unless an analyst selects it. Measured after a
+    # day of sending automatically: input tokens per call went from 5,877 to
+    # 6,794, about +15.6% — real, and spent on every alert including the
+    # overwhelming majority that are noise. An analyst deciding costs nothing
+    # and is better targeted than a ranking.
+    #
+    # Turning this on restores automatic context for deployments that want it.
+    alert_log_ai_autosend: bool = False
 
     @property
     def opensearch_tenant_value_list(self) -> list[str]:

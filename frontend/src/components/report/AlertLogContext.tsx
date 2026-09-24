@@ -224,7 +224,8 @@ export function AlertLogContext({ runId }: { runId: string }) {
       <style>{INDETERMINATE_KEYFRAMES}</style>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline" }}>
         <Fact label="Retrieved" value={`${page.retrieved_total} events in the window`} />
-        <Fact label="Considered by AI" value={String(page.sent_to_ai_total)} />
+        <Fact label="Ranked relevant" value={String(page.relevant_total ?? 0)} />
+        <Fact label="Sent to the AI" value={String(page.sent_to_ai_total)} />
         <Fact
           label="Showing"
           value={`${page.before.length} before · alert · ${page.after.length} after`}
@@ -532,7 +533,13 @@ function Row({
         boxShadow: "inset 3px 0 0 var(--accent, #1f6feb)",
         cursor: "pointer",
       }
-    : { cursor: "pointer", background: expanded ? "var(--surface-2, transparent)" : undefined };
+    : {
+        cursor: "pointer",
+        background: expanded ? "var(--surface-2, transparent)" : undefined,
+        // A flagged row should read as flagged before you reach the chip at the
+        // far right of a wide table.
+        boxShadow: event.relevant ? "inset 3px 0 0 var(--warning, #d29922)" : undefined,
+      };
 
   return (
     <>
@@ -569,7 +576,8 @@ function Row({
         </td>
         <td style={{ ...td, whiteSpace: "nowrap" }}>
           {isAlert && <Chip tone="accent">THIS ALERT</Chip>}
-          {!isAlert && event.sent_to_ai && <Chip>AI</Chip>}
+          {!isAlert && event.relevant && <Chip tone="relevant">RELEVANT</Chip>}
+          {!isAlert && event.sent_to_ai && <Chip>SENT</Chip>}
         </td>
       </tr>
       {expanded && (
@@ -741,15 +749,21 @@ function Muted({ children }: { children: React.ReactNode }) {
   return <span style={{ color: "var(--text-muted)", fontSize: 13 }}>{children}</span>;
 }
 
-function Chip({ children, tone }: { children: React.ReactNode; tone?: "accent" }) {
+function Chip({ children, tone }: { children: React.ReactNode; tone?: "accent" | "relevant" }) {
+  const colour =
+    tone === "accent"
+      ? "var(--accent, #1f6feb)"
+      : tone === "relevant"
+      ? "var(--warning, #d29922)"
+      : "var(--border)";
   return (
     <span
       style={{
         display: "inline-block",
         padding: "1px 7px",
         borderRadius: 999,
-        border: `1px solid ${tone === "accent" ? "var(--accent, #1f6feb)" : "var(--border)"}`,
-        color: tone === "accent" ? "var(--accent, #1f6feb)" : "var(--text-muted)",
+        border: `1px solid ${colour}`,
+        color: tone ? colour : "var(--text-muted)",
         fontSize: 10.5,
         letterSpacing: "0.06em",
         fontWeight: 600,

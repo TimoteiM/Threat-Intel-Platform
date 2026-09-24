@@ -419,3 +419,53 @@ def test_two_picks_sharing_a_signature_are_both_sent():
     assert set(result.summary()["analyst_pinned"]) == {a["key"], b["key"]}
     # The unpicked noise still collapses.
     assert any(s.get("repeated") for s in result.selected)
+
+
+# --- advice is free; sending is a decision -----------------------------------
+
+def test_the_ranking_runs_but_sends_nothing_by_default():
+    """Measured after a day of sending automatically: input tokens per call went
+    from 5,877 to 6,794, about +16%, spent on every alert including the
+    overwhelming majority that are noise. The advice is the useful half and it
+    costs nothing."""
+    events = [_event(f"e{i}", offset=i * 7, desc=f"event {i}", rule_id=str(i)) for i in range(12)]
+    digest, result, _ = alert_log_prompt.build(
+        events, pivots=AlertPivots(hosts={"exp-01"}), alert_time=ALERT_TIME,
+        budget_tokens=6000, only_pinned=True,
+    )
+    assert digest == "", "nothing may be sent unless a person chose it"
+    assert result.relevant_refs, "the ranking still has to produce advice"
+
+
+def test_an_analysts_picks_are_what_gets_sent():
+    events = [_event(f"e{i}", offset=i * 7, desc=f"event {i}", rule_id=str(i)) for i in range(12)]
+    picks = [events[3]["key"], events[7]["key"]]
+    digest, result, _ = alert_log_prompt.build(
+        events, pivots=AlertPivots(hosts={"exp-01"}), alert_time=ALERT_TIME,
+        budget_tokens=6000, only_pinned=True, pinned_keys=picks,
+    )
+    assert digest
+    sent = {s["ref"] for s in result.selected}
+    assert sent == set(picks)
+    # And the advice survives the narrowing, because they answer different
+    # questions: what is worth reading, and what was read.
+    assert len(result.summary()["relevant_refs"]) == 12
+
+
+def test_the_header_counts_describe_what_is_actually_below_it():
+    events = [_event(f"e{i}", offset=i * 7, desc=f"event {i}", rule_id=str(i)) for i in range(12)]
+    digest, result, _ = alert_log_prompt.build(
+        events, pivots=AlertPivots(), alert_time=ALERT_TIME, budget_tokens=6000,
+        only_pinned=True, pinned_keys=[events[0]["key"]],
+    )
+    assert "1 entry below" in digest
+    assert result.omitted == 11
+
+
+def test_autosend_restores_the_previous_behaviour():
+    events = [_event(f"e{i}", offset=i * 7, desc=f"event {i}", rule_id=str(i)) for i in range(12)]
+    digest, result, _ = alert_log_prompt.build(
+        events, pivots=AlertPivots(hosts={"exp-01"}), alert_time=ALERT_TIME, budget_tokens=6000,
+    )
+    assert digest
+    assert len(result.selected) == 12

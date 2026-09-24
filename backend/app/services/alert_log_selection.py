@@ -348,6 +348,10 @@ class SelectionResult:
     # quietly: someone who selected thirty events is entitled to know which
     # seven the model never saw.
     pinned_dropped: list[str] = field(default_factory=list)
+    # What the ranking judged worth reading, captured before any caller narrows
+    # `selected` down to what a person actually chose. This is the advice the
+    # log view marks as "relevant"; `selected` is what was sent.
+    relevant_refs: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -368,6 +372,9 @@ class SelectionResult:
             # the model is told to cite. Reading `key` here produced a list of
             # Nones, so nothing was ever marked as having been sent.
             "selected_refs": [s.get("ref") for s in self.selected if s.get("ref")],
+            # Stays the full ranking even when `selected` has been narrowed to
+            # an analyst's picks — the two answer different questions.
+            "relevant_refs": list(self.relevant_refs),
             "note": (
                 "Selection is deterministic and rank-ordered. A low rank means an event was "
                 "not sent to the model; it does not mean the event is benign. Every retrieved "
@@ -487,6 +494,7 @@ def select_for_ai(
     ordered = sorted(chosen.values(), key=lambda s: (_parse_time(s.record.get("timestamp")) or alert_time))
     result.selected = [_for_prompt(s) for s in ordered]
     result.used_tokens = used
+    result.relevant_refs = [s.get("ref") for s in result.selected if s.get("ref")]
     result.represented = sum(int(s.record.get("duplicate_count") or 1) for s in chosen.values())
     result.omitted = max(0, len(records) - result.represented)
     return result

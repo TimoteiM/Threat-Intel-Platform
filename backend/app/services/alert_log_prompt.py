@@ -34,6 +34,7 @@ def build(
     budget_tokens: int = 6000,
     pinned_keys: Sequence[str] = (),
     window_complete: bool = True,
+    only_pinned: bool = False,
 ) -> tuple[str, SelectionResult, dict[str, int]]:
     """The prompt block, the selection it came from, and what was redacted.
 
@@ -57,6 +58,22 @@ def build(
     )
     if not selection.selected:
         return "", selection, redactions
+
+    # The ranking always runs — the log view needs it to mark which events are
+    # worth an analyst's attention — but with `only_pinned` nothing is sent
+    # unless a person chose it. Returning an empty digest rather than skipping
+    # the ranking is deliberate: the advice is the useful half, and it is free.
+    if only_pinned and not pinned_keys:
+        return "", selection, redactions
+    if only_pinned:
+        wanted = {str(k) for k in pinned_keys}
+        selection.selected = [s for s in selection.selected if s.get("ref") in wanted]
+        if not selection.selected:
+            return "", selection, redactions
+        # The header counts describe what is actually below it. Left alone they
+        # would claim the whole ranking was sent.
+        selection.represented = len(selection.selected)
+        selection.omitted = max(0, selection.found - selection.represented)
 
     lines = [
         "SIEM LOG CONTEXT — events from the customer's log store around this alert.",

@@ -61,7 +61,7 @@ export function AlertLogView({ runId }: { runId: string }) {
   const [debouncedQ, setDebouncedQ] = useState("");
   const [side, setSide] = useState<"all" | "before" | "after">("all");
   const [minLevel, setMinLevel] = useState<number | undefined>(undefined);
-  const [onlyAi, setOnlyAi] = useState(false);
+  const [onlyRelevant, setOnlyRelevant] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -86,7 +86,7 @@ export function AlertLogView({ runId }: { runId: string }) {
           q: debouncedQ,
           side,
           min_level: minLevel,
-          only_sent_to_ai: onlyAi,
+          only_relevant: onlyRelevant,
         }),
       );
     } catch (err) {
@@ -94,7 +94,7 @@ export function AlertLogView({ runId }: { runId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [runId, offset, debouncedQ, side, minLevel, onlyAi]);
+  }, [runId, offset, debouncedQ, side, minLevel, onlyRelevant]);
 
   useEffect(() => {
     void load();
@@ -155,15 +155,17 @@ export function AlertLogView({ runId }: { runId: string }) {
       <div style={{ ...panel, display: "grid", gap: 6 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline" }}>
           <Fact label="Retrieved" value={`${page.retrieved_total} event${page.retrieved_total === 1 ? "" : "s"}`} />
-          <Fact label="Considered by AI" value={`${page.sent_to_ai_total}`} />
+          <Fact label="Ranked relevant" value={`${page.relevant_total ?? 0}`} />
+          <Fact label="Sent to the AI" value={`${page.sent_to_ai_total}`} />
           <Fact label="Window" value={page.window ? `${ts(page.window.start)} → ${ts(page.window.end)}` : "—"} />
           {page.tenant_id && <Fact label="Client" value={page.tenant_id} mono />}
           {page.truncated && <Fact label="Retrieval limit" value="reached" />}
         </div>
         <Muted>
-          Every retrieved event is listed here. The ones marked <Chip>AI</Chip> were ranked into the
-          model&rsquo;s context; the rest were not sent, which is a ranking decision and not a judgement
-          that they are benign.
+          Every retrieved event is listed here. <Chip>RELEVANT</Chip> is what the ranking judged
+          worth your attention — advice, not a verdict, and nothing is sent to the AI because of it.
+          <Chip>SENT</Chip> marks what actually reached the model. Select events and use
+          &ldquo;Send to the AI&rdquo; to add any of them.
         </Muted>
         {page.truncated && (
           <Muted>
@@ -218,8 +220,12 @@ export function AlertLogView({ runId }: { runId: string }) {
           <option value="12">Level 12+</option>
         </select>
         <label style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--text-muted)", fontSize: 13 }}>
-          <input type="checkbox" checked={onlyAi} onChange={(e) => { setOnlyAi(e.target.checked); setOffset(0); }} />
-          Only events sent to AI
+          <input
+            type="checkbox"
+            checked={onlyRelevant}
+            onChange={(e) => { setOnlyRelevant(e.target.checked); setOffset(0); }}
+          />
+          Only relevant events
         </label>
         <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
           {page.filtered_total} matching
@@ -282,7 +288,8 @@ export function AlertLogView({ runId }: { runId: string }) {
                       </span>
                     </td>
                     <td style={{ ...td, whiteSpace: "nowrap" }}>
-                      {event.sent_to_ai && <Chip>AI</Chip>}
+                      {event.relevant && <Chip>RELEVANT</Chip>}
+                      {event.sent_to_ai && <Chip>SENT</Chip>}
                     </td>
                   </tr>
                   {isExpanded && (
