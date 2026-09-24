@@ -108,9 +108,22 @@ def _resolutions_for(db: Session, case: dict[str, Any]) -> dict[str, str]:
         select(AlertBodyInvestigationRun.id, AlertBodyInvestigationRun.result_json)
         .where(AlertBodyInvestigationRun.id.in_(run_ids))
     ).all()
+    from app.services.assistant_service import strip_resolved_identifiers
+
     found: dict[str, str] = {}
     for run_id, result_json in rows:
-        report = ((result_json or {}).get("ai_report") or {}).get("report_markdown")
+        ai_report = (result_json or {}).get("ai_report") or {}
+        # The pre-restoration text where we have it: it is what the model wrote
+        # before `[HOST_1]` became a real hostname, so re-reading it discloses
+        # nothing. `report_markdown` is de-anonymised *for the analyst*, and
+        # feeding that to another model hands over the values the first call was
+        # careful not to send.
+        report = ai_report.get("report_markdown_model_safe")
+        if not report:
+            # Written before this was stored. Strip what can be stripped; the
+            # prose may still name values, which is why the model-safe version
+            # exists rather than this being the whole fix.
+            report = strip_resolved_identifiers(ai_report.get("report_markdown") or "")
         if report:
             found[str(run_id)] = str(report)
     return found

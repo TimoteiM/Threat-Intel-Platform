@@ -30,6 +30,23 @@ PRIMARY_MODEL = "gpt-5.6-luna"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 
+# The analyst-facing section appended to a finished report. A module-level
+# constant and function because two consumers need to remove it, and a regex
+# written twice is a regex that will eventually differ.
+_RESOLVED_SECTION_RE = re.compile(
+    r"\n*-{3,}\s*\n+##\s+Resolved Identifiers\b[\s\S]*$", re.IGNORECASE
+)
+
+
+def strip_resolved_identifiers(text: str) -> str:
+    """Remove the token-to-value table from text bound for a model.
+
+    The table exists so an analyst can read a redacted report. Sending it back
+    to a provider hands over the key along with the ciphertext.
+    """
+    return _RESOLVED_SECTION_RE.sub("", str(text or "")).rstrip()
+
+
 class AssistantService:
     def __init__(self, session: AsyncSession, settings=None):
         self.session = session
@@ -72,6 +89,12 @@ class AssistantService:
         assistant_session = await self._get_session(session_id)
         if assistant_session is None:
             raise ValueError(f"Assistant session {session_id} not found")
+        # Every model input becomes an entry through here, which makes this the
+        # one place the de-anonymisation table can be kept out of all of them.
+        # A caller that assembles evidence from finished reports — the
+        # correlated-case narrative does — would otherwise hand the model a
+        # table whose whole purpose is undoing the redaction.
+        text = strip_resolved_identifiers(text)
         next_index = entry_index if entry_index is not None else len(assistant_session.entries)
         entry = AssistantEntry(
             session_id=assistant_session.id,
@@ -265,6 +288,12 @@ class AssistantService:
                 "incident_graph": incident_graph,
             }
             assistant_session.report_markdown = final_report
+            # The same report before its tokens were resolved. Kept so a later
+            # model call — the correlated-case narrative reads finished
+            # analyses — can read this one without reading the values it was
+            # written to hide. `cleaned` is pre-restoration on purpose:
+            # anything after _restore_tokens would defeat the point.
+            assistant_session.report_markdown_model_safe = cleaned
             assistant_session.status = "completed"
             assistant_session.completed_at = datetime.now(timezone.utc)
             await self.session.commit()

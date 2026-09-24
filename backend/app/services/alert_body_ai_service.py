@@ -152,6 +152,9 @@ async def _run_assistant(
             "title": completed.title,
             "generated_at": result_json.get("generated_at"),
             "report_markdown": completed.report_markdown or "",
+            # Carried so a correlated-case narrative can read this analysis
+            # without reading the identifiers it was careful to redact.
+            "report_markdown_model_safe": completed.report_markdown_model_safe or "",
             "incident_graph": result_json.get("incident_graph") or {},
             "sanitization_summary": completed.sanitization_summary_json or {},
         }

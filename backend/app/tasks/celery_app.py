@@ -69,6 +69,14 @@ celery_app.conf.update(
         # guarantee is "the window gets read", not "the window usually gets
         # read". Running both is safe — the read starts from a stored
         # high-water mark and merges on each document's own id.
+        # Correlation acts here rather than on a page load. Hourly, and the
+        # task itself returns early when no alert has arrived since its last
+        # pass — an hour with no ingest cannot have changed a case, so
+        # re-deriving the same grouping would spend the scan for nothing.
+        "case-correlation-hourly": {
+            "task": "app.tasks.case_correlation_task.correlate_and_notify",
+            "schedule": crontab(minute=5),
+        },
         "alert-log-context-sweep": {
             "task": "app.tasks.alert_log_followup_task.sweep_alert_log_context",
             "schedule": crontab(minute="*"),
@@ -132,6 +140,10 @@ celery_app.autodiscover_tasks([
     # real-time alert would keep the logs it managed to grab in the first
     # second and silently never get the rest.
     "app.tasks.alert_log_followup_task",
+    # Fifth time. Correlation used to act from the read path; this is the job
+    # that acts instead, and unregistered it would simply never run while the
+    # reads that used to do the work no longer do it.
+    "app.tasks.case_correlation_task",
     # Third time this list has been the bug. The API queued the CAPE workflow
     # happily and the worker answered "Received unregistered task", so every
     # submission sat in `queued` for ever.

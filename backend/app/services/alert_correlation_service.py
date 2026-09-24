@@ -532,8 +532,17 @@ async def correlate_alerts(
     min_rules: int = MIN_DISTINCT_RULES,
     min_score: int = 0,
     limit: int = 50,
+    emit: bool = False,
 ) -> dict[str, Any]:
-    """Entities carrying more than one independent detection inside the window."""
+    """Entities carrying more than one independent detection inside the window.
+
+    `emit` decides whether this run may also *act* — fire case webhooks and
+    commission AI narratives. It defaults to False because the usual caller is
+    a page load, and a page load queueing a model call per changed case is how
+    an analyst reading their queue became the thing that drives the AI bill.
+    Reads compute and store; the hourly job in tasks/case_correlation_task.py
+    is what acts on what they found.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
     window = timedelta(hours=max(1, hours))
 
@@ -869,12 +878,19 @@ async def correlate_alerts(
     # to be filtered when it was last opened.
     await db.commit()
 
-    # Only now. Everything above is a record; this is the only line that speaks
-    # to anyone outside the process, and it speaks about facts already stored.
-    if emissions:
-        dispatch(emissions)
-    if narrative_jobs:
-        dispatch_narratives(narrative_jobs)
+    # Only now. Everything above is a record; these are the only lines that
+    # speak to anyone outside the process, and they speak about facts already
+    # stored — which is why they are safe to withhold from a read and do later.
+    if emit:
+        if emissions:
+            dispatch(emissions)
+        if narrative_jobs:
+            dispatch_narratives(narrative_jobs)
+    elif emissions or narrative_jobs:
+        logger.debug(
+            "correlation found %s emission(s) and %s narrative job(s); left for the scheduled run",
+            len(emissions), len(narrative_jobs),
+        )
 
     # The window does two jobs, and they are not the same job.
     #

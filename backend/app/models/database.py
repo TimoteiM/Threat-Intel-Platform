@@ -996,6 +996,10 @@ class AssistantSession(Base):
     sanitization_summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The same report before its tokens were resolved. This is the only version
+    # that may be given to a model again: report_markdown is de-anonymised for
+    # the analyst and carries the token table. See migration 032.
+    report_markdown_model_safe: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
