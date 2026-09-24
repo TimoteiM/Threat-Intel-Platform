@@ -911,6 +911,15 @@ export interface CollectedEvidence {
     available: boolean;
     reason?: string | null;
     report?: Record<string, any> | null;
+    /**
+     * A detonation this investigation started and did not wait out. It is
+     * running on CAPE now; the report is merged in and the verdict recomputed
+     * when it lands, without the analyst doing anything.
+     */
+    pending?: boolean;
+    pending_analysis_id?: string | null;
+    pending_task_id?: string | null;
+    pending_since?: string | null;
   };
   final_risk?: FinalRiskEvidence;
   redirect_destination_intel?: RedirectDestinationIntelEvidence;

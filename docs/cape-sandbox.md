@@ -198,6 +198,44 @@ driving it. `cape-resume-in-flight` runs every five minutes, resumes anything
 unfinished by polling the CAPE task it already recorded, and retires anything
 past its polling deadline.
 
+### A domain or URL detonates without being asked
+
+Both sandboxes start at the same moment, once the detonation gate has been
+answered. CAPE used to run as a *fast* collector, which meant it could only ever
+report what CAPE already happened to know: a domain nobody had detonated came
+back "no sandbox analysis has contacted this host", and the analyst had to press
+**Detonate URL in sandbox** and wait out the whole five minutes again, after the
+investigation had already concluded.
+
+`SANDBOX_COLLECTOR_NAMES` in `app/tasks/investigation_task.py` holds both
+`hybrid_analysis` and `cape` out of the fast phase. When `should_detonate` says
+yes, both are submitted to one executor in the same breath, so CAPE's five
+minutes and AnyRun's ninety seconds overlap instead of queueing.
+
+The gate is unchanged and answers for both. A manual investigation — anything a
+person typed into the box — returns `requested_by_analyst` and always detonates.
+Alert-spawned volume still does not, which is deliberate: one pasted alert body
+can carry dozens of URLs, and six VMs is the whole pool.
+
+**The inline wait does not wait for the detonation**, because on this instance it
+cannot. Measured over the URL analyses in the record, a fresh one takes
+**271, 289, 310 and 321 seconds** — 180s of that is the enforced in-VM analysis
+timeout (`CAPE_ANALYSIS_TIMEOUT_SECONDS`), and the rest is queueing and report
+processing. `CAPE_INLINE_WAIT_SECONDS` (120) is therefore a budget for catching
+an analysis CAPE had *already* run, or one adopted from an earlier submission,
+which returns in about a second.
+
+Everything else is deferred, and deferred is not failed. The collector hands the
+detonation to the durable workflow before it stops waiting, and the section below
+does the rest. The evidence carries `pending`, `pending_task_id` and
+`pending_since`, and the panel says "Detonating now — CAPE task 21" rather than
+"no sandbox analysis", which read as an answer when it was a wait.
+
+If you want the inline wait to actually catch a fresh detonation, the lever is
+`CAPE_ANALYSIS_TIMEOUT_SECONDS`, not `CAPE_INLINE_WAIT_SECONDS` — and shortening
+it buys latency with observation, because the sample gets less time to do
+anything worth seeing.
+
 ### The verdict is re-made when the report lands
 
 A detonation takes minutes; the collector pipeline and the classification

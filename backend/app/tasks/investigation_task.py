@@ -51,6 +51,14 @@ settings = get_settings()
 # collector result so scoring includes the final lookup/sandbox evidence.
 ANYRUN_ASYNC_DEADLINE = 90  # seconds
 ANYRUN_COLLECTOR_NAME = "hybrid_analysis"
+CAPE_COLLECTOR_NAME = "cape"
+
+# Both sandboxes are held out of the fast phase and started together, once the
+# detonation gate has been answered. CAPE used to run as a fast collector, which
+# meant it could only ever report what CAPE already happened to know; a domain
+# nobody had detonated came back empty and the analyst had to press "Detonate
+# URL in sandbox" and wait again from scratch.
+SANDBOX_COLLECTOR_NAMES = frozenset({ANYRUN_COLLECTOR_NAME, CAPE_COLLECTOR_NAME})
 
 
 def _sandbox_collector_timeout(base_timeout: int) -> int:
@@ -294,7 +302,7 @@ def _run_collectors_inline(
 
     Returns (results, collector_statuses, anyrun_background_future_or_None).
     """
-    def _run_one(name: str) -> dict:
+    def _run_one(name: str, extra_context: dict | None = None) -> dict:
         collector_cls = get_collector(name)
         if not collector_cls:
             logger.warning(f"[{investigation_id}] Unknown collector: {name}")
@@ -307,13 +315,17 @@ def _run_collectors_inline(
                 "duration_ms": None,
             }
 
+        context = dict(external_context or {})
+        if extra_context:
+            context.update(extra_context)
+
         collector = collector_cls(
             domain=domain,
             investigation_id=investigation_id,
             timeout=_collector_timeout(name, timeout),
             observable_type=observable_type,
             file_artifact_id=file_artifact_id,
-            external_context=external_context,
+            external_context=context,
         )
 
         evidence, meta, raw_artifacts = collector.run()
@@ -329,7 +341,8 @@ def _run_collectors_inline(
 
     # ── Separate AnyRun from fast collectors ─────────────────────────────────
     run_anyrun = ANYRUN_COLLECTOR_NAME in collectors_to_run
-    fast_collectors = [c for c in collectors_to_run if c != ANYRUN_COLLECTOR_NAME]
+    run_cape = CAPE_COLLECTOR_NAME in collectors_to_run
+    fast_collectors = [c for c in collectors_to_run if c not in SANDBOX_COLLECTOR_NAMES]
 
     results: list[dict] = []
     collector_statuses: dict[str, str] = {name: "running" for name in collectors_to_run}
@@ -351,6 +364,8 @@ def _run_collectors_inline(
     anyrun_future:   Optional[concurrent.futures.Future] = None
     anyrun_started_at: float = start_ts
     anyrun_skip_reason: Optional[str] = None
+    cape_future: Optional[concurrent.futures.Future] = None
+    cape_started_at: float = start_ts
 
     # ── Run all fast collectors ───────────────────────────────────────────────
     with concurrent.futures.ThreadPoolExecutor(
@@ -412,7 +427,7 @@ def _run_collectors_inline(
     # late is that the sandbox no longer overlaps them — about twenty seconds
     # added to the runs that do detonate, against not detonating at all on a
     # quarter of them.
-    if run_anyrun:
+    if run_anyrun or run_cape:
         fast_evidence: dict[str, Any] = {
             str(item.get("collector")): (item.get("evidence") or {}) for item in results
         }
@@ -426,21 +441,40 @@ def _run_collectors_inline(
             suppressed=bool((external_context or {}).get("sandbox_suppressed")),
         )
         if decision.run:
-            anyrun_executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix=f"anyrun-{investigation_id[:8]}",
+            # One executor per sandbox, submitted in the same breath, so CAPE's
+            # five minutes and AnyRun's ninety seconds overlap instead of
+            # queueing behind one another.
+            sandbox_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix=f"sandbox-{investigation_id[:8]}",
             )
-            anyrun_future = anyrun_executor.submit(_run_one, ANYRUN_COLLECTOR_NAME)
-            anyrun_executor.shutdown(wait=False)  # don't block on exit
-            anyrun_started_at = time.monotonic()
+            if run_anyrun:
+                anyrun_executor = sandbox_executor
+                anyrun_future = sandbox_executor.submit(_run_one, ANYRUN_COLLECTOR_NAME)
+                anyrun_started_at = time.monotonic()
+            if run_cape:
+                # The gate's answer, carried to the collector. Without it the
+                # collector looks up and does not detonate.
+                cape_future = sandbox_executor.submit(
+                    _run_one, CAPE_COLLECTOR_NAME, {"cape_detonate": True},
+                )
+                cape_started_at = time.monotonic()
+            sandbox_executor.shutdown(wait=False)  # don't block on exit
             logger.info(
-                "[%s] sandbox detonation queued (%s)", investigation_id, decision.reason
+                "[%s] sandbox detonation queued for %s (%s)",
+                investigation_id,
+                ", ".join(n for n, on in
+                          ((ANYRUN_COLLECTOR_NAME, run_anyrun), (CAPE_COLLECTOR_NAME, run_cape)) if on),
+                decision.reason,
             )
         else:
             anyrun_skip_reason = decision.reason
+            for skipped in (n for n, on in
+                            ((ANYRUN_COLLECTOR_NAME, run_anyrun), (CAPE_COLLECTOR_NAME, run_cape)) if on):
+                collector_statuses[skipped] = "skipped"
+                results.append(_build_sandbox_skipped_result(decision.reason, collector=skipped))
             run_anyrun = False
-            collector_statuses[ANYRUN_COLLECTOR_NAME] = "skipped"
-            results.append(_build_sandbox_skipped_result(decision.reason))
+            run_cape = False
             logger.info(
                 "[%s] sandbox skipped (%s)", investigation_id, decision.reason
             )
@@ -536,23 +570,60 @@ def _run_collectors_inline(
                 collector_statuses[ANYRUN_COLLECTOR_NAME] = "deferred"
                 anyrun_background_future = anyrun_future
 
+    # ── Check the CAPE budget ────────────────────────────────────────────────
+    #
+    # No background future for this one. The collector hands the detonation to
+    # the durable workflow before it gives up waiting, and that workflow writes
+    # the report into this investigation and re-runs the analyst when it lands.
+    # A thread held open here would only duplicate what a Celery task already
+    # guarantees across a worker restart.
+    if run_cape and cape_future is not None:
+        budget = max(0, int(get_settings().cape_inline_wait_seconds)) + 45
+        remaining = max(0.0, budget - (time.monotonic() - cape_started_at))
+        try:
+            result = cape_future.result(timeout=remaining)
+            results.append(result)
+            collector_statuses[CAPE_COLLECTOR_NAME] = result.get("status", "failed")
+        except concurrent.futures.TimeoutError:
+            logger.info(
+                "[%s] CAPE exceeded its %ss inline budget - the detonation continues and "
+                "its report will be merged when it lands",
+                investigation_id, budget,
+            )
+            collector_statuses[CAPE_COLLECTOR_NAME] = "deferred"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[%s] CAPE collector raised: %s", investigation_id, exc)
+            collector_statuses[CAPE_COLLECTOR_NAME] = "failed"
+        _publish_progress(
+            investigation_id,
+            InvestigationState.GATHERING,
+            f"Collector CAPE {collector_statuses[CAPE_COLLECTOR_NAME]}",
+            58,
+            collectors=collector_statuses,
+            collector=CAPE_COLLECTOR_NAME,
+            total_elapsed_ms=int((time.monotonic() - start_ts) * 1000),
+        )
+
     return results, collector_statuses, anyrun_background_future
 
 
-def _build_sandbox_skipped_result(reason: str) -> dict:
+def _build_sandbox_skipped_result(reason: str, *, collector: str = ANYRUN_COLLECTOR_NAME) -> dict:
     """A sandbox that was not run, recorded as a decision rather than a gap.
 
     Status is `skipped`, never `failed`: nothing went wrong, and a report that
     says the sandbox failed invites an analyst to distrust the rest of it. The
     reason travels with the result so the report can say which clause decided.
+
+    `collector` because the gate now answers for both sandboxes, and a skip
+    recorded under AnyRun's name leaves the CAPE panel looking like a gap.
     """
     now = datetime.now(timezone.utc).isoformat()
     return {
-        "collector": ANYRUN_COLLECTOR_NAME,
+        "collector": collector,
         "status": "skipped",
         "evidence": {
             "meta": {
-                "collector": ANYRUN_COLLECTOR_NAME,
+                "collector": collector,
                 "version": "1.0.0",
                 "status": "skipped",
                 "started_at": now,
@@ -563,7 +634,7 @@ def _build_sandbox_skipped_result(reason: str) -> dict:
             "sandbox_skipped": {"reason": reason},
         },
         "meta": {
-            "collector": ANYRUN_COLLECTOR_NAME,
+            "collector": collector,
             "version": "1.0.0",
             "status": "skipped",
             "started_at": now,

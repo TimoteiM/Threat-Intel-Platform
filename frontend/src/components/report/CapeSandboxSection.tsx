@@ -178,6 +178,41 @@ export default function CapeSandboxSection({
               </div>
               <Result report={collectorReport} />
             </>
+          ) : capeEvidence.pending ? (
+            /* A detonation is in flight. Saying "no analysis" here reads as an
+               answer when it is a wait, which is what sent analysts to press
+               the button a second time. */
+            <div
+              style={{
+                display: "grid",
+                gap: 6,
+                padding: "10px 12px",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--surface-2, transparent)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: "var(--warning, #d29922)",
+                    flex: "0 0 auto",
+                  }}
+                />
+                <strong style={{ color: "var(--text)" }}>
+                  Detonating now
+                  {capeEvidence.pending_task_id ? ` — CAPE task ${capeEvidence.pending_task_id}` : ""}
+                </strong>
+              </div>
+              <Muted>
+                {capeEvidence.reason ||
+                  "A CAPE detonation is running. The report is merged into this investigation and the verdict recomputed as soon as it lands."}
+              </Muted>
+            </div>
           ) : (
             <Muted>
               {capeEvidence.reason ||

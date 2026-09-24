@@ -1158,6 +1158,16 @@ class CapeEvidence(BaseModel):
     reason: Optional[str] = None
     report: Optional[CapeNormalizedReport] = None
 
+    # A detonation this collector started and did not wait out. The analysis is
+    # running on CAPE; its report is merged into this investigation when it
+    # lands and the analyst is re-run over it. Carried so the UI can say "in
+    # progress, task 21" rather than "no sandbox analysis", which reads as an
+    # answer when it is a wait.
+    pending: bool = False
+    pending_analysis_id: Optional[str] = None
+    pending_task_id: Optional[str] = None
+    pending_since: Optional[str] = None
+
 
 class CollectedEvidence(BaseModel):
     """

@@ -216,6 +216,22 @@ class Settings(BaseSettings):
     # — so this cannot fan out across a ticket. Reuse still applies: a sample
     # CAPE has already analysed is adopted, and no machine is occupied.
     cape_auto_detonate_uploads: bool = True
+
+    # A domain or URL investigation detonates the target automatically, at the
+    # same moment the AnyRun sandbox starts, instead of waiting for an analyst
+    # to press "Detonate URL in sandbox" afterwards.
+    cape_auto_detonate_urls: bool = True
+    # How long an investigation waits inline before carrying on without the
+    # report. Measured on this instance, a fresh URL detonation takes 271-321s
+    # (a 180s enforced analysis timeout plus queueing and report processing), so
+    # this budget catches an adopted or already-completed analysis and defers
+    # the rest. A deferred report is merged when it lands and the analyst re-run
+    # over it — see _annotate_investigation in tasks/cape_task.py.
+    cape_inline_wait_seconds: int = 120
+    # Fast polling while an investigation is waiting on it. The workflow's own
+    # 30s cadence is right for a background poll and too slow for a 120s window.
+    # Floor of 5s because CAPE throttles at roughly one request per five.
+    cape_inline_poll_seconds: int = 5
     # Report formats to try, in order. The full JSON report is authoritative for
     # malscore, signatures and network indicators; `lite` is the smaller
     # fallback for an instance that only has that one enabled.

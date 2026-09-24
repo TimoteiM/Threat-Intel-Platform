@@ -1,10 +1,21 @@
-"""CAPE evidence for an observable, without ever detonating inline.
+"""CAPE evidence for an observable: what CAPE knows, and a detonation if it does not.
 
-A collector runs inside an investigation and has to finish in seconds. A CAPE
-detonation takes minutes, so this collector never submits: it *looks up* what
-CAPE — or this platform's own record of CAPE — already knows. Submission is the
-asynchronous workflow in tasks/cape_task.py, started deliberately by an analyst
-or by the alert pipeline.
+The collector first *looks up* what CAPE — or this platform's own record of
+CAPE — already knows. If nothing is known and the caller has said a detonation
+is warranted, it starts one and waits a bounded number of seconds for it.
+
+It does not wait for the detonation to finish, because on this instance it will
+not: measured over the URL analyses in the record, a fresh one takes 271-321
+seconds, of which 180 is the enforced in-VM analysis timeout. What the wait
+does catch is an analysis CAPE had already run, or one adopted from an earlier
+submission, which returns in about a second. Everything else is deferred: the
+workflow in tasks/cape_task.py owns it from there, and when the report lands it
+is written into this investigation's evidence and the analyst is re-run over it
+(_annotate_investigation). Nobody has to press anything.
+
+Submitting from here rather than from an analyst's button is the difference
+between a report arriving five minutes into an investigation and arriving five
+minutes after somebody notices it is missing.
 
 Two different questions, depending on the observable:
 
@@ -22,6 +33,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import uuid as _uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, text
@@ -169,6 +183,10 @@ class CapeCollector(BaseCollector):
                     break
 
         if not matches:
+            # 3. Nothing known. Detonate it, if this caller asked for that.
+            detonated = self._detonate_and_wait()
+            if detonated is not None:
+                return detonated
             evidence.reason = (
                 f"No CAPE analysis has contacted {needle}. Searched CAPE's own "
                 "analyses and this platform's stored detonations."
@@ -184,6 +202,133 @@ class CapeCollector(BaseCollector):
                 f"while detonating {best.sample_name or best.sha256[:16]}."
             ]
         return evidence
+
+    def _detonate_and_wait(self) -> CapeEvidence | None:
+        """Start a detonation for this target and wait a bounded time for it.
+
+        Returns None when no detonation was warranted, so the caller keeps its
+        own wording for "nothing known".
+
+        The wait watches our own row rather than polling CAPE, because the
+        workflow task owns the conversation with CAPE and its throttle handling.
+        Two pollers on a service that rate-limits at one request per five
+        seconds would mostly succeed in throttling each other.
+        """
+        settings = get_settings()
+        if not settings.cape_auto_detonate_urls:
+            return None
+        # An IP is not something CAPE can fetch and detonate; the lookup above is
+        # the whole of what this collector can say about one.
+        if self.observable_type not in {"domain", "url"}:
+            return None
+
+        context = self.external_context if isinstance(self.external_context, dict) else {}
+        # The caller decides. The same gate that decides whether AnyRun is worth
+        # its cost decides this, and it is evaluated once, in the investigation
+        # task, with the fast collectors' evidence in hand. A collector that
+        # decided for itself would detonate every URL in every pasted alert.
+        if not context.get("cape_detonate"):
+            return None
+
+        target = svc.normalise_url(self.domain)
+        if not target:
+            return None
+
+        evidence = CapeEvidence()
+        try:
+            analysis_id, task_id, status = self._start(target, context)
+        except Exception as exc:  # noqa: BLE001 — a failed submission is a gap, not a crash
+            # The detail goes to the log, not to the panel. What surfaced here
+            # first was a psycopg2 foreign-key error, which tells an analyst
+            # nothing and looks like the sandbox misbehaving.
+            logger.warning(
+                "[%s] CAPE auto-detonation of %s could not start: %s",
+                self.investigation_id, target, cape.redact(str(exc))[:400],
+            )
+            evidence.reason = (
+                "Could not start a CAPE detonation for this target; the sandbox was not asked. "
+                "The reason is in the worker log."
+            )
+            return evidence
+
+        deadline = time.monotonic() + max(0, int(settings.cape_inline_wait_seconds))
+        interval = max(5, int(settings.cape_inline_poll_seconds))
+        while True:
+            report, status, task_id = self._read_analysis(analysis_id)
+            if report is not None:
+                evidence.available = True
+                evidence.report = report
+                return evidence
+            if status in svc.TERMINAL_STATUSES:
+                evidence.reason = (
+                    f"CAPE detonation of {target} finished as {status} without a report."
+                )
+                return evidence
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+        # Deferred, not failed. Nothing is lost by stopping here: the workflow
+        # keeps polling, and when the report lands it is written into this
+        # investigation and the analyst runs again over it.
+        evidence.pending = True
+        evidence.pending_analysis_id = str(analysis_id)
+        evidence.pending_task_id = str(task_id) if task_id else None
+        evidence.pending_since = datetime.now(timezone.utc).isoformat()
+        evidence.reason = (
+            f"Detonating {target} in CAPE"
+            + (f" as task {task_id}" if task_id else "")
+            + f" — still {status} after {settings.cape_inline_wait_seconds}s. A URL detonation on "
+              "this instance takes about five minutes; the report is merged into this "
+              "investigation and the verdict recomputed as soon as it lands. No action needed."
+        )
+        logger.info(
+            "[%s] CAPE detonation of %s deferred after %ss (analysis %s, task %s)",
+            self.investigation_id, target, settings.cape_inline_wait_seconds, analysis_id, task_id,
+        )
+        return evidence
+
+    def _start(self, target: str, context: dict[str, Any]) -> tuple[Any, str | None, str]:
+        """Create (or adopt) the analysis row and make sure something is driving it."""
+        from app.tasks.cape_task import run_cape_analysis
+
+        investigation_uuid = _as_uuid(self.investigation_id)
+        with Session(sync_engine) as db:
+            row, created = svc.get_or_create(
+                db,
+                target_kind="url",
+                target_url=target,
+                client=str(context.get("client_domain") or "") or None,
+                sample_name=self.domain,
+                investigation_id=investigation_uuid,
+                requested_by="auto-detonation",
+            )
+            analysis_id, task_id, status = row.id, row.provider_task_id, row.status
+            db.commit()
+
+        if created:
+            run_cape_analysis.delay(str(analysis_id))
+            logger.info("[%s] CAPE auto-detonation queued for %s (analysis %s)",
+                        self.investigation_id, target, analysis_id)
+        else:
+            # Somebody already asked — an earlier investigation of the same URL,
+            # or another worker a millisecond ago. Watch theirs. If it is sitting
+            # in a non-terminal state with nothing driving it, the beat job
+            # `cape-resume-in-flight` picks it up within five minutes.
+            logger.info("[%s] CAPE auto-detonation adopted existing analysis %s (%s)",
+                        self.investigation_id, analysis_id, status)
+        return analysis_id, task_id, status
+
+    def _read_analysis(self, analysis_id: Any) -> tuple[CapeNormalizedReport | None, str, str | None]:
+        with Session(sync_engine) as db:
+            row = db.get(SandboxAnalysis, analysis_id)
+            if row is None:
+                return None, svc.STATUS_FAILED, None
+            status = str(row.status or "")
+            task_id = str(row.provider_task_id) if row.provider_task_id else None
+            if status == svc.STATUS_REPORTED and row.normalized_json:
+                return _as_report(row.normalized_json), status, task_id
+            return None, status, task_id
 
     def _ask_cape(self, needle: str) -> CapeNormalizedReport | None:
         """CAPE's own analyses that contacted this indicator.
@@ -231,6 +376,13 @@ class CapeCollector(BaseCollector):
 
     def _empty_evidence(self, meta: CollectorMeta) -> CapeEvidence:
         return CapeEvidence(meta=meta, available=False, reason="CAPE collector did not complete.")
+
+
+def _as_uuid(value: Any) -> Any:
+    try:
+        return _uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_int(value: Any) -> int:
