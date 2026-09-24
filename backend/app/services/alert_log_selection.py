@@ -364,7 +364,10 @@ class SelectionResult:
             "used_tokens": self.used_tokens,
             "analyst_pinned": list(self.pinned),
             "analyst_pinned_dropped": list(self.pinned_dropped),
-            "selected_refs": [s.get("key") for s in self.selected],
+            # `ref`, not `key`: _for_prompt names it `ref` because that is what
+            # the model is told to cite. Reading `key` here produced a list of
+            # Nones, so nothing was ever marked as having been sent.
+            "selected_refs": [s.get("ref") for s in self.selected if s.get("ref")],
             "note": (
                 "Selection is deterministic and rank-ordered. A low rank means an event was "
                 "not sent to the model; it does not mean the event is benign. Every retrieved "
@@ -398,12 +401,21 @@ def select_for_ai(
         for r in records
     ]
 
+    pinned_set = {str(k) for k in pinned_keys if str(k)}
+
     # Group near-duplicates; the highest-scoring member represents the group.
+    #
+    # Pinned events are never grouped. A group has one representative, so two
+    # picks sharing a signature meant only one was sent — measured, six of
+    # eight arrived. An analyst who ticks two rows is asking for two rows, and
+    # "one of them stands for the other" is not an answer to that.
     by_group: dict[str, list[Scored]] = {}
     for item in scored:
+        if item.key in pinned_set:
+            continue
         by_group.setdefault(item.group_key, []).append(item)
 
-    representatives: list[Scored] = []
+    representatives: list[Scored] = [s for s in scored if s.key in pinned_set]
     for key, members in by_group.items():
         members.sort(key=lambda s: (-s.score, abs(s.offset_seconds)))
         representative = members[0]
@@ -426,7 +438,6 @@ def select_for_ai(
             })
         representatives.append(representative)
 
-    pinned_set = {str(k) for k in pinned_keys if str(k)}
     chosen: dict[str, Scored] = {}
     used = 0
 

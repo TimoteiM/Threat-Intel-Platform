@@ -131,6 +131,13 @@ def run_alert_body_investigation_task(
             "alert_kind",
             "event_time",
             "suppressed_by_exclusion",
+            # A re-analysis rewrites the payload wholesale, so anything the
+            # request itself recorded has to be carried or it is lost by the
+            # run it asked for. `previous_analyses` is the kept verdict the
+            # endpoint promised not to overwrite; losing it here would make
+            # that promise false in exactly the case it was made for.
+            "previous_analyses",
+            "reanalysis",
         ):
             if carried in (run.result_json or {}):
                 payload[carried] = (run.result_json or {})[carried]
@@ -201,18 +208,34 @@ def _collect_log_context(run_uuid: uuid.UUID, run: Any) -> tuple[dict[str, Any] 
             alert_fields=(run.result_json or {}).get("alert_fields") or {},
         )
         row_id = None
+        merged_logs = None
         with Session(sync_engine) as db:
             row = store.save(db, run_uuid, context)
             if row is not None:
                 row_id = row.id
+                # The merged set, which is what the analyst is looking at. The
+                # fresh retrieval alone is not: a window read twice does not
+                # return exactly the same documents, and an event an analyst
+                # picked from the view but which is absent from this read would
+                # be dropped without a word. Measured — five of six picks
+                # survived until this line existed.
+                merged_logs = list(row.logs or [])
                 if row.status in ("partial", "unavailable"):
                     schedule_followup(row)
 
         payload = context.as_dict()
+        if merged_logs:
+            payload["logs"] = merged_logs
         # What the selector needs and the retrieval does not carry.
         payload["alert_time"] = run.event_time.isoformat() if run.event_time else None
         payload["entity_host"] = run.entity_host
         payload["entity_user"] = run.entity_user
+        # Events an analyst chose by hand, recorded by the re-analysis request.
+        # Without this the picks were accepted, stored, and then ignored by the
+        # run they were supposed to steer.
+        payload["pinned_keys"] = list(
+            ((run.result_json or {}).get("reanalysis") or {}).get("pinned_refs") or []
+        )
         return payload, row_id
     except Exception as exc:  # noqa: BLE001 — enrichment never fails an alert
         logger.warning("Log context for run %s could not be collected: %s", run_uuid, exc)
@@ -232,8 +255,11 @@ def _finalise_log_context(run_uuid: uuid.UUID, row_id: Any, payload: dict[str, A
             store.mark_analysed(db, row)
             summary = store.as_payload(row, include_logs=False)
             summary["logs_endpoint"] = f"/api/alert-investigations/{run_uuid}/logs"
-            summary["ai_selection"] = (payload.get("assistant_report") or {}).get("log_selection") \
+            summary["ai_selection"] = (
+                (payload.get("ai_report") or {}).get("log_selection")
+                or (payload.get("assistant_report") or {}).get("log_selection")
                 or payload.get("log_selection")
+            )
             return summary
     except Exception as exc:  # noqa: BLE001
         logger.warning("Log context for run %s could not be finalised: %s", run_uuid, exc)

@@ -19,9 +19,11 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import {
   getAlertLogContext,
+  getAnalysisStatus,
   reanalyseWithLogContext,
   type AlertLogContextPage,
   type AlertLogEvent,
+  type AnalysisStatus,
 } from "@/lib/api";
 
 const STEP_DEFAULT = 5;
@@ -74,6 +76,12 @@ function delta(eventTime?: string | null, alertTime?: string | null): string {
   return abs < 60 ? `${sign}${abs}s` : `${sign}${Math.floor(abs / 60)}m${abs % 60 ? ` ${abs % 60}s` : ""}`;
 }
 
+const INDETERMINATE_KEYFRAMES = `
+@keyframes tip-indeterminate {
+  0%   { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}`;
+
 export function AlertLogContext({ runId }: { runId: string }) {
   const [page, setPage] = useState<AlertLogContextPage | null>(null);
   const [before, setBefore] = useState(STEP_DEFAULT);
@@ -86,6 +94,12 @@ export function AlertLogContext({ runId }: { runId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // The re-analysis, watched to completion in place. An analyst who sends
+  // events to the model should not have to guess whether it worked, reload, or
+  // go somewhere else to read the answer.
+  const [job, setJob] = useState<AnalysisStatus | null>(null);
+  const [jobPhase, setJobPhase] = useState<"idle" | "queued" | "running" | "done" | "failed">("idle");
+  const [elapsed, setElapsed] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,15 +154,53 @@ export function AlertLogContext({ runId }: { runId: string }) {
   const requestReanalysis = async () => {
     setBusy(true);
     setNote(null);
+    setJob(null);
+    setElapsed(0);
+    setJobPhase("queued");
     try {
       const result = await reanalyseWithLogContext(runId, Array.from(pinned));
       setNote(result.note);
     } catch (err) {
+      setJobPhase("failed");
       setNote(err instanceof Error ? err.message : "Re-analysis could not be queued.");
     } finally {
       setBusy(false);
     }
   };
+
+  // Poll while a re-analysis is in flight. Three seconds is slow enough not to
+  // matter and fast enough that the bar does not look stuck; the endpoint is a
+  // single row read, not the hydrated run.
+  useEffect(() => {
+    if (jobPhase !== "queued" && jobPhase !== "running") return undefined;
+    let cancelled = false;
+    const started = Date.now();
+
+    const tick = async () => {
+      try {
+        const status = await getAnalysisStatus(runId);
+        if (cancelled) return;
+        setElapsed(Math.round((Date.now() - started) / 1000));
+        if (status.finished) {
+          setJob(status);
+          setJobPhase(status.status === "completed" ? "done" : "failed");
+          // The window's own numbers move with the new analysis.
+          void load();
+        } else {
+          setJobPhase("running");
+        }
+      } catch {
+        // A failed poll is not a failed analysis; keep waiting.
+      }
+    };
+
+    void tick();
+    const timer = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [jobPhase, runId, load]);
 
   if (loading && !page) return <Muted>Loading the events around this alert…</Muted>;
   if (error) return <Muted>{error}</Muted>;
@@ -169,6 +221,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
+      <style>{INDETERMINATE_KEYFRAMES}</style>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "baseline" }}>
         <Fact label="Retrieved" value={`${page.retrieved_total} events in the window`} />
         <Fact label="Considered by AI" value={String(page.sent_to_ai_total)} />
@@ -191,6 +244,79 @@ export function AlertLogContext({ runId }: { runId: string }) {
             </button>
             <Muted>The current verdict is kept, not overwritten.</Muted>
           </div>
+        </div>
+      )}
+
+      {/* The re-analysis, from request to result, without leaving the page. */}
+      {jobPhase !== "idle" && (
+        <div
+          style={{
+            ...panel,
+            borderColor:
+              jobPhase === "failed"
+                ? "var(--danger, #f85149)"
+                : jobPhase === "done"
+                ? "var(--success, #3fb950)"
+                : "var(--accent, #1f6feb)",
+            gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <strong style={{ color: "var(--text)" }}>
+              {jobPhase === "queued" && "Queued for re-analysis…"}
+              {jobPhase === "running" && "Re-analysing with your selected events…"}
+              {jobPhase === "done" && "✓ Re-analysed"}
+              {jobPhase === "failed" && "Re-analysis did not complete"}
+            </strong>
+            {(jobPhase === "queued" || jobPhase === "running") && (
+              <Muted>{elapsed}s elapsed — this usually takes under a minute</Muted>
+            )}
+            {jobPhase === "done" && job && (
+              <Muted>
+                {job.log_selection.analyst_pinned.length} selected event
+                {job.log_selection.analyst_pinned.length === 1 ? "" : "s"} considered
+                {job.log_selection.analyst_pinned_dropped.length > 0
+                  ? `, ${job.log_selection.analyst_pinned_dropped.length} did not fit the token budget`
+                  : ""}
+                {job.log_selection.used_tokens ? ` · ${job.log_selection.used_tokens} tokens used` : ""}
+              </Muted>
+            )}
+          </div>
+
+          {(jobPhase === "queued" || jobPhase === "running") && (
+            <div style={progressTrack} role="progressbar" aria-label="Re-analysis progress">
+              <div style={progressBar} />
+            </div>
+          )}
+
+          {jobPhase === "done" && job && (
+            <>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <Fact label="Verdict" value={job.overall_verdict || "—"} />
+                <Fact label="Risk" value={job.highest_risk_score != null ? `${job.highest_risk_score}/100` : "—"} />
+                <Fact label="Earlier analyses kept" value={String(job.previous_analyses)} />
+              </div>
+              {job.report_markdown ? (
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>
+                    Updated interpretation
+                  </div>
+                  <div style={reportBox}>{job.report_markdown}</div>
+                </div>
+              ) : (
+                <Muted>The analysis completed but produced no narrative.</Muted>
+              )}
+            </>
+          )}
+
+          {note && <Muted>{note}</Muted>}
+          {jobPhase !== "queued" && jobPhase !== "running" && (
+            <div>
+              <button type="button" onClick={() => { setJobPhase("idle"); setJob(null); setNote(null); }} style={secondaryBtn}>
+                Dismiss
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -228,7 +354,6 @@ export function AlertLogContext({ runId }: { runId: string }) {
           </button>
         </div>
       )}
-      {note && <Muted>{note}</Muted>}
 
       {/* Newer end. */}
       <LoadBar
@@ -556,6 +681,34 @@ const primaryBtn = (disabled: boolean): React.CSSProperties => ({
   cursor: disabled ? "default" : "pointer",
   fontSize: 13,
 });
+const progressTrack: React.CSSProperties = {
+  height: 4,
+  borderRadius: 999,
+  background: "var(--border)",
+  overflow: "hidden",
+};
+// Indeterminate on purpose: the work is a model call whose duration is not
+// knowable, and a bar that claims 60% would be inventing a number.
+const progressBar: React.CSSProperties = {
+  height: "100%",
+  width: "35%",
+  borderRadius: 999,
+  background: "var(--accent, #1f6feb)",
+  animation: "tip-indeterminate 1.4s ease-in-out infinite",
+};
+const reportBox: React.CSSProperties = {
+  maxHeight: 360,
+  overflowY: "auto",
+  padding: 10,
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  background: "var(--surface, transparent)",
+  color: "var(--text)",
+  fontSize: 13,
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
 const summaryKey: React.CSSProperties = {
   padding: "4px 10px 4px 0",
   borderBottom: "1px solid var(--border)",

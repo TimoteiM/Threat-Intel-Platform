@@ -11,17 +11,7 @@ import { AlertLogView } from "@/components/report/AlertLogView";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
 import PageHero from "@/components/ui/PageHero";
 import { MenuItem, OverflowMenu } from "@/components/ui/Primitives";
-import {
-  alertInvestigationExportUrl,
-  cancelAlertInvestigation,
-  createAlertExclusion,
-  deleteAlertInvestigation,
-  getAlertInvestigation,
-  getRunCase,
-  getSuppressionCandidate,
-  sandboxAlertIndicators,
-  type AlertExportFormat,
-} from "@/lib/api";
+import { alertInvestigationExportUrl, cancelAlertInvestigation, createAlertExclusion, deleteAlertInvestigation, getAlertInvestigation, getRunCase, getSuppressionCandidate, sandboxAlertIndicators, type AlertExportFormat, getAlertLogContext } from "@/lib/api";
 import type {
   AlertAIReport,
   AlertEndpointEventReport,
@@ -1484,13 +1474,39 @@ function LogContextSection({ runId }: { runId: string }) {
   // "Around the alert" is the default: an analyst opening this wants to start
   // where the alert is, not to find it in a hundred rows first.
   const [mode, setMode] = useState<"context" | "all">("context");
+  // Fetched collapsed, so the header can say what is inside. A section headed
+  // only "SIEM log context" is indistinguishable from an empty one, which is
+  // why it read as something to skip.
+  const [summary, setSummary] = useState<{ total: number; sentToAi: number; status: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAlertLogContext(runId, 0, 0)
+      .then((page) => {
+        if (cancelled) return;
+        setSummary({
+          total: page.retrieved_total ?? 0,
+          sentToAi: page.sent_to_ai_total ?? 0,
+          status: page.status,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  const has = (summary?.total ?? 0) > 0;
+  const accent = has ? "var(--status-info, #388bfd)" : "var(--panel-divider-strong)";
+
   return (
     <section
       style={{
         border: "1px solid var(--panel-divider-strong)",
+        borderLeft: `3px solid ${accent}`,
         borderRadius: 10,
         background: "var(--panel-outline-bg)",
-        padding: "10px 12px",
+        padding: "12px 14px",
       }}
     >
       <button
@@ -1500,19 +1516,57 @@ function LogContextSection({ runId }: { runId: string }) {
           all: "unset",
           cursor: "pointer",
           display: "flex",
-          alignItems: "baseline",
+          alignItems: "center",
           gap: 10,
           width: "100%",
+          flexWrap: "wrap",
         }}
         aria-expanded={open}
       >
-        <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>
+        <span style={{ fontSize: 13.5, color: "var(--text)", fontWeight: 700, letterSpacing: "0.01em" }}>
           SIEM log context
         </span>
-        <span style={{ fontSize: 11.5, color: "var(--text-dim)", flex: 1 }}>
-          Ten minutes either side of this alert, for the device and the account it names.
+        {has && (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "2px 9px",
+              borderRadius: 999,
+              border: `1px solid ${accent}`,
+              color: accent,
+              fontSize: 11,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {summary!.total.toLocaleString()} events
+          </span>
+        )}
+        {has && summary!.sentToAi > 0 && (
+          <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+            {summary!.sentToAi} considered by the AI
+          </span>
+        )}
+        <span style={{ fontSize: 11.5, color: "var(--text-dim)", flex: 1, minWidth: 180 }}>
+          {has
+            ? "Ten minutes either side of this alert, for the device and the account it names."
+            : summary
+            ? "No surrounding events were retrieved for this alert."
+            : "Loading…"}
         </span>
-        <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>{open ? "Hide" : "Show"}</span>
+        <span
+          style={{
+            fontSize: 11.5,
+            color: accent,
+            fontWeight: 600,
+            border: `1px solid ${accent}`,
+            borderRadius: 6,
+            padding: "3px 10px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {open ? "Hide" : "View events"}
+        </span>
       </button>
       {open && (
         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>

@@ -504,6 +504,33 @@ export function getAlertLogContext(runId: string, before = 5, after = 5) {
   return request<AlertLogContextPage>(`/alert-investigations/${runId}/logs/context?${qs}`);
 }
 
+export interface AnalysisStatus {
+  run_id: string;
+  status: string;
+  finished: boolean;
+  completed_at?: string | null;
+  overall_verdict?: string | null;
+  highest_risk_score?: number | null;
+  report_markdown: string;
+  log_selection: {
+    events_found?: number | null;
+    events_selected?: number | null;
+    events_represented?: number | null;
+    events_omitted?: number | null;
+    analyst_pinned: string[];
+    analyst_pinned_dropped: string[];
+    used_tokens?: number | null;
+    budget_tokens?: number | null;
+  };
+  reanalysis: { requested_by?: string | null; requested_at?: string | null; pinned_refs: string[] };
+  previous_analyses: number;
+}
+
+/** Small enough to poll while a progress bar is ticking. */
+export function getAnalysisStatus(runId: string) {
+  return request<AnalysisStatus>(`/alert-investigations/${runId}/analysis-status`);
+}
+
 export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []) {
   return request<{ run_id: string; status: string; pinned_refs: string[]; note: string }>(
     `/alert-investigations/${runId}/reanalyse`,

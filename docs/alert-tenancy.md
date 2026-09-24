@@ -159,6 +159,12 @@ settings object, and there is no parameter a request could arrive through.
 
 ## The analyst log view
 
+The section is framed in the info accent with a live count in its header —
+*"SIEM log context · 442 events · 1 considered by the AI"* — fetched while
+collapsed. A section headed only "SIEM log context" is indistinguishable from an
+empty one, which is why it read as something to skip.
+
+
 The default is **Around the alert**: the alert highlighted in place, five events
 either side, and a *Load N newer / older documents* control at each end — the
 shape Discover uses for surrounding documents, because starting at the thing
@@ -205,6 +211,49 @@ dropping the least interesting of someone's picks and dropping whichever
 happened to be iterated last. Anything that did not fit is recorded as
 `analyst_pinned_dropped` on the analysis: someone who selected thirty events is
 entitled to know which seven the model never saw.
+
+### Watching a re-analysis finish
+
+Sending events to the model shows a progress bar, then the result, in the same
+panel. No reload, no navigating away, and no guessing whether it worked.
+
+The bar is **indeterminate** on purpose: the work is a model call whose duration
+is not knowable, and a bar claiming 60% would be inventing a number. Elapsed
+seconds are shown instead. Polling is `GET /{run_id}/analysis-status`, a single
+row read — the run detail endpoint hydrates every spawned investigation, which
+is the wrong thing to fetch every three seconds.
+
+When it finishes the panel shows the new verdict, risk, how many of the
+selected events were considered, tokens used against the budget, and the updated
+interpretation itself.
+
+Four bugs sat behind this, all found by running the flow end to end rather than
+by reading it:
+
+* **`selected_refs` was a list of `None`.** It was built from `s.get("key")`
+  while prompt entries name the field `ref`, so no event was ever marked as
+  having been sent — the `AI` chips could not appear.
+* **Two readers disagreed about where the selection lives.** The context view
+  looked under `assistant_report`, the pipeline writes `ai_report`. One reader
+  now.
+* **The analyst's picks were accepted, stored, and ignored.** The re-analysis
+  built a fresh payload and never read `reanalysis.pinned_refs`. The same
+  rewrite discarded `previous_analyses` — so the endpoint's promise to keep the
+  previous verdict was false in exactly the case it was made for.
+* **Picks were selected from a different set than the analyst saw.** The
+  re-analysis re-read the window and selected from the fresh result, while the
+  analyst picked from the stored, merged one. Two reads of the same window do
+  not return identical documents, so picks vanished silently.
+
+And two rules about pinned events, both measured rather than reasoned:
+
+* a pinned event is **never grouped** — a group has one representative, so two
+  picks sharing a signature meant only one was sent;
+* when picks overflow the budget they are taken highest-ranked first, and what
+  did not fit is reported.
+
+Measured end to end: 8 selected, **8 honoured**, 0 dropped, 4,287 of 6,000
+tokens, previous analyses kept.
 
 ### What an expanded row shows
 

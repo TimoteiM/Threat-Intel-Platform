@@ -116,6 +116,21 @@ def _scope(request: Request, tenant: str | None = None) -> "tenant_scope.TenantS
         raise HTTPException(403, str(exc)) from None
 
 
+def _log_selection(result_json: dict[str, Any] | None) -> dict[str, Any]:
+    """The AI's log-selection summary, wherever the pipeline put it.
+
+    One reader, because two of them disagreed: the context view looked under
+    `assistant_report` while the pipeline writes `ai_report`, so the "considered
+    by the AI" marks never appeared on any event.
+    """
+    result = result_json or {}
+    for key in ("ai_report", "assistant_report"):
+        selection = (result.get(key) or {}).get("log_selection")
+        if selection:
+            return dict(selection)
+    return dict(result.get("log_selection") or {})
+
+
 ACTIVE_STATUSES = {"queued", "processing", "running"}
 
 # Synchronous ingest: how long a caller may hold the connection open. A run with
@@ -757,12 +772,7 @@ async def get_run_logs(
     from app.services import alert_log_context_store as _log_store
 
     alert_time = run.event_time
-    selected_refs = set(
-        ((run.result_json or {}).get("assistant_report") or {})
-        .get("log_selection", {})
-        .get("selected_refs")
-        or []
-    )
+    selected_refs = set(_log_selection(run.result_json).get("selected_refs") or [])
 
     def _matches(event: dict[str, Any]) -> bool:
         if only_sent_to_ai and event.get("key") not in selected_refs:
@@ -862,12 +872,7 @@ async def get_run_log_context(
     from app.db.session import sync_engine
     from app.services import alert_log_context_store as _log_store
 
-    selected_refs = set(
-        ((run.result_json or {}).get("assistant_report") or {})
-        .get("log_selection", {})
-        .get("selected_refs")
-        or []
-    )
+    selected_refs = set(_log_selection(run.result_json).get("selected_refs") or [])
     external_ref = str(run.external_ref or "").strip()
     alert_time = run.event_time
 
@@ -927,6 +932,60 @@ async def get_run_log_context(
             return payload
 
     return await run_in_threadpool(_read)
+
+
+@router.get("/{run_id}/analysis-status")
+async def get_analysis_status(
+    run_id: uuid.UUID,
+    db: DBSession,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Where a re-analysis has got to, and its result once it has one.
+
+    Deliberately small. The run detail endpoint hydrates every spawned
+    investigation, which is the wrong thing to fetch every three seconds while
+    a progress bar is ticking.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
+
+    result = run.result_json or {}
+    ai_report = result.get("ai_report") or {}
+    selection = _log_selection(result)
+    requested = result.get("reanalysis") or {}
+
+    status = str(run.status or "")
+    return {
+        "run_id": str(run_id),
+        "status": status,
+        # `finished` rather than a status string the caller has to interpret:
+        # queued, processing and running all mean "keep waiting", and the set
+        # has grown before.
+        "finished": status in ("completed", "failed", "cancelled"),
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "overall_verdict": run.overall_verdict,
+        "highest_risk_score": run.highest_risk_score,
+        # The analyst-facing report: de-anonymised on purpose, for a person.
+        "report_markdown": ai_report.get("report_markdown") or "",
+        "log_selection": {
+            "events_found": selection.get("events_found"),
+            "events_selected": selection.get("events_selected"),
+            "events_represented": selection.get("events_represented"),
+            "events_omitted": selection.get("events_omitted"),
+            "analyst_pinned": selection.get("analyst_pinned") or [],
+            "analyst_pinned_dropped": selection.get("analyst_pinned_dropped") or [],
+            "used_tokens": selection.get("used_tokens"),
+            "budget_tokens": selection.get("budget_tokens"),
+        },
+        "reanalysis": {
+            "requested_by": requested.get("requested_by"),
+            "requested_at": requested.get("requested_at"),
+            "pinned_refs": requested.get("pinned_refs") or [],
+        },
+        "previous_analyses": len(result.get("previous_analyses") or []),
+    }
 
 
 @router.post("/{run_id}/reanalyse")

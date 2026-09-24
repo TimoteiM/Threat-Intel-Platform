@@ -369,3 +369,53 @@ def test_an_oversized_selection_keeps_the_highest_ranked_and_says_what_it_droppe
     assert summary["analyst_pinned_dropped"], "an overflow must be reported, not silent"
     assert strong["key"] not in summary["analyst_pinned_dropped"]
     assert result.used_tokens <= 400
+
+
+def test_the_selection_summary_names_the_events_it_sent():
+    """These refs are what marks an event as considered in the log view. Built
+    from the wrong key they were a list of Nones, and nothing was ever marked."""
+    events = [_event("a"), _event("b", rule_id="99", desc="other")]
+    result = select_for_ai(events, pivots=AlertPivots(), alert_time=ALERT_TIME, budget_tokens=6000)
+    refs = result.summary()["selected_refs"]
+
+    assert refs, "a selection that sent events must name them"
+    assert None not in refs
+    assert set(refs) == {s["ref"] for s in result.selected}
+    assert all(r.startswith("wazuh-alerts-4.x-") for r in refs)
+
+
+def test_a_pinned_event_is_not_folded_into_a_near_duplicate():
+    """An analyst's pick must be the event sent, not a sibling that happens to
+    score higher. Measured live: five of six picks arrived because the sixth
+    shared a signature with a louder neighbour."""
+    louder = _event("louder", offset=1, level=12, desc="Firewall deny", rule_id="81618",
+                    log="Deny from 10.0.0.1 port 1")
+    picked = _event("picked", offset=2, level=3, desc="Firewall deny", rule_id="81618",
+                    log="Deny from 10.0.0.1 port 2")
+    assert group_key_for(louder) == group_key_for(picked), "these must be near-duplicates"
+
+    result = select_for_ai(
+        [louder, picked], pivots=AlertPivots(), alert_time=ALERT_TIME,
+        budget_tokens=6000, pinned_keys=[picked["key"]],
+    )
+    refs = [s["ref"] for s in result.selected]
+    assert picked["key"] in refs
+    assert picked["key"] in result.summary()["analyst_pinned"]
+
+
+def test_two_picks_sharing_a_signature_are_both_sent():
+    """A group has one representative, so two picks that look alike meant only
+    one arrived — measured, six of eight. Ticking two rows asks for two rows."""
+    a = _event("a", offset=1, desc="Firewall deny", rule_id="81618", log="Deny from 10.0.0.1 port 1")
+    b = _event("b", offset=2, desc="Firewall deny", rule_id="81618", log="Deny from 10.0.0.1 port 2")
+    noise = [_event(f"n{i}", offset=10 + i, desc="Firewall deny", rule_id="81618",
+                    log=f"Deny from 10.0.0.1 port {i}") for i in range(30)]
+    assert group_key_for(a) == group_key_for(b) == group_key_for(noise[0])
+
+    result = select_for_ai([a, b] + noise, pivots=AlertPivots(), alert_time=ALERT_TIME,
+                           budget_tokens=6000, pinned_keys=[a["key"], b["key"]])
+    refs = [s["ref"] for s in result.selected]
+    assert a["key"] in refs and b["key"] in refs
+    assert set(result.summary()["analyst_pinned"]) == {a["key"], b["key"]}
+    # The unpicked noise still collapses.
+    assert any(s.get("repeated") for s in result.selected)
