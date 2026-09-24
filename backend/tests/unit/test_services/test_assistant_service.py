@@ -386,17 +386,57 @@ async def test_list_sessions_returns_paginated_matches_for_search() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_searches_titles_and_entry_content() -> None:
+async def test_list_sessions_searches_titles_only_by_default() -> None:
+    """Searching log content used to be unconditional and cost 6,153 ms: the
+    count had to evaluate an ILIKE over 201 MB of entry text. Titles answer in
+    about 40 ms, so that is the default and content is asked for."""
     fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
     service = AssistantService(fake_db, settings=_build_settings())
 
     await service.list_sessions(search="admin@example.com", limit=25, offset=0)
 
-    executed_query = fake_db.execute.await_args_list[0].args[0]
-    assert isinstance(executed_query, Select)
-    query_text = str(executed_query.compile(compile_kwargs={"literal_binds": False}))
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
+    assert "assistant_sessions.title" in query_text
+    assert "assistant_entries.raw_text" not in query_text
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_can_search_entry_content_on_request() -> None:
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(
+        search="admin@example.com", limit=25, offset=0, search_content=True
+    )
+
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
     assert "assistant_sessions.title" in query_text
     assert "assistant_entries.raw_text" in query_text
+    # EXISTS, not a join: the join multiplied each session by its entries and
+    # then needed DISTINCT to undo it.
+    assert "EXISTS" in query_text.upper()
+
+
+@pytest.mark.asyncio
+async def test_the_list_query_does_not_fetch_the_heavy_columns() -> None:
+    """The list was returning `result_json` and `report_markdown` for every row
+    — 20.8 kB for one session, 108 kB for a page of five, to render a card that
+    shows a title and a date."""
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(limit=25, offset=0)
+
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
+    for heavy in ("result_json", "report_markdown", "sanitization_summary_json"):
+        assert heavy not in query_text, heavy
+    assert "assistant_sessions.title" in query_text
 
 
 class _StubSession:
@@ -432,3 +472,43 @@ def test_restore_tokens_handles_group_references_verbatim() -> None:
     service = AssistantService(_StubSession(), settings=_build_settings())
     for original in (r"host\1name", r"a\g<0>b"):
         assert service._restore_tokens("[HOST_1] failed", {"[HOST_1]": original}) == f"{original} failed"
+
+
+def test_a_huge_entry_is_capped_before_it_reaches_a_browser() -> None:
+    """Entries return what was pasted and what was sent. Measured across 21,568
+    of them the pair averages 28 kB and reaches 20 MB, so opening one session
+    could ship twenty megabytes to render text nobody scrolls to the end of."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import MAX_ENTRY_TEXT_CHARS, AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        entry_index=0,
+        raw_text="x" * (MAX_ENTRY_TEXT_CHARS + 5_000),
+        sanitized_text="y" * 10,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert entry.truncated is True
+    assert len(entry.raw_text) == MAX_ENTRY_TEXT_CHARS
+    # The real length travels with it, so a reader is never quietly shown a
+    # fraction as though it were the whole.
+    assert entry.raw_text_chars == MAX_ENTRY_TEXT_CHARS + 5_000
+
+
+def test_a_normal_entry_is_untouched() -> None:
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(), session_id=uuid.uuid4(), entry_index=0,
+        raw_text="a short alert body", sanitized_text="a short alert body",
+        created_at=datetime.now(timezone.utc),
+    )
+    assert entry.truncated is False
+    assert entry.raw_text_chars is None

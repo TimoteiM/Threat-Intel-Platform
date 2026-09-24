@@ -48,14 +48,18 @@ async def list_sessions(
     limit: int = 50,
     offset: int = 0,
     search: str | None = None,
+    search_content: bool = False,
 ):
     service = AssistantService(session)
-    results = await service.list_sessions(limit=limit, offset=offset, search=search)
+    results = await service.list_sessions(
+        limit=limit, offset=offset, search=search, search_content=search_content
+    )
     return {
         "items": [_serialize_session(item) for item in results["items"]],
         "total": results["total"],
         "limit": results["limit"],
         "offset": results["offset"],
+        "searched_content": results.get("searched_content", False),
     }
 
 

@@ -55,6 +55,11 @@ export default function AssistantWorkspace() {
     return () => window.clearTimeout(timeoutId);
   }, [sessionSearch]);
 
+  // Off by default. Titles answer in about 40ms; the pasted log text is 201 MB
+  // and a common word appears in 83% of it, so searching content is a thing an
+  // analyst asks for rather than something they pay for on every keystroke.
+  const [searchLogContent, setSearchLogContent] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     setSessionsLoading(true);
@@ -62,6 +67,7 @@ export default function AssistantWorkspace() {
       limit: pageSize,
       offset: sessionOffset,
       search: appliedSessionSearch,
+      searchContent: searchLogContent,
     })
       .then((data) => {
         if (cancelled) return;
@@ -79,7 +85,7 @@ export default function AssistantWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [appliedSessionSearch, sessionOffset, pageSize]);
+  }, [appliedSessionSearch, sessionOffset, pageSize, searchLogContent]);
 
   useEffect(() => {
     if (!requestedSessionId) return;
@@ -245,6 +251,11 @@ export default function AssistantWorkspace() {
             activeSessionId={activeSession?.id}
             searchValue={sessionSearch}
             onSearchChange={setSessionSearch}
+            searchContent={searchLogContent}
+            onSearchContentChange={(next) => {
+              setSearchLogContent(next);
+              setSessionOffset(0);
+            }}
             offset={sessionOffset}
             limit={pageSize}
             total={sessionTotal}

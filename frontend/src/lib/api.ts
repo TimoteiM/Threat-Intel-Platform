@@ -1539,11 +1539,21 @@ export function resolveAlert(alertId: string) {
 
 // ─── SSE helper ───
 
-export function listAssistantSessions(params?: { limit?: number; offset?: number; search?: string }) {
+export function listAssistantSessions(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  /**
+   * Also match the pasted log text. Opt-in: titles answer in ~40ms, log
+   * content is 201 MB and a common word is in 83% of it.
+   */
+  searchContent?: boolean;
+}) {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.offset !== undefined) qs.set("offset", String(params.offset));
   if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.searchContent) qs.set("search_content", "true");
   const query = qs.toString();
   return requestWithDirectFallback<PaginatedResponse<any>>(
     `/assistant/sessions${query ? `?${query}` : ""}`,

@@ -10,6 +10,8 @@ export default function AssistantSessionList({
   onSelect,
   searchValue,
   onSearchChange,
+  searchContent,
+  onSearchContentChange,
   offset,
   limit,
   total,
@@ -22,6 +24,8 @@ export default function AssistantSessionList({
   onSelect: (sessionId: string) => void;
   searchValue: string;
   onSearchChange: (value: string) => void;
+  searchContent: boolean;
+  onSearchContentChange: (value: boolean) => void;
   offset: number;
   limit: number;
   total: number;
@@ -48,9 +52,30 @@ export default function AssistantSessionList({
         type="search"
         value={searchValue}
         onChange={(event) => onSearchChange(event.target.value)}
-        placeholder="Search title or log content"
+        placeholder={searchContent ? "Search titles and log content" : "Search session titles"}
         style={searchInputStyle}
       />
+
+      {/* Opt-in, and labelled with why. Titles answer in about 40ms; the
+          pasted log text is 201 MB and a common word is in 83% of it. */}
+      <label
+        style={{
+          display: "flex",
+          gap: 7,
+          alignItems: "center",
+          color: "var(--text-dim)",
+          fontSize: 11.5,
+          marginTop: -4,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={searchContent}
+          onChange={(event) => onSearchContentChange(event.target.checked)}
+        />
+        Also search log content
+        <span style={{ opacity: 0.7 }}>(slower)</span>
+      </label>
 
       <div style={{ display: "grid", gap: 10 }}>
         {sessions.map((session) => {

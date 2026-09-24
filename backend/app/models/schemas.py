@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Optional
 import uuid as _uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import (
     Classification,
@@ -1353,6 +1353,14 @@ class AssistantSessionRunRequest(BaseModel):
     model: Optional[str] = None
 
 
+# An entry holds what was pasted and what was sent. Both are returned, and both
+# are capped: measured across 21,568 entries the pair averages 28 kB and reaches
+# 20 MB, so opening one session could ship twenty megabytes to a browser to show
+# text nobody scrolls to the end of. The cap is generous — a hundred thousand
+# characters is a long log — and the full text is never lost, only not shipped.
+MAX_ENTRY_TEXT_CHARS = 100_000
+
+
 class AssistantEntryRead(BaseModel):
     id: _uuid.UUID
     session_id: _uuid.UUID
@@ -1362,19 +1370,40 @@ class AssistantEntryRead(BaseModel):
     sanitized_text: str
     token_map_json: dict[str, str] = {}
     created_at: datetime
+    # Set when the text above was cut for transport, with the real lengths, so
+    # a reader is never quietly shown a fraction as though it were the whole.
+    truncated: bool = False
+    raw_text_chars: Optional[int] = None
+    sanitized_text_chars: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _cap_text(self) -> "AssistantEntryRead":
+        raw_len, san_len = len(self.raw_text or ""), len(self.sanitized_text or "")
+        if raw_len > MAX_ENTRY_TEXT_CHARS or san_len > MAX_ENTRY_TEXT_CHARS:
+            self.truncated = True
+            self.raw_text_chars = raw_len
+            self.sanitized_text_chars = san_len
+            self.raw_text = (self.raw_text or "")[:MAX_ENTRY_TEXT_CHARS]
+            self.sanitized_text = (self.sanitized_text or "")[:MAX_ENTRY_TEXT_CHARS]
+        return self
 
 
 class AssistantSessionListItem(BaseModel):
+    """One row in the session list.
+
+    Deliberately without `result_json`, `report_markdown` or the sanitisation
+    summary. A list needs a title, a status and a date; it was carrying the
+    whole analysis of every session on the page — 20.8 kB for one row and
+    108 kB for a page of five, to render text that fits in a card.
+    """
+
     id: _uuid.UUID
     title: str
     mode: str
     status: str
     source_type: str
     linked_investigation_id: Optional[_uuid.UUID] = None
-    sanitization_summary_json: dict[str, Any] = {}
-    result_json: dict[str, Any] = {}
-    report_markdown: Optional[str] = None
     error: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -1383,6 +1412,11 @@ class AssistantSessionListItem(BaseModel):
 
 
 class AssistantSessionDetailResponse(AssistantSessionListItem):
+    """One session, opened. The heavy fields live here and nowhere else."""
+
+    sanitization_summary_json: dict[str, Any] = {}
+    result_json: dict[str, Any] = {}
+    report_markdown: Optional[str] = None
     entries: list[AssistantEntryRead] = []
 
 class InvestigationCreate(BaseModel):

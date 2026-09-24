@@ -10,7 +10,7 @@ from uuid import UUID
 import anthropic
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 from openai import AsyncOpenAI
 
 from app.config import get_settings
@@ -114,34 +114,58 @@ class AssistantService:
         limit: int = 50,
         offset: int = 0,
         search: str | None = None,
+        search_content: bool = False,
     ) -> dict[str, object]:
+        """Sessions, newest first.
+
+        `search` matches the title. `search_content` extends it to the pasted
+        log text, and is opt-in because the cost is not comparable: titles are
+        21,568 short strings and answer in 39 ms, while the entry text is 201 MB
+        and a common word like "process" appears in 83% of it. A trigram index
+        makes a *rare* term fast — a hostname, a hash, "kerberoast" answer in
+        about 135 ms — but a common one still has to recheck thousands of
+        TOASTed rows, and no index changes that.
+        """
         normalized_search = (search or "").strip()
-        base_query = select(AssistantSession)
+        # Only the columns a list row shows. Without this Postgres detoasts
+        # `result_json` and `report_markdown` for every row on the page — the
+        # list was 108 kB for five sessions, almost all of it analysis text the
+        # card never rendered.
+        base_query = select(AssistantSession).options(
+            load_only(
+                AssistantSession.id,
+                AssistantSession.title,
+                AssistantSession.mode,
+                AssistantSession.status,
+                AssistantSession.source_type,
+                AssistantSession.linked_investigation_id,
+                AssistantSession.error,
+                AssistantSession.created_at,
+                AssistantSession.updated_at,
+                AssistantSession.completed_at,
+            )
+        )
         count_query = select(func.count(func.distinct(AssistantSession.id)))
 
+        count_query = count_query.select_from(AssistantSession)
         if normalized_search:
             pattern = f"%{normalized_search}%"
-            search_filter = or_(
-                AssistantSession.title.ilike(pattern),
-                AssistantEntry.raw_text.ilike(pattern),
-            )
-            base_query = (
-                base_query
-                .outerjoin(AssistantEntry, AssistantEntry.session_id == AssistantSession.id)
-                .where(search_filter)
-            )
-            count_query = (
-                count_query
-                .select_from(AssistantSession)
-                .outerjoin(AssistantEntry, AssistantEntry.session_id == AssistantSession.id)
-                .where(search_filter)
-            )
-        else:
-            count_query = count_query.select_from(AssistantSession)
+            title_match = AssistantSession.title.ilike(pattern)
+            if search_content:
+                # EXISTS rather than a join: the join multiplied every session
+                # by its entries and then needed DISTINCT to undo it.
+                content_match = select(AssistantEntry.id).where(
+                    AssistantEntry.session_id == AssistantSession.id,
+                    AssistantEntry.raw_text.ilike(pattern),
+                ).exists()
+                search_filter = or_(title_match, content_match)
+            else:
+                search_filter = title_match
+            base_query = base_query.where(search_filter)
+            count_query = count_query.where(search_filter)
 
         result = await self.session.execute(
             base_query
-            .distinct()
             .order_by(AssistantSession.created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -152,6 +176,7 @@ class AssistantService:
             "total": int(total_result.scalar_one()),
             "limit": limit,
             "offset": offset,
+            "searched_content": bool(normalized_search and search_content),
         }
 
     async def get_daily_alert_metrics(
