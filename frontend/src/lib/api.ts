@@ -414,6 +414,8 @@ export interface AlertLogEvent {
   decoder?: string | null;
   location?: string | null;
   full_log?: string | null;
+  channel?: string | null;
+  domain?: string | null;
   matched_on?: string[];
   /** Whether this event was in the subset sent to the model. */
   sent_to_ai?: boolean;
@@ -468,6 +470,31 @@ export function getAlertLogs(
   if (params?.only_sent_to_ai) qs.set("only_sent_to_ai", "true");
   const query = qs.toString();
   return request<AlertLogPage>(`/alert-investigations/${runId}/logs${query ? `?${query}` : ""}`);
+}
+
+export interface AlertLogContextPage {
+  status: string;
+  reason?: string | null;
+  tenant_id?: string | null;
+  anchor: AlertLogEvent & { is_alert: true; synthetic?: boolean };
+  before: AlertLogEvent[];
+  after: AlertLogEvent[];
+  available_before: number;
+  available_after: number;
+  retrieved_total: number;
+  sent_to_ai_total: number;
+  truncated: boolean;
+  alert_time?: string | null;
+  window?: { start: string; end: string; covered_until: string; complete: boolean };
+  analysis_basis?: "complete" | "partial" | "unknown";
+  new_logs_since_analysis?: number | null;
+  analysis_note?: string | null;
+}
+
+/** The alert with N events either side of it, the way Discover shows context. */
+export function getAlertLogContext(runId: string, before = 5, after = 5) {
+  const qs = new URLSearchParams({ before: String(before), after: String(after) });
+  return request<AlertLogContextPage>(`/alert-investigations/${runId}/logs/context?${qs}`);
 }
 
 export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []) {

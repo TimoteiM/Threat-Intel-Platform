@@ -24,6 +24,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -239,3 +240,62 @@ def retry_log_context_after_recovery(limit: int = 500) -> dict[str, object]:
     outcome["examined"] = len(rows)
     logger.info("Log context recovery: %s", outcome)
     return outcome
+
+
+@celery_app.task(name="app.tasks.alert_log_followup_task.refresh_log_context")
+def refresh_log_context(limit: int = 200, run_id: str | None = None) -> dict[str, object]:
+    """Re-read stored windows so they carry fields added after they were fetched.
+
+    Retrieval keeps a fixed projection of each document — 1,644 mapped fields is
+    far too many to store whole — so a column added to that projection is absent
+    from everything already stored. `data.win.system.channel` was added for the
+    analyst's System Channel column, and without this every existing alert would
+    show a dash in it for ever.
+
+    Replaces rather than merges: the merge keeps the record it already has,
+    which is the poorer one here. Bounded, and skips anything still owed a
+    follow-up so it cannot race with one.
+    """
+    settings = get_settings()
+    if not getattr(settings, "alert_log_context_enabled", True):
+        return {"refreshed": 0, "reason": "disabled"}
+
+    with Session(sync_engine) as db:
+        query = select(AlertLogContext).where(AlertLogContext.status.in_(("collected", "empty")))
+        if run_id:
+            query = query.where(AlertLogContext.run_id == uuid.UUID(str(run_id)))
+        rows = [r.id for r in db.execute(query.limit(limit)).scalars().all()]
+
+    refreshed, failed, unchanged = 0, 0, 0
+    for row_id in rows:
+        try:
+            with Session(sync_engine) as db:
+                row = db.get(AlertLogContext, row_id)
+                run = db.get(AlertBodyInvestigationRun, row.run_id) if row else None
+                if row is None or run is None:
+                    continue
+
+                context = collect_for_alert(
+                    tenant_id=run.tenant_id,
+                    event_time=run.event_time,
+                    entity_host=run.entity_host,
+                    entity_user=run.entity_user,
+                    alert_body=run.alert_body,
+                    alert_fields=(run.result_json or {}).get("alert_fields") or {},
+                )
+                if context.status in ("unavailable", "skipped") or not context.logs:
+                    unchanged += 1
+                    continue
+
+                row.logs = context.logs
+                row.truncated = bool(context.truncated)
+                row.sources = context.sources or row.sources
+                row.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                refreshed += 1
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the pass
+            logger.warning("Could not refresh log context %s: %s", row_id, exc)
+            failed += 1
+
+    logger.info("Log context refresh: %s refreshed, %s unchanged, %s failed", refreshed, unchanged, failed)
+    return {"examined": len(rows), "refreshed": refreshed, "unchanged": unchanged, "failed": failed}

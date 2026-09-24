@@ -96,6 +96,10 @@ SOURCE_FIELDS: tuple[str, ...] = (
     "rule.id", "rule.level", "rule.description", "rule.groups", "rule.mitre.technique",
     "decoder.name", "location", "full_log",
     "data.win.system.eventID", "data.win.system.computer",
+    # Which Windows log the event came from, and the account's domain — both
+    # are columns an analyst reads at a glance when scanning a window.
+    "data.win.system.channel", "data.win.system.providerName",
+    "data.win.eventdata.subjectDomainName", "data.win.eventdata.targetDomainName",
     "data.win.eventdata.subjectUserName", "data.win.eventdata.targetUserName",
     "data.win.eventdata.user", "data.win.eventdata.image",
     "data.win.eventdata.commandLine", "data.win.eventdata.parentImage",
@@ -394,6 +398,11 @@ def normalise_hit(hit: dict[str, Any], *, device: Device, principal: Principal) 
             "mitre_technique": _get(source, "rule.mitre.technique"),
         },
         "event_id": _get(source, "data.win.system.eventID"),
+        "channel": _get(source, "data.win.system.channel") or _get(source, "decoder.name"),
+        "domain": (
+            _get(source, "data.win.eventdata.targetDomainName")
+            or _get(source, "data.win.eventdata.subjectDomainName")
+        ),
         "users": users[:4],
         "process": {
             "image": _get(source, "data.win.eventdata.image"),

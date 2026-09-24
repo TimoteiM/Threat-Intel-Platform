@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
+import { AlertLogContext } from "@/components/report/AlertLogContext";
 import { AlertLogView } from "@/components/report/AlertLogView";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
 import PageHero from "@/components/ui/PageHero";
@@ -1480,6 +1481,9 @@ function CaseBanner({ runCase, currentRunId }: { runCase: CorrelatedCase; curren
  */
 function LogContextSection({ runId }: { runId: string }) {
   const [open, setOpen] = useState(false);
+  // "Around the alert" is the default: an analyst opening this wants to start
+  // where the alert is, not to find it in a hundred rows first.
+  const [mode, setMode] = useState<"context" | "all">("context");
   return (
     <section
       style={{
@@ -1511,8 +1515,28 @@ function LogContextSection({ runId }: { runId: string }) {
         <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>{open ? "Hide" : "Show"}</span>
       </button>
       {open && (
-        <div style={{ marginTop: 12 }}>
-          <AlertLogView runId={runId} />
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["context", "all"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px solid var(--panel-divider-strong)",
+                  background: mode === value ? "var(--accent-subtle, rgba(56,139,253,0.16))" : "transparent",
+                  color: mode === value ? "var(--text)" : "var(--text-dim)",
+                  fontSize: 11.5,
+                  cursor: "pointer",
+                }}
+              >
+                {value === "context" ? "Around the alert" : "All retrieved events"}
+              </button>
+            ))}
+          </div>
+          {mode === "context" ? <AlertLogContext runId={runId} /> : <AlertLogView runId={runId} />}
         </div>
       )}
     </section>

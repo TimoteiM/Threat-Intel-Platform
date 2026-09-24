@@ -159,6 +159,32 @@ settings object, and there is no parameter a request could arrive through.
 
 ## The analyst log view
 
+The default is **Around the alert**: the alert highlighted in place, five events
+either side, and a *Load N newer / older documents* control at each end — the
+shape Discover uses for surrounding documents, because starting at the thing
+that fired is how a window is actually read. A flat page makes you find the
+alert before you can begin.
+
+The anchor is the alert's **own OpenSearch document**, matched on
+`external_ref`, which is the sender's `_id` and is one for 12,450 of 12,470
+stored C00 runs. Where it is missing, or the entity filter excluded that
+document from the window, the anchor is synthesised at the alert's event time
+and labelled as such — the view is never anchorless and never quietly presents a
+neighbouring event as the alert.
+
+Columns: time, offset from the alert, agent, agent IP, domain, system channel,
+rule description. *All retrieved events* remains one click away with the search
+and filters.
+
+`data.win.system.channel` was added to the stored projection for that column.
+Retrieval keeps a fixed subset of each document — 1,644 mapped fields is far too
+many to store whole — so anything already stored lacked it, and
+`refresh_log_context` re-read all 111 existing contexts to fill it in. It
+replaces rather than merges, because the merge keeps the record it already has,
+which is the poorer one here.
+
+### The searchable list
+
 Every retrieved event, not only the ones the model saw. The two sets are kept
 visibly distinct because conflating them is how an analyst comes to trust a
 verdict more than it deserves:

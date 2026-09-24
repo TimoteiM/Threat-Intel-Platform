@@ -831,6 +831,100 @@ async def get_run_logs(
     return await run_in_threadpool(_read)
 
 
+@router.get("/{run_id}/logs/context")
+async def get_run_log_context(
+    run_id: uuid.UUID,
+    db: DBSession,
+    before: int = Query(default=5, ge=0, le=500),
+    after: int = Query(default=5, ge=0, le=500),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """The alert with the events immediately either side of it.
+
+    The shape an analyst actually reads a window in: the alert highlighted in
+    place, a handful of events before and after, and the ability to pull in more
+    from either end. A flat page of a hundred rows makes you find the alert
+    before you can start; this starts where the alert is.
+
+    Anchored on the alert's own OpenSearch document where we have its id —
+    `external_ref` is the sender's `_id`, and it is one for 12,450 of 12,470
+    stored C00 runs. Where it is missing or the document is not in the window,
+    the alert is synthesised as a marker row at its own event time, so the view
+    is never anchorless.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
+
+    from sqlalchemy.orm import Session as _SyncSession
+
+    from app.db.session import sync_engine
+    from app.services import alert_log_context_store as _log_store
+
+    selected_refs = set(
+        ((run.result_json or {}).get("assistant_report") or {})
+        .get("log_selection", {})
+        .get("selected_refs")
+        or []
+    )
+    external_ref = str(run.external_ref or "").strip()
+    alert_time = run.event_time
+
+    def _read() -> dict[str, Any]:
+        with _SyncSession(sync_engine) as sync_db:
+            row = _log_store.for_run(sync_db, run_id)
+            payload = _log_store.as_payload(row, include_logs=False)
+            events = sorted(
+                (row.logs if row else []) or [],
+                key=lambda e: (str(e.get("timestamp") or ""), str(e.get("key") or "")),
+            )
+            for event in events:
+                event["sent_to_ai"] = event.get("key") in selected_refs
+
+            anchor_index = next(
+                (i for i, e in enumerate(events) if external_ref and e.get("id") == external_ref),
+                None,
+            )
+            anchor: dict[str, Any]
+            if anchor_index is not None:
+                anchor = dict(events[anchor_index])
+                anchor["is_alert"] = True
+                head, tail = events[:anchor_index], events[anchor_index + 1:]
+            else:
+                # Not in the retrieved set — the alert may have been filtered
+                # out by the entity clause, or its id was never recorded. Place
+                # a marker at its own time so before/after still mean something.
+                anchor = {
+                    "key": f"alert:{run_id}",
+                    "is_alert": True,
+                    "synthetic": True,
+                    "timestamp": alert_time.isoformat() if alert_time else None,
+                    "agent": {"name": run.entity_host},
+                    "users": [run.entity_user] if run.entity_user else [],
+                    "rule": {
+                        "id": run.detection_rule_id,
+                        "description": run.detection_rule_name or run.title,
+                    },
+                }
+                stamp = alert_time.isoformat() if alert_time else ""
+                split = len([e for e in events if str(e.get("timestamp") or "") <= stamp])
+                head, tail = events[:split], events[split:]
+
+            payload["anchor"] = anchor
+            payload["before"] = head[-before:] if before else []
+            payload["after"] = tail[:after] if after else []
+            payload["available_before"] = len(head)
+            payload["available_after"] = len(tail)
+            payload["retrieved_total"] = len(events)
+            payload["sent_to_ai_total"] = len(selected_refs)
+            payload["alert_time"] = alert_time.isoformat() if alert_time else None
+            payload["tenant_id"] = run.tenant_id
+            return payload
+
+    return await run_in_threadpool(_read)
+
+
 @router.post("/{run_id}/reanalyse")
 async def reanalyse_with_log_context(
     run_id: uuid.UUID,
