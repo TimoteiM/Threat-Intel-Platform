@@ -492,6 +492,8 @@ export interface AlertLogContextPage {
   available_after: number;
   retrieved_total: number;
   relevant_total: number;
+  /** Every flagged event in the window, not only those on this page. */
+  relevant_refs?: string[];
   sent_to_ai_total: number;
   truncated: boolean;
   alert_time?: string | null;
@@ -521,9 +523,14 @@ export interface AnalysisStatus {
     events_selected?: number | null;
     events_represented?: number | null;
     events_omitted?: number | null;
+    relevant?: number | null;
+    sent?: number | null;
     analyst_pinned: string[];
     analyst_pinned_dropped: string[];
-    used_tokens?: number | null;
+    /** What the prompt block actually cost. Zero when nothing was sent. */
+    sent_tokens?: number | null;
+    /** What the ranking's arithmetic came to, sent or not. */
+    ranking_tokens?: number | null;
     budget_tokens?: number | null;
   };
   reanalysis: { requested_by?: string | null; requested_at?: string | null; pinned_refs: string[] };
@@ -536,7 +543,13 @@ export function getAnalysisStatus(runId: string) {
 }
 
 export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []) {
-  return request<{ run_id: string; status: string; pinned_refs: string[]; note: string }>(
+  return request<{
+    run_id: string;
+    status: string;
+    pinned_refs: string[];
+    note: string;
+    previous_completed_at?: string | null;
+  }>(
     `/alert-investigations/${runId}/reanalyse`,
     { method: "POST", body: JSON.stringify({ pinned_refs: pinnedRefs }) },
   );

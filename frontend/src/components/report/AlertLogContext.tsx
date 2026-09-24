@@ -100,6 +100,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
   const [job, setJob] = useState<AnalysisStatus | null>(null);
   const [jobPhase, setJobPhase] = useState<"idle" | "queued" | "running" | "done" | "failed">("idle");
   const [elapsed, setElapsed] = useState(0);
+  const [supersedes, setSupersedes] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -138,6 +139,11 @@ export function AlertLogContext({ runId }: { runId: string }) {
       return next;
     });
 
+  // Every event the ranking flagged in the whole window, from the server —
+  // not the flagged rows on this page. "Re-analyse with the relevant events"
+  // has to mean all of them, and the view only ever holds a window of ten.
+  const relevantKeys = page?.relevant_refs ?? [];
+
   const selectedEvents = displayed.filter((e) => pinned.has(e.key));
   const selectedTokens = estimateTokens(selectedEvents);
   const budget = page?.ai_budget_tokens ?? 6000;
@@ -151,14 +157,18 @@ export function AlertLogContext({ runId }: { runId: string }) {
       return next;
     });
 
-  const requestReanalysis = async () => {
+  const requestReanalysis = async (refs?: string[]) => {
     setBusy(true);
     setNote(null);
     setJob(null);
     setElapsed(0);
     setJobPhase("queued");
     try {
-      const result = await reanalyseWithLogContext(runId, Array.from(pinned));
+      const result = await reanalyseWithLogContext(runId, refs ?? Array.from(pinned));
+      // The completion this request supersedes. Anything not later than it is
+      // the answer that was already on screen, and presenting that as the new
+      // one is how a re-analysis looked instant and identical.
+      setSupersedes(result.previous_completed_at ?? null);
       setNote(result.note);
     } catch (err) {
       setJobPhase("failed");
@@ -181,7 +191,8 @@ export function AlertLogContext({ runId }: { runId: string }) {
         const status = await getAnalysisStatus(runId);
         if (cancelled) return;
         setElapsed(Math.round((Date.now() - started) / 1000));
-        if (status.finished) {
+        const isNew = !supersedes || (status.completed_at ?? "") > supersedes;
+        if (status.finished && isNew) {
           setJob(status);
           setJobPhase(status.status === "completed" ? "done" : "failed");
           // The window's own numbers move with the new analysis.
@@ -200,7 +211,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [jobPhase, runId, load]);
+  }, [jobPhase, runId, load, supersedes]);
 
   if (loading && !page) return <Muted>Loading the events around this alert…</Muted>;
   if (error) return <Muted>{error}</Muted>;
@@ -240,10 +251,24 @@ export function AlertLogContext({ runId }: { runId: string }) {
           </strong>
           <Muted>{page.analysis_note}</Muted>
           <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-            <button type="button" onClick={requestReanalysis} disabled={busy} style={primaryBtn(busy)}>
-              {busy ? "Queueing…" : "Re-analyse with the complete context"}
+            <button
+              type="button"
+              onClick={() => void requestReanalysis(relevantKeys)}
+              disabled={busy || relevantKeys.length === 0}
+              style={primaryBtn(busy || relevantKeys.length === 0)}
+            >
+              {busy
+                ? "Queueing…"
+                : relevantKeys.length
+                ? `Re-analyse with the ${relevantKeys.length} relevant event${relevantKeys.length === 1 ? "" : "s"}`
+                : "No relevant events to add"}
             </button>
-            <Muted>The current verdict is kept, not overwritten.</Muted>
+            <Muted>
+              The current verdict is kept, not overwritten.
+              {relevantKeys.length
+                ? " Re-running with nothing added would ask the same question and get the same answer."
+                : ""}
+            </Muted>
           </div>
         </div>
       )}
@@ -279,7 +304,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
                 {job.log_selection.analyst_pinned_dropped.length > 0
                   ? `, ${job.log_selection.analyst_pinned_dropped.length} did not fit the token budget`
                   : ""}
-                {job.log_selection.used_tokens ? ` · ${job.log_selection.used_tokens} tokens used` : ""}
+                {` · ${(job.log_selection.sent_tokens ?? 0).toLocaleString()} tokens of log context sent`}
               </Muted>
             )}
           </div>
@@ -347,7 +372,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
           </button>
           <button
             type="button"
-            onClick={requestReanalysis}
+            onClick={() => void requestReanalysis()}
             disabled={busy}
             style={{ ...primaryBtn(busy), marginLeft: "auto" }}
           >

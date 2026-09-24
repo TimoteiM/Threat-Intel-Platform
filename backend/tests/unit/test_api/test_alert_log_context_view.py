@@ -152,3 +152,39 @@ def test_nothing_after_the_alert_is_reported_as_nothing_available(monkeypatch):
     assert page["after"] == []
     assert page["available_after"] == 0
     assert page["available_before"] == 3
+
+
+# --- a re-analysis must be a new answer, not the old one shown again --------
+
+def test_requesting_a_reanalysis_clears_the_completion_it_supersedes():
+    """A poll landing between the request and the worker picking it up saw the
+    previous completed state and presented that verdict as the new one —
+    instant, identical, and wrong."""
+    import inspect
+
+    source = inspect.getsource(api.reanalyse_with_log_context)
+    assert "run.completed_at = None" in source
+    assert "previous_completed_at" in source
+
+
+def test_the_status_reports_what_was_sent_not_what_the_ranking_costed():
+    """`used_tokens` is the budget the selection would have spent. Reporting it
+    when nothing was sent told an analyst 3,689 tokens had gone on an empty
+    block."""
+    import inspect
+
+    source = inspect.getsource(api.get_analysis_status)
+    assert '"sent_tokens"' in source
+    assert '"ranking_tokens"' in source
+    # Zero unless something actually went.
+    assert 'if selection.get("sent_refs") else 0' in source
+
+
+def test_the_context_view_hands_over_every_relevant_ref():
+    """"Re-analyse with the relevant events" has to mean all of them. The view
+    holds a window of ten; the flagged set spans the whole retrieval — measured
+    on a real alert, 24 flagged out of 691 retrieved."""
+    import inspect
+
+    source = inspect.getsource(api.get_run_log_context)
+    assert 'payload["relevant_refs"]' in source

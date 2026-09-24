@@ -935,6 +935,10 @@ async def get_run_log_context(
             payload["available_after"] = len(tail)
             payload["retrieved_total"] = len(events)
             payload["relevant_total"] = len(relevant_refs)
+            # The whole flagged set, not only the rows on this page: "re-analyse
+            # with the relevant events" has to mean all of them, and the view
+            # only ever holds a window of ten.
+            payload["relevant_refs"] = sorted(relevant_refs)
             payload["sent_to_ai_total"] = len(sent_refs)
             payload["alert_time"] = alert_time.isoformat() if alert_time else None
             payload["tenant_id"] = run.tenant_id
@@ -987,9 +991,16 @@ async def get_analysis_status(
             "events_selected": selection.get("events_selected"),
             "events_represented": selection.get("events_represented"),
             "events_omitted": selection.get("events_omitted"),
+            "relevant": len(selection.get("relevant_refs") or []),
+            "sent": len(selection.get("sent_refs") or []),
             "analyst_pinned": selection.get("analyst_pinned") or [],
             "analyst_pinned_dropped": selection.get("analyst_pinned_dropped") or [],
-            "used_tokens": selection.get("used_tokens"),
+            # What the prompt block actually cost, not what the ranking's
+            # arithmetic came to. `used_tokens` is the budget the *selection*
+            # would have spent; reporting it when nothing was sent told an
+            # analyst 3,689 tokens had been spent on an empty block.
+            "sent_tokens": int(selection.get("digest_tokens") or 0) if selection.get("sent_refs") else 0,
+            "ranking_tokens": selection.get("used_tokens"),
             "budget_tokens": selection.get("budget_tokens"),
         },
         "reanalysis": {
@@ -1049,8 +1060,11 @@ async def reanalyse_with_log_context(
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "pinned_refs": pinned,
     }
+    previous_completed_at = run.completed_at.isoformat() if run.completed_at else None
+
     run.result_json = existing
     run.status = "queued"
+    run.completed_at = None
     await db.commit()
 
     run_alert_body_investigation_task.delay(str(run_id))
@@ -1058,6 +1072,11 @@ async def reanalyse_with_log_context(
         "run_id": str(run_id),
         "status": "queued",
         "pinned_refs": pinned,
+        # So a caller polling for the result can tell a fresh answer from the
+        # one that was already on screen. Without it the first poll could land
+        # on the previous completed state and present the old verdict as the
+        # new one — instant, identical, and wrong.
+        "previous_completed_at": previous_completed_at,
         "budget_tokens": int(get_settings().alert_log_ai_budget_tokens),
         "note": (
             f"Re-analysis queued with {len(pinned)} selected event(s). "
