@@ -89,6 +89,31 @@ server instead, which is the only side that knows what exists, and their counts
 go through the same scoped query as the list so the selector cannot leak another
 client's volume after the list itself was locked down.
 
+## Two ingest paths, and only one of them has a credential
+
+| Path | Credential | Tenant decided by |
+|---|---|---|
+| API key | `Authorization` header, with `tenant_ids` | the credential — `tenant_id` authorised against it |
+| Trusted source address | **none** — admitted by CIDR | the marker rule, the same one migration 030 used |
+
+NiFi delivers over the second: the appliance cannot carry a header, so it is
+admitted by source address and presents nothing to authorise a tenant against.
+That path is therefore the legacy one by definition, and it **must never
+refuse**. Requiring a tenant grant from it returned 400 to every POST for four
+hours while NiFi reported success, so nothing upstream noticed until the alert
+list stopped moving.
+
+A C00 alert over that path is filed `c00` by the marker; a Cloudflare or Office
+365 alert from the same sender is filed unassigned rather than mislabelled,
+because TraceCat shares the path and a channel is not a tenant. A payload that
+claims a different client is left unassigned rather than overridden.
+
+The trusted path may name the legacy tenant — that is what the marker would
+have decided anyway — and naming any other gets a 403 saying an API key granted
+that tenant is required. **Onboarding a second client over NiFi therefore means
+giving NiFi an API key**, which is a thing to arrange with the dev team, not to
+impose by rejection.
+
 ## The request contract
 
 `tenant_id` is mandatory under the new contract and is authorised against the

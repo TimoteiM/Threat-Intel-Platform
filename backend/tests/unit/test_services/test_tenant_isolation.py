@@ -254,3 +254,81 @@ def test_the_selector_is_built_from_the_servers_answer():
     assert "tenant_scope.apply(" in helper
     assert "include_unassigned" in helper
 
+
+# --- the uncredentialed ingest path ------------------------------------------
+#
+# NiFi delivers from a trusted source address and presents no credential,
+# because the appliance cannot carry a header. Requiring a tenant grant from it
+# stopped production ingest for four hours: every POST answered 400 while NiFi
+# reported success, so nothing upstream noticed. These pin that it accepts.
+
+NIFI = {"kind": "trusted_network", "id": "172.23.10.16", "role": "ingest"}
+
+WAZUH_C00 = "Agent: EXP-47VD864 | 1015\nManager: Siembiot\nRule: 5710\n"
+CLOUDFLARE = 'destinationServiceName=Cloudflare {"Policy":"Block_Bad_TLDs"}'
+
+
+def test_the_uncredentialed_sender_is_never_refused_for_want_of_a_tenant():
+    """The regression. It must classify, or file unassigned — never 400."""
+    for body, source in ((WAZUH_C00, "Siembiot"), (CLOUDFLARE, "unknown"), ("", None)):
+        assignment = ts.resolve_for_ingest(
+            identity=NIFI, declared=None, alert_body=body,
+            alert_source=source, alert_client=None, settings=_Settings(),
+        )
+        assert assignment.assignment in ("marker", "manager_source", "unassigned")
+
+
+def test_a_c00_alert_over_the_trusted_path_is_filed_as_c00():
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared=None, alert_body=WAZUH_C00,
+        alert_source="Siembiot", alert_client=None, settings=_Settings(),
+    )
+    assert assignment.tenant_id == "c00"
+    assert assignment.assignment == "marker"
+
+
+def test_a_non_c00_alert_over_the_trusted_path_is_unassigned_not_mislabelled():
+    """TraceCat delivers over the same path. A channel is not a tenant, and
+    filing its Cloudflare and Office 365 alerts as C00 would be worse than
+    leaving them unassigned."""
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared=None, alert_body=CLOUDFLARE,
+        alert_source="unknown", alert_client=None, settings=_Settings(),
+    )
+    assert assignment.tenant_id is None
+    assert assignment.assignment == "unassigned"
+
+
+def test_a_payload_claiming_another_client_is_not_overridden_by_the_marker():
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared=None, alert_body=WAZUH_C00,
+        alert_source="Siembiot", alert_client="LIN", settings=_Settings(),
+    )
+    assert assignment.tenant_id is None
+
+
+def test_the_trusted_path_cannot_claim_a_tenant_it_cannot_prove():
+    """There is no credential here, so a named tenant cannot be authorised.
+    Naming the legacy tenant is allowed — it is what the marker would have
+    decided anyway — and naming any other requires an API key."""
+    ok = ts.resolve_for_ingest(identity=NIFI, declared="c00", alert_body="x", settings=_Settings())
+    assert ok.tenant_id == "c00"
+
+    with pytest.raises(HTTPException) as caught:
+        ts.resolve_for_ingest(identity=NIFI, declared="lin", alert_body="x", settings=_Settings())
+    assert caught.value.status_code == 403
+    assert "API key" in str(caught.value.detail)
+
+
+def test_the_marker_rule_is_the_same_one_the_migration_used():
+    """Two copies of a classification rule drift. This is the live half; the
+    historical half is migration 030, and both key on the same header."""
+    assert ts.C00_MARKER == "manager: siembiot"
+    assert ts.classify_by_marker(
+        alert_body="MANAGER: SIEMBIOT", alert_source=None, alert_client=None, legacy_tenant="c00",
+    ).tenant_id == "c00"
+    assert ts.classify_by_marker(
+        alert_body="a log that merely mentions wm-c00.siembiot.int somewhere",
+        alert_source="unknown", alert_client=None, legacy_tenant="c00",
+    ).tenant_id is None
+

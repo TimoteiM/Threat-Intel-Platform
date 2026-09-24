@@ -175,10 +175,42 @@ class TenantAssignment:
     assignment: str          # declared | legacy_fallback | unassigned
 
 
+# The C00 alert marker, verified against 13,079 stored runs: every one of the
+# 12,443 from alert_source='Siembiot' carries it, none of the 630 'unknown' do,
+# and it never contradicts a declared client. Migration 030 classified history
+# with it; this classifies live ingest with the same rule.
+C00_MARKER = "manager: siembiot"
+
+
+def classify_by_marker(
+    *, alert_body: str | None, alert_source: str | None, alert_client: str | None,
+    legacy_tenant: str,
+) -> TenantAssignment:
+    """The tenant an uncredentialed but network-trusted alert belongs to.
+
+    Not an inference from a hostname appearing somewhere in the text: the marker
+    is a Wazuh header line, and a payload that declares a different client is
+    refused rather than overridden.
+    """
+    declared_client = str(alert_client or "unknown").strip().casefold()
+    if declared_client not in ("", "unknown"):
+        # Something else claims this alert. Filing it under C00 would resolve a
+        # contradiction silently; unassigned is the honest answer.
+        return TenantAssignment(tenant_id=None, assignment="unassigned")
+    if C00_MARKER in str(alert_body or "").casefold():
+        return TenantAssignment(tenant_id=legacy_tenant, assignment="marker")
+    if str(alert_source or "").strip() == "wm-c00.siembiot.int":
+        return TenantAssignment(tenant_id=legacy_tenant, assignment="manager_source")
+    return TenantAssignment(tenant_id=None, assignment="unassigned")
+
+
 def resolve_for_ingest(
     *,
     identity: dict[str, Any] | None,
     declared: str | None,
+    alert_body: str | None = None,
+    alert_source: str | None = None,
+    alert_client: str | None = None,
     settings: Any = None,
 ) -> TenantAssignment:
     """Decide the tenant for an incoming alert, and refuse rather than guess.
@@ -210,13 +242,41 @@ def resolve_for_ingest(
         settings = get_settings()
 
     declared = str(declared or "").strip()
-    if declared:
-        assert_can_submit(identity, declared)
-        return TenantAssignment(tenant_id=declared, assignment="declared")
-
     identity = identity or {}
     legacy = str(getattr(settings, "alert_ingest_legacy_tenant", "") or "").strip()
     held = [str(t).strip() for t in (identity.get("tenant_ids") or []) if str(t).strip()]
+
+    # ── The network-trusted ingest path ─────────────────────────────────────
+    #
+    # An appliance that cannot carry a header — NiFi here — is admitted by
+    # source address and presents no credential. There is therefore nothing to
+    # authorise a tenant against, so this path is the legacy one by definition
+    # and is classified by the same verified marker rule migration 030 used.
+    #
+    # It must never refuse. This check was added returning 400 to an
+    # uncredentialed sender and stopped production ingest for four hours:
+    # enforcing a contract the sending side has not been given yet, against the
+    # one caller that cannot satisfy it, is the wrong trade in every direction.
+    # The multi-client contract needs a credential, and asking for one is a
+    # thing to arrange with the dev team, not to impose by rejection.
+    if identity.get("kind") == "trusted_network":
+        if declared:
+            if legacy and declared == legacy:
+                return TenantAssignment(tenant_id=legacy, assignment="declared")
+            raise HTTPException(
+                403,
+                f"Submitting for tenant {declared!r} needs an API key granted that tenant. "
+                "This sender is admitted by source address and presents no credential, "
+                "so the tenant it names cannot be verified.",
+            )
+        return classify_by_marker(
+            alert_body=alert_body, alert_source=alert_source, alert_client=alert_client,
+            legacy_tenant=legacy or "",
+        ) if legacy else TenantAssignment(tenant_id=None, assignment="unassigned")
+
+    if declared:
+        assert_can_submit(identity, declared)
+        return TenantAssignment(tenant_id=declared, assignment="declared")
 
     if identity.get("kind") == "api_key":
         if legacy and held == [legacy]:

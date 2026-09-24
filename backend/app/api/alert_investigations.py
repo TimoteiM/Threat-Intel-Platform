@@ -438,7 +438,13 @@ async def _create_alert_run(
     # and one that names none is accepted only under the configured legacy
     # grant. See services/tenant_scope.resolve_for_ingest.
     assignment = tenant_scope.resolve_for_ingest(
-        identity=identity, declared=getattr(request, "tenant_id", None)
+        identity=identity,
+        declared=getattr(request, "tenant_id", None),
+        # Only the network-trusted path reads these, and only to apply the same
+        # marker rule the historical migration used.
+        alert_body=alert_body,
+        alert_source=alert_source,
+        alert_client=alert_client,
     )
 
     run = AlertBodyInvestigationRun(
