@@ -402,3 +402,134 @@ def test_a_pinned_query_says_what_it_is_pinned_to():
     }
     sent = client.queries[0]["query"]["bool"]["filter"]
     assert {"terms": {"manager.name": ["wm-c00.siembiot.int"]}} in sent
+
+
+# --- the event's own fields --------------------------------------------------
+
+def _fields(record):
+    """The captured fields as a mapping, for assertions. The stored shape is an
+    ordered list because JSONB does not preserve key order."""
+    return {f["name"]: f["value"] for f in (record.get("fields") or [])}
+
+
+def _win_hit(event_id, system=None, eventdata=None):
+    return {
+        "_index": "wazuh-alerts-4.x-2026.09.24", "_id": "abc",
+        "_source": {
+            "timestamp": "2026-09-24T11:12:48.000+0000",
+            "agent": {"name": "EXP-47VD864", "ip": "10.10.126.169"},
+            "rule": {"id": "67027", "level": 3, "description": "A process was created."},
+            "data": {"win": {
+                "system": {"eventID": event_id, "channel": "Security",
+                           "computer": "EXP-47VD864.int.expertware.net", **(system or {})},
+                "eventdata": eventdata or {},
+            }},
+        },
+    }
+
+
+def test_a_security_channel_process_event_is_not_empty():
+    """The reported gap. The projection named Sysmon's `image`, `commandLine`
+    and `parentImage`; Security 4688 calls the same three `newProcessName`,
+    `commandLine` and `parentProcessName`, so every 4688 row was blank."""
+    hit = _win_hit("4688", eventdata={
+        "newProcessName": r"C:\Program Files\Docker\docker.exe",
+        "parentProcessName": r"C:\Users\dnechita\AppData\Local\Code.exe",
+        "subjectUserName": "dnechita",
+        "subjectDomainName": "INT",
+    })
+    record = lc.normalise_hit(hit, device=lc.Device(name="EXP-47VD864"), principal=lc.Principal())
+
+    assert record["process"]["image"].endswith("docker.exe")
+    assert record["process"]["parent_image"].endswith("Code.exe")
+    assert _fields(record)["data.win.eventdata.subjectUserName"] == "dnechita"
+    assert _fields(record)["data.win.eventdata.subjectDomainName"] == "INT"
+
+
+def test_an_event_type_nobody_listed_still_carries_its_fields():
+    """The point of capturing subtrees: a type this code has never heard of
+    arrives complete, instead of arriving blank until someone adds it."""
+    hit = _win_hit("9999", eventdata={"somethingNeverSeenBefore": "a value", "andAnother": "42"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+
+    assert _fields(record)["data.win.eventdata.somethingNeverSeenBefore"] == "a value"
+    assert _fields(record)["data.win.eventdata.andAnother"] == "42"
+
+
+def test_sysmon_naming_still_works():
+    hit = _win_hit("1", eventdata={"image": r"C:\powershell.exe", "commandLine": "-nop -w hidden",
+                                   "parentImage": r"C:\explorer.exe"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert record["process"]["image"].endswith("powershell.exe")
+    assert record["process"]["command_line"] == "-nop -w hidden"
+
+
+def test_the_columns_are_not_repeated_in_the_summary():
+    hit = _win_hit("4688", eventdata={"subjectUserName": "dnechita"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert record["event_id"] == "4688"
+    assert record["channel"] == "Security"
+    for repeated in ("data.win.system.eventID", "data.win.system.channel",
+                     "data.win.system.computer"):
+        assert repeated not in _fields(record)
+
+
+def test_the_rendered_windows_message_is_not_kept_twice():
+    """It restates every field below it and truncates mid-sentence."""
+    hit = _win_hit("4688", system={"message": "A new process has been created." + "x" * 2000})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert "data.win.system.message" not in _fields(record)
+
+
+def test_the_field_map_is_bounded():
+    """One pathological document must not bloat a stored context."""
+    hit = _win_hit("1", eventdata={f"f{i}": "v" * 5000 for i in range(200)})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert len(record["fields"]) <= 40
+    assert all(len(v) <= 400 for v in _fields(record).values())
+
+
+def test_empty_values_are_dropped():
+    hit = _win_hit("1", eventdata={"real": "value", "blank": "", "nothing": None})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert "data.win.eventdata.real" in _fields(record)
+    assert "data.win.eventdata.blank" not in _fields(record)
+    assert "data.win.eventdata.nothing" not in _fields(record)
+
+
+def test_a_machine_account_is_not_shown_ahead_of_a_person():
+    """`EXP-47VD864$` in the user column says nothing the device column has not."""
+    hit = _win_hit("4688", eventdata={"subjectUserName": "EXP-47VD864$", "targetUserName": "dnechita"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    assert record["users"][0] == "dnechita"
+
+
+def test_captured_fields_are_sanitised_before_they_can_reach_the_model():
+    """These are whatever the event id happens to carry, so they are exactly
+    where an unanticipated secret lives."""
+    from app.services import log_secret_sanitizer as sec
+
+    hit = _win_hit("4688", eventdata={"commandLine": "net user svc /add Password=Hunter2Hunter2"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+    cleaned, counts = sec.sanitize_records([record])
+
+    blob = str(cleaned[0])
+    assert "Hunter2Hunter2" not in blob
+    assert "net user svc /add" in blob
+    assert counts
+
+
+def test_the_field_order_survives_a_jsonb_round_trip():
+    """JSONB normalises object keys by length then bytewise, so a mapping came
+    back with data.win.system.task above data.win.eventdata.newProcessName —
+    the reverse of what a reader wants. A list keeps the server's ordering."""
+    import json as _json
+
+    hit = _win_hit("4688", system={"task": "13312", "threadID": "9104"},
+                   eventdata={"newProcessName": "docker.exe", "subjectUserName": "dnechita"})
+    record = lc.normalise_hit(hit, device=lc.Device(), principal=lc.Principal())
+
+    names = [f["name"] for f in _json.loads(_json.dumps(record["fields"]))]
+    assert names[0].startswith("data.win.eventdata.")
+    assert names.index("data.win.eventdata.newProcessName") < names.index("data.win.system.task")
+

@@ -372,6 +372,23 @@ function Row({
                   Include this event in a re-analysis
                 </label>
               )}
+              {event.fields && event.fields.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>
+                    Document summary
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <tbody>
+                      {event.fields.map((field) => (
+                        <tr key={field.name}>
+                          <td style={summaryKey}>{field.name}</td>
+                          <td style={summaryValue}>{field.value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {event.full_log && <pre style={pre}>{event.full_log}</pre>}
             </div>
           </td>
@@ -437,6 +454,22 @@ const primaryBtn = (disabled: boolean): React.CSSProperties => ({
   cursor: disabled ? "default" : "pointer",
   fontSize: 13,
 });
+const summaryKey: React.CSSProperties = {
+  padding: "4px 10px 4px 0",
+  borderBottom: "1px solid var(--border)",
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono, monospace)",
+  whiteSpace: "nowrap",
+  verticalAlign: "top",
+  width: "1%",
+};
+const summaryValue: React.CSSProperties = {
+  padding: "4px 0",
+  borderBottom: "1px solid var(--border)",
+  color: "var(--text)",
+  fontFamily: "var(--font-mono, monospace)",
+  wordBreak: "break-all",
+};
 const pre: React.CSSProperties = {
   margin: 0,
   padding: 8,

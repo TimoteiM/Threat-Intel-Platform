@@ -183,6 +183,47 @@ many to store whole — so anything already stored lacked it, and
 replaces rather than merges, because the merge keeps the record it already has,
 which is the poorer one here.
 
+### What an expanded row shows
+
+The event's **own** fields, whatever they are for its event id — a Document
+summary in the shape OpenSearch shows one.
+
+This replaced an enumerated projection, and the enumeration was a class of bug
+rather than a missing entry. The list named Sysmon's `image`, `commandLine` and
+`parentImage`; Security event 4688 calls the same three things
+`newProcessName`, `commandLine` and `parentProcessName`, so every 4688 row came
+back blank — and so did every event type nobody had thought to add. The number
+of blanks was a function of how many event ids had been considered, not of
+anything real.
+
+So `data.win.system.*` and `data.win.eventdata.*` are taken whole. It costs
+nothing: measured over 300 recent documents, `eventdata` is 467 bytes at p90
+and 743 at its largest, with at most 21 fields. The enumeration was not buying
+size, only omissions. Non-Windows vendors stay enumerated — an Office 365 or
+AWS `data` object runs to hundreds of fields, and `data.*` would be a different
+mistake.
+
+Three details that are easy to get wrong:
+
+* **The fields are a list of pairs, not an object.** JSONB normalises key order
+  by length then bytewise, so a mapping came back with `data.win.system.task`
+  above `data.win.eventdata.newProcessName` — the reverse of what a reader
+  wants. `eventdata` leads, because it is what the event is *about*.
+* **They are sanitised.** These are whatever the event happens to carry, so they
+  are exactly where an unanticipated secret lives; sanitising only the fields we
+  had named would repeat the mistake that made the capture necessary.
+* **`data.win.system.message` is dropped.** It restates every field below it,
+  runs to hundreds of characters, and truncating it cuts mid-sentence.
+  `full_log` keeps the raw event.
+
+A machine account is no longer shown ahead of a person: `EXP-47VD864$` in the
+user column says nothing the device column has not already said, while
+`dnechita` on the same event is the answer.
+
+Adding fields to the projection does not reach what is already stored, so
+`refresh_log_context` re-reads existing contexts. It has been run; all stored
+events carry their own fields.
+
 ### The searchable list
 
 Every retrieved event, not only the ones the model saw. The two sets are kept

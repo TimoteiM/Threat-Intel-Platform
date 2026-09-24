@@ -42,7 +42,7 @@ from typing import Any, Iterable
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # -- credentials in command lines and config -----------------------------
     ("password", re.compile(
-        r"(?i)\b(?:password|passwd|pwd|pass|secret|credential)\s*[:=]\s*"
+        r"(?i)\b(?:password|passphrase|passwd|pwd|pass|pw|secret|credential)\s*[:=]\s*"
         r"(?P<secret>(?:\"[^\"\n]{1,256}\"|'[^'\n]{1,256}'|[^\s,;&|]{1,256}))"
     )),
     ("password_flag", re.compile(
@@ -213,6 +213,29 @@ def sanitize_records(records: Iterable[dict[str, Any]], *, fields: tuple[str, ..
                 copy[name] = result.text
                 for k, v in result.replacements.items():
                     totals[k] = totals.get(k, 0) + v
+        # The captured document fields. These are whatever the event id happens
+        # to carry, so they are exactly where an unanticipated secret lives —
+        # a `commandLine` with `-Password`, a `TargetUserName` that is an email,
+        # a vendor field nobody enumerated. Sanitising only the fields we named
+        # would repeat the mistake that made this capture necessary.
+        # Named `document_fields`, not `fields`: that is this function's own
+        # parameter, and shadowing it made the second record iterate the first
+        # record's value.
+        document_fields = copy.get("fields")
+        if isinstance(document_fields, list):
+            cleaned_fields = []
+            for entry in document_fields:
+                if not isinstance(entry, dict):
+                    continue
+                value = entry.get("value")
+                if isinstance(value, str):
+                    result = sanitize_text(value, shared=shared)
+                    entry = {**entry, "value": result.text}
+                    for k, v in result.replacements.items():
+                        totals[k] = totals.get(k, 0) + v
+                cleaned_fields.append(entry)
+            copy["fields"] = cleaned_fields
+
         process = copy.get("process")
         if isinstance(process, dict):
             process = dict(process)

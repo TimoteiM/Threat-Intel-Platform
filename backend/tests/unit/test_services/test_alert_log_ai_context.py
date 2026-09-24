@@ -313,3 +313,24 @@ def test_pivots_do_not_scrape_arbitrary_words_from_the_body():
                                alert_body="the quick brown fox jumped over the lazy dog",
                                alert_fields={})
     assert pivots.is_empty()
+
+
+def test_sanitising_many_records_does_not_leak_state_between_them():
+    """A local named `fields` shadowed the parameter of the same name, so the
+    second record iterated the first record's value and the pass crashed on any
+    record without one."""
+    records = [
+        _event("a", log="password=Secret111"),
+        _event("b", log="nothing sensitive", rule_id="99", desc="other"),
+        _event("c", log="password=Secret222", rule_id="98", desc="third"),
+    ]
+    records[0]["fields"] = [{"name": "data.win.eventdata.commandLine", "value": "pw=Secret333"}]
+
+    cleaned, counts = sec.sanitize_records(records)
+
+    assert len(cleaned) == 3
+    blob = str(cleaned)
+    for secret in ("Secret111", "Secret222", "Secret333"):
+        assert secret not in blob
+    assert counts
+

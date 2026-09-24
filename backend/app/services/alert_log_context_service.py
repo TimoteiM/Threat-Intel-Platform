@@ -37,6 +37,7 @@ many times it runs.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -88,24 +89,48 @@ USER_FIELDS: tuple[str, ...] = (
     "data.win.eventdata.sourceUser",
 )
 
-# What is kept from a hit. The mapping has 1,644 leaf fields; a case that pulled
-# whole documents would store megabytes of Windows event XML per alert.
+# What is kept from a hit.
+#
+# The Windows subtrees are taken *whole*, with wildcards, rather than by naming
+# fields. Naming them is what produced an empty row for Security event 4688:
+# the list had Sysmon's `image`, `commandLine` and `parentImage`, and the
+# Security channel calls the same three things `newProcessName`, `commandLine`
+# and `parentProcessName`. Every event type not hand-listed had the same hole,
+# and the count of holes was a function of how many event ids had been thought
+# about rather than of anything real.
+#
+# It costs nothing. Measured over 300 recent documents, `data.win.eventdata` is
+# 467 bytes at p90 and 743 at its largest, with at most 21 fields — so the
+# enumeration was not buying size, only omissions.
+#
+# The non-Windows vendors stay enumerated: an Office 365 or AWS `data` object
+# runs to hundreds of fields, and `data.*` would be a different mistake.
 SOURCE_FIELDS: tuple[str, ...] = (
     "timestamp", "@timestamp",
     "agent.id", "agent.name", "agent.ip", "manager.name",
     "rule.id", "rule.level", "rule.description", "rule.groups", "rule.mitre.technique",
     "decoder.name", "location", "full_log",
-    "data.win.system.eventID", "data.win.system.computer",
-    # Which Windows log the event came from, and the account's domain — both
-    # are columns an analyst reads at a glance when scanning a window.
-    "data.win.system.channel", "data.win.system.providerName",
-    "data.win.eventdata.subjectDomainName", "data.win.eventdata.targetDomainName",
-    "data.win.eventdata.subjectUserName", "data.win.eventdata.targetUserName",
-    "data.win.eventdata.user", "data.win.eventdata.image",
-    "data.win.eventdata.commandLine", "data.win.eventdata.parentImage",
+    "data.win.system.*",
+    "data.win.eventdata.*",
     "data.srcuser", "data.dstuser", "data.srcip", "data.dstip",
     "data.ms-graph.userPrincipalName", "data.office365.UserId",
 )
+
+# Bounds on the captured field map. Generous against the measurement above and
+# firm enough that one pathological document cannot bloat a stored context.
+_MAX_FIELDS = 40
+_MAX_FIELD_CHARS = 400
+
+# Fields already surfaced as columns or their own keys. Repeating them in the
+# summary is noise.
+_SUMMARY_SKIP = frozenset({
+    "data.win.system.eventID", "data.win.system.channel", "data.win.system.computer",
+    # The rendered Windows message. It restates every field below it, runs to
+    # several hundred characters, and truncating it cuts mid-sentence — so it is
+    # both the least readable copy and the most expensive. `full_log` keeps the
+    # raw event for anyone who wants it.
+    "data.win.system.message",
+})
 
 _FULL_LOG_CHARS = 600
 _DOMAIN_USER = re.compile(r"(?<![\w.\\])(?P<domain>[A-Za-z0-9][A-Za-z0-9._-]{1,30})\\(?P<user>[A-Za-z0-9][\w.$@-]{0,63})")
@@ -358,6 +383,38 @@ def _get(source: dict[str, Any], path: str) -> Any:
     return node
 
 
+def _document_fields(source: dict[str, Any]) -> list[dict[str, str]]:
+    """A bounded, ordered view of the event's own Windows fields.
+
+    A **list of pairs**, not a mapping, because this is stored in JSONB and
+    JSONB does not preserve key order — it normalises keys by length and then
+    bytewise. A dict came back with `data.win.system.task` above
+    `data.win.eventdata.newProcessName`, which is the reverse of what a reader
+    wants and is not something the frontend should have to re-derive.
+
+    `eventdata` first: it is what the event is *about* — the process, the
+    account, the target. `system` is the envelope, and a reader who wants the
+    thread id can scroll for it. Values are truncated rather than dropped,
+    because a long command line matters up to the point it stops being readable.
+    """
+    win = ((source.get("data") or {}).get("win")) or {}
+    out: list[dict[str, str]] = []
+    for section in ("eventdata", "system"):
+        block = win.get(section)
+        if not isinstance(block, dict):
+            continue
+        for key in sorted(block):
+            name = f"data.win.{section}.{key}"
+            if name in _SUMMARY_SKIP or len(out) >= _MAX_FIELDS:
+                continue
+            value = block[key]
+            if value in (None, "", [], {}):
+                continue
+            text = value if isinstance(value, str) else json.dumps(value, default=str)
+            out.append({"name": name, "value": text[:_MAX_FIELD_CHARS]})
+    return out
+
+
 def normalise_hit(hit: dict[str, Any], *, device: Device, principal: Principal) -> dict[str, Any]:
     """One log line, small enough to store and explicit about why it matched.
 
@@ -373,6 +430,10 @@ def normalise_hit(hit: dict[str, Any], *, device: Device, principal: Principal) 
         str(_get(source, f)) for f in USER_FIELDS
         if _get(source, f) not in (None, "")
     ]
+    # A machine account is a real value and a poor label. `EXP-47VD864$` in the
+    # user column tells an analyst nothing that the device column has not
+    # already said, while `dnechita` on the same event is the answer.
+    users = sorted(dict.fromkeys(users), key=lambda u: (u.endswith("$"), users.index(u)))
     spellings = {s.casefold() for s in principal.spellings()}
     matched: list[str] = []
     if device.name and str(agent_name or "").casefold() == device.name.casefold():
@@ -404,12 +465,19 @@ def normalise_hit(hit: dict[str, Any], *, device: Device, principal: Principal) 
             or _get(source, "data.win.eventdata.subjectDomainName")
         ),
         "users": users[:4],
+        # Sysmon and the Security channel name the same three things
+        # differently. Both, so process links work for either.
         "process": {
-            "image": _get(source, "data.win.eventdata.image"),
-            "command_line": (str(_get(source, "data.win.eventdata.commandLine"))[:400]
-                             if _get(source, "data.win.eventdata.commandLine") else None),
-            "parent_image": _get(source, "data.win.eventdata.parentImage"),
+            "image": (_get(source, "data.win.eventdata.image")
+                      or _get(source, "data.win.eventdata.newProcessName")),
+            "command_line": (str(cmd)[:_MAX_FIELD_CHARS] if (cmd := _get(source, "data.win.eventdata.commandLine")) else None),
+            "parent_image": (_get(source, "data.win.eventdata.parentImage")
+                             or _get(source, "data.win.eventdata.parentProcessName")),
         },
+        # The event's own fields, whatever they are for this event id. This is
+        # what an analyst opens a row to read, and what the enumerated
+        # projection could never carry for a type nobody had listed.
+        "fields": _document_fields(source),
         "network": {"src_ip": _get(source, "data.srcip"), "dst_ip": _get(source, "data.dstip")},
         "decoder": _get(source, "decoder.name"),
         "location": _get(source, "location"),

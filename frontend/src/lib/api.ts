@@ -416,6 +416,12 @@ export interface AlertLogEvent {
   full_log?: string | null;
   channel?: string | null;
   domain?: string | null;
+  /**
+   * The event's own fields, whatever they are for this event id. A list of
+   * pairs rather than an object: it is stored in JSONB, which normalises key
+   * order, so the server's ordering only survives as a list.
+   */
+  fields?: { name: string; value: string }[];
   matched_on?: string[];
   /** Whether this event was in the subset sent to the model. */
   sent_to_ai?: boolean;
