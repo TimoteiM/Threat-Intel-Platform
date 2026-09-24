@@ -769,6 +769,10 @@ class AlertLogContext(Base):
     logs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     selectors: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     sources: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # How much log context the verdict on screen was actually formed from.
+    # `len(logs) - logs_at_analysis` is what the analyst needs to know.
+    logs_at_analysis: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    analysed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )

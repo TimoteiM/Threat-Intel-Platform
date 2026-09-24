@@ -232,6 +232,7 @@ def test_a_repeated_document_is_not_returned_twice():
     result = client.search_all(
         indices=["i"], query={"match_all": {}},
         sort=[{"timestamp": "asc"}, {"_id": "asc"}], page_size=2, max_hits=50,
+        use_pit=False,   # the overlap this covers is the one a PIT prevents
     )
     client.close()
     assert [h["_id"] for h in result.hits] == ["a", "b", "c"]
@@ -260,3 +261,63 @@ def test_a_missing_ca_bundle_says_so(tmp_path):
 
     with pytest.raises(osc.OpenSearchNotConfigured, match="CA bundle"):
         osc.OpenSearchClient(settings=WithCa())
+
+
+# --- consistent pagination ---------------------------------------------------
+
+def test_paging_uses_a_point_in_time_so_pages_compose():
+    """This cluster indexes about 274 documents a second. A refresh between page
+    2 and page 3 shifts everything after the cursor, so pages walked over a live
+    index do not add up to one answer."""
+    calls: list[dict] = []
+
+    def handler(request):
+        import json as _json
+
+        if request.method == "DELETE":
+            calls.append({"deleted": True})
+            return httpx.Response(200, json={"succeeded": True})
+        if request.url.path.endswith("/_search/point_in_time"):
+            return httpx.Response(200, json={"pit_id": "PIT-1"})
+        body = _json.loads(request.read().decode() or "{}")
+        calls.append(body)
+        after = body.get("search_after")
+        start = int(after[0]) if after else 0
+        hits = [
+            {"_index": "i", "_id": f"d{i}", "_source": {}, "sort": [i + 1, f"d{i}"]}
+            for i in range(start, min(start + body["size"], 3))
+        ]
+        return httpx.Response(200, json={"hits": {"hits": hits}, "pit_id": "PIT-2"})
+
+    client = _client(handler)
+    result = client.search_all(
+        indices=["i"], query={"match_all": {}},
+        sort=[{"timestamp": "asc"}, {"_id": "asc"}], page_size=2, max_hits=50,
+    )
+    client.close()
+
+    searches = [c for c in calls if "size" in c]
+    assert result.consistent is True
+    assert searches[0]["pit"]["id"] == "PIT-1"
+    # The cluster may rotate the id on every response; the next page must use
+    # the new one or it pages a PIT that no longer exists.
+    assert searches[1]["pit"]["id"] == "PIT-2"
+    assert any(c.get("deleted") for c in calls), "a leaked PIT pins segments on the cluster"
+
+
+def test_a_cluster_that_will_not_open_a_pit_is_still_queried():
+    """Consistency is an improvement, not a precondition for reading logs."""
+    def handler(request):
+        if request.url.path.endswith("/_search/point_in_time"):
+            return httpx.Response(400, text="point in time not supported")
+        return httpx.Response(200, json={"hits": {"hits": [
+            {"_index": "i", "_id": "a", "_source": {}, "sort": [1, "a"]}]}})
+
+    client = _client(handler)
+    result = client.search_all(
+        indices=["i"], query={"match_all": {}},
+        sort=[{"timestamp": "asc"}, {"_id": "asc"}], page_size=10, max_hits=10,
+    )
+    client.close()
+    assert result.consistent is False
+    assert len(result.hits) == 1

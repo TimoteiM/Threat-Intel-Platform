@@ -274,6 +274,43 @@ class Settings(BaseSettings):
     # long after the window closes, late enough that the tail has been indexed.
     alert_log_followup_delay_seconds: int = 120
     alert_log_followup_max_attempts: int = 5
+    # How far back a follow-up re-reads before its high-water mark, to catch
+    # documents whose event time fell inside the covered slice but which were
+    # indexed after it was read. Measured on this cluster over two hours:
+    # indexing lag is p50 0.53s, p99 4.2s, p99.9 11.4s, max 15.8s. Five minutes
+    # is that maximum nineteen times over, which leaves room for a Filebeat
+    # backlog without re-reading the whole window. Overlapping costs nothing
+    # but a few duplicate hits, which merge on index:id.
+    alert_log_overlap_seconds: int = 300
+    # Page a frozen view of the indices rather than a live one. Off only for a
+    # cluster that refuses to open a Point in Time.
+    opensearch_use_point_in_time: bool = True
+    # Re-running the analyst over late logs costs a model call per alert and
+    # rewrites the run payload. Off by default: the late logs are attached, the
+    # analysis is marked as having been formed without them, and an analyst
+    # decides. See docs/alert-log-context.md.
+    alert_log_reanalyse_on_complete: bool = False
+    # Observed, not configured here: daily indices run 120 days back on this
+    # cluster. Used to tell "retry this" from "the logs are gone".
+    opensearch_retention_days: int = 120
+    # A belt-and-braces pin on the tenant boundary. Verified 2026-09-24: this
+    # cluster (C00-Indexer) is written to by exactly one Wazuh manager —
+    # wm-c00.siembiot.int accounts for all 2,593,308,014 documents across all
+    # 120 alert indices — so the boundary today is that the cluster is
+    # dedicated, not that anything filters. That is a deployment property, and
+    # deployment properties change without the code noticing. With these set,
+    # every query carries the filter, so a second manager appearing on this
+    # cluster widens nothing.
+    #
+    # Leave empty to query unpinned; the status then says so, because "no
+    # tenant filter" should be visible rather than assumed.
+    opensearch_tenant_field: str = "manager.name"
+    opensearch_tenant_values: str = ""
+
+    @property
+    def opensearch_tenant_value_list(self) -> list[str]:
+        return [v.strip() for v in str(self.opensearch_tenant_values or "").split(",") if v.strip()]
+
 
     # Report formats to try, in order. The full JSON report is authoritative for
     # malscore, signatures and network indicators; `lite` is the smaller

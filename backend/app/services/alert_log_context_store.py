@@ -96,6 +96,10 @@ def save(db: Session, run_id: uuid.UUID, context: LogContext) -> AlertLogContext
         None if context.status in TERMINAL_STATUSES
         else _aware(end) + timedelta(seconds=int(settings.alert_log_followup_delay_seconds))
     )
+    # The analysis runs immediately after this, over exactly these records.
+    # Anything that arrives later is something the verdict never saw.
+    row.logs_at_analysis = len(row.logs or [])
+    row.analysed_at = _now()
 
     try:
         db.commit()
@@ -206,9 +210,141 @@ def as_payload(row: AlertLogContext | None, *, include_logs: bool = True) -> dic
         "sources": row.sources or {},
         "attempts": int(row.attempts or 0),
     }
+    payload.update(analysis_basis(row))
     if include_logs:
         payload["logs"] = row.logs or []
     return payload
+
+
+def analysis_basis(row: AlertLogContext) -> dict[str, Any]:
+    """How much of the log context the stored analysis was formed from.
+
+    Three states, and the middle one is the reason this exists:
+
+    ``complete``  the analysis saw every log this window holds
+    ``partial``   logs arrived after the analysis ran; it never saw them
+    ``unknown``   the row predates this being recorded
+
+    An analysis presented as complete when it was formed on a third of the
+    window is worse than having no log context at all, because it reads as
+    though the quiet half was checked and found quiet.
+    """
+    total = len(row.logs or [])
+    seen = row.logs_at_analysis
+    if seen is None:
+        return {
+            "analysis_basis": "unknown",
+            "analysis_saw_logs": None,
+            "new_logs_since_analysis": None,
+            "analysis_note": "This run predates log-context tracking.",
+        }
+
+    new = max(0, total - int(seen))
+    window_complete = _aware(row.covered_until) >= _aware(row.window_end)
+    if new == 0 and window_complete:
+        return {
+            "analysis_basis": "complete",
+            "analysis_saw_logs": int(seen),
+            "new_logs_since_analysis": 0,
+            "analysis_note": None,
+        }
+    if new == 0:
+        return {
+            "analysis_basis": "partial",
+            "analysis_saw_logs": int(seen),
+            "new_logs_since_analysis": 0,
+            "analysis_note": (
+                "The alert is live and the rest of its window has not been read yet. "
+                "The analysis covers the logs retrieved so far."
+            ),
+        }
+    return {
+        "analysis_basis": "partial",
+        "analysis_saw_logs": int(seen),
+        "new_logs_since_analysis": new,
+        "analysis_note": (
+            f"{new} log event{'s' if new != 1 else ''} arrived after this analysis was written "
+            "and were not considered in its verdict. Re-run the analysis to include them."
+        ),
+    }
+
+
+def mark_analysed(db: Session, row: AlertLogContext) -> AlertLogContext:
+    """Record that an analysis has just been formed over everything now stored."""
+    row.logs_at_analysis = len(row.logs or [])
+    row.analysed_at = _now()
+    row.updated_at = _now()
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+# Failures worth retrying once the operator has fixed something. A refused
+# query or an alert with no queryable entity is not one of them — retrying
+# those produces the same answer for ever.
+RECOVERABLE_MARKERS = (
+    "ca bundle", "certificate", "tls", "ssl",
+    "no opensearch node answered", "not configured", "connecterror", "timeout",
+)
+
+
+def recoverable(row: AlertLogContext) -> bool:
+    text = f"{row.reason or ''} {row.last_error or ''}".casefold()
+    return any(marker in text for marker in RECOVERABLE_MARKERS)
+
+
+def reopen_for_retry(db: Session, rows: Sequence[AlertLogContext], *, now: datetime | None = None) -> dict[str, Any]:
+    """Put recoverable rows back in the queue after an outage is fixed.
+
+    Attempts are reset, because the five that were spent proving the CA was
+    missing say nothing about whether the cluster answers now.
+
+    A window older than the cluster's retention is *not* reopened: the indices
+    that held those logs have rolled away, so the retry would spend a query to
+    learn that. It is marked `expired` instead, which is the truthful outcome
+    and distinguishable from "we never tried".
+    """
+    settings = get_settings()
+    now = now or _now()
+    horizon = now - timedelta(days=int(getattr(settings, "opensearch_retention_days", 120)))
+
+    reopened, expired, skipped = 0, 0, 0
+    for row in rows:
+        if not recoverable(row):
+            skipped += 1
+            continue
+        if _aware(row.window_end) < horizon:
+            row.status = "expired"
+            row.reason = (
+                "The logs for this window have aged out of the cluster's retention "
+                f"(~{int(getattr(settings, 'opensearch_retention_days', 120))} days), so there is "
+                "nothing left to retrieve."
+            )
+            row.next_attempt_at = None
+            expired += 1
+            continue
+        row.status = "partial"
+        row.attempts = 0
+        row.last_error = None
+        row.reason = "Queued for retry after the connection to the log cluster was restored."
+        row.next_attempt_at = now
+        reopened += 1
+    for row in rows:
+        row.updated_at = now
+    db.commit()
+    return {"reopened": reopened, "expired": expired, "skipped_not_recoverable": skipped}
+
+
+def retryable(db: Session, *, limit: int = 500) -> list[AlertLogContext]:
+    """Every row a recovery pass should look at."""
+    return list(
+        db.execute(
+            select(AlertLogContext)
+            .where(AlertLogContext.status.in_(("unavailable", "failed")))
+            .order_by(AlertLogContext.window_end.desc())
+            .limit(limit)
+        ).scalars().all()
+    )
 
 
 def combine_for_case(rows: Sequence[AlertLogContext], *, max_logs: int | None = None) -> dict[str, Any]:

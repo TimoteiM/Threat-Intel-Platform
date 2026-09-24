@@ -195,3 +195,131 @@ def test_the_follow_up_task_is_registered_with_the_worker():
     assert "app.tasks.alert_log_followup_task.complete_alert_log_context" in celery_app.tasks
     assert "app.tasks.alert_log_followup_task.sweep_alert_log_context" in celery_app.tasks
     assert "alert-log-context-sweep" in celery_app.conf.beat_schedule
+
+
+# --- is the analysis an analyst reads based on these logs? -------------------
+
+def test_an_analysis_that_saw_everything_is_complete():
+    row = Row(logs=[_log("a"), _log("b")], logs_at_analysis=2, covered_until=END)
+    basis = store.analysis_basis(row)
+    assert basis["analysis_basis"] == "complete"
+    assert basis["new_logs_since_analysis"] == 0
+    assert basis["analysis_note"] is None
+
+
+def test_logs_that_arrived_after_the_analysis_are_counted_and_named():
+    """The failure this prevents: a verdict formed on a third of the window,
+    presented as though the quiet half had been checked and found quiet."""
+    row = Row(logs=[_log("a"), _log("b"), _log("c")], logs_at_analysis=1, covered_until=END)
+    basis = store.analysis_basis(row)
+    assert basis["analysis_basis"] == "partial"
+    assert basis["analysis_saw_logs"] == 1
+    assert basis["new_logs_since_analysis"] == 2
+    assert "were not considered in its verdict" in basis["analysis_note"]
+
+
+def test_an_unfinished_window_is_partial_even_with_nothing_new_yet():
+    row = Row(logs=[_log("a")], logs_at_analysis=1, covered_until=EVENT + timedelta(minutes=2))
+    basis = store.analysis_basis(row)
+    assert basis["analysis_basis"] == "partial"
+    assert "has not been read yet" in basis["analysis_note"]
+
+
+def test_a_row_from_before_this_was_tracked_says_unknown_not_stale():
+    """Defaulting to 0 would mark every pre-existing run as stale."""
+    row = Row(logs=[_log("a")], logs_at_analysis=None)
+    assert store.analysis_basis(row)["analysis_basis"] == "unknown"
+
+
+def test_marking_analysed_moves_the_baseline():
+    row, db = Row(logs=[_log("a"), _log("b")], logs_at_analysis=0), FakeDB()
+    store.mark_analysed(db, row)
+    assert store.analysis_basis(row)["new_logs_since_analysis"] == 0
+
+
+# --- recovery once the CA is installed ---------------------------------------
+
+def _unavailable(**kw):
+    return Row(status="unavailable", attempts=5,
+               reason="The CA bundle /run/secrets/tip/opensearch-internal-ca.crt does not exist",
+               **kw)
+
+
+def test_rows_that_failed_on_tls_are_reopened_with_their_attempts_reset():
+    """The five attempts spent proving the CA was missing say nothing about
+    whether the cluster answers now."""
+    row, db = _unavailable(), FakeDB()
+    row.status = "failed"
+    outcome = store.reopen_for_retry(db, [row], now=END + timedelta(minutes=5))
+    assert outcome["reopened"] == 1
+    assert row.status == "partial"
+    assert row.attempts == 0
+    assert row.next_attempt_at is not None
+    assert row.last_error is None
+
+
+def test_a_window_past_retention_is_marked_expired_rather_than_retried():
+    """The indices holding those logs have rolled away; retrying spends a query
+    to learn that, and 'expired' is distinguishable from 'never tried'."""
+    row, db = _unavailable(), FakeDB()
+    outcome = store.reopen_for_retry(db, [row], now=END + timedelta(days=200))
+    assert outcome["expired"] == 1
+    assert row.status == "expired"
+    assert row.next_attempt_at is None
+    assert "retention" in row.reason
+
+
+def test_a_failure_that_retrying_cannot_fix_is_left_alone():
+    """An alert with no queryable entity returns the same answer for ever."""
+    row = Row(status="failed", reason="The alert named neither a device nor an account")
+    outcome = store.reopen_for_retry(FakeDB(), [row], now=END)
+    assert outcome["skipped_not_recoverable"] == 1
+    assert row.status == "failed"
+
+
+def test_recovery_refuses_to_reopen_anything_while_the_cluster_is_still_down(monkeypatch):
+    """Reopening hundreds of rows against an unreachable cluster spends every
+    one of their retries re-discovering that it is unreachable."""
+    from app.services import opensearch_client as osc
+    from app.tasks import alert_log_followup_task as task
+
+    def _boom(settings=None):
+        raise osc.OpenSearchNotConfigured("the CA bundle does not exist")
+
+    monkeypatch.setattr(osc, "OpenSearchClient", _boom)
+    result = task.retry_log_context_after_recovery()
+    assert result["blocked"] is True
+    assert result["reopened"] == 0
+    assert "still not reachable" in result["reason"]
+
+
+def test_late_logs_do_not_silently_trigger_a_model_call(monkeypatch):
+    """Default is to flag, not to re-analyse: a model call per completed window
+    is a real cost, and re-analysis rewrites the run payload wholesale — which
+    is how a CAPE report written into an investigation's evidence was lost."""
+    from app.tasks import alert_log_followup_task as task
+
+    monkeypatch.setattr(task, "get_settings", lambda: Settings())
+    row = Row(logs=[_log("a"), _log("b")])
+    assert task._maybe_reanalyse(row, before=1) == "flagged_for_analyst"
+    assert task._maybe_reanalyse(row, before=2) == "unchanged"
+
+
+def test_the_setting_can_turn_automatic_re_analysis_on(monkeypatch):
+    from app.tasks import alert_log_followup_task as task
+
+    class On(Settings):
+        alert_log_reanalyse_on_complete = True
+
+    queued: list = []
+    monkeypatch.setattr(task, "get_settings", lambda: On())
+
+    class _Task:
+        @staticmethod
+        def delay(run_id): queued.append(run_id)
+
+    import app.tasks.alert_body_task as body
+    monkeypatch.setattr(body, "run_alert_body_investigation_task", _Task)
+
+    assert task._maybe_reanalyse(Row(logs=[_log("a"), _log("b")]), before=0) == "reanalysis_queued"
+    assert queued

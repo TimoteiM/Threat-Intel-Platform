@@ -308,3 +308,97 @@ def test_merging_is_a_union_on_the_documents_own_identity():
 
     # And again, to be explicit that repetition changes nothing.
     assert lc.merge_logs(merged, second) == merged
+
+
+# --- late-arriving documents -------------------------------------------------
+
+def test_a_follow_up_starts_before_the_high_water_mark_not_at_it():
+    """A document whose event time falls inside the covered slice can be indexed
+    after that slice was read — measured lag on this cluster reaches 15.8s. A
+    follow-up starting exactly at the mark steps over those documents for ever."""
+    covered = EVENT + timedelta(minutes=2)
+    start = lc.follow_up_start(
+        window_start=EVENT - timedelta(minutes=10), covered_until=covered, overlap_seconds=300
+    )
+    assert start == covered - timedelta(seconds=300)
+
+
+def test_the_overlap_never_reaches_before_the_window():
+    """Re-reading before the window starts would pull in logs that are not this
+    alert's context at all."""
+    window_start = EVENT - timedelta(minutes=10)
+    start = lc.follow_up_start(
+        window_start=window_start,
+        covered_until=EVENT - timedelta(minutes=8),
+        overlap_seconds=3600,
+    )
+    assert start == window_start
+
+
+def test_a_zero_overlap_is_honoured():
+    covered = EVENT + timedelta(minutes=2)
+    assert lc.follow_up_start(
+        window_start=EVENT - timedelta(minutes=10), covered_until=covered, overlap_seconds=0
+    ) == covered
+
+
+def test_the_read_declares_whether_its_pages_were_consistent():
+    """Paging a live index and paging a frozen one give different answers; which
+    one happened is reported rather than assumed."""
+    result = FakeResult([_hit("a")])
+    result.consistent = True
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=1),
+        client=FakeClient(result), settings=Settings(),
+    )
+    assert ctx.sources["consistent_pagination"] is True
+
+
+# --- the tenant boundary -----------------------------------------------------
+
+def test_the_tenant_pin_is_a_filter_not_a_should():
+    """A clause that can be satisfied by the entity match instead is not a pin.
+    It has to hold whatever else matched."""
+    query = lc.build_query(
+        device=lc.Device(name="expsccm01"), principal=lc.principal_of("jdoe"),
+        start=EVENT, end=EVENT, timestamp_field="timestamp",
+        tenant_field="manager.name", tenant_values=["wm-c00.siembiot.int"],
+    )
+    pins = [c for c in query["bool"]["filter"] if "terms" in c]
+    assert pins == [{"terms": {"manager.name": ["wm-c00.siembiot.int"]}}]
+    assert not any("terms" in c and "manager.name" in c.get("terms", {})
+                   for c in query["bool"]["should"])
+
+
+def test_an_unpinned_query_is_reported_as_unpinned():
+    """Absence of a tenant filter is a fact a reader should see, not one they
+    have to notice."""
+    class Unpinned(Settings):
+        opensearch_tenant_field = "manager.name"
+        opensearch_tenant_value_list: list = []
+
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=1),
+        client=FakeClient(FakeResult([_hit("a")])), settings=Unpinned(),
+    )
+    assert ctx.sources["tenant_filter"] is None
+
+
+def test_a_pinned_query_says_what_it_is_pinned_to():
+    class Pinned(Settings):
+        opensearch_tenant_field = "manager.name"
+        opensearch_tenant_value_list = ["wm-c00.siembiot.int"]
+
+    client = FakeClient(FakeResult([_hit("a")]))
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=1),
+        client=client, settings=Pinned(),
+    )
+    assert ctx.sources["tenant_filter"] == {
+        "field": "manager.name", "values": ["wm-c00.siembiot.int"],
+    }
+    sent = client.queries[0]["query"]["bool"]["filter"]
+    assert {"terms": {"manager.name": ["wm-c00.siembiot.int"]}} in sent

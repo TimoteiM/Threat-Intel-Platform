@@ -71,6 +71,9 @@ class SearchResult:
     nodes_used: list[str] = field(default_factory=list)
     node_failures: list[str] = field(default_factory=list)
     took_ms: int = 0
+    # Whether the pages came from one frozen view of the indices or from a live
+    # one. Reported rather than assumed, because the answer differs.
+    consistent: bool = False
 
 
 # A node that just failed is skipped for this long rather than being retried on
@@ -292,6 +295,35 @@ class OpenSearchClient:
             return []
         return sorted(str(row.get("index")) for row in payload if row.get("index"))
 
+    def open_pit(self, indices: Sequence[str], *, keep_alive: str = "2m") -> str | None:
+        """A Point in Time over these indices, or None if the cluster declines.
+
+        Without one, `search_after` pages walk a live index: this cluster takes
+        about 274 documents a second, and a refresh between page 2 and page 3
+        shifts every document after the cursor. A PIT freezes the view so the
+        pages compose into one consistent answer.
+
+        Returning None rather than raising is deliberate — a PIT is an
+        improvement to consistency, not a precondition for reading logs, and a
+        cluster that will not open one should still be queried.
+        """
+        try:
+            payload, _, _ = self._request(
+                "POST", f"/{','.join(indices)}/_search/point_in_time",
+                params={"keep_alive": keep_alive},
+            )
+        except OpenSearchError as exc:
+            logger.info("PIT unavailable, paging a live index instead: %s", self._scrub(exc)[:160])
+            return None
+        return payload.get("pit_id") or payload.get("id")
+
+    def close_pit(self, pit_id: str) -> None:
+        """Release a PIT. Leaking them pins segments and costs the cluster disk."""
+        try:
+            self._request("DELETE", "/_search/point_in_time", json_body={"pit_id": [pit_id]})
+        except Exception as exc:  # noqa: BLE001 — a leaked PIT expires on its own
+            logger.info("Could not close PIT: %s", self._scrub(exc)[:160])
+
     def search_all(
         self,
         *,
@@ -301,6 +333,8 @@ class OpenSearchClient:
         source_fields: Sequence[str] | None = None,
         page_size: int = 100,
         max_hits: int = 500,
+        use_pit: bool = True,
+        pit_keep_alive: str = "2m",
     ) -> SearchResult:
         """Every matching hit up to `max_hits`, paged with `search_after`.
 
@@ -318,6 +352,29 @@ class OpenSearchClient:
         cursor: list[Any] | None = None
         started = time.monotonic()
 
+        pit_id = self.open_pit(indices, keep_alive=pit_keep_alive) if use_pit else None
+        result.consistent = pit_id is not None
+        try:
+            self._page(
+                result=result, target=target, query=query, sort=sort,
+                source_fields=source_fields, page_size=page_size, max_hits=max_hits,
+                seen=seen, pit_id=pit_id, pit_keep_alive=pit_keep_alive,
+            )
+        finally:
+            if pit_id:
+                self.close_pit(pit_id)
+
+        result.truncated = len(result.hits) >= max_hits
+        result.took_ms = int((time.monotonic() - started) * 1000)
+        return result
+
+    def _page(
+        self, *, result: SearchResult, target: str, query: dict[str, Any],
+        sort: list[dict[str, Any]], source_fields: Sequence[str] | None,
+        page_size: int, max_hits: int, seen: set[str],
+        pit_id: str | None, pit_keep_alive: str,
+    ) -> None:
+        cursor: list[Any] | None = None
         while len(result.hits) < max_hits:
             body: dict[str, Any] = {
                 "size": min(page_size, max_hits - len(result.hits)),
@@ -332,10 +389,17 @@ class OpenSearchClient:
             if cursor is not None:
                 body["search_after"] = cursor
 
-            payload, node, failures = self._request(
-                "POST", f"/{target}/_search", json_body=body,
-                params={"ignore_unavailable": "true", "allow_no_indices": "true"},
-            )
+            if pit_id:
+                # With a PIT the indices come from the PIT, not the path, and
+                # the id may be rotated by the cluster on every response.
+                body["pit"] = {"id": pit_id, "keep_alive": pit_keep_alive}
+                payload, node, failures = self._request("POST", "/_search", json_body=body)
+                pit_id = payload.get("pit_id") or pit_id
+            else:
+                payload, node, failures = self._request(
+                    "POST", f"/{target}/_search", json_body=body,
+                    params={"ignore_unavailable": "true", "allow_no_indices": "true"},
+                )
             result.pages += 1
             if node not in result.nodes_used:
                 result.nodes_used.append(node)
@@ -362,10 +426,6 @@ class OpenSearchClient:
                 break
             if len(hits) < body["size"]:
                 break
-
-        result.truncated = len(result.hits) >= max_hits
-        result.took_ms = int((time.monotonic() - started) * 1000)
-        return result
 
 
 def safe_client(settings: Any = None) -> OpenSearchClient | None:

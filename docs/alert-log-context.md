@@ -22,6 +22,44 @@ statement in a report can be traced back to the events behind it. Each record
 carries `matched_on` — `device`, `user`, or both — so "why is this log here" is
 answered by the record rather than inferred.
 
+## The client boundary
+
+**What was verified**, against the cluster on 2026-09-24, not inferred from the
+hostnames:
+
+* `cluster_name` is `C00-Indexer`.
+* **Exactly one Wazuh manager has ever written to it.** `wm-c00.siembiot.int`
+  accounts for all 2,593,308,014 documents across all 120 alert indices, over
+  209 distinct agents. There is no second manager, on any day.
+* **There is no SIEM-level tenant field to filter on.** The mapping's
+  tenant-shaped names are all vendor payload (`data.office365.*TenantId`,
+  `data.ms-graph.tenantId`, `data.win.eventdata.client*`) — an Azure tenant in
+  an event body, not a partition of the index.
+* The OpenSearch security plugin has only `global_tenant` and `admin_tenant`,
+  the Dashboards defaults — no per-client tenancy.
+* No other client's indices exist. The non-Wazuh indices are the platform's own
+  tooling (Shuffle, TheHive, Praeco).
+
+So the boundary **is that the cluster is dedicated to C00**, not that anything
+filters. That is a deployment property, and deployment properties change
+without the code noticing.
+
+**What now enforces it.** Every query carries a tenant pin as a `filter` clause:
+
+```
+OPENSEARCH_TENANT_FIELD=manager.name
+OPENSEARCH_TENANT_VALUES=wm-c00.siembiot.int
+```
+
+A `filter`, not a `should` — a clause the entity match could satisfy instead is
+not a pin. Proven load-bearing on live data: the same alert returns 297 logs
+with the C00 pin and **0** with a foreign one. If the values are left empty the
+query runs unpinned and `sources.tenant_filter` is `null`, so "nothing pinned
+this" is visible rather than assumed.
+
+This is belt-and-braces over a cluster that is single-tenant today. The
+`tenant_id` contract and the client selector are a separate, larger change.
+
 ## Real-time alerts
 
 The window of a live alert ends in the future. Waiting ten minutes before
@@ -47,7 +85,98 @@ the read is idempotent, running both costs nothing.
 
 A cluster that stays unreachable is retried with a growing gap and gives up
 after `ALERT_LOG_FOLLOWUP_MAX_ATTEMPTS`, recording why on the row instead of
-retrying for ever.
+retrying for ever — see **Recovery** below.
+
+### Documents indexed after they were read
+
+A document whose event time falls *inside* the already-covered slice can be
+indexed after that slice was read, and a follow-up starting exactly at
+`covered_until` would step over it permanently. Measured on this cluster over
+two hours, the gap between a document's event time and its indexing is:
+
+| p50 | p90 | p99 | p99.9 | max |
+|---|---|---|---|---|
+| 0.53s | 0.94s | 4.20s | 11.39s | 15.83s |
+
+So each follow-up starts `ALERT_LOG_OVERLAP_SECONDS` (default 300) *before* the
+high-water mark, clamped to the window start. Five minutes is the observed
+maximum nineteen times over, which leaves room for a Filebeat backlog. The
+re-read costs a handful of duplicate hits, and they merge away on `index:id`.
+Missing a log does not announce itself; re-reading one is free.
+
+### Consistent pagination
+
+`search_after` over a live index is not a consistent read: this cluster takes
+about 274 documents a second, and a refresh between page 2 and page 3 shifts
+everything after the cursor. Every paged read therefore opens a **Point in
+Time**, pages against that frozen view, and releases it.
+
+Two details found by testing against the cluster: `_shard_doc` is not mapped
+here, so `_id` is the PIT tiebreaker; and the cluster rotates `pit_id` on every
+response, so each page must use the id the previous one returned. A cluster that
+declines to open a PIT is still queried — consistency is an improvement, not a
+precondition — and `sources.consistent_pagination` says which happened.
+
+## Is the analysis you are reading based on these logs?
+
+A live alert is analysed on the half of its window that had already happened.
+The rest arrives minutes later. **The analysis is not re-run for it by
+default**, and the run says so rather than presenting a partial reading as a
+complete one:
+
+| `analysis_basis` | meaning |
+|---|---|
+| `complete` | the analysis saw every log this window holds |
+| `partial` | logs arrived after the analysis ran, or the window is still open |
+| `unknown` | the run predates this being tracked |
+
+`analysis_saw_logs` and `new_logs_since_analysis` carry the numbers, and
+`analysis_note` carries the sentence to show an analyst — *"7 log events arrived
+after this analysis was written and were not considered in its verdict. Re-run
+the analysis to include them."*
+
+**Why not re-run automatically.** Two reasons, and the second settles it: a
+model call per completed window is a real cost on a platform ingesting thousands
+of alerts a day, most of them noise; and re-analysis rewrites the run payload
+wholesale, which is precisely how a CAPE sandbox report written into an
+investigation's evidence went missing — the second writer replaced what the
+first had added. Doing that automatically to every live alert would repeat a
+known failure at volume.
+
+`ALERT_LOG_REANALYSE_ON_COMPLETE=true` turns it on for deployments that want it.
+
+## Recovery
+
+Once the internal CA is installed, every alert that failed while it was missing
+can be retried, **including the ones that exhausted their five attempts** —
+those five say nothing about whether the cluster answers now.
+
+```
+POST  app.tasks.alert_log_followup_task.retry_log_context_after_recovery
+```
+
+It checks the connection **first, with the real configuration**, and refuses to
+reopen anything while the cluster is still unreachable: reopening hundreds of
+rows against a dead cluster spends every one of their retries re-discovering
+that. Then, per row:
+
+* recoverable failure (TLS, CA, no node answered, timeout) → `attempts` reset to
+  0, status back to `partial`, queued immediately;
+* window older than `OPENSEARCH_RETENTION_DAYS` (120) → marked `expired`, not
+  retried, because the indices that held those logs have rolled away and
+  `expired` is distinguishable from "never tried";
+* a failure retrying cannot fix (no queryable entity, a refused query) → left
+  alone.
+
+To check the deployed TLS configuration itself — as opposed to a probe run with
+verification disabled, which proves nothing about it:
+
+```
+GET /api/admin/opensearch-health
+```
+
+It reports `verify_tls`, `ca_bundle`, `ca_bundle_present`, and either connects
+or gives the exact reason it could not.
 
 ## Who the alert is about
 

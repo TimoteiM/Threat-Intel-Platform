@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,7 @@ from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import AlertBodyInvestigationRun, AlertLogContext
 from app.services import alert_log_context_store as store
-from app.services.alert_log_context_service import collect_for_alert
+from app.services.alert_log_context_service import collect_for_alert, follow_up_start
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -64,27 +64,44 @@ def complete_one(row_id: uuid.UUID) -> dict[str, object]:
         covered_until = _aware(row.covered_until)
         alert_fields = (run.result_json or {}).get("alert_fields") or {}
 
+        # Start *before* the high-water mark, not at it. A document whose event
+        # time fell inside the covered slice can be indexed after that slice was
+        # read — measured indexing lag on this cluster is p99 4.2s and up to
+        # 15.8s — and a follow-up starting exactly at the mark would step over
+        # it for ever. The overlap is re-read and the duplicates merge away on
+        # each document's own index:id, so the cost is a few repeated hits.
+        settings = get_settings()
+        read_from = follow_up_start(
+            window_start=_aware(row.window_start),
+            covered_until=covered_until,
+            overlap_seconds=int(getattr(settings, "alert_log_overlap_seconds", 300)),
+        )
+
         context = collect_for_alert(
             event_time=event_time,
             entity_host=run.entity_host,
             entity_user=run.entity_user,
             alert_body=run.alert_body,
             alert_fields=alert_fields,
-            # The whole point: start where the last read stopped.
-            start_override=covered_until,
+            start_override=read_from,
         )
+        before = len(row.logs or [])
         row = store.record_attempt(db, row, context)
+        analysis_outcome = _maybe_reanalyse(row, before)
         result = {
             "row": str(row_id),
             "run": str(row.run_id),
             "status": row.status,
             "logs": len(row.logs or []),
             "attempts": int(row.attempts or 0),
+            "new_logs": len(row.logs or []) - before,
+            "analysis": analysis_outcome,
         }
 
     logger.info(
-        "Alert log follow-up %s: status=%s logs=%s attempt=%s",
-        row_id, result["status"], result["logs"], result["attempts"],
+        "Alert log follow-up %s: status=%s logs=%s (+%s new) attempt=%s analysis=%s",
+        row_id, result["status"], result["logs"], result["new_logs"],
+        result["attempts"], result["analysis"],
     )
     return result
 
@@ -153,3 +170,71 @@ def schedule_followup(row: AlertLogContext) -> str | None:
         row.run_id, countdown, window_end.isoformat(),
     )
     return getattr(async_result, "id", None)
+
+
+def _maybe_reanalyse(row: AlertLogContext, before: int) -> str:
+    """Decide what happens to the analysis now that late logs have landed.
+
+    Default is to leave it and say so. Two reasons, and the second is the one
+    that settles it:
+
+    * A model call per completed window is a real cost on a platform that
+      ingests thousands of alerts a day, most of which are noise.
+    * Re-analysis rewrites the run payload wholesale, and that is exactly how a
+      CAPE sandbox report written into an investigation's evidence went missing
+      — the second writer replaced what the first had added. Doing that
+      automatically to every live alert would be repeating a known failure at
+      volume.
+
+    So the late logs are attached, the analysis is marked as not having seen
+    them, and an analyst decides. ALERT_LOG_REANALYSE_ON_COMPLETE flips it.
+    """
+    added = len(row.logs or []) - before
+    if added <= 0:
+        return "unchanged"
+    if not getattr(get_settings(), "alert_log_reanalyse_on_complete", False):
+        return "flagged_for_analyst"
+
+    from app.tasks.alert_body_task import run_alert_body_investigation_task
+
+    run_alert_body_investigation_task.delay(str(row.run_id))
+    logger.info("Re-analysis queued for run %s after %s late log events", row.run_id, added)
+    return "reanalysis_queued"
+
+
+@celery_app.task(name="app.tasks.alert_log_followup_task.retry_log_context_after_recovery")
+def retry_log_context_after_recovery(limit: int = 500) -> dict[str, object]:
+    """Put failed and unavailable rows back in the queue after an outage is fixed.
+
+    The case this exists for: the internal CA is installed, and every alert that
+    arrived while it was missing is sitting in `unavailable`, some having spent
+    all five attempts proving the same thing. Those five attempts say nothing
+    about whether the cluster answers now, so they are reset.
+
+    Verifies the connection *first*, with the real configuration. Reopening
+    hundreds of rows against a cluster that still cannot be reached would spend
+    every one of their retries re-discovering that.
+    """
+    from app.services import opensearch_client as osc
+
+    settings = get_settings()
+    try:
+        with osc.OpenSearchClient(settings=settings) as client:
+            health = client.ping()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "reopened": 0,
+            "blocked": True,
+            "reason": f"The log cluster is still not reachable with the current configuration: "
+                      f"{osc.redact(exc)[:200]}",
+        }
+
+    with Session(sync_engine) as db:
+        rows = store.retryable(db, limit=limit)
+        outcome = store.reopen_for_retry(db, rows)
+
+    outcome["blocked"] = False
+    outcome["cluster"] = health.get("cluster")
+    outcome["examined"] = len(rows)
+    logger.info("Log context recovery: %s", outcome)
+    return outcome
