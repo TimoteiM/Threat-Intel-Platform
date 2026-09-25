@@ -75,3 +75,47 @@ story, and the list would have stayed slow without the three above.
 
 Twenty-eight sessions written in the gap between migration 033 and its deploy
 still carried a graph and were cleared by hand.
+
+## What the assistant's list is for
+
+The table had 22,675 sessions and the analyst had written 627 of them. The rest
+were other features using the assistant as an engine:
+
+```
+alert_body          14,345   Alert Body Investigation
+correlated_case      7,703   case narratives
+manual                 618   someone pasted a log here
+from_investigation       9   someone sent one here from an investigation
+```
+
+Both generated kinds already display their result on the page that produced
+them, so the assistant's list was showing 97% rows that belonged somewhere
+else. It now lists the two analyst source types, and `include_generated=true`
+brings the others back for anyone who needs them.
+
+Nothing is deleted and nothing stops being written. `get_session` was never
+filtered, which matters more than it sounds: an alert investigation and a case
+narrative both link to `/assistant?session=<id>`, and those ids are exactly the
+rows the list now hides. A filter applied one layer too deep would have turned
+every one of those links into a 404. A test pins that.
+
+```
+list page      1.20 ms ->  0.85 ms    Index Scan, migration 036
+total count    2.42 ms ->  0.60 ms
+rows listed     22,675 ->      627
+```
+
+**Content search did not improve, and this is worth saying plainly.** Narrowing
+to 627 sessions does not narrow the work: Postgres hoists the `EXISTS` into a
+hashed subplan and filters all 22,675 entries by `ILIKE` before any session
+restriction applies. Rewriting it as a materialised CTE, a correlated `EXISTS`
+with a `LIMIT` barrier, and a join with the filter pushed inside the subquery
+all produced the same plan.
+
+```
+'process'      7,395 ms -> 7,456 ms
+```
+
+Making it fast needs the candidate ids resolved in a separate statement, which
+is a real change to a feature nobody has asked about — content search is still
+opt-in and still labelled *(slower)*. Left as it is, on purpose.

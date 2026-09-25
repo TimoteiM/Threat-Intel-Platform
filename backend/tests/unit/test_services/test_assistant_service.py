@@ -78,6 +78,14 @@ class _CountResult:
         return self._value
 
 
+class _ScalarOneOrNone:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
 @pytest.mark.asyncio
 async def test_run_session_persists_alert_result_without_sending_raw_text(monkeypatch) -> None:
     session_obj = _build_session("alert_analysis")
@@ -550,3 +558,69 @@ def test_the_prompt_still_sees_the_sanitised_text_on_the_row() -> None:
     from app.models.database import AssistantEntry
 
     assert "sanitized_text" in AssistantEntry.__table__.c
+
+
+@pytest.mark.asyncio
+async def test_the_list_shows_only_sessions_an_analyst_started() -> None:
+    """22,048 of 22,675 sessions were other features using the assistant.
+
+    `alert_body` (14,345) is Alert Body Investigation and `correlated_case`
+    (7,703) is case narratives; both call the assistant as an engine and both
+    display the result on their own page. Listing them here left the 627
+    sessions an analyst actually opened this tool to write unfindable.
+    """
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(limit=5, offset=0)
+
+    page, count = (
+        str(call.args[0].compile(compile_kwargs={"literal_binds": True}))
+        for call in fake_db.execute.await_args_list
+    )
+    # Both halves must agree, or the pager reports a total it cannot show.
+    for query in (page, count):
+        assert "source_type IN ('manual', 'from_investigation')" in query
+        assert "alert_body" not in query
+        assert "correlated_case" not in query
+
+
+@pytest.mark.asyncio
+async def test_the_generated_sessions_can_still_be_listed_on_request() -> None:
+    """Hidden, not gone. Nothing here deletes or stops writing a session."""
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    result = await service.list_sessions(limit=5, offset=0, include_generated=True)
+
+    page = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": True})
+    )
+    # `source_type` still appears as a selected column; what must be gone is the
+    # predicate that narrows on it.
+    assert "source_type IN" not in page
+    assert result["includes_generated"] is True
+
+
+@pytest.mark.asyncio
+async def test_opening_a_generated_session_by_id_is_not_filtered() -> None:
+    """The regression this guards.
+
+    An alert investigation and a case narrative both link to
+    `/assistant?session=<id>`, and those ids are exactly the `alert_body` and
+    `correlated_case` sessions the list now hides. If the filter reached
+    `get_session`, every one of those links would 404.
+    """
+    generated = _build_session("alert_analysis")
+    generated.source_type = "alert_body"
+    fake_db = SimpleNamespace(execute=AsyncMock(return_value=_ScalarOneOrNone(generated)))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    found = await service.get_session(generated.id)
+
+    assert found is generated
+    query = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "source_type IN" not in query
+    assert "WHERE assistant_sessions.id" in query

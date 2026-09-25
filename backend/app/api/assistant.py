@@ -49,10 +49,22 @@ async def list_sessions(
     offset: int = 0,
     search: str | None = None,
     search_content: bool = False,
+    include_generated: bool = False,
 ):
+    """Sessions an analyst started.
+
+    `include_generated=true` also lists the ones other features created while
+    using the assistant as an engine. Off by default: those are 22,048 of the
+    22,675 rows, they are read on the pages that produced them, and they left
+    the 627 sessions this tool is for unfindable.
+    """
     service = AssistantService(session)
     results = await service.list_sessions(
-        limit=limit, offset=offset, search=search, search_content=search_content
+        limit=limit,
+        offset=offset,
+        search=search,
+        search_content=search_content,
+        include_generated=include_generated,
     )
     return {
         "items": [_serialize_session(item) for item in results["items"]],
@@ -60,6 +72,7 @@ async def list_sessions(
         "limit": results["limit"],
         "offset": results["offset"],
         "searched_content": results.get("searched_content", False),
+        "includes_generated": results.get("includes_generated", False),
     }
 
 

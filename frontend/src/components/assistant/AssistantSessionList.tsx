@@ -43,9 +43,14 @@ export default function AssistantSessionList({
       <div style={searchHeaderStyle}>
         <div>
           <div style={eyebrowStyle}>Session Catalog</div>
-          <div style={titleStyle}>Recent sessions</div>
+          <div style={titleStyle}>Your sessions</div>
         </div>
         <div style={metaStyle}>{loading ? "Loading sessions..." : `Showing ${pageStart}-${pageEnd} of ${total}`}</div>
+      </div>
+
+      <div style={scopeNoteStyle}>
+        Logs analysts pasted here. Analyses that Alert Body Investigation and
+        case narratives ran through the assistant stay on those pages.
       </div>
 
       <input
@@ -230,6 +235,12 @@ const metaStyle: React.CSSProperties = {
   fontSize: 11,
   color: "var(--text-dim)",
   letterSpacing: "0.04em",
+};
+
+const scopeNoteStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: "var(--text-dim)",
 };
 
 const searchInputStyle: React.CSSProperties = {

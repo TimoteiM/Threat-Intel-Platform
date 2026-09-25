@@ -29,6 +29,17 @@ PRIMARY_MODEL = "gpt-5.6-luna"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 
+# Who started the session. `manual` is someone pasting a log into the assistant;
+# `from_investigation` is someone sending one there from an investigation. Both
+# are an analyst using the tool, so both belong in its list.
+#
+# The two left out — `alert_body` and `correlated_case` — are other features
+# calling the assistant to do their thinking. They are still stored, still
+# opened by id, and still shown on the pages that made them; they are simply
+# not what an analyst came here to find.
+ANALYST_SOURCE_TYPES = ("manual", "from_investigation")
+
+
 # The analyst-facing section appended to a finished report. A module-level
 # constant and function because two consumers need to remove it, and a regex
 # written twice is a regex that will eventually differ.
@@ -115,8 +126,21 @@ class AssistantService:
         offset: int = 0,
         search: str | None = None,
         search_content: bool = False,
+        include_generated: bool = False,
     ) -> dict[str, object]:
-        """Sessions, newest first.
+        """Sessions an analyst started, newest first.
+
+        By default this lists only what a person opened the assistant and typed
+        into — `manual` and `from_investigation`. The other two source types are
+        the assistant being used as an engine by something else: `alert_body`
+        behind Alert Body Investigation and `correlated_case` behind case
+        narratives. Those are 22,048 of the 22,675 rows here, they are read on
+        the pages that produced them, and listing them buried the 627 sessions
+        this tool exists for.
+
+        They are hidden, not gone. `include_generated` brings them back, and
+        `get_session` never filtered — the `/assistant?session=<id>` links from
+        an alert investigation or a case narrative open exactly as before.
 
         `search` matches the title. `search_content` extends it to the pasted
         log text, and is opt-in because the cost is not comparable: titles are
@@ -150,6 +174,11 @@ class AssistantService:
         # below replaced that join, so nothing duplicates and the de-duplication
         # is pure cost — it sorts every row to discover they were unique.
         count_query = select(func.count()).select_from(AssistantSession)
+
+        if not include_generated:
+            analyst_only = AssistantSession.source_type.in_(ANALYST_SOURCE_TYPES)
+            base_query = base_query.where(analyst_only)
+            count_query = count_query.where(analyst_only)
         if normalized_search:
             pattern = f"%{normalized_search}%"
             title_match = AssistantSession.title.ilike(pattern)
@@ -179,6 +208,7 @@ class AssistantService:
             "limit": limit,
             "offset": offset,
             "searched_content": bool(normalized_search and search_content),
+            "includes_generated": include_generated,
         }
 
     async def get_daily_alert_metrics(
