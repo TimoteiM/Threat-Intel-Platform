@@ -183,9 +183,16 @@ def test_nifi_may_name_any_configured_tenant_in_the_path():
     assert assignment.assignment == "path"
 
 
-def test_a_tenant_that_is_not_configured_is_refused_at_the_sender():
-    """A typo in a per-flow URL template is the likeliest mistake here, and a
-    silent new bucket would leave a client's alerts nowhere anyone looks."""
+def test_an_unknown_tenant_is_still_refused_at_this_layer():
+    """`resolve_for_ingest` never invents a tenant; it only accepts ones it is
+    told exist.
+
+    The API layer above now *pre-permits* a well-formed declared tenant and
+    creates the row after authorisation succeeds, so in production this branch
+    is reached only for a tenant the caller was not permitted to introduce.
+    The rule stays here because the function must be safe on its own terms —
+    see test_alert_investigations_api.py for the provisioning path.
+    """
     with pytest.raises(HTTPException) as caught:
         ts.resolve_for_ingest(
             identity=NIFI, declared="c0O", settings=_Settings(),
@@ -193,6 +200,22 @@ def test_a_tenant_that_is_not_configured_is_refused_at_the_sender():
         )
     assert caught.value.status_code == 400
     assert "Unknown or inactive tenant" in str(caught.value.detail)
+
+
+def test_a_tenant_id_must_be_a_plain_identifier():
+    """It arrives in a URL from an uncredentialed sender and now creates a row,
+    so it must not be able to carry a path or read as another identifier."""
+    from app.api.alert_investigations import _validated_tenant_id
+
+    assert _validated_tenant_id("C07") == "c07"        # normalised, not rejected
+    assert _validated_tenant_id("  c07  ") == "c07"
+    assert _validated_tenant_id(None) == ""
+    for bad in ("../c00", "c00/raw", "c 00", "-c00", "", "x" * 65):
+        if bad == "":
+            continue
+        with pytest.raises(HTTPException) as caught:
+            _validated_tenant_id(bad)
+        assert caught.value.status_code == 400
 
 
 def test_the_marker_still_files_c00_while_c00_is_the_only_tenant():

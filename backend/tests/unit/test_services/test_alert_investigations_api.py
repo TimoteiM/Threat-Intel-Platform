@@ -1200,3 +1200,66 @@ def test_wait_false_returns_the_queued_response(ingest_env):
     response = _ingest(_IngestDB(), alert_body="Domain evil-corp.net")
     assert response["status"] == "queued"
     assert "links" in response
+
+
+# --- a new client is never turned away ----------------------------------------
+
+
+def test_an_alert_for_an_unknown_tenant_creates_that_client(ingest_env, monkeypatch):
+    """A refused alert is not retried; it is simply gone.
+
+    The first alerts from a new client are exactly the ones worth keeping, and
+    they must not depend on someone having added a row first. The tenant is
+    created on arrival and appears in the client selector.
+    """
+    provisioned: list[str] = []
+
+    async def _record(_db, tenant_id):
+        provisioned.append(tenant_id)
+
+    monkeypatch.setattr(api, "_provision_tenant", _record)
+
+    db = _IngestDB()
+    _ingest(db, alert_body="Alert: something\nAgent: HOST-1\n", tenant_id="c07")
+
+    assert provisioned == ["c07"]
+    assert db.added, "the run itself is still stored"
+    assert db.added[0].tenant_id == "c07"
+
+
+def test_an_already_configured_tenant_is_not_reprovisioned(ingest_env, monkeypatch):
+    """`c00` is configured, so nothing should be created for it."""
+    provisioned: list[str] = []
+
+    async def _record(_db, tenant_id):
+        provisioned.append(tenant_id)
+
+    monkeypatch.setattr(api, "_provision_tenant", _record)
+
+    db = _IngestDB()
+    _ingest(db, alert_body="Alert: something\nAgent: HOST-1\n", tenant_id="c00")
+
+    assert provisioned == []
+    assert db.added[0].tenant_id == "c00"
+
+
+def test_a_malformed_tenant_id_is_refused_before_anything_is_created(ingest_env, monkeypatch):
+    """The id arrives in a URL and now creates a row. A path segment that is
+    not a plain identifier must not become one."""
+    import pytest
+    from fastapi import HTTPException
+
+    provisioned: list[str] = []
+
+    async def _record(_db, tenant_id):
+        provisioned.append(tenant_id)
+
+    monkeypatch.setattr(api, "_provision_tenant", _record)
+
+    db = _IngestDB()
+    with pytest.raises(HTTPException) as caught:
+        _ingest(db, alert_body="Alert: something\n", tenant_id="../c00")
+
+    assert caught.value.status_code == 400
+    assert provisioned == []
+    assert not db.added, "no run is stored for a request that was refused"

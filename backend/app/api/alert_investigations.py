@@ -445,19 +445,87 @@ async def create_alert_investigation_from_raw_text_for_tenant(
     return await _wait_for_report(db, queued, timeout=wait_timeout)
 
 
+# What a tenant id may look like. Deliberately narrow: this value arrives in a
+# URL from an uncredentialed sender and now creates a row, so it must not be
+# able to carry a path, a space, or anything that reads as another identifier.
+_TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+# A tenant that sent alerts before anyone configured it. Selectable and
+# accepting alerts — the point is that a new client is never dropped — but
+# distinguishable from one a person actually onboarded, so a typo in a NiFi URL
+# is a visible row to delete rather than a silent second home for real alerts.
+PROVISIONAL = "provisional"
+
+
 async def _active_tenant_ids(db: DBSession) -> tuple[str, ...]:
     """Every tenant currently accepting alerts.
 
+    Includes provisional ones: they exist precisely because alerts are already
+    arriving for them, and excluding them would refuse the second alert from a
+    client whose first one was accepted.
+
     Used for two decisions at ingest: whether a named tenant exists, and
-    whether the legacy marker rule still identifies anybody. Both want the
-    same list, and reading it twice invites the two answers to disagree.
+    whether the legacy marker rule still identifies anybody. Both want the same
+    list, and reading it twice invites the two answers to disagree.
     """
     from app.models.database import Tenant
 
     rows = (
-        await db.execute(select(Tenant.tenant_id).where(Tenant.status == "active"))
+        await db.execute(
+            select(Tenant.tenant_id).where(Tenant.status.in_(("active", PROVISIONAL)))
+        )
     ).scalars().all()
     return tuple(str(t) for t in rows if str(t or "").strip())
+
+
+def _validated_tenant_id(declared: Any) -> str:
+    """The tenant id as it will be stored, or a 400 naming the problem."""
+    value = str(declared or "").strip().lower()
+    if not value:
+        return ""
+    if not _TENANT_ID_RE.match(value):
+        raise HTTPException(
+            400,
+            f"Tenant id {str(declared)[:64]!r} is not usable. Use lower-case letters, "
+            "digits, dot, dash or underscore, up to 64 characters.",
+        )
+    return value
+
+
+async def _provision_tenant(db: DBSession, tenant_id: str) -> None:
+    """Create a tenant the first time alerts arrive for it.
+
+    A new client must not have their alerts refused while someone gets round to
+    adding a row — a refused alert is not retried and is simply gone. So the
+    first alert for an unknown tenant creates it, and it appears in the client
+    selector straight away.
+
+    Marked provisional rather than active, because this row was created by a
+    sender naming itself in a URL, not by anyone deciding to onboard a client.
+    That distinction is the whole safeguard: a mistyped tenant shows up as an
+    obviously unconfigured client holding a handful of alerts, instead of
+    quietly becoming a second place real alerts live.
+
+    ON CONFLICT because two alerts for a new client can arrive together, and
+    the loser of that race must not fail an alert over a row that now exists.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models.database import Tenant
+
+    await db.execute(
+        pg_insert(Tenant)
+        .values(
+            tenant_id=tenant_id,
+            name=tenant_id.upper(),
+            status=PROVISIONAL,
+            notes=(
+                "Created automatically on the first alert naming this tenant. "
+                "Rename it and set status to 'active' once the client is onboarded."
+            ),
+        )
+        .on_conflict_do_nothing(index_elements=[Tenant.tenant_id])
+    )
 
 
 async def _create_alert_run(
@@ -571,20 +639,38 @@ async def _create_alert_run(
     # guesses: a credential that names a tenant it does not hold is rejected,
     # and one that names none is accepted only under the configured legacy
     # grant. See services/tenant_scope.resolve_for_ingest.
+    # Shape-checked before anything else looks at it: this value arrives in a
+    # URL and may create a row, so a malformed one is refused outright.
+    declared_tenant = _validated_tenant_id(getattr(request, "tenant_id", None))
+    configured = await _active_tenant_ids(db)
+    # A tenant nobody has configured yet is allowed *through* the check here so
+    # that resolve_for_ingest can still authorise it — an API key that does not
+    # hold it is refused below, and only then is a row created. Creating first
+    # would let a caller mint tenants it is not allowed to submit for.
+    permitted = configured if not declared_tenant else tuple({*configured, declared_tenant})
+
     assignment = tenant_scope.resolve_for_ingest(
         identity=identity,
-        declared=getattr(request, "tenant_id", None),
+        declared=declared_tenant or None,
         # Only the network-trusted path reads these, and only to apply the same
         # marker rule the historical migration used.
         alert_body=alert_body,
         alert_source=alert_source,
         alert_client=alert_client,
-        # The configured tenants, so an unknown one is refused at the sender
-        # rather than filed somewhere nobody is looking, and so the marker rule
-        # can tell whether it still identifies anybody.
-        known_tenants=await _active_tenant_ids(db),
+        # So the marker rule can tell whether it still identifies anybody.
+        known_tenants=permitted,
         declared_via=declared_via,
     )
+
+    # The sender named a client we have never seen, and was allowed to. Create
+    # it rather than refuse the alert: a refused alert is not retried, and a new
+    # client's first alerts are exactly the ones worth keeping.
+    if assignment.tenant_id and assignment.tenant_id not in configured:
+        await _provision_tenant(db, assignment.tenant_id)
+        logger.info(
+            "Provisioned tenant %r from an incoming alert (assignment=%s)",
+            assignment.tenant_id, assignment.assignment,
+        )
 
     run = AlertBodyInvestigationRun(
         title=_run_title(request.title, alert_body),
@@ -782,8 +868,19 @@ async def _selectable_tenants(db: DBSession, request: Request | None) -> list[di
     counts = {tid: int(n) for tid, n in (await db.execute(counts_stmt)).all()}
 
     options = [
-        {"tenant_id": row.tenant_id, "name": row.name, "status": row.status,
-         "run_count": counts.get(row.tenant_id, 0)}
+        {
+            "tenant_id": row.tenant_id,
+            # Says so in the one place a person looks. A tenant created by an
+            # incoming alert has a name nobody chose and a client nobody has
+            # confirmed; that is worth seeing before its alerts are worked.
+            "name": (
+                f"{row.name} — new, not yet onboarded"
+                if row.status == PROVISIONAL else row.name
+            ),
+            "status": row.status,
+            "provisional": row.status == PROVISIONAL,
+            "run_count": counts.get(row.tenant_id, 0),
+        }
         for row in rows
         if scope.may_read(row.tenant_id)
     ]
