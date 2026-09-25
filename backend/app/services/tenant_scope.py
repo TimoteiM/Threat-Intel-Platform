@@ -204,6 +204,30 @@ def classify_by_marker(
     return TenantAssignment(tenant_id=None, assignment="unassigned")
 
 
+def _assert_known_tenant(declared: str, known_tenants: Sequence[str] | None) -> None:
+    """Refuse a tenant that is not configured, loudly.
+
+    A tenant now arrives in a URL that an operator templates per NiFi flow, so
+    a typo is the likeliest failure there is. Filing `c0O`'s alerts under a new
+    silent bucket would leave a client's alerts nowhere anyone is looking; a
+    400 names the mistake at the sender, which is the only place it can be
+    fixed.
+
+    `None` means the caller could not enumerate tenants and is not asserting
+    anything — the check is skipped rather than failing every ingest.
+    """
+    from fastapi import HTTPException
+
+    if known_tenants is None:
+        return
+    if declared not in set(known_tenants):
+        raise HTTPException(
+            400,
+            f"Unknown or inactive tenant {declared!r}. "
+            "Configure the tenant before sending alerts for it.",
+        )
+
+
 def resolve_for_ingest(
     *,
     identity: dict[str, Any] | None,
@@ -212,6 +236,8 @@ def resolve_for_ingest(
     alert_source: str | None = None,
     alert_client: str | None = None,
     settings: Any = None,
+    known_tenants: Sequence[str] | None = None,
+    declared_via: str = "declared",
 ) -> TenantAssignment:
     """Decide the tenant for an incoming alert, and refuse rather than guess.
 
@@ -261,14 +287,46 @@ def resolve_for_ingest(
     # thing to arrange with the dev team, not to impose by rejection.
     if identity.get("kind") == "trusted_network":
         if declared:
-            if legacy and declared == legacy:
-                return TenantAssignment(tenant_id=legacy, assignment="declared")
-            raise HTTPException(
-                403,
-                f"Submitting for tenant {declared!r} needs an API key granted that tenant. "
-                "This sender is admitted by source address and presents no credential, "
-                "so the tenant it names cannot be verified.",
-            )
+            # The sender names its tenant in the URL path. Be clear about what
+            # this is and is not: a path segment is exactly as self-declared as
+            # a body field, and this sender presents no credential, so nothing
+            # here *verifies* the claim — it records it. A sender able to post
+            # to one tenant's path can post to any.
+            #
+            # It is still a large improvement on the alternative it replaces.
+            # The marker rule below reads "Manager: Siembiot", which every
+            # tenant will carry, so left as the only rule it would file every
+            # new client's alerts under the legacy tenant. An unverified claim
+            # that is usually right and always visible beats an inference that
+            # is silently wrong.
+            #
+            # Tightening this to a per-source-address map, or to an API key per
+            # sender, changes only this branch.
+            if known_tenants is None:
+                # The caller could not tell us which tenants exist, so this
+                # claim cannot be checked against anything at all. Fail closed
+                # to the pre-path behaviour rather than accept it: a parameter
+                # someone forgot to pass must not quietly widen who may file
+                # alerts into whose list.
+                if legacy and declared == legacy:
+                    return TenantAssignment(tenant_id=legacy, assignment=declared_via)
+                raise HTTPException(
+                    403,
+                    f"Submitting for tenant {declared!r} could not be checked against the "
+                    "configured tenants. This sender is admitted by source address and "
+                    "presents no credential.",
+                )
+            _assert_known_tenant(declared, known_tenants)
+            return TenantAssignment(tenant_id=declared, assignment=declared_via)
+
+        # Nothing named. The marker rule can only speak while the answer is not
+        # in doubt: "Manager: Siembiot" identifies the manager, not the client,
+        # and once a second tenant exists it no longer distinguishes anyone.
+        # Unassigned is then the honest answer, and it is a visible queue rather
+        # than a wrong assignment inside somebody's client list.
+        if known_tenants is not None and len(known_tenants) > 1:
+            return TenantAssignment(tenant_id=None, assignment="unassigned")
+
         return classify_by_marker(
             alert_body=alert_body, alert_source=alert_source, alert_client=alert_client,
             legacy_tenant=legacy or "",
@@ -276,7 +334,8 @@ def resolve_for_ingest(
 
     if declared:
         assert_can_submit(identity, declared)
-        return TenantAssignment(tenant_id=declared, assignment="declared")
+        _assert_known_tenant(declared, known_tenants)
+        return TenantAssignment(tenant_id=declared, assignment=declared_via)
 
     if identity.get("kind") == "api_key":
         if legacy and held == [legacy]:

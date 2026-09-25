@@ -7,6 +7,8 @@ All settings are validated at startup — if something is missing, the app won't
 
 from __future__ import annotations
 
+import re as _re
+
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +38,28 @@ else:
 _LOCAL_PLAYWRIGHT_DIR = _BACKEND_DIR / ".playwright"
 if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and _LOCAL_PLAYWRIGHT_DIR.exists():
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_LOCAL_PLAYWRIGHT_DIR)
+
+
+# `<base>/tenants/<tenant_id>` and the same with `/raw`. The tenant segment is
+# bounded to the column width so a pathological URL cannot be walked into the
+# trusted set, and it may not contain a slash.
+_TENANT_INGEST_PATH_RE = _re.compile(r"^(?P<base>.+?)/tenants/[^/]{1,64}(?:/raw)?$")
+
+
+def matches_trusted_ingest_path(path: str, trusted: "frozenset[str] | set[str]") -> bool:
+    """Whether `path` is one of the trusted ingest endpoints.
+
+    A free function rather than only a Settings method because the
+    authentication middleware applies the same rule, and the rule must have one
+    implementation. Copied into the middleware it would be a second copy to
+    keep in step, and the failure mode of drift here is a 401 on the one caller
+    that cannot retry.
+    """
+    candidate = (path or "").rstrip("/") or "/"
+    if candidate in trusted:
+        return True
+    match = _TENANT_INGEST_PATH_RE.match(candidate)
+    return bool(match and match.group("base") in trusted)
 
 
 class Settings(BaseSettings):
@@ -522,6 +546,21 @@ class Settings(BaseSettings):
         return frozenset(
             p.strip() for p in str(self.ingest_trusted_paths or "").split(",") if p.strip()
         )
+
+    def is_trusted_ingest_path(self, path: str) -> bool:
+        """Whether a network-admitted sender may post to this path.
+
+        The configured list names the collection endpoints. The tenant-scoped
+        forms — `<base>/tenants/<tenant_id>` and `<base>/tenants/<tenant_id>/raw`
+        — are the same endpoints with the tenant moved into the URL, because
+        NiFi can template a path per flow but cannot carry a header.
+
+        Derived rather than configured. Listing every tenant's path by hand is
+        a list someone has to remember to extend, and the failure mode is a 401
+        on the one caller that cannot retry — which is how ingest stopped for
+        four hours the last time this contract moved.
+        """
+        return matches_trusted_ingest_path(path, self.ingest_trusted_path_set)
 
     @property
     def cape_configured(self) -> bool:

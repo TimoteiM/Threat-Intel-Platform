@@ -342,10 +342,129 @@ async def create_alert_investigation_from_raw_text(
     return await _wait_for_report(db, queued, timeout=wait_timeout)
 
 
+@router.post("/tenants/{tenant_id}")
+async def create_alert_investigation_for_tenant(
+    tenant_id: str,
+    db: DBSession,
+    payload: dict[str, Any] = Body(...),
+    title: str | None = None,
+    context: str | None = None,
+    external_ref: str | None = None,
+    callback_url: str | None = None,
+    dedupe: bool | None = None,
+    run_ai: bool | None = None,
+    spawn_investigations: bool | None = None,
+    wait: bool = True,
+    wait_timeout: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
+    http_request: Request = None,  # type: ignore[assignment]
+) -> Any:
+    """
+    Same as `POST /api/alert-investigations`, with the tenant in the URL.
+
+    This exists because of who sends alerts. NiFi cannot attach an
+    `Authorization` header — which is why it is admitted by source address at
+    all — but it can template a path per flow. So the path is the only channel
+    through which it can state which client an alert belongs to.
+
+    The tenant here **overrides** any `tenant_id` in the body. One request must
+    not carry two answers, and the URL is the one the operator configured.
+
+    A tenant that is not configured and active is refused with 400 rather than
+    filed somewhere: a typo in a flow's URL is the likeliest mistake here, and
+    it needs to surface at the sender.
+    """
+    request = _request_from_payload(
+        payload,
+        title=title, context=context, external_ref=external_ref,
+        callback_url=callback_url, dedupe=dedupe, run_ai=run_ai,
+        spawn_investigations=spawn_investigations,
+    )
+    # The path wins over anything the body said. One request must not carry two
+    # answers, and the URL is the one an operator configured per flow.
+    request.tenant_id = tenant_id
+    queued = await _create_alert_run(
+        request, db, _identity(http_request), declared_via="path"
+    )
+    if not wait:
+        return queued
+    return await _wait_for_report(db, queued, timeout=wait_timeout)
+
+
+@router.post("/tenants/{tenant_id}/raw")
+async def create_alert_investigation_from_raw_text_for_tenant(
+    tenant_id: str,
+    http_request: Request,
+    db: DBSession,
+    title: str | None = None,
+    context: str | None = None,
+    external_ref: str | None = None,
+    callback_url: str | None = None,
+    dedupe: bool | None = None,
+    run_ai: bool = True,
+    run_ip_lookup: bool = True,
+    spawn_investigations: bool | None = None,
+    reuse_prior_investigations: bool | None = None,
+    include_raw_evidence: bool = False,
+    max_indicators: int = 30,
+    collectors: str | None = None,
+    wait: bool = True,
+    wait_timeout: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> Any:
+    """
+    Same as `POST /api/alert-investigations/raw`, with the tenant in the URL.
+
+    The shape NiFi will actually use: the alert posted as `text/plain` exactly
+    as the SIEM emitted it, and the client named by the path.
+    """
+    raw = await http_request.body()
+    queued = await _create_alert_run(
+        AlertBodyInvestigationCreate(
+            alert_body=raw.decode("utf-8", errors="replace"),
+            tenant_id=tenant_id,
+            title=title,
+            context=context,
+            external_ref=external_ref,
+            callback_url=callback_url,
+            dedupe=dedupe,
+            run_ai=run_ai,
+            run_ip_lookup=run_ip_lookup,
+            spawn_investigations=spawn_investigations,
+            reuse_prior_investigations=reuse_prior_investigations,
+            include_raw_evidence=include_raw_evidence,
+            max_indicators=max(1, min(100, int(max_indicators))),
+            requested_collectors=(
+                [name.strip() for name in collectors.split(",") if name.strip()] if collectors else None
+            ),
+        ),
+        db,
+        _identity(http_request),
+        declared_via="path",
+    )
+    if not wait:
+        return queued
+    return await _wait_for_report(db, queued, timeout=wait_timeout)
+
+
+async def _active_tenant_ids(db: DBSession) -> tuple[str, ...]:
+    """Every tenant currently accepting alerts.
+
+    Used for two decisions at ingest: whether a named tenant exists, and
+    whether the legacy marker rule still identifies anybody. Both want the
+    same list, and reading it twice invites the two answers to disagree.
+    """
+    from app.models.database import Tenant
+
+    rows = (
+        await db.execute(select(Tenant.tenant_id).where(Tenant.status == "active"))
+    ).scalars().all()
+    return tuple(str(t) for t in rows if str(t or "").strip())
+
+
 async def _create_alert_run(
     request: AlertBodyInvestigationCreate,
     db: DBSession,
     identity: dict[str, Any] | None = None,
+    declared_via: str = "declared",
 ) -> dict[str, Any]:
     """
     Queue an investigation for every indicator found in the alert body.
@@ -460,6 +579,11 @@ async def _create_alert_run(
         alert_body=alert_body,
         alert_source=alert_source,
         alert_client=alert_client,
+        # The configured tenants, so an unknown one is refused at the sender
+        # rather than filed somewhere nobody is looking, and so the marker rule
+        # can tell whether it still identifies anybody.
+        known_tenants=await _active_tenant_ids(db),
+        declared_via=declared_via,
     )
 
     run = AlertBodyInvestigationRun(

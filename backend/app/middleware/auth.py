@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import get_settings
+from app.config import get_settings, matches_trusted_ingest_path
 from app.db.session import sync_engine
 from app.models.database import ApiKey, User
 from app.security.credentials import (
@@ -167,7 +167,9 @@ def _trusted_ingest(request: Request, settings) -> dict | None:
         return None
     if request.method != "POST":
         return None
-    if request.url.path not in settings.ingest_trusted_path_set:
+    if not matches_trusted_ingest_path(
+        request.url.path, settings.ingest_trusted_path_set
+    ):
         return None
 
     peer = request.client.host if request.client else None

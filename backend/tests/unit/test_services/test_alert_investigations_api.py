@@ -98,6 +98,13 @@ def ingest_env(monkeypatch):
     """Ingest with the queue, history lookup and duplicate lookup stubbed out."""
     queued: list[tuple] = []
 
+    # The tenants table, like the other collaborators here. These tests are
+    # about what a sender gets back, not about tenancy — that lives in
+    # test_tenant_isolation.py, which exercises the real rule.
+    async def _configured_tenants(_db):
+        return ("c00",)
+
+    monkeypatch.setattr(api, "_active_tenant_ids", _configured_tenants)
     monkeypatch.setattr(api, "_attach_prior_investigations", _noop_async)
     monkeypatch.setattr(api, "find_duplicate_run", _no_duplicate)
     monkeypatch.setattr(api, "find_run_by_external_ref", _no_duplicate)

@@ -167,6 +167,101 @@ def test_turning_the_fallback_off_makes_tenant_id_mandatory_for_everyone():
         ts.resolve_for_ingest(identity=key, declared=None, settings=NoLegacy())
 
 
+# --- the tenant in the URL path ----------------------------------------------
+
+NIFI = {"kind": "trusted_network", "id": "172.23.10.16", "role": "ingest"}
+
+
+def test_nifi_may_name_any_configured_tenant_in_the_path():
+    """The new contract. NiFi cannot carry an Authorization header, so the URL
+    is the only channel through which it can say whose alert this is."""
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared="c07", settings=_Settings(),
+        known_tenants=("c00", "c07"), declared_via="path",
+    )
+    assert assignment.tenant_id == "c07"
+    assert assignment.assignment == "path"
+
+
+def test_a_tenant_that_is_not_configured_is_refused_at_the_sender():
+    """A typo in a per-flow URL template is the likeliest mistake here, and a
+    silent new bucket would leave a client's alerts nowhere anyone looks."""
+    with pytest.raises(HTTPException) as caught:
+        ts.resolve_for_ingest(
+            identity=NIFI, declared="c0O", settings=_Settings(),
+            known_tenants=("c00", "c07"), declared_via="path",
+        )
+    assert caught.value.status_code == 400
+    assert "Unknown or inactive tenant" in str(caught.value.detail)
+
+
+def test_the_marker_still_files_c00_while_c00_is_the_only_tenant():
+    """The 13,685 existing runs were assigned this way and stay correct; the
+    rule keeps working for a sender that has not cut over yet."""
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared=None, settings=_Settings(),
+        alert_body="Alert: X\nManager: Siembiot\n", alert_source=None, alert_client=None,
+        known_tenants=("c00",),
+    )
+    assert assignment.tenant_id == "c00"
+    assert assignment.assignment == "marker"
+
+
+def test_the_marker_stops_assigning_once_a_second_tenant_exists():
+    """The regression this exists to prevent.
+
+    Every tenant's alerts carry "Manager: Siembiot" — it names the manager, not
+    the client. Left as the only rule, a second tenant's alerts would be filed
+    into C00's list silently. Unassigned is a visible queue instead.
+    """
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared=None, settings=_Settings(),
+        alert_body="Alert: X\nManager: Siembiot\n", alert_source=None, alert_client=None,
+        known_tenants=("c00", "c07"),
+    )
+    assert assignment.tenant_id is None
+    assert assignment.assignment == "unassigned"
+
+
+def test_a_credentialed_sender_still_cannot_claim_a_tenant_it_does_not_hold():
+    """The path does not become a way around authorisation for callers that
+    actually carry one."""
+    key = {"kind": "api_key", "tenant_ids": ["c00"], "all_tenants": False}
+    with pytest.raises(HTTPException) as caught:
+        ts.resolve_for_ingest(
+            identity=key, declared="c07", settings=_Settings(),
+            known_tenants=("c00", "c07"), declared_via="path",
+        )
+    assert caught.value.status_code in (400, 403)
+
+
+def test_the_tenant_path_is_reachable_by_a_network_admitted_sender():
+    """The auth layer matched trusted ingest paths exactly, so a tenant in the
+    URL would have been a 401 on the one caller that cannot retry."""
+    from app.config import Settings
+
+    cfg = Settings(
+        ingest_trusted_paths="/api/alert-investigations,/api/alert-investigations/raw"
+    )
+    assert cfg.is_trusted_ingest_path("/api/alert-investigations/tenants/c00")
+    assert cfg.is_trusted_ingest_path("/api/alert-investigations/tenants/c00/raw")
+    # and nothing wider than that
+    assert not cfg.is_trusted_ingest_path("/api/alert-investigations/tenants/c00/extra")
+    assert not cfg.is_trusted_ingest_path("/api/admin/tenants/c00")
+
+
+def test_both_tenant_routes_are_registered_ahead_of_the_run_id_routes():
+    """`POST /{run_id}/…` would otherwise be free to shadow them."""
+    from app.api import alert_investigations as mod
+
+    posts = [r.path for r in mod.router.routes if "POST" in getattr(r, "methods", set())]
+    assert "/api/alert-investigations/tenants/{tenant_id}" in posts
+    assert "/api/alert-investigations/tenants/{tenant_id}/raw" in posts
+    assert posts.index("/api/alert-investigations/tenants/{tenant_id}") < posts.index(
+        "/api/alert-investigations/{run_id}/cancel"
+    )
+
+
 # --- the routes themselves ---------------------------------------------------
 
 def test_every_run_route_is_tenant_scoped():
@@ -307,17 +402,33 @@ def test_a_payload_claiming_another_client_is_not_overridden_by_the_marker():
     assert assignment.tenant_id is None
 
 
-def test_the_trusted_path_cannot_claim_a_tenant_it_cannot_prove():
-    """There is no credential here, so a named tenant cannot be authorised.
-    Naming the legacy tenant is allowed — it is what the marker would have
-    decided anyway — and naming any other requires an API key."""
+def test_the_trusted_path_falls_closed_when_the_tenants_are_unknown():
+    """Deliberate change of contract, and the guard that keeps it safe.
+
+    A network-admitted sender may now name any *configured* tenant in the URL
+    path — that is the point of the path, since NiFi cannot carry a header. The
+    check that makes it safe is `known_tenants`, supplied by the route from the
+    tenants table.
+
+    When that list is absent the claim cannot be checked against anything, so
+    this falls back to the older, narrower rule rather than accepting it. A
+    parameter someone forgets to pass must not quietly widen who may file
+    alerts into whose list.
+    """
     ok = ts.resolve_for_ingest(identity=NIFI, declared="c00", alert_body="x", settings=_Settings())
     assert ok.tenant_id == "c00"
 
     with pytest.raises(HTTPException) as caught:
         ts.resolve_for_ingest(identity=NIFI, declared="lin", alert_body="x", settings=_Settings())
     assert caught.value.status_code == 403
-    assert "API key" in str(caught.value.detail)
+
+    # With the list supplied, the same call is allowed — and is recorded as a
+    # path assignment so it can be told apart from an authorised one later.
+    allowed = ts.resolve_for_ingest(
+        identity=NIFI, declared="lin", alert_body="x", settings=_Settings(),
+        known_tenants=("c00", "lin"), declared_via="path",
+    )
+    assert (allowed.tenant_id, allowed.assignment) == ("lin", "path")
 
 
 def test_the_marker_rule_is_the_same_one_the_migration_used():
