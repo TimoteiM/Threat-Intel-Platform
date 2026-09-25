@@ -19,7 +19,8 @@ from app.services import tenant_scope
 
 
 class _Run:
-    def __init__(self, host, source, rule, verdict="suspicious", event_time=None):
+    def __init__(self, host, source, rule, verdict="suspicious", event_time=None,
+                 tenant_id="c00"):
         self.id = uuid4()
         self.title = f"{rule} on {host}"
         self.created_at = datetime.now(timezone.utc)
@@ -31,6 +32,10 @@ class _Run:
         self.entity_user = None
         self.alert_source = source
         self.alert_client = "unknown"
+        # A case reports whose it is, so a member has to carry a tenant. The
+        # real query selects this column; a stub without it tests a row shape
+        # that no longer exists.
+        self.tenant_id = tenant_id
         self.alert_kind = "alert"
         self.detection_rule_id = rule
         self.detection_rule_name = rule

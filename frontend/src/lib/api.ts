@@ -1381,12 +1381,18 @@ export function getCorrelatedCases(params?: {
   min_rules?: number;
   min_score?: number;
   tenant?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
 }) {
   const qs = new URLSearchParams();
   if (params?.hours) qs.set("hours", String(params.hours));
   if (params?.min_rules) qs.set("min_rules", String(params.min_rules));
   if (params?.min_score) qs.set("min_score", String(params.min_score));
   if (params?.tenant) qs.set("tenant", params.tenant);
+  if (params?.since) qs.set("since", params.since);
+  if (params?.until) qs.set("until", params.until);
+  if (params?.limit) qs.set("limit", String(params.limit));
   const query = qs.toString();
   return request<CorrelatedCasesResponse>(
     `/detections/correlated-cases${query ? `?${query}` : ""}`,

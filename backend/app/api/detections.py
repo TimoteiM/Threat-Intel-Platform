@@ -18,6 +18,7 @@ decision is a guess about whether a classification was right.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -75,6 +76,25 @@ def _filtered(request: Request | None, tenant: str | None) -> "tenant_scope.Tena
         return tenant_scope.requested_scope(scope, tenant)
     except tenant_scope.TenantForbidden as exc:
         raise HTTPException(403, str(exc)) from None
+
+
+def _as_utc(value: str | None, *, end_of_day: bool) -> datetime | None:
+    """Parse an ISO date or datetime into UTC, or refuse it.
+
+    A bare `2026-09-01` as an upper bound means the end of that day, not its
+    first instant — otherwise picking the same day for both bounds returns
+    nothing, which reads as "no cases" rather than "you asked for no time".
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"Not a date: {text[:40]!r}") from None
+    if len(text) == 10 and end_of_day:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 SUBJECT_TYPES = ("investigation", "alert_run")
@@ -257,11 +277,17 @@ async def get_mismatch_alerts(
 @router.get("/correlated-cases")
 async def get_correlated_cases(
     db: DBSession,
-    hours: int = Query(default=48, ge=1, le=720),
+    # Up to two years, so "all cases" is a real option rather than a 30-day
+    # cap wearing that name. Retention decides what it actually reaches.
+    hours: int = Query(default=48, ge=1, le=17520),
     min_rules: int = Query(default=2, ge=1, le=10),
     min_score: int = Query(default=0, ge=0, le=100),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=500),
     tenant: str | None = None,
+    # An explicit range, for an analyst who picked dates. ISO-8601; a bare date
+    # is read as midnight UTC.
+    since: str | None = None,
+    until: str | None = None,
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Entities carrying more than one independent detection inside the window.
@@ -269,11 +295,48 @@ async def get_correlated_cases(
     Scoped to the caller's tenants. `tenant` narrows further to one client and
     is refused if the caller may not read it.
     """
+    scope = _scope(request)
+    if tenant:
+        # Refused, not ignored: naming a client you may not read must not
+        # quietly fall back to the ones you can.
+        tenant_scope.assert_can_read(scope, tenant)
+
+    # Correlated once, across everything this caller may read, so the client
+    # selector can report a real count per client. Narrowing the *query* first
+    # would make every other client's count unknowable, and the selector used
+    # to paper over that by counting alert rows instead — which is why Cases
+    # offered "Expertware (C00) (13,729)" next to a list of 33 cases.
+    since_at = _as_utc(since, end_of_day=False)
+    until_at = _as_utc(until, end_of_day=True)
+    if since_at and until_at and since_at > until_at:
+        raise HTTPException(400, "`since` is after `until`.")
+    if since_at:
+        # The scan has to reach back at least as far as the range being listed,
+        # or a case inside it is filtered out of a window that never held it.
+        span = (datetime.now(timezone.utc) - since_at).total_seconds() / 3600.0
+        hours = max(hours, int(span) + 1)
+
     result = await correlate_alerts(
-        db, scope=_filtered(request, tenant), hours=hours, min_rules=min_rules,
-        min_score=min_score, limit=limit,
+        db, scope=scope, hours=hours, min_rules=min_rules,
+        min_score=min_score, limit=limit, since=since_at, until=until_at,
     )
-    result["available_tenants"] = await _selectable_tenants(db, request)
+    cases = list(result.get("cases") or [])
+    counts: dict[str | None, int] = defaultdict(int)
+    for case in cases:
+        counts[case.get("tenant_id")] += 1
+
+    if tenant:
+        cases = [case for case in cases if case.get("tenant_id") == tenant]
+        result["cases"] = cases
+        result["total_cases"] = len(cases)
+
+    options = await _selectable_tenants(db, request)
+    for option in options:
+        # Cases, not alert runs. On this page the alert count is a different
+        # number about a different thing, and putting it in a case selector
+        # read as a case count.
+        option["run_count"] = counts.get(option["tenant_id"], 0)
+    result["available_tenants"] = options
     return result
 
 

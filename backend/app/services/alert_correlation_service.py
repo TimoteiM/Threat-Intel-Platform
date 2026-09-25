@@ -498,6 +498,10 @@ _RUN_COLUMNS = (
     AlertBodyInvestigationRun.alert_source,
     AlertBodyInvestigationRun.alert_client,
     AlertBodyInvestigationRun.alert_kind,
+    # Read so a case can say whose it is. Cases are grouped by client and host,
+    # not by tenant, so without this the payload had no tenant to report and
+    # the client selector had to count alert rows instead of cases.
+    AlertBodyInvestigationRun.tenant_id,
     AlertBodyInvestigationRun.event_time,
     AlertBodyInvestigationRun.detection_rule_id,
     AlertBodyInvestigationRun.detection_rule_name,
@@ -591,6 +595,11 @@ async def correlate_alerts(
     *,
     scope: tenant_scope.TenantScope,
     hours: int = DEFAULT_WINDOW_HOURS,
+    # An explicit range, when an analyst picked dates rather than a preset.
+    # `hours` still governs how far back membership is computed; these two only
+    # decide which of the resulting cases are listed.
+    since: datetime | None = None,
+    until: datetime | None = None,
     min_rules: int = MIN_DISTINCT_RULES,
     min_score: int = 0,
     limit: int = 50,
@@ -785,6 +794,13 @@ async def correlate_alerts(
                     "source": source,
                     "client": client,
                     "entity_host": entity,
+                    # Whose case this is. Every member shares a client and a
+                    # host, so a case has one tenant; `sorted(...)[0]` is a
+                    # formality that also refuses to invent one when the
+                    # members are unassigned.
+                    "tenant_id": next(
+                        iter(sorted({m.tenant_id for m in members if m.tenant_id})), None
+                    ),
                     "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
                     # Computed once, server-side, so the list and the detail
                     # page cannot render the same case under two names.
@@ -979,7 +995,10 @@ async def correlate_alerts(
     # whose alerts were three weeks old appeared under 48 hours because they sat
     # within 48 hours of each other, so every window showed the same cases at
     # the top and the control looked broken.
-    horizon = datetime.now(timezone.utc) - timedelta(hours=max(1, hours))
+    # An explicit range says exactly which cases to list and is used as given.
+    # Without one the window is the rolling "what has been happening lately".
+    horizon = since or (datetime.now(timezone.utc) - timedelta(hours=max(1, hours)))
+
     def within_window(case: dict[str, Any]) -> bool:
         last_seen = case.get("last_seen")
         if not last_seen:
@@ -990,6 +1009,8 @@ async def correlate_alerts(
             return True
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
+        if until is not None and when > until:
+            return False
         return when >= horizon
 
     cases = [case for case in cases if within_window(case)]

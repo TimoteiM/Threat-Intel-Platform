@@ -33,7 +33,6 @@ import {
   Section,
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
-import DevicesTab from "@/components/detections/DevicesTab";
 import {
   RuleTuningPanel,
   useTuningRecommendations,
@@ -66,7 +65,7 @@ function pct(rate: number | null): string {
 }
 
 export default function DetectionsPage() {
-  const [tab, setTab] = useState<"rules" | "attack" | "devices" | "accuracy">("rules");
+  const [tab, setTab] = useState<"rules" | "attack" | "accuracy">("rules");
   const [days, setDays] = useState(30);
   const [quality, setQuality] = useState<DetectionQualityResponse | null>(null);
   const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
@@ -95,7 +94,6 @@ export default function DetectionsPage() {
   const tabs = [
     { id: "rules" as const, label: "Rules" },
     { id: "attack" as const, label: "ATT&CK coverage" },
-    { id: "devices" as const, label: "Devices" },
     { id: "accuracy" as const, label: "Platform accuracy" },
   ];
 
@@ -151,8 +149,6 @@ export default function DetectionsPage() {
           <RulesTab data={quality} days={days} />
         ) : tab === "attack" ? (
           <AttackTab data={coverage} days={Math.max(days, 90)} />
-        ) : tab === "devices" ? (
-          <DevicesTab days={days} />
         ) : (
           <AccuracyTab data={accuracy} />
         )}

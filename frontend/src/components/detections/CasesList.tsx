@@ -37,7 +37,16 @@ const CASES_REFRESH_MS = 30_000;
 export const CASE_WINDOWS = [48, 168, 720] as const;
 const MAX_WINDOW_HOURS = 720;
 
-export default function CasesList({ hours }: { hours: number }) {
+export default function CasesList({
+  hours,
+  since,
+  until,
+}: {
+  hours: number;
+  /** An explicit range, when the analyst picked dates instead of a preset. */
+  since?: string;
+  until?: string;
+}) {
   const [openHost, setOpenHost] = useState<string | null>(null);
   const [tenant, setTenant] = useState("");
   const [tenants, setTenants] = useState<TenantOption[]>([]);
@@ -60,7 +69,16 @@ export default function CasesList({ hours }: { hours: number }) {
     const load = () => {
       if (first) setLoading(true);
       api
-        .getCorrelatedCases({ hours, tenant: tenant || undefined })
+        .getCorrelatedCases({
+          hours,
+          tenant: tenant || undefined,
+          since: since || undefined,
+          until: until || undefined,
+          // A wide window returns far more than the default 50, and a list
+          // that silently stops at 50 while the header says 300 is worse than
+          // a slow one.
+          limit: 500,
+        })
         .then((result) => {
           if (cancelled) return;
           setData(result);
@@ -91,7 +109,7 @@ export default function CasesList({ hours }: { hours: number }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [hours, tenant]);
+  }, [hours, tenant, since, until]);
 
   if (loading && !data) return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>;
   if (!data) return <EmptyState title="Correlation could not be read" hint="The endpoint did not answer." />;
