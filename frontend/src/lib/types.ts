@@ -1815,6 +1815,19 @@ export interface AlertAIReport {
   started_at?: string;
   completed_at?: string;
   duration_ms?: number;
+  /**
+   * What the model was given alongside the alert body. `sent_refs` is what
+   * actually reached it; `relevant_refs` is only the ranking's advice.
+   */
+  log_selection?: {
+    relevant_refs?: string[];
+    sent_refs?: string[];
+    analyst_pinned?: string[];
+    analyst_pinned_dropped?: string[];
+    digest_tokens?: number;
+    events_found?: number;
+    status?: string;
+  };
 }
 
 /** What the collectors actually found, one line per indicator. */

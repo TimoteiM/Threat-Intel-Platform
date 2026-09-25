@@ -518,6 +518,10 @@ export interface AnalysisStatus {
   overall_verdict?: string | null;
   highest_risk_score?: number | null;
   report_markdown: string;
+  /** When this interpretation was written, so a stale one is visibly stale. */
+  generated_at?: string | null;
+  generation_ms?: number | null;
+  log_events_considered?: number | null;
   log_selection: {
     events_found?: number | null;
     events_selected?: number | null;

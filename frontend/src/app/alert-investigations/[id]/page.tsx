@@ -461,7 +461,22 @@ export default function AlertInvestigationDetailPage() {
       {aiReport && (
         <ConsoleModule
           title="AI assistant analysis"
-          description="The raw alert body was sanitised and analysed by the AI assistant — identifiers were tokenised before the model saw them and restored afterwards."
+          description={
+            // Stamped. An interpretation that has been superseded otherwise
+            // looks exactly like one that has not, and the only way to tell was
+            // to have memorised the previous wording.
+            [
+              "The raw alert body was sanitised and analysed by the AI assistant — identifiers were tokenised before the model saw them and restored afterwards.",
+              aiReport?.completed_at
+                ? `Written ${new Date(aiReport.completed_at).toLocaleString()}.`
+                : "",
+              (aiReport?.log_selection?.sent_refs?.length ?? 0) > 0
+                ? `${aiReport?.log_selection?.sent_refs?.length} SIEM log event(s) were in its context.`
+                : "Alert body only — no log events were sent.",
+            ]
+              .filter(Boolean)
+              .join(" ")
+          }
           tone={aiReport.status === "failed" ? "danger" : "info"}
           actions={
             aiReport.assistant_session_id ? (

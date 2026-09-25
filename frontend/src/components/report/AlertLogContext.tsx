@@ -381,6 +381,16 @@ export function AlertLogContext({
                 <div style={{ marginTop: 4 }}>
                   <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>
                     Updated interpretation
+                    {job.generated_at && (
+                      <span style={{ opacity: 0.85 }}>
+                        {" — written "}
+                        {new Date(job.generated_at).toLocaleTimeString()}
+                        {job.log_events_considered
+                          ? `, ${job.log_events_considered} log event${job.log_events_considered === 1 ? "" : "s"} in its context`
+                          : ", alert body only"}
+                        {job.generation_ms ? ` (${(job.generation_ms / 1000).toFixed(1)}s)` : ""}
+                      </span>
+                    )}
                   </div>
                   <div style={reportBox}>{job.report_markdown}</div>
                 </div>

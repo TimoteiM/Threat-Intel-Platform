@@ -986,6 +986,13 @@ async def get_analysis_status(
         "highest_risk_score": run.highest_risk_score,
         # The analyst-facing report: de-anonymised on purpose, for a person.
         "report_markdown": ai_report.get("report_markdown") or "",
+        # When this interpretation was written and what informed it. Without a
+        # stamp, an interpretation that has been superseded looks exactly like
+        # one that has not, and the only way to tell is to have memorised the
+        # previous wording.
+        "generated_at": ai_report.get("completed_at"),
+        "generation_ms": ai_report.get("duration_ms"),
+        "log_events_considered": len(selection.get("sent_refs") or []),
         "log_selection": {
             "events_found": selection.get("events_found"),
             "events_selected": selection.get("events_selected"),
