@@ -281,7 +281,7 @@ export default function AlertInvestigationDetailPage() {
   return (
     <div style={{ display: "grid", gap: 18, paddingBottom: 56 }}>
       {runCase && <CaseBanner runCase={runCase} currentRunId={runId} />}
-      <LogContextSection runId={runId} />
+      <LogContextSection runId={runId} onReanalysed={() => void load()} />
       {suppressOpen && (
         <SuppressDialog
           runId={runId}
@@ -1469,7 +1469,19 @@ function CaseBanner({ runCase, currentRunId }: { runCase: CorrelatedCase; curren
  * analyst opens it when they want to check what else was happening, and a few
  * hundred rows above the findings would bury them.
  */
-function LogContextSection({ runId }: { runId: string }) {
+function LogContextSection({
+  runId,
+  onReanalysed,
+}: {
+  runId: string;
+  /**
+   * Called when a re-analysis finishes. The page's own "AI assistant analysis"
+   * section was loaded when the page opened and does not refresh itself, so
+   * after a re-run it kept showing the interpretation that had just been
+   * superseded — which reads exactly like the re-analysis having done nothing.
+   */
+  onReanalysed?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   // "Around the alert" is the default: an analyst opening this wants to start
   // where the alert is, not to find it in a hundred rows first.
@@ -1590,7 +1602,11 @@ function LogContextSection({ runId }: { runId: string }) {
               </button>
             ))}
           </div>
-          {mode === "context" ? <AlertLogContext runId={runId} /> : <AlertLogView runId={runId} />}
+          {mode === "context" ? (
+            <AlertLogContext runId={runId} onReanalysed={onReanalysed} />
+          ) : (
+            <AlertLogView runId={runId} />
+          )}
         </div>
       )}
     </section>

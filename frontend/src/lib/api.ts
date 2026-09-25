@@ -533,7 +533,12 @@ export interface AnalysisStatus {
     ranking_tokens?: number | null;
     budget_tokens?: number | null;
   };
-  reanalysis: { requested_by?: string | null; requested_at?: string | null; pinned_refs: string[] };
+  reanalysis: {
+    request_id?: string | null;
+    requested_by?: string | null;
+    requested_at?: string | null;
+    pinned_refs: string[];
+  };
   previous_analyses: number;
   previous?: {
     superseded_at?: string | null;
@@ -557,6 +562,7 @@ export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []
     status: string;
     pinned_refs: string[];
     note: string;
+    request_id?: string | null;
     previous_completed_at?: string | null;
   }>(
     `/alert-investigations/${runId}/reanalyse`,

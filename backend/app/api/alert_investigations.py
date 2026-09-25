@@ -1004,6 +1004,7 @@ async def get_analysis_status(
             "budget_tokens": selection.get("budget_tokens"),
         },
         "reanalysis": {
+            "request_id": requested.get("request_id"),
             "requested_by": requested.get("requested_by"),
             "requested_at": requested.get("requested_at"),
             "pinned_refs": requested.get("pinned_refs") or [],
@@ -1086,7 +1087,12 @@ async def reanalyse_with_log_context(
         "log_selection": superseded.get("log_selection"),
     })
     existing["previous_analyses"] = history[-5:]
+    request_id = uuid.uuid4().hex
     existing["reanalysis"] = {
+        # Identifies this request exactly, so a caller polling for its result
+        # can tell it apart from the answer that was already there. Comparing
+        # completion timestamps left a hole whenever there was no completion.
+        "request_id": request_id,
         "requested_by": str(identity.get("username") or "unknown"),
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "pinned_refs": pinned,
@@ -1103,6 +1109,7 @@ async def reanalyse_with_log_context(
         "run_id": str(run_id),
         "status": "queued",
         "pinned_refs": pinned,
+        "request_id": request_id,
         # So a caller polling for the result can tell a fresh answer from the
         # one that was already on screen. Without it the first poll could land
         # on the previous completed state and present the old verdict as the

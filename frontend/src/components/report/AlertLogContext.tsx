@@ -82,7 +82,13 @@ const INDETERMINATE_KEYFRAMES = `
   100% { margin-left: 100%; }
 }`;
 
-export function AlertLogContext({ runId }: { runId: string }) {
+export function AlertLogContext({
+  runId,
+  onReanalysed,
+}: {
+  runId: string;
+  onReanalysed?: () => void;
+}) {
   const [page, setPage] = useState<AlertLogContextPage | null>(null);
   const [before, setBefore] = useState(STEP_DEFAULT);
   const [after, setAfter] = useState(STEP_DEFAULT);
@@ -101,6 +107,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
   const [jobPhase, setJobPhase] = useState<"idle" | "queued" | "running" | "done" | "failed">("idle");
   const [elapsed, setElapsed] = useState(0);
   const [supersedes, setSupersedes] = useState<string | null>(null);
+  const [awaitingRequestId, setAwaitingRequestId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,9 +172,12 @@ export function AlertLogContext({ runId }: { runId: string }) {
     setJobPhase("queued");
     try {
       const result = await reanalyseWithLogContext(runId, refs ?? Array.from(pinned));
-      // The completion this request supersedes. Anything not later than it is
-      // the answer that was already on screen, and presenting that as the new
-      // one is how a re-analysis looked instant and identical.
+      // Matched exactly, by the id of this request. Comparing completion
+      // timestamps left a hole whenever the run had no completion to compare
+      // against, and a poll landing before the worker started then reported
+      // the previous answer as this one — zero events, zero tokens, zero
+      // history, and an interpretation that had not moved.
+      setAwaitingRequestId(result.request_id ?? null);
       setSupersedes(result.previous_completed_at ?? null);
       setNote(result.note);
     } catch (err) {
@@ -191,12 +201,17 @@ export function AlertLogContext({ runId }: { runId: string }) {
         const status = await getAnalysisStatus(runId);
         if (cancelled) return;
         setElapsed(Math.round((Date.now() - started) / 1000));
-        const isNew = !supersedes || (status.completed_at ?? "") > supersedes;
-        if (status.finished && isNew) {
+        const isThisRequest = awaitingRequestId
+          ? status.reanalysis?.request_id === awaitingRequestId
+          : !supersedes || (status.completed_at ?? "") > supersedes;
+        if (status.finished && isThisRequest) {
           setJob(status);
           setJobPhase(status.status === "completed" ? "done" : "failed");
-          // The window's own numbers move with the new analysis.
+          // The window's own numbers move with the new analysis, and so does
+          // the page's analysis section — which otherwise keeps showing the
+          // interpretation this run just replaced.
           void load();
+          onReanalysed?.();
         } else {
           setJobPhase("running");
         }
@@ -211,7 +226,7 @@ export function AlertLogContext({ runId }: { runId: string }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [jobPhase, runId, load, supersedes]);
+  }, [jobPhase, runId, load, supersedes, awaitingRequestId, onReanalysed]);
 
   if (loading && !page) return <Muted>Loading the events around this alert…</Muted>;
   if (error) return <Muted>{error}</Muted>;

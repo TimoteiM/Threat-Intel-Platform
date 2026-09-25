@@ -234,3 +234,18 @@ def test_an_unrecorded_earlier_report_is_not_claimed_to_be_unchanged():
 
 def test_no_history_means_no_comparison():
     assert api._previous_analysis({"ai_report": {"report_markdown": "x"}}) is None
+
+
+def test_each_reanalysis_is_identified_so_its_own_result_can_be_recognised():
+    """Comparing completion timestamps left a hole: a run with no completion to
+    compare against accepted any finished status, so a poll landing before the
+    worker started reported the previous answer as this one — zero events, zero
+    tokens, zero history, and an interpretation that had not moved."""
+    import inspect
+
+    request = inspect.getsource(api.reanalyse_with_log_context)
+    assert '"request_id": request_id' in request
+    assert "uuid.uuid4().hex" in request
+
+    status = inspect.getsource(api.get_analysis_status)
+    assert '"request_id": requested.get("request_id")' in status
