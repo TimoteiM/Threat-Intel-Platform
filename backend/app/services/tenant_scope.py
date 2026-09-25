@@ -186,11 +186,17 @@ def classify_by_marker(
     *, alert_body: str | None, alert_source: str | None, alert_client: str | None,
     legacy_tenant: str,
 ) -> TenantAssignment:
-    """The tenant an uncredentialed but network-trusted alert belongs to.
+    """How the existing C00 runs were assigned. No longer used at ingest.
 
-    Not an inference from a hostname appearing somewhere in the text: the marker
-    is a Wazuh header line, and a payload that declares a different client is
-    refused rather than overridden.
+    Historical. This is the rule migration 030 applied to the backlog and the
+    one that assigned the 13,714 runs now sitting under the legacy tenant, and
+    it is kept so that record stays readable and so a test can hold the live
+    code and the migration to the same definition.
+
+    It is not called when an alert arrives any more. "Manager: Siembiot" names
+    the Wazuh manager, not the client — every tenant carries it — so as a
+    classifier it could only ever have been right while there was exactly one
+    client. Alerts that name no tenant are now filed unassigned instead.
     """
     declared_client = str(alert_client or "unknown").strip().casefold()
     if declared_client not in ("", "unknown"):
@@ -275,16 +281,15 @@ def resolve_for_ingest(
     # ── The network-trusted ingest path ─────────────────────────────────────
     #
     # An appliance that cannot carry a header — NiFi here — is admitted by
-    # source address and presents no credential. There is therefore nothing to
-    # authorise a tenant against, so this path is the legacy one by definition
-    # and is classified by the same verified marker rule migration 030 used.
+    # source address and presents no credential. There is nothing to authorise
+    # a tenant against, so the tenant has to arrive in the URL.
     #
     # It must never refuse. This check was added returning 400 to an
     # uncredentialed sender and stopped production ingest for four hours:
     # enforcing a contract the sending side has not been given yet, against the
     # one caller that cannot satisfy it, is the wrong trade in every direction.
-    # The multi-client contract needs a credential, and asking for one is a
-    # thing to arrange with the dev team, not to impose by rejection.
+    # An alert that names no tenant is still accepted — it is filed unassigned,
+    # which is a queue somebody can work, not a rejection.
     if identity.get("kind") == "trusted_network":
         if declared:
             # The sender names its tenant in the URL path. Be clear about what
@@ -319,18 +324,19 @@ def resolve_for_ingest(
             _assert_known_tenant(declared, known_tenants)
             return TenantAssignment(tenant_id=declared, assignment=declared_via)
 
-        # Nothing named. The marker rule can only speak while the answer is not
-        # in doubt: "Manager: Siembiot" identifies the manager, not the client,
-        # and once a second tenant exists it no longer distinguishes anyone.
-        # Unassigned is then the honest answer, and it is a visible queue rather
-        # than a wrong assignment inside somebody's client list.
-        if known_tenants is not None and len(known_tenants) > 1:
-            return TenantAssignment(tenant_id=None, assignment="unassigned")
-
-        return classify_by_marker(
-            alert_body=alert_body, alert_source=alert_source, alert_client=alert_client,
-            legacy_tenant=legacy or "",
-        ) if legacy else TenantAssignment(tenant_id=None, assignment="unassigned")
+        # Nothing named — so nothing is known, and nothing is guessed.
+        #
+        # This used to fall back to the marker rule, which read "Manager:
+        # Siembiot" and filed the alert under the legacy tenant. That marker
+        # identifies the manager, not the client: every tenant carries it. It
+        # was right for as long as there was one client and would have been
+        # wrong the moment there were two, so it is gone rather than merely
+        # guarded.
+        #
+        # The 13,714 runs it already assigned stay exactly as they are. They
+        # were correct when they were made, and re-deciding history from a rule
+        # we have just discarded would be worse than leaving it recorded.
+        return TenantAssignment(tenant_id=None, assignment="unassigned")
 
     if declared:
         assert_can_submit(identity, declared)

@@ -218,16 +218,21 @@ def test_a_tenant_id_must_be_a_plain_identifier():
         assert caught.value.status_code == 400
 
 
-def test_the_marker_still_files_c00_while_c00_is_the_only_tenant():
-    """The 13,685 existing runs were assigned this way and stay correct; the
-    rule keeps working for a sender that has not cut over yet."""
+def test_an_alert_naming_no_tenant_is_unassigned_even_with_the_marker():
+    """An alert that names no tenant is filed unassigned, whatever it says.
+
+    "Manager: Siembiot" names the Wazuh manager, not the client — every tenant
+    carries it — so it never distinguished anybody. It happened to be right
+    while there was one client. It is no longer consulted at ingest, and an
+    alert carrying it is now treated exactly like one that does not.
+    """
     assignment = ts.resolve_for_ingest(
         identity=NIFI, declared=None, settings=_Settings(),
         alert_body="Alert: X\nManager: Siembiot\n", alert_source=None, alert_client=None,
         known_tenants=("c00",),
     )
-    assert assignment.tenant_id == "c00"
-    assert assignment.assignment == "marker"
+    assert assignment.tenant_id is None
+    assert assignment.assignment == "unassigned"
 
 
 def test_the_marker_stops_assigning_once_a_second_tenant_exists():
@@ -396,13 +401,31 @@ def test_the_uncredentialed_sender_is_never_refused_for_want_of_a_tenant():
         assert assignment.assignment in ("marker", "manager_source", "unassigned")
 
 
-def test_a_c00_alert_over_the_trusted_path_is_filed_as_c00():
+def test_a_c00_looking_alert_with_no_tenant_in_the_path_is_unassigned():
+    """The cutover, stated as a test.
+
+    This is the alert shape that produced 13,714 C00 runs. It now goes to the
+    unassigned queue, because the sender did not say whose it is and nothing
+    in the payload can answer that question. The flow has to post to
+    /tenants/c00/raw to keep landing in C00.
+    """
     assignment = ts.resolve_for_ingest(
         identity=NIFI, declared=None, alert_body=WAZUH_C00,
         alert_source="Siembiot", alert_client=None, settings=_Settings(),
     )
+    assert assignment.tenant_id is None
+    assert assignment.assignment == "unassigned"
+
+
+def test_the_same_alert_with_the_tenant_in_the_path_still_lands_in_c00():
+    """And the other half: cutting over is all it takes."""
+    assignment = ts.resolve_for_ingest(
+        identity=NIFI, declared="c00", alert_body=WAZUH_C00,
+        alert_source="Siembiot", alert_client=None, settings=_Settings(),
+        known_tenants=("c00",), declared_via="path",
+    )
     assert assignment.tenant_id == "c00"
-    assert assignment.assignment == "marker"
+    assert assignment.assignment == "path"
 
 
 def test_a_non_c00_alert_over_the_trusted_path_is_unassigned_not_mislabelled():
