@@ -913,7 +913,7 @@ async def get_run_case(
         raise HTTPException(404, "Alert investigation not found")
     tenant_scope.assert_can_read(scope, run.tenant_id)
 
-    case = await case_for_run(db, run_id, hours=hours)
+    case = await case_for_run(db, run_id, scope=_scope(request), hours=hours)
     if case is not None:
         # Correlation partitions on source and client, not on tenant, so a case
         # is *not* guaranteed to be single-tenant. Members the caller may not

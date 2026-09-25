@@ -75,11 +75,15 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   const profile = data.profile;
   const verdict = caseVerdict(data.narrative.markdown);
   const host = item?.entity_host || profile?.host || caseKey.slice(0, 12);
+  // `{host}/{user} — {what happened}`, composed server-side. Falls back to the
+  // bare host for a case that no longer forms in the current window and so has
+  // no freshly computed label.
+  const label = item?.label || host;
 
   return (
     <Page>
       <PageHeader
-        title={host}
+        title={label}
         subtitle={
           item
             ? `${item.alert_count} alert(s) · ${item.distinct_rules} independent detections · ${shortDate(item.first_seen)} → ${shortDate(item.last_seen)}`

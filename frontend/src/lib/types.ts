@@ -2146,6 +2146,9 @@ export interface CorrelatedCase {
   /** Whose estate. Cases never span clients. */
   client: string;
   entity_host: string;
+  /** `{host}/{user} — {what happened}`, composed server-side so the list and
+   *  the detail page cannot name the same case two different ways. */
+  label?: string;
   entity_users: string[];
   /** Stable identity of this session, derived from its first event time.
    *  Survives a change of query window; session_seq deliberately does not. */

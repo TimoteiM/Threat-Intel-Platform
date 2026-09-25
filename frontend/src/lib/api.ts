@@ -1380,11 +1380,13 @@ export function getCorrelatedCases(params?: {
   hours?: number;
   min_rules?: number;
   min_score?: number;
+  tenant?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.hours) qs.set("hours", String(params.hours));
   if (params?.min_rules) qs.set("min_rules", String(params.min_rules));
   if (params?.min_score) qs.set("min_score", String(params.min_score));
+  if (params?.tenant) qs.set("tenant", params.tenant);
   const query = qs.toString();
   return request<CorrelatedCasesResponse>(
     `/detections/correlated-cases${query ? `?${query}` : ""}`,
@@ -1426,7 +1428,7 @@ export function listDevices(params?: {
   if (params?.verdict) qs.set("verdict", params.verdict);
   if (params?.tenant) qs.set("tenant", params.tenant);
   const query = qs.toString();
-  return request<{ items: DeviceRow[]; days: number }>(
+  return request<{ items: DeviceRow[]; days: number; available_tenants?: TenantOption[] }>(
     `/detections/devices${query ? `?${query}` : ""}`,
   );
 }
@@ -1598,22 +1600,6 @@ export function listClientAlerts(
   return request<any>(`/clients/${clientId}/alerts${query ? `?${query}` : ""}`);
 }
 
-export function listAllAlerts(params?: {
-  limit?: number;
-  offset?: number;
-  severity?: string;
-  resolved?: boolean;
-  acknowledged?: boolean;
-}) {
-  const qs = new URLSearchParams();
-  if (params?.limit) qs.set("limit", String(params.limit));
-  if (params?.offset) qs.set("offset", String(params.offset));
-  if (params?.severity) qs.set("severity", params.severity);
-  if (params?.resolved !== undefined) qs.set("resolved", String(params.resolved));
-  if (params?.acknowledged !== undefined) qs.set("acknowledged", String(params.acknowledged));
-  const query = qs.toString();
-  return request<any>(`/client-alerts${query ? `?${query}` : ""}`);
-}
 
 export function acknowledgeAlert(alertId: string) {
   return request<any>(`/client-alerts/${alertId}/acknowledge`, { method: "POST" });

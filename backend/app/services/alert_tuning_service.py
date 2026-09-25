@@ -34,6 +34,7 @@ from xml.sax.saxutils import escape as xml_escape
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services import tenant_scope
 from app.models.database import AlertBodyInvestigationRun
 from app.services.alert_field_service import (
     SEVERITY_ONLY_FIELDS,
@@ -378,10 +379,14 @@ def wazuh_rule_xml(rule_id: str, match_fields: dict[str, str], *, reason: str) -
 
 
 async def build_tuning_recommendations(
-    db: AsyncSession, *, days: int = 90, min_alerts: int = MIN_ALERTS_TO_RECOMMEND
+    db: AsyncSession, *, scope: tenant_scope.TenantScope,
+    days: int = 90, min_alerts: int = MIN_ALERTS_TO_RECOMMEND,
 ) -> dict[str, Any]:
     """Rules whose alerts have never been worth acting on, and how to silence them."""
-    cache_key = (int(days), int(min_alerts))
+    # The cache is keyed by scope as well as by the window. A recommendation is
+    # computed from one client's verdicts; serving it to another from cache
+    # would be a leak with no query behind it to notice.
+    cache_key = (int(days), int(min_alerts), scope.cache_key())
     cached = _CACHE.get(cache_key)
     if cached and (time.monotonic() - cached[0]) < CACHE_TTL_SECONDS:
         return cached[1]
@@ -405,6 +410,7 @@ async def build_tuning_recommendations(
             .where(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.detection_rule_id.isnot(None),
+                tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
             )
             .order_by(AlertBodyInvestigationRun.created_at.desc())
             .execution_options(query_name="tuning_scan")
@@ -452,7 +458,10 @@ async def build_tuning_recommendations(
                     AlertBodyInvestigationRun.alert_body,
                     AlertBodyInvestigationRun.result_json,
                 )
-                .where(AlertBodyInvestigationRun.id.in_(list(wanted)))
+                .where(
+                    AlertBodyInvestigationRun.id.in_(list(wanted)),
+                    tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+                )
                 .execution_options(query_name="tuning_bodies")
             )
         ).all():

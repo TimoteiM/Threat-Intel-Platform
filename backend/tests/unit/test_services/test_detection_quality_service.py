@@ -7,6 +7,7 @@ from uuid import uuid4
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from app.services import detection_quality_service as svc
+from app.services import tenant_scope
 
 
 def _run(rule_id="100002", verdict="benign", **overrides):
@@ -64,7 +65,13 @@ class _DB:
 
 
 def _quality(runs, feedback_rows=(), unattributed=0, **kwargs):
-    return asyncio.run(svc.detection_quality(_DB(runs, feedback_rows, unattributed), **kwargs))
+    return asyncio.run(
+        svc.detection_quality(
+            _DB(runs, feedback_rows, unattributed),
+            scope=tenant_scope.INTERNAL,
+            **kwargs,
+        )
+    )
 
 
 def test_a_rule_whose_alerts_all_conclude_benign_is_flagged_as_noise():

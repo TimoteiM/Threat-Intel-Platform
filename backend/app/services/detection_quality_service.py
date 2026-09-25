@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services import tenant_scope
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ NOISE_VERDICTS = frozenset({"benign", "inconclusive", None})
 async def detection_quality(
     db: AsyncSession,
     *,
+    scope: tenant_scope.TenantScope,
     days: int = 30,
     limit: int = 100,
 ) -> dict[str, Any]:
@@ -63,6 +65,7 @@ async def detection_quality(
             ).where(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.detection_rule_id.isnot(None),
+                tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
             )
         )
     ).all()
@@ -85,7 +88,7 @@ async def detection_quality(
         "alerts_total": sum(item["alerts"] for item in summaries),
         "min_alerts_to_score": MIN_ALERTS_TO_SCORE,
         "rules": summaries[:limit],
-        "unattributed_alerts": await _unattributed(db, cutoff),
+        "unattributed_alerts": await _unattributed(db, cutoff, scope),
     }
 
 
@@ -238,7 +241,9 @@ async def _feedback_by_rule(db: AsyncSession, cutoff: datetime) -> dict[str, dic
     return grouped
 
 
-async def _unattributed(db: AsyncSession, cutoff: datetime) -> int:
+async def _unattributed(
+    db: AsyncSession, cutoff: datetime, scope: tenant_scope.TenantScope
+) -> int:
     """
     Alerts with no rule id — pasted by an analyst, or from a sender that does
     not send one. Reported so the totals visibly do not add up to everything.
@@ -249,6 +254,7 @@ async def _unattributed(db: AsyncSession, cutoff: datetime) -> int:
                 select(func.count(AlertBodyInvestigationRun.id)).where(
                     AlertBodyInvestigationRun.created_at >= cutoff,
                     AlertBodyInvestigationRun.detection_rule_id.is_(None),
+                    tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
                 )
             )
         ).scalar()

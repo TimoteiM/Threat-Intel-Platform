@@ -35,6 +35,8 @@ from app.services.alert_tuning_service import build_tuning_recommendations
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
 from app.services import tenant_scope
+# The client selector, shared with the Alerts page rather than written twice.
+from app.api.alert_investigations import _selectable_tenants
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
 
@@ -56,6 +58,23 @@ def _identity(request: Request | None) -> dict[str, Any] | None:
 
 def _scope(request: Request | None) -> "tenant_scope.TenantScope":
     return tenant_scope.scope_of(_identity(request))
+
+
+def _filtered(request: Request | None, tenant: str | None) -> "tenant_scope.TenantScope":
+    """The caller's scope, optionally narrowed to the one client they picked.
+
+    The filter can only narrow. Naming a tenant the caller may not read is
+    refused rather than ignored — a filter that silently falls back to
+    "everything you can see" is how a client-restricted account learns that
+    another client exists.
+    """
+    scope = _scope(request)
+    if not tenant:
+        return scope
+    try:
+        return tenant_scope.requested_scope(scope, tenant)
+    except tenant_scope.TenantForbidden as exc:
+        raise HTTPException(403, str(exc)) from None
 
 
 SUBJECT_TYPES = ("investigation", "alert_run")
@@ -156,6 +175,10 @@ async def list_devices(
         ],
         "days": days,
         "scope": scope.describe(),
+        # The clients this caller may filter to. Built by the same helper the
+        # Alerts page uses, so the two selectors cannot come to offer different
+        # answers about who exists.
+        "available_tenants": await _selectable_tenants(db, request),
     }
 
 
@@ -164,18 +187,30 @@ async def get_detection_quality(
     db: DBSession,
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=100, ge=1, le=500),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Per-rule quality, worst signal-to-noise first."""
-    return await detection_quality(db, days=days, limit=limit)
+    """Per-rule quality, worst signal-to-noise first.
+
+    Scoped to the caller's tenants. `tenant` narrows further to one client and
+    is refused if the caller may not read it.
+    """
+    return await detection_quality(db, scope=_filtered(request, tenant), days=days, limit=limit)
 
 
 @router.get("/attack-coverage")
 async def get_attack_coverage(
     db: DBSession,
     days: int = Query(default=90, ge=1, le=365),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Which ATT&CK techniques the detections claim, and which the evidence shows."""
-    return await attack_coverage(db, days=days)
+    """Which ATT&CK techniques the detections claim, and which the evidence shows.
+
+    Scoped to the caller's tenants. `tenant` narrows further to one client and
+    is refused if the caller may not read it.
+    """
+    return await attack_coverage(db, scope=_filtered(request, tenant), days=days)
 
 
 @router.get("/attack-coverage/tactic-alerts")
@@ -184,9 +219,17 @@ async def get_tactic_alerts(
     tactic: str = Query(min_length=1, max_length=120),
     days: int = Query(default=90, ge=1, le=365),
     limit: int = Query(default=100, ge=1, le=500),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """The alerts whose assessment touched one tactic, newest first."""
-    return await tactic_alerts(db, tactic=tactic, days=days, limit=limit)
+    """The alerts whose assessment touched one tactic, newest first.
+
+    Scoped to the caller's tenants. `tenant` narrows further to one client and
+    is refused if the caller may not read it.
+    """
+    return await tactic_alerts(
+        db, scope=_filtered(request, tenant), tactic=tactic, days=days, limit=limit
+    )
 
 
 @router.get("/attack-coverage/mismatch-alerts")
@@ -197,10 +240,17 @@ async def get_mismatch_alerts(
     rule_id: str | None = Query(default=None, max_length=120),
     days: int = Query(default=90, ge=1, le=365),
     limit: int = Query(default=100, ge=1, le=500),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """The alerts where this rule claimed one technique and the evidence showed another."""
+    """The alerts where this rule claimed one technique and the evidence showed another.
+
+    Scoped to the caller's tenants. `tenant` narrows further to one client and
+    is refused if the caller may not read it.
+    """
     return await mismatch_alerts(
-        db, rule_name=rule_name, technique=technique, rule_id=rule_id, days=days, limit=limit
+        db, scope=_filtered(request, tenant), rule_name=rule_name, technique=technique,
+        rule_id=rule_id, days=days, limit=limit,
     )
 
 
@@ -211,11 +261,20 @@ async def get_correlated_cases(
     min_rules: int = Query(default=2, ge=1, le=10),
     min_score: int = Query(default=0, ge=0, le=100),
     limit: int = Query(default=50, ge=1, le=200),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Entities carrying more than one independent detection inside the window."""
-    return await correlate_alerts(
-        db, hours=hours, min_rules=min_rules, min_score=min_score, limit=limit
+    """Entities carrying more than one independent detection inside the window.
+
+    Scoped to the caller's tenants. `tenant` narrows further to one client and
+    is refused if the caller may not read it.
+    """
+    result = await correlate_alerts(
+        db, scope=_filtered(request, tenant), hours=hours, min_rules=min_rules,
+        min_score=min_score, limit=limit,
     )
+    result["available_tenants"] = await _selectable_tenants(db, request)
+    return result
 
 
 @router.get("/entity/{host}")
@@ -223,9 +282,15 @@ async def get_entity_profile(
     host: str,
     db: DBSession,
     days: int = Query(default=30, ge=1, le=365),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Everything stored about one machine, assembled for a single view."""
-    return await build_entity_profile(db, host=host, days=days)
+    """Everything stored about one machine, assembled for a single view.
+
+    A profile is every alert a host has produced, so it is scoped like any
+    other alert-run read. A host belonging to another client simply has no
+    alerts here, which is the same answer as a host that does not exist.
+    """
+    return await build_entity_profile(db, host=host, scope=_scope(request), days=days)
 
 
 @router.get("/tuning-recommendations")
@@ -233,6 +298,8 @@ async def get_tuning_recommendations(
     db: DBSession,
     days: int = Query(default=90, ge=1, le=365),
     min_alerts: int = Query(default=5, ge=2, le=50),
+    tenant: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Rules that have never produced an actionable verdict, and how to silence them.
 
@@ -240,7 +307,9 @@ async def get_tuning_recommendations(
     stored history first, and any candidate that would have silenced an alert
     concluding malicious or suspicious is discarded rather than reported.
     """
-    return await build_tuning_recommendations(db, days=days, min_alerts=min_alerts)
+    return await build_tuning_recommendations(
+        db, scope=_filtered(request, tenant), days=days, min_alerts=min_alerts
+    )
 
 
 @router.get("/case/{case_key}")
@@ -248,6 +317,7 @@ async def get_case(
     case_key: str,
     db: DBSession,
     hours: int = Query(default=720, ge=1, le=8760),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Everything one case page needs, in a single call.
 
@@ -255,13 +325,20 @@ async def get_case(
     happened on — assembled here rather than left to the page to fetch in three
     round trips, because they are read together every time.
     """
-    case = await case_by_key(db, case_key, hours=hours)
+    scope = _scope(request)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
     spine = await db.get(AlertCaseSpine, case_key)
     if case is None and spine is None:
         raise HTTPException(404, "No such case")
 
+    # A case that does not form for this caller is not theirs to read. The spine
+    # alone would otherwise still answer who owned it and what it reached — a
+    # 404 for the case body and a full header for another client's incident.
+    if case is None and spine is not None and not scope.all_tenants:
+        raise HTTPException(404, "No such case")
+
     host = (case or {}).get("entity_host") or (spine.entity_host if spine else None)
-    profile = await build_entity_profile(db, host=host) if host else None
+    profile = await build_entity_profile(db, host=host, scope=scope) if host else None
 
     return {
         "case_key": case_key,

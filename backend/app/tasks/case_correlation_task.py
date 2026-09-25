@@ -88,6 +88,7 @@ def correlate_and_notify(hours: int | None = None, force: bool = False) -> dict[
     window = int(hours or getattr(settings, "correlation_window_hours", 48))
 
     async def _run() -> dict[str, Any]:
+        from app.services import tenant_scope
         from app.services.alert_correlation_service import correlate_alerts
 
         # A dedicated, unpooled engine per invocation, for the reason the two
@@ -117,7 +118,12 @@ def correlate_and_notify(hours: int | None = None, force: bool = False) -> dict[
                 # window for nothing.
                 return {"ran": False, "reason": "no new alerts", "watermark": watermark.isoformat()}
 
-            result = await correlate_alerts(db, hours=window, limit=500, emit=True)
+            # The scheduled job correlates every tenant's alerts. Said out loud,
+            # because `scope` is required precisely so that reading across
+            # clients is never something a caller does by omission.
+            result = await correlate_alerts(
+                db, scope=tenant_scope.INTERNAL, hours=window, limit=500, emit=True
+            )
             _write_watermark(newest)
             return {
                 "ran": True,

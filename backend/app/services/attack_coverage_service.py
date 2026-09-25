@@ -40,10 +40,13 @@ from app.analyst.attack_mapping import (
     normalize_technique_id,
     technique_tactics,
 )
+from app.services import tenant_scope
 from app.models.database import AlertBodyInvestigationRun
 
 
-async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]:
+async def attack_coverage(
+    db: AsyncSession, *, scope: tenant_scope.TenantScope, days: int = 90
+) -> dict[str, Any]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
 
     # Only the assessment is needed. Selecting `result_json` pulled the whole
@@ -56,7 +59,10 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
                 AlertBodyInvestigationRun.result_attack_assessment,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
-            ).where(AlertBodyInvestigationRun.created_at >= cutoff)
+            ).where(
+                AlertBodyInvestigationRun.created_at >= cutoff,
+                tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+            )
         )
     ).all()
     assessments = [row[0] for row in rows]
@@ -119,7 +125,8 @@ async def attack_coverage(db: AsyncSession, *, days: int = 90) -> dict[str, Any]
 
 
 async def tactic_alerts(
-    db: AsyncSession, *, tactic: str, days: int = 90, limit: int = 100
+    db: AsyncSession, *, scope: tenant_scope.TenantScope, tactic: str,
+    days: int = 90, limit: int = 100,
 ) -> dict[str, Any]:
     """
     The alerts behind one tactic's numbers.
@@ -145,7 +152,10 @@ async def tactic_alerts(
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.result_attack_assessment,
             )
-            .where(AlertBodyInvestigationRun.created_at >= cutoff)
+            .where(
+                AlertBodyInvestigationRun.created_at >= cutoff,
+                tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+            )
             .order_by(AlertBodyInvestigationRun.created_at.desc())
         )
     ).all()
@@ -399,6 +409,7 @@ def _mapping_mismatches(rows: Sequence[Any], *, limit: int = 25) -> list[dict[st
 async def mismatch_alerts(
     db: AsyncSession,
     *,
+    scope: tenant_scope.TenantScope,
     rule_name: str,
     technique: str,
     rule_id: str | None = None,
@@ -432,7 +443,10 @@ async def mismatch_alerts(
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.result_attack_assessment,
             )
-            .where(AlertBodyInvestigationRun.created_at >= cutoff)
+            .where(
+                AlertBodyInvestigationRun.created_at >= cutoff,
+                tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+            )
             .order_by(AlertBodyInvestigationRun.created_at.desc())
         )
     ).all()

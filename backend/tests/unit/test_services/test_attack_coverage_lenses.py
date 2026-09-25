@@ -66,6 +66,7 @@ def test_a_tactic_with_nothing_confirmed_reports_zero():
 # ── Mapping mismatches ───────────────────────────────────────────────────────
 
 from app.services.attack_coverage_service import _mapping_mismatches
+from app.services import tenant_scope
 
 
 def _run(rule, claims, found):
@@ -201,7 +202,7 @@ async def test_drilldown_returns_the_runs_and_the_quote():
     before trusting the row — especially for an AI proposal.
     """
     db = _DB([_Row(MISMATCH, "PowerShell rule")])
-    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    out = await mismatch_alerts(db, scope=tenant_scope.INTERNAL, rule_name="PowerShell rule", technique="T1059.001")
     assert out["total"] == 1
     alert = out["alerts"][0]
     assert [c["id"] for c in alert["claimed"]] == ["T1078"]
@@ -212,7 +213,7 @@ async def test_drilldown_returns_the_runs_and_the_quote():
 @pytest.mark.asyncio
 async def test_drilldown_only_returns_the_rule_that_was_clicked():
     db = _DB([_Row(MISMATCH, "PowerShell rule"), _Row(MISMATCH, "Some other rule")])
-    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    out = await mismatch_alerts(db, scope=tenant_scope.INTERNAL, rule_name="PowerShell rule", technique="T1059.001")
     assert out["total"] == 1
 
 
@@ -221,7 +222,7 @@ async def test_drilldown_matches_the_unnamed_rule_placeholder():
     """The aggregate groups a nameless rule under a placeholder; clicking it
     has to find the same runs."""
     db = _DB([_Row(MISMATCH, None)])
-    out = await mismatch_alerts(db, rule_name="(unnamed rule)", technique="T1059.001")
+    out = await mismatch_alerts(db, scope=tenant_scope.INTERNAL, rule_name="(unnamed rule)", technique="T1059.001")
     assert out["total"] == 1
 
 
@@ -233,12 +234,12 @@ async def test_drilldown_excludes_runs_that_confirmed_something():
         "additional_techniques": MISMATCH["additional_techniques"],
     }
     db = _DB([_Row(confirmed, "PowerShell rule")])
-    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1059.001")
+    out = await mismatch_alerts(db, scope=tenant_scope.INTERNAL, rule_name="PowerShell rule", technique="T1059.001")
     assert out["total"] == 0
 
 
 @pytest.mark.asyncio
 async def test_drilldown_ignores_a_different_technique():
     db = _DB([_Row(MISMATCH, "PowerShell rule")])
-    out = await mismatch_alerts(db, rule_name="PowerShell rule", technique="T1027")
+    out = await mismatch_alerts(db, scope=tenant_scope.INTERNAL, rule_name="PowerShell rule", technique="T1027")
     assert out["total"] == 0

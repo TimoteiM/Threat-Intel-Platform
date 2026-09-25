@@ -23,6 +23,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services import tenant_scope
+from app.services.tenant_scope import TenantScope
 from app.services.alert_correlation_service import _tactics_of as correlation_tactics
 from app.models.database import (
     AlertBodyInvestigationRun,
@@ -80,32 +82,43 @@ def _indicators_of(result_json: Any) -> list[dict[str, Any]]:
 
 
 async def build_entity_profile(
-    db: AsyncSession, *, host: str, days: int = 30
+    db: AsyncSession, *, host: str, scope: "TenantScope", days: int = 30
 ) -> dict[str, Any]:
-    """Assemble one host's profile from what is already stored about it."""
+    """Assemble one host's profile from what is already stored about it.
+
+    `scope` is required, not defaulted. A profile is every alert this host has
+    ever produced — rules, accounts, verdicts, indicators — so an unscoped read
+    hands one client a complete account of another client's machine. There is
+    no safe default for that, and `tenant_scope.INTERNAL` is how a background
+    caller says it meant every tenant.
+    """
     cutoff = datetime.now(timezone.utc).replace(microsecond=0)
 
     rows = (
         await db.execute(
-            select(
-                AlertBodyInvestigationRun.id,
-                AlertBodyInvestigationRun.title,
-                AlertBodyInvestigationRun.created_at,
-                AlertBodyInvestigationRun.event_time,
-                AlertBodyInvestigationRun.entity_host,
-                AlertBodyInvestigationRun.entity_user,
-                AlertBodyInvestigationRun.alert_source,
-                AlertBodyInvestigationRun.alert_client,
-                AlertBodyInvestigationRun.alert_kind,
-                AlertBodyInvestigationRun.detection_rule_id,
-                AlertBodyInvestigationRun.detection_rule_name,
-                AlertBodyInvestigationRun.overall_verdict,
-                AlertBodyInvestigationRun.highest_risk_score,
-                AlertBodyInvestigationRun.result_attack_assessment,
-                AlertBodyInvestigationRun.result_json,
+            tenant_scope.apply(
+                select(
+                    AlertBodyInvestigationRun.id,
+                    AlertBodyInvestigationRun.title,
+                    AlertBodyInvestigationRun.created_at,
+                    AlertBodyInvestigationRun.event_time,
+                    AlertBodyInvestigationRun.entity_host,
+                    AlertBodyInvestigationRun.entity_user,
+                    AlertBodyInvestigationRun.alert_source,
+                    AlertBodyInvestigationRun.alert_client,
+                    AlertBodyInvestigationRun.alert_kind,
+                    AlertBodyInvestigationRun.detection_rule_id,
+                    AlertBodyInvestigationRun.detection_rule_name,
+                    AlertBodyInvestigationRun.overall_verdict,
+                    AlertBodyInvestigationRun.highest_risk_score,
+                    AlertBodyInvestigationRun.result_attack_assessment,
+                    AlertBodyInvestigationRun.result_json,
+                )
+                .where(AlertBodyInvestigationRun.entity_host == host)
+                .order_by(AlertBodyInvestigationRun.event_time.desc().nullslast()),
+                AlertBodyInvestigationRun.tenant_id,
+                scope,
             )
-            .where(AlertBodyInvestigationRun.entity_host == host)
-            .order_by(AlertBodyInvestigationRun.event_time.desc().nullslast())
         )
     ).all()
 

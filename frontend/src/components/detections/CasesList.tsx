@@ -12,10 +12,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import type { CorrelatedCasesResponse } from "@/lib/types";
+import type { TenantOption } from "@/lib/api";
 import { EmptyState, MetricStrip, Section } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
 import CaseNarrative from "@/components/detections/CaseNarrative";
+import ClientFilter from "@/components/detections/ClientFilter";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
 
@@ -37,6 +39,8 @@ const MAX_WINDOW_HOURS = 720;
 
 export default function CasesList({ hours }: { hours: number }) {
   const [openHost, setOpenHost] = useState<string | null>(null);
+  const [tenant, setTenant] = useState("");
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -56,10 +60,11 @@ export default function CasesList({ hours }: { hours: number }) {
     const load = () => {
       if (first) setLoading(true);
       api
-        .getCorrelatedCases({ hours })
+        .getCorrelatedCases({ hours, tenant: tenant || undefined })
         .then((result) => {
           if (cancelled) return;
           setData(result);
+          setTenants((result as { available_tenants?: TenantOption[] }).available_tenants || []);
           setRefreshedAt(new Date());
           setStaleSince(null);
           setLoadError(null);
@@ -86,7 +91,7 @@ export default function CasesList({ hours }: { hours: number }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [hours]);
+  }, [hours, tenant]);
 
   if (loading && !data) return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>;
   if (!data) return <EmptyState title="Correlation could not be read" hint="The endpoint did not answer." />;
@@ -105,6 +110,7 @@ export default function CasesList({ hours }: { hours: number }) {
       {/* No window buttons here: the page header carries the only one, so a
           reader is never asked which of two controls is in effect. */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <ClientFilter options={tenants} value={tenant} onChange={setTenant} />
         {staleSince && (
           <span style={{ fontSize: 10.5, color: "var(--status-warning)" }}>
             not refreshing since {staleSince.toLocaleTimeString()}
@@ -146,7 +152,7 @@ export default function CasesList({ hours }: { hours: number }) {
                       borderBottom: "1px solid var(--panel-divider-strong)",
                     }}
                   >
-                    {item.entity_host}
+                    {item.label || item.entity_host}
                   </a>
                   <button
                     type="button"

@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +47,7 @@ from app.services.alert_case_store import (
     upsert_spine,
 )
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
+from app.services import tenant_scope
 from app.tasks.case_event_task import dispatch
 from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 from app.services.alert_session_service import (
@@ -145,6 +146,61 @@ def _event_time(row: Any, fallback: datetime) -> datetime:
     fallback with the real value wherever the body carries one.
     """
     return getattr(row, "event_time", None) or row.created_at or fallback
+
+
+def case_label(
+    *,
+    host: str | None,
+    users: Sequence[str],
+    tactics: Sequence[str],
+    members: Sequence[Any],
+) -> str:
+    """What to call this case: `{host}/{user} — {what happened}`.
+
+    The identity half names whoever the case is about. A host is the usual
+    answer, but 167 stored alerts carry an account and no device at all, so
+    "host" cannot be assumed to exist — the user is the fallback rather than
+    an extra.
+
+    More than one account on one device is reported as a count, not as the
+    first one sorted. Naming one of three accounts is worse than naming none:
+    it reads as a fact about the case.
+
+    The descriptive half is the evidenced tactic that ranks earliest in the
+    kill chain, because that is the question a list is scanned for. Failing
+    that it is the rule that fired most, which is at least what the estate
+    actually said. Neither is a conclusion — the verdict is elsewhere — so
+    this stays a label and never grows into a claim.
+    """
+    named = [str(u).strip() for u in users if str(u or "").strip()]
+    host_name = str(host or "").strip()
+
+    if host_name and len(named) == 1:
+        identity = f"{host_name}/{named[0]}"
+    elif host_name and len(named) > 1:
+        identity = f"{host_name}/{len(named)} accounts"
+    elif host_name:
+        identity = host_name
+    elif len(named) == 1:
+        identity = named[0]
+    elif named:
+        identity = f"{len(named)} accounts"
+    else:
+        identity = "Unidentified entity"
+
+    what = ""
+    if tactics:
+        what = str(tactics[0])
+    else:
+        counts: dict[str, int] = defaultdict(int)
+        for member in members:
+            name = str(getattr(member, "detection_rule_name", "") or "").strip()
+            if name:
+                counts[name] += 1
+        if counts:
+            what = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+    return f"{identity} — {what}" if what else identity
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -472,6 +528,7 @@ async def _extend_to_anchor(
     host: str,
     members: list[Any],
     cutoff: datetime,
+    scope: tenant_scope.TenantScope,
 ) -> list[Any]:
     """Prepend whatever history is needed to place the first member correctly.
 
@@ -492,7 +549,11 @@ async def _extend_to_anchor(
         earliest = _event_time(ordered[0], cutoff)
         older = (
             await db.execute(
-                select(*_RUN_COLUMNS, _EVT.label("evt"))
+                tenant_scope.apply(
+                    select(*_RUN_COLUMNS, _EVT.label("evt")),
+                    AlertBodyInvestigationRun.tenant_id,
+                    scope,
+                )
                 .where(
                     AlertBodyInvestigationRun.entity_host == host,
                     _EVT < earliest,
@@ -528,6 +589,7 @@ async def _extend_to_anchor(
 async def correlate_alerts(
     db: AsyncSession,
     *,
+    scope: tenant_scope.TenantScope,
     hours: int = DEFAULT_WINDOW_HOURS,
     min_rules: int = MIN_DISTINCT_RULES,
     min_score: int = 0,
@@ -560,8 +622,12 @@ async def correlate_alerts(
         )
     )
     scoped = (
-        select(*_RUN_COLUMNS, _EVT.label("evt"), entity_latest.label("entity_latest"))
-        .where(AlertBodyInvestigationRun.entity_host.isnot(None))
+        tenant_scope.apply(
+            select(*_RUN_COLUMNS, _EVT.label("evt"), entity_latest.label("entity_latest"))
+            .where(AlertBodyInvestigationRun.entity_host.isnot(None)),
+            AlertBodyInvestigationRun.tenant_id,
+            scope,
+        )
         .subquery()
     )
     rows = (
@@ -618,6 +684,10 @@ async def correlate_alerts(
             db, source=source, client=client, host=entity,
             members=sorted(group_members, key=lambda m: _event_time(m, cutoff)),
             cutoff=cutoff,
+            # The walk reads history outside the window. Unscoped it would pull
+            # another client's alerts on a same-named host into this case, and
+            # a session start is exactly the kind of thing nobody re-checks.
+            scope=scope,
         )
         assignments = assign_sessions(
             [(row.id, _event_time(row, cutoff)) for row in history],
@@ -716,6 +786,14 @@ async def correlate_alerts(
                     "client": client,
                     "entity_host": entity,
                     "entity_users": sorted({str(m.entity_user) for m in members if m.entity_user}),
+                    # Computed once, server-side, so the list and the detail
+                    # page cannot render the same case under two names.
+                    "label": case_label(
+                        host=entity,
+                        users=sorted({str(m.entity_user) for m in members if m.entity_user}),
+                        tactics=sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
+                        members=members,
+                    ),
                     "window_hours": hours,
                     # The span the behaviour occupied on the host. Reported from
                     # event time so a replayed alert does not stretch a case across
@@ -937,7 +1015,10 @@ async def correlate_alerts(
     }
 
 
-async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WINDOW_HOURS) -> dict[str, Any] | None:
+async def case_for_run(
+    db: AsyncSession, run_id: Any, *, scope: tenant_scope.TenantScope,
+    hours: int = DEFAULT_WINDOW_HOURS,
+) -> dict[str, Any] | None:
     """
     The case this one alert belongs to, if any.
 
@@ -949,7 +1030,7 @@ async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WI
     if run is None or not run.entity_host:
         return None
 
-    result = await correlate_alerts(db, hours=hours, limit=500)
+    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500)
     for case in result["cases"]:
         if case["source"] != str(run.alert_source or UNKNOWN_SOURCE):
             continue
@@ -963,7 +1044,7 @@ async def case_for_run(db: AsyncSession, run_id: Any, *, hours: int = DEFAULT_WI
 
 
 async def case_by_key(
-    db: AsyncSession, case_key: str, *, hours: int = 720
+    db: AsyncSession, case_key: str, *, scope: tenant_scope.TenantScope, hours: int = 720
 ) -> dict[str, Any] | None:
     """One case, found by the identity that survives a change of window.
 
@@ -975,7 +1056,7 @@ async def case_by_key(
     days, so a bookmarked case page does not depend on the window it was opened
     with.
     """
-    result = await correlate_alerts(db, hours=hours, limit=500)
+    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500)
     for case in result["cases"]:
         if case.get("case_key") == case_key:
             return case

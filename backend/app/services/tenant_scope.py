@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from sqlalchemy import false as sql_false
+from sqlalchemy import true as sql_true
 from sqlalchemy import or_
 
 
@@ -58,6 +59,15 @@ class TenantScope:
         if tenant_id is None:
             return self.include_unassigned
         return tenant_id in self.tenant_ids
+
+    def cache_key(self) -> tuple[Any, ...]:
+        """A hashable identity for this scope, for anything that caches by it.
+
+        A cached answer computed for one client must not be served to another,
+        and a cache is the one place where that can happen without a query to
+        notice it.
+        """
+        return (self.all_tenants, tuple(sorted(self.tenant_ids)), self.include_unassigned)
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -113,14 +123,26 @@ def requested_scope(scope: TenantScope, requested: str | None) -> TenantScope:
     )
 
 
-def apply(stmt: Any, column: Any, scope: TenantScope) -> Any:
-    """Add the tenant restriction to a SELECT/DELETE over alert runs.
+# The scope a background job or an in-process call runs under. Named, so that a
+# call site reading every tenant's rows says so out loud.
+#
+# It exists because the alternative is a `scope=None` default meaning "no
+# filter", and a parameter someone forgets to pass must never be the one that
+# opens a read up. Every service entry point below takes `scope` as a required
+# keyword for the same reason.
+INTERNAL = TenantScope(all_tenants=True, actor="internal")
 
-    Used by every read of the alert-run table. An all-tenants scope adds no
-    clause; everything else adds one that can only narrow.
+
+def clause(column: Any, scope: TenantScope) -> Any:
+    """The tenant restriction on its own, for a query that already has a where().
+
+    Same rule as `apply`, expressed as a boolean so a caller can put it beside
+    its other conditions instead of wrapping the statement. `apply` is this
+    plus a `.where()`, and they share an implementation so the two can never
+    come to disagree about what a scope means.
     """
     if scope.all_tenants:
-        return stmt
+        return sql_true()
 
     clauses = []
     if scope.tenant_ids:
@@ -131,8 +153,19 @@ def apply(stmt: Any, column: Any, scope: TenantScope) -> Any:
     if not clauses:
         # Fail closed. An empty IN () is the classic way a scoped query quietly
         # becomes an unscoped one.
-        return stmt.where(sql_false())
-    return stmt.where(or_(*clauses))
+        return sql_false()
+    return or_(*clauses)
+
+
+def apply(stmt: Any, column: Any, scope: TenantScope) -> Any:
+    """Add the tenant restriction to a SELECT/DELETE over alert runs.
+
+    Used by every read of the alert-run table. An all-tenants scope adds no
+    clause; everything else adds one that can only narrow.
+    """
+    if scope.all_tenants:
+        return stmt
+    return stmt.where(clause(column, scope))
 
 
 def assert_can_read(scope: TenantScope, tenant_id: str | None) -> None:

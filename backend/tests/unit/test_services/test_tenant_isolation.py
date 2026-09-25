@@ -8,6 +8,8 @@ narrowing is the only thing a caller can do.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import Column, String, select
@@ -494,7 +496,7 @@ def test_the_marker_rule_is_the_same_one_the_migration_used():
 # --- the devices list ---------------------------------------------------------
 
 
-def test_the_devices_list_is_tenant_scoped():
+def test_the_devices_list_is_tenant_scoped(monkeypatch):
     """A new aggregate over alert rows is still a read of alert rows.
 
     An aggregate leaks just as precisely as a list: "EXP-4LWK334, 12 alerts,
@@ -518,6 +520,13 @@ def test_the_devices_list_is_tenant_scoped():
             captured["sql"] = str(query.compile(compile_kwargs={"literal_binds": True}))
             return _Result()
 
+    # The client selector is a second query and a different question; these
+    # tests are about the filter on the device query itself.
+    async def _no_tenants(_db, _request):
+        return []
+
+    monkeypatch.setattr(mod, "_selectable_tenants", _no_tenants)
+
     request = SimpleNamespace(
         state=SimpleNamespace(
             identity={"kind": "user", "all_tenants": False, "tenant_ids": ["c00"]}
@@ -530,7 +539,7 @@ def test_the_devices_list_is_tenant_scoped():
     assert "'c00'" in sql
 
 
-def test_the_devices_list_of_an_account_with_no_tenants_matches_nothing():
+def test_the_devices_list_of_an_account_with_no_tenants_matches_nothing(monkeypatch):
     """Fail closed, not open. An empty IN () is the classic way a scoped query
     quietly becomes an unscoped one."""
     import asyncio
@@ -549,9 +558,101 @@ def test_the_devices_list_of_an_account_with_no_tenants_matches_nothing():
             captured["sql"] = str(query.compile(compile_kwargs={"literal_binds": True}))
             return _Result()
 
+    async def _no_tenants(_db, _request):
+        return []
+
+    monkeypatch.setattr(mod, "_selectable_tenants", _no_tenants)
+
     request = SimpleNamespace(
         state=SimpleNamespace(identity={"kind": "user", "all_tenants": False, "tenant_ids": []})
     )
     asyncio.run(mod.list_devices(_DB(), days=30, request=request))
 
+    assert "false" in str(captured["sql"]).lower()
+
+
+def test_a_detections_client_filter_can_only_narrow():
+    """The filter is a convenience, not a way in.
+
+    Naming a tenant the caller may not read is refused rather than ignored. A
+    filter that silently falls back to "everything you can see" is how a
+    client-restricted account learns that another client exists at all.
+    """
+    from app.api.detections import _filtered
+
+    internal = SimpleNamespace(
+        state=SimpleNamespace(identity={"kind": "user", "all_tenants": True, "tenant_ids": []})
+    )
+    restricted = SimpleNamespace(
+        state=SimpleNamespace(
+            identity={"kind": "user", "all_tenants": False, "tenant_ids": ["c00"]}
+        )
+    )
+
+    # Internal staff may pick any client.
+    assert _filtered(internal, "c07").tenant_ids == ("c07",)
+    # Their own is fine.
+    assert _filtered(restricted, "c00").tenant_ids == ("c00",)
+    # Somebody else's is not, and is refused rather than quietly dropped.
+    with pytest.raises(HTTPException) as caught:
+        _filtered(restricted, "c07")
+    assert caught.value.status_code == 403
+    # And no filter leaves the caller's own scope untouched.
+    assert _filtered(restricted, None).tenant_ids == ("c00",)
+
+
+def test_every_detections_route_that_reads_alerts_takes_a_request():
+    """A route with no Request cannot scope, and would read every tenant.
+
+    This module had no scoping at all before, so the guard is the parameter:
+    if a route reads alert rows and does not take a Request, it has no way to
+    know who is asking.
+    """
+    import inspect
+
+    from app.api import detections as mod
+
+    reads_alerts = [
+        "list_devices", "get_detection_quality", "get_attack_coverage",
+        "get_tactic_alerts", "get_mismatch_alerts", "get_correlated_cases",
+        "get_entity_profile", "get_tuning_recommendations", "get_case",
+    ]
+    for name in reads_alerts:
+        fn = getattr(mod, name)
+        assert "request" in inspect.signature(fn).parameters, f"{name} cannot scope"
+
+
+def test_the_entity_profile_is_tenant_scoped():
+    """A profile is every alert a host ever produced.
+
+    This exists because nothing covered `build_entity_profile` at all, and a
+    missing import in its scoping reached a running container: the query was
+    written correctly and the module raised NameError on the way to it. A test
+    that calls it would have caught that before the deploy did.
+    """
+    import asyncio
+
+    from app.services import alert_entity_profile_service as mod
+    from app.services import tenant_scope as ts
+
+    captured: dict[str, object] = {}
+
+    class _Result:
+        def all(self):
+            return []
+
+    class _DB:
+        async def execute(self, query):
+            captured["sql"] = str(query.compile(compile_kwargs={"literal_binds": True}))
+            return _Result()
+
+    scope = ts.TenantScope(all_tenants=False, tenant_ids=("c00",))
+    asyncio.run(mod.build_entity_profile(_DB(), host="EXP-1", scope=scope))
+    assert "'c00'" in str(captured["sql"])
+
+    asyncio.run(
+        mod.build_entity_profile(
+            _DB(), host="EXP-1", scope=ts.TenantScope(all_tenants=False, tenant_ids=())
+        )
+    )
     assert "false" in str(captured["sql"]).lower()

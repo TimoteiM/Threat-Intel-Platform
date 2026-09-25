@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from app.services.alert_correlation_service import correlate_alerts
+from app.services import tenant_scope
 
 
 class _Run:
@@ -105,7 +106,7 @@ async def test_two_sources_on_one_hostname_are_not_one_case():
     name.
     """
     rows = [_Run("SRV-01", "Siembiot", "rule-a"), _Run("SRV-01", "tracecat", "rule-b")]
-    result = await correlate_alerts(_DB(rows), hours=48)
+    result = await correlate_alerts(_DB(rows), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 0
     # Counted as two separate entity groups, not one.
     assert result["entities_seen"] == 2
@@ -115,7 +116,7 @@ async def test_two_sources_on_one_hostname_are_not_one_case():
 @pytest.mark.asyncio
 async def test_a_case_still_forms_within_one_source():
     rows = [_Run("SRV-01", "Siembiot", "rule-a"), _Run("SRV-01", "Siembiot", "rule-b")]
-    result = await correlate_alerts(_DB(rows), hours=48)
+    result = await correlate_alerts(_DB(rows), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 1
     case = result["cases"][0]
     assert case["source"] == "Siembiot"
@@ -129,7 +130,7 @@ async def test_an_absent_source_does_not_pool_every_platform():
     it is named rather than left empty.
     """
     rows = [_Run("SRV-01", None, "rule-a"), _Run("SRV-01", "Siembiot", "rule-b")]
-    result = await correlate_alerts(_DB(rows), hours=48)
+    result = await correlate_alerts(_DB(rows), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 0
     assert {c for c in result} and result["entities_seen"] == 2
 
@@ -145,7 +146,7 @@ async def test_two_clients_sharing_a_hostname_are_not_one_case():
     a.alert_client = "ACME"
     b = _Run("DC01", "Siembiot", "rule-b")
     b.alert_client = "GLOBEX"
-    result = await correlate_alerts(_DB([a, b]), hours=48)
+    result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 0
     assert result["clients_seen"] == 2
 
@@ -155,7 +156,7 @@ async def test_a_case_forms_within_one_client():
     a = _Run("DC01", "Siembiot", "rule-a")
     b = _Run("DC01", "Siembiot", "rule-b")
     a.alert_client = b.alert_client = "ACME"
-    result = await correlate_alerts(_DB([a, b]), hours=48)
+    result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 1
     assert result["cases"][0]["client"] == "ACME"
 
@@ -167,5 +168,5 @@ async def test_an_incident_is_never_a_member_of_a_case():
     incident.alert_kind = "incident"
     other = _Run("mvapsupm01", "tracecat", "another rule")
     other.alert_kind = "alert"
-    result = await correlate_alerts(_DB([incident, other]), hours=48)
+    result = await correlate_alerts(_DB([incident, other]), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 0

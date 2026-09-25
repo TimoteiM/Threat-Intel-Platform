@@ -15,8 +15,9 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
-import type { DeviceRow } from "@/lib/api";
+import type { DeviceRow, TenantOption } from "@/lib/api";
 import EntityWindow from "@/components/detections/EntityWindow";
+import ClientFilter from "@/components/detections/ClientFilter";
 import { EmptyState, LoadingState, Section } from "@/components/ui/Primitives";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
@@ -46,6 +47,8 @@ export default function DevicesTab({ days }: { days: number }) {
   const [search, setSearch] = useState("");
   const [verdict, setVerdict] = useState<string>("");
   const [openHost, setOpenHost] = useState<string | null>(null);
+  const [tenant, setTenant] = useState("");
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
 
   // Debounced, because this is a group-by over every alert row in the window
   // and a keystroke is not a question.
@@ -59,10 +62,11 @@ export default function DevicesTab({ days }: { days: number }) {
     let cancelled = false;
     setLoading(true);
     api
-      .listDevices({ days, search: applied, verdict: verdict || undefined })
+      .listDevices({ days, search: applied, verdict: verdict || undefined, tenant: tenant || undefined })
       .then((data) => {
         if (cancelled) return;
         setRows(data.items || []);
+        setTenants(data.available_tenants || []);
         setError(null);
       })
       .catch((err) => {
@@ -76,7 +80,7 @@ export default function DevicesTab({ days }: { days: number }) {
     return () => {
       cancelled = true;
     };
-  }, [days, applied, verdict]);
+  }, [days, applied, verdict, tenant]);
 
   const total = useMemo(
     () => (rows || []).reduce((sum, r) => sum + r.alerts, 0),
@@ -103,6 +107,7 @@ export default function DevicesTab({ days }: { days: number }) {
             fontSize: 13,
           }}
         />
+        <ClientFilter options={tenants} value={tenant} onChange={setTenant} />
         <div role="group" aria-label="Filter by worst verdict" style={{ display: "flex", gap: 6 }}>
           {VERDICTS.map((v) => (
             <button
