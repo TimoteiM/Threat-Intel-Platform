@@ -119,3 +119,70 @@ all produced the same plan.
 Making it fast needs the candidate ids resolved in a separate statement, which
 is a real change to a feature nobody has asked about — content search is still
 opt-in and still labelled *(slower)*. Left as it is, on purpose.
+
+## The 33 seconds was never in the database
+
+Everything above is real and none of it was the reason the page felt slow. The
+API answered `GET /api/assistant/sessions` in 25 ms the whole time:
+
+```
+07:32:57.697  query issued
+07:32:57.722  200 OK          <- 25 ms, from 172.18.0.7 (the Next proxy)
+```
+
+The wait was in front of that request, not behind it.
+
+`requestWithDirectFallback` tried a *direct* backend URL first — `http://<host>:8000`
+— whenever the browser sat on a private address, falling back to the proxy only
+after that failed. And port 8000 is exactly what the firewall container DROPs
+from the LAN, deliberately, so that a port scan learns nothing:
+
+```
+pkts bytes target  in        source        destination   tcp dpt:8000
+ 230 11960 LOG     enp6s18   0.0.0.0/0     0.0.0.0/0     prefix "TIP8000DROP "
+ 230 11960 DROP    enp6s18   0.0.0.0/0     0.0.0.0/0
+```
+
+A *rejected* connection fails instantly — there is a RST to fail on. A
+*dropped* one has nothing to fail on, so the browser retransmits SYNs on the
+1-2-4-8-16s backoff and gives up around 31 s. Measured on this host:
+
+```
+connect to a port that REJECTS     0.00 s
+connect to a port that DROPS      45.02 s   (client timeout; browsers cap ~31 s)
+```
+
+Then the fallback ran and the proxy answered in 25 ms, so the page finally
+painted — at about 33 seconds. The firewall's own comment had predicted the
+confusion exactly: *"a dropped packet is silent by design, which makes 'the
+sender timed out' and 'the sender was blocked' look identical from the
+outside."*
+
+Two things made this hard to see. The stall is entirely client-side, so every
+server-side measurement was honest and irrelevant. And `requestWithDirectFallback`
+is used by seven endpoints, all of them the assistant's — every other page in
+the app uses `request()`, which goes straight to the proxy. So exactly one page
+was slow, which looked like a data-volume problem on the one table with 22,675
+rows in it.
+
+The direct-first path also had no current justification. The comment cited
+"intermittent proxy/rewrite failures for large multipart uploads", but
+`uploadFileInvestigation` does not use this wrapper — it posts to the proxy.
+
+The proxy now goes first, and a direct attempt is bounded at 2.5 s so a silent
+drop can never cost more than that. Reproduced by recreating the drop against
+this host (`raw` OUTPUT, so the rule is evaluated before Docker's DNAT
+rewrites the destination):
+
+```
+OLD (direct first)   10,171 ms   10,114 ms dropped, then 57 ms via proxy
+NEW (proxy first)        32 ms   proxy
+```
+
+`requestLongRunning` had the same direct URL and *no* fallback, so on a private
+host its two case-story endpoints stalled ~31 s and then failed outright. It
+now uses the proxy as well.
+
+A retry is still never attempted after any HTTP status, only after a transport
+failure. `/assistant/sessions/{id}/run` is billable, and a 502 means the
+request may well have been delivered.

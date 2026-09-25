@@ -89,17 +89,41 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// How long a direct-to-backend attempt may hang before we stop waiting.
+//
+// This is the whole reason the assistant took 33 seconds to load. The direct
+// URL is port 8000, and the firewall DROPs port 8000 from the LAN rather than
+// rejecting it — by design, so a port scan learns nothing. A rejected
+// connection fails in 0.00s; a dropped one has nothing to fail on, so the
+// browser retransmits SYNs on the usual 1-2-4-8-16s backoff and gives up after
+// about 31s. Every assistant call paid that, then quietly succeeded through
+// the proxy 25ms later.
+//
+// A bound is needed even though the proxy now goes first, because "the proxy
+// failed" and "the backend is unreachable" can both be true at once.
+const DIRECT_ATTEMPT_TIMEOUT_MS = 2500;
+
 async function requestWithDirectFallback<T>(path: string, options?: RequestInit): Promise<T> {
   const proxiedUrl = `${BASE}${path}`;
   const directUrl = `${resolveDirectBackendBase()}${BASE}${path}`;
-  const endpoints = canUseDirectBackendFallback() ? [directUrl, proxiedUrl] : [proxiedUrl];
+
+  // The proxy first. It is how every other endpoint in this file reaches the
+  // backend, it is the only path that works from outside this host, and it
+  // answered these very requests in 25ms while the direct attempt ahead of it
+  // was still retransmitting. Direct is kept as what its name always claimed:
+  // a fallback.
+  const endpoints: Array<{ url: string; timeoutMs?: number }> = [{ url: proxiedUrl }];
+  if (canUseDirectBackendFallback()) {
+    endpoints.push({ url: directUrl, timeoutMs: DIRECT_ATTEMPT_TIMEOUT_MS });
+  }
 
   let lastError: unknown = null;
-  for (const endpoint of endpoints) {
+  for (const { url, timeoutMs } of endpoints) {
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch(url, {
         headers: { "Content-Type": "application/json", ...options?.headers },
         credentials: "include",
+        ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
         ...options,
       });
 
@@ -115,7 +139,6 @@ async function requestWithDirectFallback<T>(path: string, options?: RequestInit)
       // A backend HTTP response means the request was delivered. Retrying it
       // through another endpoint can duplicate expensive/non-idempotent work.
       if (error instanceof ApiError) throw error;
-      if (!canUseDirectBackendFallback()) break;
     }
   }
 
@@ -125,9 +148,13 @@ async function requestWithDirectFallback<T>(path: string, options?: RequestInit)
 async function requestLongRunning<T>(path: string, options?: RequestInit): Promise<T> {
   // Exactly one submission: long-running AI requests must never be replayed
   // automatically because the first request may already be billable.
-  const endpoint = canUseDirectBackendFallback()
-    ? `${resolveDirectBackendBase()}${BASE}${path}`
-    : `${BASE}${path}`;
+  //
+  // Through the proxy, like every other call. This used to go direct whenever
+  // the browser was on a private address, which on this deployment meant a
+  // port the firewall silently drops: ~31s of SYN retransmission and then a
+  // failure, with no fallback to soften it, for a request that cannot be
+  // safely retried.
+  const endpoint = `${BASE}${path}`;
   const res = await fetch(endpoint, {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
