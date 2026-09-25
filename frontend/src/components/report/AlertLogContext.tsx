@@ -104,7 +104,13 @@ export function AlertLogContext({
   // events to the model should not have to guess whether it worked, reload, or
   // go somewhere else to read the answer.
   const [job, setJob] = useState<AnalysisStatus | null>(null);
-  const [jobPhase, setJobPhase] = useState<"idle" | "queued" | "running" | "done" | "failed">("idle");
+  // "submitting" exists so that polling cannot begin before the request it is
+  // meant to be waiting for. Going straight to "queued" started the poll loop
+  // while the POST was still in flight, and the first tick then read the run
+  // as it was *before* the request — completed, with the previous analysis.
+  const [jobPhase, setJobPhase] = useState<
+    "idle" | "submitting" | "queued" | "running" | "done" | "failed"
+  >("idle");
   const [elapsed, setElapsed] = useState(0);
   const [supersedes, setSupersedes] = useState<string | null>(null);
   const [awaitingRequestId, setAwaitingRequestId] = useState<string | null>(null);
@@ -169,7 +175,12 @@ export function AlertLogContext({
     setNote(null);
     setJob(null);
     setElapsed(0);
-    setJobPhase("queued");
+    setAwaitingRequestId(null);
+    setSupersedes(null);
+    // Not "queued": nothing is queued until the POST below says so. Setting
+    // the polling phase here started a tick that read the run before the
+    // request had touched it.
+    setJobPhase("submitting");
     try {
       const result = await reanalyseWithLogContext(runId, refs ?? Array.from(pinned));
       // Matched exactly, by the id of this request. Comparing completion
@@ -180,6 +191,8 @@ export function AlertLogContext({
       setAwaitingRequestId(result.request_id ?? null);
       setSupersedes(result.previous_completed_at ?? null);
       setNote(result.note);
+      // Only now is there something to wait for, and an id to recognise it by.
+      setJobPhase("queued");
     } catch (err) {
       setJobPhase("failed");
       setNote(err instanceof Error ? err.message : "Re-analysis could not be queued.");
@@ -193,6 +206,9 @@ export function AlertLogContext({
   // single row read, not the hydrated run.
   useEffect(() => {
     if (jobPhase !== "queued" && jobPhase !== "running") return undefined;
+    // No id means no way to tell this request's result from the one already on
+    // screen, and guessing resolved to "yes" every time.
+    if (!awaitingRequestId) return undefined;
     let cancelled = false;
     const started = Date.now();
 
@@ -201,9 +217,15 @@ export function AlertLogContext({
         const status = await getAnalysisStatus(runId);
         if (cancelled) return;
         setElapsed(Math.round((Date.now() - started) / 1000));
-        const isThisRequest = awaitingRequestId
-          ? status.reanalysis?.request_id === awaitingRequestId
-          : !supersedes || (status.completed_at ?? "") > supersedes;
+        // Exactly this request, or nothing. The request_id is written by the
+        // POST together with status="queued", so a run reporting *finished*
+        // under this id can only be the worker having completed it since.
+        //
+        // The timestamp comparison that used to stand in for this is gone: it
+        // treated "I cannot tell which request this is" as "this one", which
+        // is how the previous analysis came to be presented as the new one —
+        // instantly, with zero selected events and zero tokens.
+        const isThisRequest = status.reanalysis?.request_id === awaitingRequestId;
         if (status.finished && isThisRequest) {
           setJob(status);
           setJobPhase(status.status === "completed" ? "done" : "failed");
@@ -304,12 +326,13 @@ export function AlertLogContext({
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
             <strong style={{ color: "var(--text)" }}>
+              {jobPhase === "submitting" && "Sending your selected events…"}
               {jobPhase === "queued" && "Queued for re-analysis…"}
               {jobPhase === "running" && "Re-analysing with your selected events…"}
               {jobPhase === "done" && "✓ Re-analysed"}
               {jobPhase === "failed" && "Re-analysis did not complete"}
             </strong>
-            {(jobPhase === "queued" || jobPhase === "running") && (
+            {(jobPhase === "submitting" || jobPhase === "queued" || jobPhase === "running") && (
               <Muted>{elapsed}s elapsed — this usually takes under a minute</Muted>
             )}
             {jobPhase === "done" && job && (
@@ -327,7 +350,7 @@ export function AlertLogContext({
             )}
           </div>
 
-          {(jobPhase === "queued" || jobPhase === "running") && (
+          {(jobPhase === "submitting" || jobPhase === "queued" || jobPhase === "running") && (
             <div style={progressTrack} role="progressbar" aria-label="Re-analysis progress">
               <div style={progressBar} />
             </div>
