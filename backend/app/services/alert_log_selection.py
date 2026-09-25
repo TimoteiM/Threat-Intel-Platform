@@ -185,6 +185,14 @@ class Scored:
     lane: str
     offset_seconds: float
     group_key: str
+    # Only the reasons that tie this event to *this* alert — a shared device,
+    # account, address, hash, process image, domain or rule. Kept apart from
+    # `reasons`, which also holds the ranking signals: being notable, or being
+    # close in time, says nothing about whether an event belongs to the alert.
+    #
+    # This is the difference between evidence and background, and the model is
+    # told to treat the two differently.
+    links: list[str] = field(default_factory=list)
 
     @property
     def key(self) -> str:
@@ -249,6 +257,12 @@ def score_record(
     """One event's score, with the reason for every point it got."""
     score = 0.0
     reasons: list[str] = []
+    links: list[str] = []
+
+    def _link(reason: str) -> None:
+        """A reason that is also a tie to this alert. Counted in both places."""
+        reasons.append(reason)
+        links.append(reason)
 
     agent = record.get("agent") or {}
     rule = record.get("rule") or {}
@@ -260,32 +274,32 @@ def score_record(
     host = str(agent.get("name") or "").casefold()
     if host and host in pivots.hosts:
         score += 10
-        reasons.append("same device as the alert")
+        _link("same device as the alert")
     users = {str(u).casefold() for u in (record.get("users") or [])}
     users |= {u.split("\\", 1)[-1] for u in users if "\\" in u}
     if users & pivots.users:
         score += 10
-        reasons.append("same account as the alert")
+        _link("same account as the alert")
     event_ips = {str(network.get("src_ip") or ""), str(network.get("dst_ip") or "")} - {""}
     event_ips |= set(_IPV4.findall(str(record.get("full_log") or "")))
     shared_ips = event_ips & pivots.ips
     if shared_ips:
         score += 8
-        reasons.append(f"shares IP {sorted(shared_ips)[0]} with the alert")
+        _link(f"shares IP {sorted(shared_ips)[0]} with the alert")
     event_hashes = {h.casefold() for h in _HASH.findall(str(record.get("full_log") or ""))}
     if event_hashes & pivots.hashes:
         score += 9
-        reasons.append("carries a file hash named in the alert")
+        _link("carries a file hash named in the alert")
     image = str(process.get("image") or "").casefold()
     if image and any(p in image or image.endswith(p) for p in pivots.processes):
         score += 8
-        reasons.append("same process image as the alert")
+        _link("same process image as the alert")
     if any(d in haystack for d in pivots.domains):
         score += 7
-        reasons.append("mentions a domain from the alert")
+        _link("mentions a domain from the alert")
     if str(rule.get("id") or "") in pivots.rule_ids:
         score += 4
-        reasons.append("same detection rule as the alert")
+        _link("same detection rule as the alert")
 
     # -- significance, as a ranking signal only ------------------------------
     groups = rule.get("groups") or []
@@ -324,6 +338,7 @@ def score_record(
     return Scored(
         record=record, score=round(score, 3), reasons=reasons, lane=lane,
         offset_seconds=round(offset, 1), group_key=group_key_for(record),
+        links=links,
     )
 
 
@@ -524,6 +539,11 @@ def _for_prompt(item: Scored) -> dict[str, Any]:
         "level": rule.get("level"),
         "event_id": record.get("event_id"),
         "why": item.reasons[:4],
+        # What ties this event to *this* alert, if anything. An empty list is
+        # meaningful and is deliberately still emitted: it is the difference
+        # between "this happened to the same account" and "this happened
+        # nearby", and the model is told to weigh the two differently.
+        "links_to_alert": item.links,
     }
     if process.get("image") or process.get("command_line"):
         out["process"] = {
@@ -540,7 +560,15 @@ def _for_prompt(item: Scored) -> dict[str, Any]:
             "span": record.get("duplicate_span"),
             "other_refs": record.get("duplicate_refs"),
         }
-    return {k: v for k, v in out.items() if v not in (None, [], {})}
+    # Empty values are dropped to save tokens — except `links_to_alert`, where
+    # empty is the message. "This event shares nothing with the alert" is the
+    # difference between evidence and background, and an absent key says that
+    # to nobody.
+    return {
+        k: v
+        for k, v in out.items()
+        if k == "links_to_alert" or v not in (None, [], {})
+    }
 
 
 def explain(records: Sequence[dict[str, Any]], **kwargs: Any) -> list[dict[str, Any]]:

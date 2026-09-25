@@ -8,6 +8,13 @@ The block says what it is and what it is not. A model given twenty events out
 of three hundred will otherwise reason as though it saw the window, and an
 analyst reading the verdict has no way to tell. So the header carries the
 counts, and the footer says plainly that omission is not exoneration.
+
+It also says which events are actually *connected* to the alert. An analyst
+ticking ten boxes is saying "look at these", not "these are related" — the
+picks are a question, not an assertion. Every event therefore carries
+`links_to_alert`, and the model is told to reason from the linked ones, treat
+the rest as background, and report which it set aside. Nothing an analyst
+selected is dropped on their behalf; the judgement is made in the open.
 """
 
 from __future__ import annotations
@@ -102,6 +109,32 @@ def build(
     lines.append(
         "`ref` is the OpenSearch index:id — cite it when an event supports a conclusion. "
         "`why` is why the event was selected, not a claim about it."
+    )
+    # The instruction an analyst is really asking for when they tick ten boxes.
+    # Selecting an event means "look at this", not "this is related" — the
+    # analyst is asking a question, not asserting an answer. Without this the
+    # model treats everything in the block as pertinent, and a handful of
+    # unrelated events around a busy host can talk it out of a correct verdict.
+    lines.append(
+        "`links_to_alert` says what each event shares with THIS alert — the same device, "
+        "account, address, file hash, process image, domain or rule. Use it:"
+    )
+    lines.append(
+        "  - Events with a non-empty `links_to_alert` are evidence. Reason from these."
+    )
+    lines.append(
+        "  - Events with an empty `links_to_alert` share nothing with the alert. They were "
+        "included because they are notable or close in time, which is not a connection. "
+        "Treat them as background: they may corroborate or add timeline, but on their own "
+        "they must not change the verdict."
+    )
+    lines.append(
+        "  - The alert itself remains the subject. An event is relevant only insofar as it "
+        "explains, confirms or contradicts the alert — not because it is interesting."
+    )
+    lines.append(
+        "  - Say briefly which selected events you set aside as unrelated, and why. An "
+        "analyst chose these by hand and is entitled to know which ones you used."
     )
     lines.append("")
     for event in selection.selected:

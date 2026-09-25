@@ -469,3 +469,131 @@ def test_autosend_restores_the_previous_behaviour():
     )
     assert digest
     assert len(result.selected) == 12
+
+
+# --- selected does not mean related -------------------------------------------
+
+
+def _relevance_pivots():
+    from app.services.alert_log_selection import pivots_from_alert
+
+    return pivots_from_alert(
+        entity_host="EXP-1GW2P34",
+        entity_user="dnechita",
+        alert_body="Alert: EXP-1GW2P34\nAgent: EXP-1GW2P34\nManager: Siembiot\n",
+        alert_fields={},
+    )
+
+
+def _at(seconds: int, **over):
+    base = {
+        "key": f"idx:{over.pop('name', 'X')}",
+        "timestamp": f"2026-09-25T12:00:{seconds:02d}Z",
+        "rule": {"description": "Something", "id": "1", "level": 5},
+    }
+    base.update(over)
+    return base
+
+
+def test_an_event_sharing_nothing_with_the_alert_is_not_called_evidence():
+    """Ticking a checkbox asks a question; it does not assert a connection.
+
+    An analyst selecting ten rows around a busy host will include events that
+    have nothing to do with the alert. Presented as peers of the linked ones,
+    a handful of those can argue a correct verdict out of the model.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.alert_log_selection import score_record
+
+    now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+    pivots = _relevance_pivots()
+
+    linked = score_record(
+        _at(10, name="A", agent={"name": "EXP-1GW2P34"}, users=["dnechita"]),
+        pivots=pivots, alert_time=now, window_seconds=600.0,
+    )
+    unrelated = score_record(
+        _at(20, name="B", agent={"name": "SOME-OTHER-HOST"}, users=["svc-backup"],
+            rule={"description": "Logon", "id": "60106", "level": 3,
+                  "groups": ["authentication_success"]}),
+        pivots=pivots, alert_time=now, window_seconds=600.0,
+    )
+
+    assert linked.links, "an event on the alert's device and account is linked"
+    assert unrelated.links == [], "a different host and account share nothing"
+    # Being notable and being close in time still earn rank — they are just not
+    # a connection to this alert, and must not be reported as one.
+    assert unrelated.score > 0
+    assert any("significant activity" in r for r in unrelated.reasons)
+
+
+def test_the_empty_link_list_survives_into_the_prompt():
+    """Empty values are stripped to save tokens; this one carries the meaning.
+
+    An absent key tells the model nothing, and the instruction above it talks
+    about events whose `links_to_alert` is empty.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.alert_log_selection import _for_prompt, score_record
+
+    now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+    unrelated = score_record(
+        _at(20, name="B", agent={"name": "OTHER"}, users=["someone-else"]),
+        pivots=_relevance_pivots(), alert_time=now, window_seconds=600.0,
+    )
+    shaped = _for_prompt(unrelated)
+    assert "links_to_alert" in shaped
+    assert shaped["links_to_alert"] == []
+
+
+def test_the_block_tells_the_model_how_to_use_the_links():
+    """Without the instruction the field is decoration."""
+    from datetime import datetime, timezone
+
+    from app.services import alert_log_prompt
+
+    now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+    records = [
+        _at(10, name="A", agent={"name": "EXP-1GW2P34"}, users=["dnechita"]),
+        _at(20, name="B", agent={"name": "OTHER"}, users=["someone-else"]),
+    ]
+    digest, _, _ = alert_log_prompt.build(
+        records, pivots=_relevance_pivots(), alert_time=now, window_seconds=600.0,
+        budget_tokens=6000, pinned_keys=["idx:A", "idx:B"], only_pinned=True,
+    )
+
+    assert "links_to_alert" in digest
+    assert "are evidence" in digest
+    assert "must not change the verdict" in digest
+    assert "which selected events you set aside" in digest
+    # Both picks are still sent. The judgement is made in the open, not by
+    # quietly dropping what an analyst asked to be looked at.
+    assert '"ref":"idx:A"' in digest
+    assert '"ref":"idx:B"' in digest
+
+
+def test_an_analyst_pick_is_never_silently_dropped_for_being_unrelated():
+    """The guarantee that makes the rest safe.
+
+    Filtering picks server-side would mean an analyst ticks a box, is told the
+    events were sent, and the model never sees them — the exact failure we
+    already had once, arrived at deliberately this time.
+    """
+    from datetime import datetime, timezone
+
+    from app.services import alert_log_prompt
+
+    now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+    unrelated = [
+        _at(20, name="B", agent={"name": "OTHER"}, users=["someone-else"]),
+        _at(30, name="C", agent={"name": "OTHER2"}, users=["another"]),
+    ]
+    digest, selection, _ = alert_log_prompt.build(
+        unrelated, pivots=_relevance_pivots(), alert_time=now, window_seconds=600.0,
+        budget_tokens=6000, pinned_keys=["idx:B", "idx:C"], only_pinned=True,
+    )
+
+    assert len(selection.selected) == 2
+    assert '"ref":"idx:B"' in digest and '"ref":"idx:C"' in digest
