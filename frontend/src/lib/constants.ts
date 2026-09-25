@@ -14,20 +14,27 @@ export const APP_VERSION = "v2.0";
  *  anywhere, including the server. */
 export type NavIcon =
   | "grid" | "cases" | "bulk" | "watch"
-  | "detections" | "alerts" | "exclusions"
+  | "detections" | "alerts" | "exclusions" | "devices"
   | "email" | "alertBody" | "ip" | "assistant" | "clients" | "settings";
 
 export type AppNavLink = {
   href: string;
   label: string;
-  /** Sidebar section. An analyst's day splits three ways: the case work
-   *  itself, what the estate is reporting, and the single-purpose lookups. */
-  group?: "workspace" | "detection" | "tools";
+  /** Sidebar section. An analyst's day splits four ways: the case work itself,
+   *  what is actually threatening a client right now, how well the estate's
+   *  detections are performing, and the single-purpose lookups.
+   *
+   *  `threat` is the working surface — the alerts that arrived and the cases
+   *  they formed. `detection` is the meta view: whether the rules that produced
+   *  them are any good. They were mixed together, which put a tuning report and
+   *  a live intrusion on the same page. */
+  group?: "workspace" | "threat" | "detection" | "tools";
   icon?: NavIcon;
 };
 
 export const APP_NAV_SECTIONS = [
   { id: "workspace", title: "Workspace" },
+  { id: "threat", title: "Security Threats" },
   { id: "detection", title: "Detection" },
   { id: "tools", title: "Tools" },
 ] as const;
@@ -46,13 +53,24 @@ export const APP_NAV_LINKS = [
   { href: "/investigations", label: "All Cases", group: "workspace", icon: "cases" },
   { href: "/batches", label: "Bulk Analysis", group: "workspace", icon: "bulk" },
   { href: "/watchlist", label: "Watchlist", group: "workspace", icon: "watch" },
+  // What is threatening a client right now: the alerts that arrived, and the
+  // cases they formed. Both filter by client and by verdict.
+  //
+  // "Alerts" rather than "Alert Body Investigation": the old name described the
+  // mechanism — that it reads a pasted alert body — where an analyst is looking
+  // for the alerts. It was also filed under Tools beside an IP lookup, which is
+  // not what it is.
+  { href: "/alert-investigations", label: "Alerts", group: "threat", icon: "alerts" },
+  // One case is one session of activity on one device for one account. The list
+  // used to be a tab on Detections, next to rule tuning.
+  { href: "/detections/cases", label: "Cases", group: "threat", icon: "cases" },
   { href: "/detections", label: "Detections", group: "detection", icon: "detections" },
-  { href: "/alerts", label: "Alerts", group: "detection", icon: "alerts" },
+  // Everything a single device is doing — activity, its most triggered rules,
+  // verdicts, accounts. This is the per-host background that used to be printed
+  // inside every case, where it described the device rather than the case.
+  { href: "/detections/devices", label: "Devices", group: "detection", icon: "devices" },
   { href: "/exclusions", label: "Exclusions", group: "detection", icon: "exclusions" },
   { href: "/email-investigations", label: "Email Analysis", group: "tools", icon: "email" },
-  // Alert Body is a first-class intake path, not a variant of Email Analysis:
-  // it takes a pasted alert body and runs every indicator inside it.
-  { href: "/alert-investigations", label: "Alert Body Investigation", group: "tools", icon: "alertBody" },
   { href: "/ip-lookup", label: "IP Lookup", group: "tools", icon: "ip" },
   { href: "/assistant", label: "AI Assistant", group: "tools", icon: "assistant" },
   { href: "/clients", label: "Clients", group: "tools", icon: "clients" },
@@ -75,7 +93,6 @@ export const APP_FOOTER_LINK_GROUPS = [
       { href: "/ip-lookup", label: "IP Lookup" },
       { href: "/watchlist", label: "Domain Watchlist" },
       { href: "/exclusions", label: "Exclusion List" },
-      { href: "/alerts", label: "Alerts" },
       { href: "/clients", label: "Client Management" },
     ],
   },

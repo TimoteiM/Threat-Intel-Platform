@@ -489,3 +489,69 @@ def test_the_marker_rule_is_the_same_one_the_migration_used():
         alert_source="unknown", alert_client=None, legacy_tenant="c00",
     ).tenant_id is None
 
+
+
+# --- the devices list ---------------------------------------------------------
+
+
+def test_the_devices_list_is_tenant_scoped():
+    """A new aggregate over alert rows is still a read of alert rows.
+
+    An aggregate leaks just as precisely as a list: "EXP-4LWK334, 12 alerts,
+    worst malicious" is exactly the fact a client-restricted caller must not
+    learn about another client's estate. The detections module had no scoping
+    of any kind before this route, so the filter had to be added, not inherited.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.api import detections as mod
+
+    captured: dict[str, object] = {}
+
+    class _Result:
+        def all(self):
+            return []
+
+    class _DB:
+        async def execute(self, query):
+            captured["sql"] = str(query.compile(compile_kwargs={"literal_binds": True}))
+            return _Result()
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            identity={"kind": "user", "all_tenants": False, "tenant_ids": ["c00"]}
+        )
+    )
+    asyncio.run(mod.list_devices(_DB(), days=30, request=request))
+
+    sql = str(captured["sql"])
+    assert "tenant_id" in sql
+    assert "'c00'" in sql
+
+
+def test_the_devices_list_of_an_account_with_no_tenants_matches_nothing():
+    """Fail closed, not open. An empty IN () is the classic way a scoped query
+    quietly becomes an unscoped one."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.api import detections as mod
+
+    captured: dict[str, object] = {}
+
+    class _Result:
+        def all(self):
+            return []
+
+    class _DB:
+        async def execute(self, query):
+            captured["sql"] = str(query.compile(compile_kwargs={"literal_binds": True}))
+            return _Result()
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(identity={"kind": "user", "all_tenants": False, "tenant_ids": []})
+    )
+    asyncio.run(mod.list_devices(_DB(), days=30, request=request))
+
+    assert "false" in str(captured["sql"]).lower()

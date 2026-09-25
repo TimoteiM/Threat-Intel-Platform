@@ -1404,6 +1404,33 @@ export function getCaseNarrative(caseKey: string) {
   );
 }
 
+export type DeviceRow = {
+  host: string;
+  tenant_id: string | null;
+  alerts: number;
+  last_seen: string | null;
+  worst_verdict: string | null;
+  users: number;
+  rules: number;
+};
+
+export function listDevices(params?: {
+  days?: number;
+  search?: string;
+  verdict?: string;
+  tenant?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.days !== undefined) qs.set("days", String(params.days));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.verdict) qs.set("verdict", params.verdict);
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  const query = qs.toString();
+  return request<{ items: DeviceRow[]; days: number }>(
+    `/detections/devices${query ? `?${query}` : ""}`,
+  );
+}
+
 export function getEntityProfile(host: string, days?: number) {
   const query = days ? `?days=${days}` : "";
   return request<EntityProfile>(

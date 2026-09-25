@@ -1,6 +1,7 @@
 """
 Detection quality, ATT&CK coverage and analyst feedback.
 
+GET  /api/detections/devices        -> one row per machine: volume, verdicts, users
 GET  /api/detections/quality        -> per-rule signal-to-noise, ATT&CK confirm rate
 GET  /api/detections/attack-coverage-> what detections claim vs what evidence shows
 GET  /api/detections/attack-coverage/tactic-alerts -> the alerts behind one tactic
@@ -20,7 +21,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from sqlalchemy import case as sql_case
 from sqlalchemy import func, select
 
 from app.dependencies import DBSession
@@ -32,8 +34,29 @@ from app.services.alert_entity_profile_service import build_entity_profile
 from app.services.alert_tuning_service import build_tuning_recommendations
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
+from app.services import tenant_scope
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
+
+# Identity, read exactly as the alert-run routes read it. A second way to
+# decide who is calling is a second way to get it wrong, and this module is
+# about to start scoping reads with it.
+_IN_PROCESS = {"kind": "internal", "all_tenants": True, "tenant_ids": []}
+
+
+def _identity(request: Request | None) -> dict[str, Any] | None:
+    """The authenticated caller, as the auth middleware left it."""
+    if request is None:
+        return dict(_IN_PROCESS)
+    state = getattr(request, "state", None)
+    if state is None:
+        return dict(_IN_PROCESS)
+    return getattr(state, "identity", None)
+
+
+def _scope(request: Request | None) -> "tenant_scope.TenantScope":
+    return tenant_scope.scope_of(_identity(request))
+
 
 SUBJECT_TYPES = ("investigation", "alert_run")
 VERDICTS = ("true_positive", "false_positive", "unclear")
@@ -41,6 +64,99 @@ VERDICTS = ("true_positive", "false_positive", "unclear")
 # The platform's classifications, split into what an analyst calling something a
 # true positive would expect to see. Used only to measure agreement.
 ACTIONABLE = frozenset({"malicious", "suspicious"})
+
+
+# Worst first. A machine with a malicious conclusion outranks one with fifty
+# benign alerts, because volume is a workload measure and this list is read to
+# decide where to look.
+_VERDICT_RANK = sql_case(
+    (AlertBodyInvestigationRun.overall_verdict == "malicious", 3),
+    (AlertBodyInvestigationRun.overall_verdict == "suspicious", 2),
+    (AlertBodyInvestigationRun.overall_verdict == "benign", 1),
+    else_=0,
+)
+
+
+@router.get("/devices")
+async def list_devices(
+    db: DBSession,
+    # Plain defaults, not Query(...): this handler is called directly in tests
+    # and a Query object reaches SQLAlchemy as a non-integer. Clamped below
+    # instead, which also bounds what a URL can ask for.
+    days: int = 30,
+    search: str | None = None,
+    verdict: str | None = None,
+    tenant: str | None = None,
+    limit: int = 100,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """One row per machine that has produced an alert in the window.
+
+    The estate seen device-first. Each row is what the per-host panels used to
+    say inside every case — how much, how bad, whose account — which described
+    the machine rather than the case it was printed in.
+
+    Scoped to the caller's tenants like every other alert-run read. This is a
+    new aggregate over the same rows, and an aggregate leaks just as precisely
+    as a list: a count of malicious alerts on a named host is exactly the fact
+    a client-restricted caller must not learn about another client.
+    """
+    scope = _scope(request)
+    days = max(1, min(365, int(days)))
+    limit = max(1, min(500, int(limit)))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    query = (
+        select(
+            AlertBodyInvestigationRun.entity_host.label("host"),
+            AlertBodyInvestigationRun.tenant_id.label("tenant_id"),
+            func.count(AlertBodyInvestigationRun.id).label("alerts"),
+            func.max(AlertBodyInvestigationRun.created_at).label("last_seen"),
+            func.max(_VERDICT_RANK).label("worst_rank"),
+            func.count(func.distinct(AlertBodyInvestigationRun.entity_user)).label("users"),
+            func.count(func.distinct(AlertBodyInvestigationRun.detection_rule_id)).label("rules"),
+        )
+        .where(
+            AlertBodyInvestigationRun.entity_host.is_not(None),
+            AlertBodyInvestigationRun.entity_host != "",
+            AlertBodyInvestigationRun.created_at >= since,
+        )
+        .group_by(AlertBodyInvestigationRun.entity_host, AlertBodyInvestigationRun.tenant_id)
+    )
+    query = tenant_scope.apply(query, AlertBodyInvestigationRun.tenant_id, scope)
+    if tenant:
+        tenant_scope.assert_can_read(scope, tenant)
+        query = query.where(AlertBodyInvestigationRun.tenant_id == tenant)
+    if search:
+        query = query.where(AlertBodyInvestigationRun.entity_host.ilike(f"%{search.strip()}%"))
+    if verdict:
+        query = query.having(
+            func.max(_VERDICT_RANK) == {"malicious": 3, "suspicious": 2, "benign": 1}.get(verdict, 0)
+        )
+
+    rows = (
+        await db.execute(query.order_by(func.max(_VERDICT_RANK).desc(),
+                                        func.count(AlertBodyInvestigationRun.id).desc())
+                         .limit(limit))
+    ).all()
+
+    worst = {3: "malicious", 2: "suspicious", 1: "benign", 0: None}
+    return {
+        "items": [
+            {
+                "host": r.host,
+                "tenant_id": r.tenant_id,
+                "alerts": int(r.alerts or 0),
+                "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+                "worst_verdict": worst.get(int(r.worst_rank or 0)),
+                "users": int(r.users or 0),
+                "rules": int(r.rules or 0),
+            }
+            for r in rows
+        ],
+        "days": days,
+        "scope": scope.describe(),
+    }
 
 
 @router.get("/quality")

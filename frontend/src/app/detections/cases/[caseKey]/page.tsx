@@ -21,10 +21,8 @@ import * as api from "@/lib/api";
 import type { CaseDetail } from "@/lib/types";
 import { EmptyState, LoadingState, Page, PageHeader } from "@/components/ui/Primitives";
 import {
-  CountedRows,
   MONO,
   Panel,
-  Timeline,
   riskColor,
   shortDate,
 } from "@/components/detections/panels";
@@ -183,57 +181,13 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
         </Panel>
       )}
 
-      {profile && (
-        <Panel title="ACTIVITY" hint="Alerts on event time, in lanes by evidenced tactic. Shaded bands are sessions.">
-          <Timeline profile={profile} />
-        </Panel>
-      )}
-
-      {profile && (
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))" }}>
-          <Panel title="MOST TRIGGERED" hint={profile.rules_total ? `${profile.rules_total} distinct rule(s) have fired here` : undefined}>
-            <CountedRows
-              rows={(profile.rules || []).map((rule) => ({
-                label: rule.name, count: rule.count, risk: rule.max_risk,
-                hint: `${rule.name}${rule.id ? ` · rule ${rule.id}` : ""}`,
-              }))}
-              emptyLabel="No alert here carries a detection rule."
-            />
-          </Panel>
-          <Panel title="BEHAVIOUR" hint="Tactics the investigation evidenced. Rule claims are excluded.">
-            <CountedRows
-              rows={(profile.tactics || []).map((t) => ({ label: t.name, count: t.count }))}
-              emptyLabel="No evidenced ATT&CK tactic on this host."
-            />
-          </Panel>
-          <Panel title="VERDICTS" hint="What the alerts on this host concluded.">
-            <CountedRows
-              rows={(profile.verdicts || []).map((v) => ({
-                label: v.name, count: v.count,
-                risk: v.name === "malicious" ? 100 : v.name === "suspicious" ? 50 : 0,
-              }))}
-              emptyLabel="No concluded verdicts."
-            />
-          </Panel>
-          <Panel
-            title="USERS"
-            hint={profile.users ? `Carried on ${profile.users.runs_with_user} of ${profile.users.runs_total} alert(s)` : undefined}
-          >
-            {profile.users && profile.users.values.length > 0 ? (
-              <CountedRows
-                rows={profile.users.values.map((u) => ({ label: u.name, count: u.count }))}
-                emptyLabel=""
-              />
-            ) : (
-              <div style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.5 }}>
-                No alert on this host carries a user. The field is populated on a small
-                minority of alerts across the estate, so its absence says nothing about
-                who used the machine.
-              </div>
-            )}
-          </Panel>
-        </div>
-      )}
+      {/* ACTIVITY, MOST TRIGGERED, BEHAVIOUR, VERDICTS and USERS used to sit
+          here. They describe the machine, not this case: on a busy host the
+          same five panels appeared identically on every one of its cases, and
+          pushed the four things that are actually about the case — why these
+          alerts are one case, what stands out, the indicators, the alerts
+          themselves — below the fold. They are on Detections → Devices, where
+          one row is one machine. */}
 
       {profile && Object.keys(profile.indicators || {}).length > 0 && (
         <Panel title="INDICATORS" hint="Every indicator seen in this host's alerts, worst conclusion kept.">

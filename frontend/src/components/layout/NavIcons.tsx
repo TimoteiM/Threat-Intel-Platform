@@ -55,6 +55,13 @@ const PATHS: Record<NavIcon, React.ReactNode> = {
       <path d="M4 4h16l-6.4 7.6V20L10.4 18v-6.4Z" />
     </>
   ),
+  // A workstation: the estate seen one machine at a time.
+  devices: (
+    <>
+      <rect x="3" y="4.5" width="18" height="12" rx="1.6" />
+      <path d="M8.5 20.5h7M12 16.5v4" />
+    </>
+  ),
   email: (
     <>
       <rect x="3" y="5" width="18" height="14" rx="2" />
