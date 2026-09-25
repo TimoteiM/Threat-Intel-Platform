@@ -895,16 +895,32 @@ async def correlate_alerts(
                 score=score,
                 score_version=SCORE_VERSION,
             )
-            outcome = await snapshot_if_changed(
-                db,
-                case_key=case_key,
-                score=score,
-                raw_score=raw_score,
-                surprise=surprise,
-                member_count=len(members),
-                tactics=tactics,
-                score_version=SCORE_VERSION,
-            )
+            # Score history and escalation are the scheduled job's business,
+            # not a page load's.
+            #
+            # These four queries per case ran on every read — 336 of the 618 a
+            # single listing issued — and their results were then discarded
+            # unless `emit`, because nothing is dispatched from a read. Worse,
+            # `record_emission` below marks a snapshot as escalated, so a read
+            # could consume an escalation that was never delivered.
+            #
+            # A read now computes the case and reports it. The hourly pass in
+            # tasks/case_correlation_task.py is what writes down how the score
+            # moved and what to notify about, which is what the snapshot
+            # docstring asks for: record what the case did, not how often
+            # someone opened it.
+            outcome = None
+            if emit:
+                outcome = await snapshot_if_changed(
+                    db,
+                    case_key=case_key,
+                    score=score,
+                    raw_score=raw_score,
+                    surprise=surprise,
+                    member_count=len(members),
+                    tactics=tactics,
+                    score_version=SCORE_VERSION,
+                )
             # The overall reading of the case, written out of band. Queued only
             # when the case says something different from what the narrative was
             # written about — analysing on every recompute would spend the token
@@ -932,7 +948,7 @@ async def correlate_alerts(
                 "error": spine.narrative_error,
             }
 
-            emission = await decide_emission(
+            emission = None if outcome is None else await decide_emission(
                 db,
                 case_key=case_key,
                 outcome=outcome,

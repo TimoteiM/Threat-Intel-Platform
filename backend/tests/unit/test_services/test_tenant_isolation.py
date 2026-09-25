@@ -656,3 +656,87 @@ def test_the_entity_profile_is_tenant_scoped():
         )
     )
     assert "false" in str(captured["sql"]).lower()
+
+
+# --- the cases cache ----------------------------------------------------------
+
+
+def _cases_probe(monkeypatch, watermarks):
+    """Drive get_correlated_cases with a controllable ingest watermark."""
+    import asyncio
+    from datetime import datetime
+
+    from app.api import detections as mod
+
+    calls: list[object] = []
+
+    class _Scalar:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar(self):
+            return self._value
+
+    class _DB:
+        def __init__(self):
+            self.marks = list(watermarks)
+
+        async def execute(self, _stmt):
+            # A datetime, like the real column yields.
+            return _Scalar(datetime.fromisoformat(self.marks.pop(0)))
+
+    async def _fake_correlate(_db, **kwargs):
+        calls.append(kwargs.get("scope"))
+        return {"cases": [{"tenant_id": "c00"}], "total_cases": 1}
+
+    async def _no_tenants(_db, _request):
+        return []
+
+    monkeypatch.setattr(mod, "correlate_alerts", _fake_correlate)
+    monkeypatch.setattr(mod, "_selectable_tenants", _no_tenants)
+    mod._CASES_CACHE.clear()
+    return mod, _DB(), calls, asyncio
+
+
+def test_the_cases_cache_is_reused_while_no_alert_has_arrived(monkeypatch):
+    mod, db, calls, asyncio = _cases_probe(monkeypatch, ["2026-09-25T10:00:00", "2026-09-25T10:00:00"])
+    req = SimpleNamespace(
+        state=SimpleNamespace(identity={"kind": "user", "all_tenants": True, "tenant_ids": []})
+    )
+    for _ in range(2):
+        asyncio.run(mod.get_correlated_cases(db, hours=168, min_rules=2, min_score=0,
+                                             limit=50, request=req))
+    assert len(calls) == 1, "the second read should not recompute"
+
+
+def test_one_new_alert_invalidates_the_cases_cache(monkeypatch):
+    """Not a staleness window. The watermark is the newest alert we hold, so a
+    single arrival makes every entry a miss."""
+    mod, db, calls, asyncio = _cases_probe(monkeypatch, ["2026-09-25T10:00:00", "2026-09-25T10:00:01"])
+    req = SimpleNamespace(
+        state=SimpleNamespace(identity={"kind": "user", "all_tenants": True, "tenant_ids": []})
+    )
+    for _ in range(2):
+        asyncio.run(mod.get_correlated_cases(db, hours=168, min_rules=2, min_score=0,
+                                             limit=50, request=req))
+    assert len(calls) == 2, "an alert arrived; the answer may have changed"
+
+
+def test_the_cases_cache_is_not_shared_between_clients(monkeypatch):
+    """A cache is the one place a leak can happen with no query behind it."""
+    mod, db, calls, asyncio = _cases_probe(monkeypatch, ["2026-09-25T10:00:00"] * 2)
+    internal = SimpleNamespace(
+        state=SimpleNamespace(identity={"kind": "user", "all_tenants": True, "tenant_ids": []})
+    )
+    restricted = SimpleNamespace(
+        state=SimpleNamespace(
+            identity={"kind": "user", "all_tenants": False, "tenant_ids": ["c00"]}
+        )
+    )
+    asyncio.run(mod.get_correlated_cases(db, hours=168, min_rules=2, min_score=0,
+                                         limit=50, request=internal))
+    asyncio.run(mod.get_correlated_cases(db, hours=168, min_rules=2, min_score=0,
+                                         limit=50, request=restricted))
+    assert len(calls) == 2
+    assert calls[0].all_tenants is True
+    assert calls[1].all_tenants is False

@@ -18,7 +18,7 @@ decision is a guess about whether a classification was right.
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -95,6 +95,33 @@ def _as_utc(value: str | None, *, end_of_day: bool) -> datetime | None:
     if len(text) == 10 and end_of_day:
         parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# Correlated cases, keyed by what they were computed from.
+#
+# A case is a function of the alerts that exist and the question asked. Nothing
+# else moves it, so recomputing on every page load — and on every 30-second
+# refresh the list performs by itself — re-derives an identical answer at a
+# measured 3.2s a time.
+#
+# The key carries the newest alert's timestamp, so this is not a staleness
+# window: an entry is served only while no alert has been ingested since it was
+# built, and the arrival of one alert invalidates every entry. That check is a
+# single indexed max().
+#
+# Scope is in the key because a cached answer computed for one client must
+# never be served to another — a cache is the one place a leak can happen with
+# no query behind it to notice.
+_CASES_CACHE: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
+_CASES_CACHE_MAX = 16
+
+
+async def _ingest_watermark(db: DBSession) -> str:
+    """The newest alert we hold, used as a cache generation."""
+    newest = (
+        await db.execute(select(func.max(AlertBodyInvestigationRun.created_at)))
+    ).scalar()
+    return newest.isoformat() if newest else "empty"
 
 
 SUBJECT_TYPES = ("investigation", "alert_run")
@@ -316,10 +343,28 @@ async def get_correlated_cases(
         span = (datetime.now(timezone.utc) - since_at).total_seconds() / 3600.0
         hours = max(hours, int(span) + 1)
 
-    result = await correlate_alerts(
-        db, scope=scope, hours=hours, min_rules=min_rules,
-        min_score=min_score, limit=limit, since=since_at, until=until_at,
+    cache_key = (
+        await _ingest_watermark(db),
+        scope.cache_key(),
+        hours, min_rules, min_score, limit,
+        since_at.isoformat() if since_at else None,
+        until_at.isoformat() if until_at else None,
     )
+    cached = _CASES_CACHE.get(cache_key)
+    if cached is not None:
+        _CASES_CACHE.move_to_end(cache_key)
+        # Copied, because the tenant filter below replaces `cases` and the next
+        # reader must still see the whole answer.
+        result = {**cached, "cases": list(cached.get("cases") or [])}
+    else:
+        result = await correlate_alerts(
+            db, scope=scope, hours=hours, min_rules=min_rules,
+            min_score=min_score, limit=limit, since=since_at, until=until_at,
+        )
+        _CASES_CACHE[cache_key] = {**result, "cases": list(result.get("cases") or [])}
+        while len(_CASES_CACHE) > _CASES_CACHE_MAX:
+            _CASES_CACHE.popitem(last=False)
+
     cases = list(result.get("cases") or [])
     counts: dict[str | None, int] = defaultdict(int)
     for case in cases:
