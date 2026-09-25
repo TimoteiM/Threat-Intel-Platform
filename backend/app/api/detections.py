@@ -242,7 +242,14 @@ async def get_detection_quality(
     Scoped to the caller's tenants. `tenant` narrows further to one client and
     is refused if the caller may not read it.
     """
-    return await detection_quality(db, scope=_filtered(request, tenant), days=days, limit=limit)
+    result = await detection_quality(
+        db, scope=_filtered(request, tenant), days=days, limit=limit
+    )
+    # The same selector the other pages carry, so Rules and ATT&CK coverage can
+    # be read one client at a time rather than as an estate-wide average that
+    # belongs to nobody.
+    result["available_tenants"] = await _selectable_tenants(db, request)
+    return result
 
 
 @router.get("/attack-coverage")

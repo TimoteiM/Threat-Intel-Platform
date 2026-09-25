@@ -44,7 +44,7 @@ function FieldChips({ fields }: { fields: Record<string, string> }) {
 
 
 /** Recommendations keyed by rule id, so a rule row can find its own. */
-export function useTuningRecommendations(days: number) {
+export function useTuningRecommendations(days: number, tenant?: string) {
   const [byRule, setByRule] = useState<Record<string, TuningRecommendation>>({});
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +52,7 @@ export function useTuningRecommendations(days: number) {
     let cancelled = false;
     setLoading(true);
     api
-      .getTuningRecommendations({ days: Math.max(days, 90) })
+      .getTuningRecommendations({ days: Math.max(days, 90), tenant: tenant || undefined })
       .then((result) => {
         if (cancelled) return;
         const map: Record<string, TuningRecommendation> = {};
@@ -64,7 +64,7 @@ export function useTuningRecommendations(days: number) {
     return () => {
       cancelled = true;
     };
-  }, [days]);
+  }, [days, tenant]);
 
   return { byRule, loading };
 }

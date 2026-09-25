@@ -1331,26 +1331,33 @@ export function checkExclusions(indicators: Array<{ indicator_type: string; valu
 
 // ─── Detection quality, ATT&CK coverage, analyst feedback ───
 
-export function getDetectionQuality(params?: { days?: number; limit?: number }) {
+export function getDetectionQuality(params?: { days?: number; limit?: number; tenant?: string }) {
   const qs = new URLSearchParams();
   if (params?.days) qs.set("days", String(params.days));
   if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.tenant) qs.set("tenant", params.tenant);
   const query = qs.toString();
-  return request<DetectionQualityResponse>(`/detections/quality${query ? `?${query}` : ""}`);
+  return request<DetectionQualityResponse & { available_tenants?: TenantOption[] }>(
+    `/detections/quality${query ? `?${query}` : ""}`,
+  );
 }
 
-export function getAttackCoverage(params?: { days?: number }) {
+export function getAttackCoverage(params?: { days?: number; tenant?: string }) {
   const qs = new URLSearchParams();
   if (params?.days) qs.set("days", String(params.days));
+  if (params?.tenant) qs.set("tenant", params.tenant);
   const query = qs.toString();
   return request<AttackCoverageResponse>(`/detections/attack-coverage${query ? `?${query}` : ""}`);
 }
 
 /** The alerts behind one ATT&CK tactic row, newest first. */
-export function getTacticAlerts(params: { tactic: string; days?: number; limit?: number }) {
+export function getTacticAlerts(params: {
+  tactic: string; days?: number; limit?: number; tenant?: string;
+}) {
   const qs = new URLSearchParams({ tactic: params.tactic });
   if (params.days) qs.set("days", String(params.days));
   if (params.limit) qs.set("limit", String(params.limit));
+  if (params.tenant) qs.set("tenant", params.tenant);
   return request<TacticAlertsResponse>(`/detections/attack-coverage/tactic-alerts?${qs.toString()}`);
 }
 
@@ -1360,6 +1367,7 @@ export function getMismatchAlerts(params: {
   rule_id?: string | null;
   days?: number;
   limit?: number;
+  tenant?: string;
 }) {
   const qs = new URLSearchParams({ rule_name: params.rule_name, technique: params.technique });
   if (params.rule_id) qs.set("rule_id", params.rule_id);
@@ -1446,10 +1454,13 @@ export function getEntityProfile(host: string, days?: number) {
   );
 }
 
-export function getTuningRecommendations(params?: { days?: number; min_alerts?: number }) {
+export function getTuningRecommendations(params?: {
+  days?: number; min_alerts?: number; tenant?: string;
+}) {
   const qs = new URLSearchParams();
   if (params?.days) qs.set("days", String(params.days));
   if (params?.min_alerts) qs.set("min_alerts", String(params.min_alerts));
+  if (params?.tenant) qs.set("tenant", params.tenant);
   const query = qs.toString();
   return request<TuningResponse>(
     `/detections/tuning-recommendations${query ? `?${query}` : ""}`,

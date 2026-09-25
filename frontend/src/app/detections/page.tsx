@@ -33,6 +33,8 @@ import {
   Section,
 } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
+import ClientFilter from "@/components/detections/ClientFilter";
+import type { TenantOption } from "@/lib/api";
 import {
   RuleTuningPanel,
   useTuningRecommendations,
@@ -71,21 +73,29 @@ export default function DetectionsPage() {
   const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
   const [accuracy, setAccuracy] = useState<FeedbackAccuracy | null>(null);
   const [loading, setLoading] = useState(true);
+  // Which client these numbers describe. A signal-to-noise rate averaged over
+  // every client is a rate that belongs to none of them: one client's noisy
+  // rule drags another's verdict on the same rule id.
+  const [tenant, setTenant] = useState("");
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
 
   const fetchAll = useCallback(() => {
     setLoading(true);
     Promise.all([
-      api.getDetectionQuality({ days }).catch(() => null),
-      api.getAttackCoverage({ days: Math.max(days, 90) }).catch(() => null),
+      api.getDetectionQuality({ days, tenant: tenant || undefined }).catch(() => null),
+      api.getAttackCoverage({ days: Math.max(days, 90), tenant: tenant || undefined }).catch(() => null),
+      // Accuracy measures analyst agreement, which is recorded per feedback
+      // entry rather than per alert, so it has no tenant to filter by yet.
       api.getFeedbackAccuracy({ days: Math.max(days, 90) }).catch(() => null),
     ])
       .then(([q, c, a]) => {
         setQuality(q);
         setCoverage(c);
         setAccuracy(a);
+        if (q?.available_tenants) setTenants(q.available_tenants);
       })
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, tenant]);
 
   useEffect(() => {
     fetchAll();
@@ -106,17 +116,20 @@ export default function DetectionsPage() {
           /* One control, one meaning. The cases view was the only tab that
              needed a different set of windows, and it now lives on its own
              page with its own control. */
-          <div className="ds-toolbar" role="group" aria-label="Time window">
-            {WINDOWS.map((value) => (
-              <Button
-                key={value}
-                variant={days === value ? "primary" : "secondary"}
-                aria-pressed={days === value}
-                onClick={() => setDays(value)}
-              >
-                {value}d
-              </Button>
-            ))}
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <ClientFilter options={tenants} value={tenant} onChange={setTenant} />
+            <div className="ds-toolbar" role="group" aria-label="Time window">
+              {WINDOWS.map((value) => (
+                <Button
+                  key={value}
+                  variant={days === value ? "primary" : "secondary"}
+                  aria-pressed={days === value}
+                  onClick={() => setDays(value)}
+                >
+                  {value}d
+                </Button>
+              ))}
+            </div>
           </div>
         }
       />
@@ -146,9 +159,9 @@ export default function DetectionsPage() {
         {loading ? (
           <LoadingState label="Loading detection data…" />
         ) : tab === "rules" ? (
-          <RulesTab data={quality} days={days} />
+          <RulesTab data={quality} days={days} tenant={tenant} />
         ) : tab === "attack" ? (
-          <AttackTab data={coverage} days={Math.max(days, 90)} />
+          <AttackTab data={coverage} days={Math.max(days, 90)} tenant={tenant} />
         ) : (
           <AccuracyTab data={accuracy} />
         )}
@@ -159,9 +172,17 @@ export default function DetectionsPage() {
 
 /* ─── Rules ─── */
 
-function RulesTab({ data, days }: { data: DetectionQualityResponse | null; days: number }) {
+function RulesTab({
+  data,
+  days,
+  tenant,
+}: {
+  data: DetectionQualityResponse | null;
+  days: number;
+  tenant: string;
+}) {
   // Fetched once for the whole list; each rule row looks up its own.
-  const tuning = useTuningRecommendations(days);
+  const tuning = useTuningRecommendations(days, tenant);
   if (!data || !data.rules.length) {
     return (
       <EmptyState
@@ -290,7 +311,15 @@ const ATTACK_LENSES: Array<{ id: AttackLens; label: string; hint: string }> = [
   { id: "gaps", label: "Gaps", hint: "Unvalidated mappings and undetected behaviour" },
 ];
 
-function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: number }) {
+function AttackTab({
+  data,
+  days,
+  tenant,
+}: {
+  data: AttackCoverageResponse | null;
+  days: number;
+  tenant: string;
+}) {
   const [lens, setLens] = useState<AttackLens>("all");
 
   if (!data || !data.runs_assessed) {
@@ -411,7 +440,12 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
         >
           <div style={{ display: "grid", gap: "var(--space-4)" }}>
             {data.mapping_mismatches.map((row) => (
-              <MismatchRow key={`${row.rule_id ?? ""}:${row.rule_name}`} row={row} days={days} />
+              <MismatchRow
+                key={`${row.rule_id ?? ""}:${row.rule_name}`}
+                row={row}
+                days={days}
+                tenant={tenant}
+              />
             ))}
           </div>
         </Section>
@@ -434,7 +468,13 @@ function AttackTab({ data, days }: { data: AttackCoverageResponse | null; days: 
             </div>
           ) : (
             visibleTactics.map((tactic) => (
-              <TacticRow key={tactic.tactic} tactic={tactic} days={days} lens={lens} />
+              <TacticRow
+                key={tactic.tactic}
+                tactic={tactic}
+                days={days}
+                tenant={tenant}
+                lens={lens}
+              />
             ))
           )}
         </div>
@@ -532,9 +572,11 @@ function LensPicker({
 function MismatchRow({
   row,
   days,
+  tenant,
 }: {
   row: AttackCoverageResponse["mapping_mismatches"][number];
   days: number;
+  tenant: string;
 }) {
   // Which evidenced technique is open, and the alerts behind it. Kept per row
   // so opening one cell does not collapse another.
@@ -557,6 +599,7 @@ function MismatchRow({
           rule_id: row.rule_id,
           technique,
           days,
+          tenant: tenant || undefined,
         }),
       );
     } catch {
@@ -753,10 +796,12 @@ function formatWhen(iso: string | null): string {
 function TacticRow({
   tactic,
   days,
+  tenant,
   lens = "all",
 }: {
   tactic: AttackCoverageResponse["tactics"][number];
   days: number;
+  tenant: string;
   lens?: AttackLens;
 }) {
   const [open, setOpen] = useState(false);
@@ -770,7 +815,7 @@ function TacticRow({
   useEffect(() => {
     setAlerts(null);
     setError(null);
-  }, [days, tactic.tactic]);
+  }, [days, tactic.tactic, tenant]);
 
   const toggle = () => {
     const next = !open;
@@ -779,7 +824,7 @@ function TacticRow({
     setLoading(true);
     setError(null);
     api
-      .getTacticAlerts({ tactic: tactic.tactic, days, limit: 100 })
+      .getTacticAlerts({ tactic: tactic.tactic, days, limit: 100, tenant: tenant || undefined })
       .then((response) => {
         setAlerts(response.alerts);
         setTotal(response.total);
