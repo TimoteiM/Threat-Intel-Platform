@@ -1391,7 +1391,6 @@ export interface AssistantEntry {
   entry_index: number;
   entry_label?: string;
   raw_text: string;
-  sanitized_text: string;
   token_map_json: Record<string, string>;
   created_at: string;
 }

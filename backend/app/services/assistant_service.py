@@ -145,9 +145,11 @@ class AssistantService:
                 AssistantSession.completed_at,
             )
         )
-        count_query = select(func.count(func.distinct(AssistantSession.id)))
-
-        count_query = count_query.select_from(AssistantSession)
+        # count(*), not count(DISTINCT id). DISTINCT was needed when search
+        # joined entries and multiplied each session by its rows; the EXISTS
+        # below replaced that join, so nothing duplicates and the de-duplication
+        # is pure cost — it sorts every row to discover they were unique.
+        count_query = select(func.count()).select_from(AssistantSession)
         if normalized_search:
             pattern = f"%{normalized_search}%"
             title_match = AssistantSession.title.ilike(pattern)

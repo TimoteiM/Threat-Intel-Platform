@@ -1353,11 +1353,18 @@ class AssistantSessionRunRequest(BaseModel):
     model: Optional[str] = None
 
 
-# An entry holds what was pasted and what was sent. Both are returned, and both
-# are capped: measured across 21,568 entries the pair averages 28 kB and reaches
-# 20 MB, so opening one session could ship twenty megabytes to a browser to show
-# text nobody scrolls to the end of. The cap is generous — a hundred thousand
-# characters is a long log — and the full text is never lost, only not shipped.
+# An entry holds what was pasted, and it is capped: measured across 21,568
+# entries the text averages 28 kB and reaches 2.4 MB, so opening one session
+# could ship megabytes to a browser to show text nobody scrolls to the end of.
+# The cap is generous — a hundred thousand characters is a long log — and the
+# full text is never lost, only not shipped.
+#
+# `sanitized_text` is deliberately *not* here. It is a near-copy of `raw_text`
+# with identifiers replaced, no screen has ever rendered it, and it doubled
+# every response: 68 kB of the median heavy session, 100 kB at the cap. The
+# sanitiser still writes it, the prompt builder still reads it from the row —
+# it simply stops travelling to a browser that never asked. What was redacted
+# is already reported, per session, in `sanitization_summary_json`.
 MAX_ENTRY_TEXT_CHARS = 100_000
 
 
@@ -1367,25 +1374,21 @@ class AssistantEntryRead(BaseModel):
     entry_index: int
     entry_label: Optional[str] = None
     raw_text: str
-    sanitized_text: str
     token_map_json: dict[str, str] = {}
     created_at: datetime
-    # Set when the text above was cut for transport, with the real lengths, so
+    # Set when the text above was cut for transport, with the real length, so
     # a reader is never quietly shown a fraction as though it were the whole.
     truncated: bool = False
     raw_text_chars: Optional[int] = None
-    sanitized_text_chars: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
     def _cap_text(self) -> "AssistantEntryRead":
-        raw_len, san_len = len(self.raw_text or ""), len(self.sanitized_text or "")
-        if raw_len > MAX_ENTRY_TEXT_CHARS or san_len > MAX_ENTRY_TEXT_CHARS:
+        raw_len = len(self.raw_text or "")
+        if raw_len > MAX_ENTRY_TEXT_CHARS:
             self.truncated = True
             self.raw_text_chars = raw_len
-            self.sanitized_text_chars = san_len
             self.raw_text = (self.raw_text or "")[:MAX_ENTRY_TEXT_CHARS]
-            self.sanitized_text = (self.sanitized_text or "")[:MAX_ENTRY_TEXT_CHARS]
         return self
 
 

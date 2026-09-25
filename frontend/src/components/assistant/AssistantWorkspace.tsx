@@ -21,7 +21,6 @@ function newEntry(index: number): AssistantEntry {
     entry_index: index,
     entry_label: `entry-${index + 1}`,
     raw_text: "",
-    sanitized_text: "",
     token_map_json: {},
     created_at: new Date().toISOString(),
   };
@@ -93,7 +92,10 @@ export default function AssistantWorkspace() {
   }, [requestedSessionId]);
 
   async function loadSession(sessionId: string) {
-    setLoading(true);
+    // `opening`, not `loading`. `loading` also means "a run is executing", and
+    // sharing it made opening a finished session say "running" — about a
+    // session that had finished days ago and was only being fetched.
+    setOpening(true);
     try {
       const session = await api.getAssistantSession(sessionId);
       setActiveSession(session);
@@ -101,7 +103,7 @@ export default function AssistantWorkspace() {
       setTitle(session.title);
       setEntries(session.entries?.length ? session.entries : [newEntry(0)]);
     } finally {
-      setLoading(false);
+      setOpening(false);
     }
   }
 
@@ -128,7 +130,28 @@ export default function AssistantWorkspace() {
   const sessionStateLabel = activeSession?.status ? capitalize(activeSession.status) : "No session selected";
   const modeLabel = mode === "alert_analysis" ? "Alert analysis" : "Incident correlation";
   const selectedTitle = activeSession?.title || (title.trim() ? title.trim() : "Draft session");
-  const workspaceTone = loading ? "warning" : canRun ? "success" : "neutral";
+  const [opening, setOpening] = useState(false);
+
+  // What the workspace is doing, or — once a stored session is open — what that
+  // session's own status is. A chip that only ever reported the workspace made
+  // a completed analysis read as "draft".
+  const workspaceState = opening
+    ? "opening"
+    : loading
+    ? "running"
+    : activeSession
+    ? (activeSession.status ?? "completed")
+    : canRun
+    ? "ready"
+    : "draft";
+  const workspaceTone =
+    opening || loading
+      ? "warning"
+      : workspaceState === "failed"
+      ? "danger"
+      : activeSession || canRun
+      ? "success"
+      : "neutral";
 
   async function handleCreateAndRun() {
     setLoading(true);
@@ -189,13 +212,13 @@ export default function AssistantWorkspace() {
         compact
       />,
     ],
-    [canRun, loading, mode, modeLabel, sessionOffset, sessionTotal, sessions.length, visibleEntryCount],
+    [canRun, loading, opening, mode, modeLabel, sessionOffset, sessionTotal, sessions.length, visibleEntryCount],
   );
 
   const heroBadges = (
     <>
       <StatusPill tone={workspaceTone} outline mono>
-        {loading ? "running" : canRun ? "ready" : "draft"}
+        {workspaceState}
       </StatusPill>
       <StatusPill tone={mode === "alert_analysis" ? "warning" : "success"} outline>
         {modeLabel}
@@ -351,7 +374,7 @@ export default function AssistantWorkspace() {
             compact
             actions={
               <StatusPill tone={workspaceTone} outline>
-                {loading ? "Running" : activeSession ? "Loaded" : "Awaiting run"}
+                {opening ? "Opening" : loading ? "Running" : activeSession ? "Loaded" : "Awaiting run"}
               </StatusPill>
             }
             footer={

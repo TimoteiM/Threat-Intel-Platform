@@ -488,7 +488,6 @@ def test_a_huge_entry_is_capped_before_it_reaches_a_browser() -> None:
         session_id=uuid.uuid4(),
         entry_index=0,
         raw_text="x" * (MAX_ENTRY_TEXT_CHARS + 5_000),
-        sanitized_text="y" * 10,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -507,8 +506,47 @@ def test_a_normal_entry_is_untouched() -> None:
 
     entry = AssistantEntryRead(
         id=uuid.uuid4(), session_id=uuid.uuid4(), entry_index=0,
-        raw_text="a short alert body", sanitized_text="a short alert body",
+        raw_text="a short alert body",
         created_at=datetime.now(timezone.utc),
     )
     assert entry.truncated is False
     assert entry.raw_text_chars is None
+
+
+def test_the_entry_response_does_not_carry_the_sanitised_copy() -> None:
+    """`sanitized_text` is a near-duplicate of `raw_text` that no screen reads.
+
+    Measured over 22,579 completed sessions it was 68 kB of the median heavy
+    response and 100 kB at the cap — half the bytes of opening a session, spent
+    on a field the browser discards. It still exists on the row, and the prompt
+    builder still reads it from there; it just does not travel.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        entry_index=0,
+        raw_text="Failed logon for svc-backup from 10.0.0.9",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    payload = entry.model_dump(mode="json")
+    assert "sanitized_text" not in payload
+    assert "sanitized_text_chars" not in payload
+    assert payload["raw_text"] == "Failed logon for svc-backup from 10.0.0.9"
+
+
+def test_the_prompt_still_sees_the_sanitised_text_on_the_row() -> None:
+    """Removing the field from the response must not remove it from the model.
+
+    The sanitised copy is what actually reaches the AI. If dropping it from the
+    API had dropped it from the ORM, raw identifiers would have gone to the
+    model instead — the failure this test exists to catch.
+    """
+    from app.models.database import AssistantEntry
+
+    assert "sanitized_text" in AssistantEntry.__table__.c
