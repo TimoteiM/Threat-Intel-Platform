@@ -39,6 +39,89 @@ NEWLY_REGISTERED_DAYS = 30
 YOUNG_DOMAIN_DAYS = 90
 
 
+def _file_collector_signal(evidence_data: dict[str, Any]) -> dict[str, Any] | None:
+    """What the collectors concluded about a file, when VirusTotal held nothing.
+
+    Priority is the order the evidence deserves: a sandbox that executed the
+    sample outranks a static read of its bytes, which outranks the composite.
+    `None` means nothing ran — which is a different answer from "nothing was
+    found", and is the only case that stays inconclusive.
+    """
+    sandbox_verdicts: list[str] = []
+
+    cape = evidence_data.get("cape") or {}
+    cape_verdict = str(cape.get("verdict") or "").strip().lower()
+    if cape_verdict:
+        sandbox_verdicts.append(cape_verdict)
+
+    for item in (evidence_data.get("hybrid_analysis") or {}).get("items") or []:
+        if isinstance(item, dict) and item.get("checked"):
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if verdict:
+                sandbox_verdicts.append(verdict)
+
+    attachment_items = (evidence_data.get("attachment_analysis") or {}).get("items") or []
+    static_level = ""
+    suspicious_apis: list[str] = []
+    for item in attachment_items:
+        if not isinstance(item, dict):
+            continue
+        level = str(item.get("risk_level") or "").strip().lower()
+        if level in {"high", "medium", "low"}:
+            static_level = level if not static_level else max(
+                static_level, level, key=lambda x: {"low": 0, "medium": 1, "high": 2}[x]
+            )
+        suspicious_apis.extend([str(a) for a in (item.get("suspicious_apis") or [])])
+
+    readable_files = len(((evidence_data.get("file_content") or {}).get("files")) or [])
+    composite = (evidence_data.get("final_risk") or {}).get("risk_score")
+    composite = int(composite) if isinstance(composite, (int, float)) else None
+
+    if not sandbox_verdicts and not static_level and not readable_files and composite is None:
+        return None
+
+    key_evidence: list[str] = []
+    if sandbox_verdicts:
+        key_evidence.append("Sandbox verdict: " + ", ".join(sorted(set(sandbox_verdicts))))
+    if static_level:
+        key_evidence.append(f"Static analysis of the file's bytes: {static_level} risk")
+    if suspicious_apis:
+        shown = ", ".join(sorted(set(suspicious_apis))[:6])
+        key_evidence.append(f"Suspicious API strings present in the file: {shown}")
+    if readable_files:
+        key_evidence.append(
+            f"{readable_files} readable file(s) extracted and read"
+        )
+
+    if any(v == "malicious" for v in sandbox_verdicts):
+        return {
+            "classification": "malicious", "confidence": "high",
+            # A sandbox that watched it run outranks a composite built partly
+            # from guesses, so the composite can raise this floor but not lower it.
+            "risk_score": max(75, composite or 0),
+            "recommended_action": "block", "key_evidence": key_evidence,
+        }
+    if any(v == "suspicious" for v in sandbox_verdicts) or static_level == "high":
+        return {
+            "classification": "suspicious", "confidence": "medium",
+            "risk_score": max(45, composite or 0),
+            "recommended_action": "investigate", "key_evidence": key_evidence,
+        }
+    if static_level == "medium" or suspicious_apis:
+        return {
+            "classification": "suspicious", "confidence": "low",
+            "risk_score": max(30, composite or 0),
+            "recommended_action": "investigate", "key_evidence": key_evidence,
+        }
+    return {
+        "classification": "benign", "confidence": "low",
+        # Deliberately not 0. Nothing was found, but nothing authoritative
+        # looked either — VirusTotal had no record of this file at all.
+        "risk_score": composite if composite is not None else 10,
+        "recommended_action": "monitor", "key_evidence": key_evidence,
+    }
+
+
 def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -> dict[str, Any]:
     vt = evidence_data.get("vt") or {}
     threat_feeds = evidence_data.get("threat_feeds") or {}
@@ -61,11 +144,32 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
         flagged_by = vt.get("flagged_malicious_by", []) or []
 
         if not vt_found:
-            classification = "inconclusive"
-            confidence = "low"
-            risk_score = None
-            recommended_action = "investigate"
-            key_evidence = ["Hash not found in VirusTotal database"]
+            # VirusTotal not holding a hash is not evidence about the file. It
+            # is the normal answer for anything not yet seen in the wild, which
+            # is exactly what a targeted sample looks like.
+            #
+            # This used to end the assessment: inconclusive, risk None, "Hash
+            # not found in VirusTotal database" — while the sandbox had
+            # returned a verdict, the static pass had measured the bytes, the
+            # source had been extracted and read, and aggregate_risk had
+            # already produced a composite from all of it. The number existed
+            # and was thrown away.
+            signal = _file_collector_signal(evidence_data)
+            if signal is None:
+                classification = "inconclusive"
+                confidence = "low"
+                risk_score = None
+                recommended_action = "investigate"
+                key_evidence = [
+                    "Hash not found in VirusTotal, and no sandbox, static or content "
+                    "signal was available either."
+                ]
+            else:
+                classification = signal["classification"]
+                confidence = signal["confidence"]
+                risk_score = signal["risk_score"]
+                recommended_action = signal["recommended_action"]
+                key_evidence = ["Hash not found in VirusTotal database"] + signal["key_evidence"]
         elif vt_malicious >= 5:
             classification = "malicious"
             confidence = "high"
@@ -182,13 +286,59 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
     }
 
 
+# How much risk an analyst's classification is worth on its own. Used only when
+# the collectors reached no conclusion at all, so these are the scores of a
+# reading rather than of a measurement — deliberately short of the numbers a
+# sandbox verdict earns.
+_ANALYST_RISK_FLOOR = {"malicious": 70, "suspicious": 45, "benign": 10, "inconclusive": None}
+
+
 def apply_decision_to_report(report_data: dict[str, Any], decision_report: dict[str, Any]) -> dict[str, Any]:
-    """Overlay canonical decision fields onto an analyst/fallback report."""
+    """Overlay canonical decision fields onto an analyst/fallback report.
+
+    The collectors decide. They measured something; the analyst read it.
+
+    But when they decided nothing — no VirusTotal record, no sandbox, nothing
+    static — a verdict of "inconclusive, risk undetermined" beside an analyst
+    who read the file and explained what it does is the platform contradicting
+    itself in public. In that case, and only then, the analyst's classification
+    is adopted and labelled as such.
+    """
     merged = dict(report_data or {})
+
+    analyst_class = str((report_data or {}).get("classification") or "").strip().lower()
+    analyst_confidence = str((report_data or {}).get("confidence") or "").strip().lower()
+    analyst_risk = (report_data or {}).get("risk_score")
+
     for key in ("classification", "confidence", "risk_score", "recommended_action", "risk_rationale"):
         merged[key] = decision_report.get(key)
 
-    merged["decision_engine"] = decision_report.get("decision_engine")
+    engine = dict(decision_report.get("decision_engine") or {})
+    collectors_undecided = (
+        str(decision_report.get("classification") or "").lower() == "inconclusive"
+        and decision_report.get("risk_score") is None
+    )
+    if collectors_undecided and analyst_class in _ANALYST_RISK_FLOOR and analyst_class != "inconclusive":
+        merged["classification"] = analyst_class
+        # Never above medium: this is one reading, with nothing corroborating it.
+        merged["confidence"] = "medium" if analyst_confidence in {"high", "medium"} else "low"
+        merged["risk_score"] = (
+            int(analyst_risk)
+            if isinstance(analyst_risk, (int, float))
+            else _ANALYST_RISK_FLOOR[analyst_class]
+        )
+        merged["recommended_action"] = (
+            "block" if analyst_class == "malicious"
+            else "investigate" if analyst_class == "suspicious"
+            else "monitor"
+        )
+        engine["source"] = "analyst_fallback"
+        engine["note"] = (
+            "No collector reached a conclusion, so the analyst's reading of the "
+            "evidence was used for the verdict."
+        )
+
+    merged["decision_engine"] = engine or decision_report.get("decision_engine")
     merged["key_evidence"] = _merge_str_lists(
         decision_report.get("key_evidence") or [],
         merged.get("key_evidence") or [],
