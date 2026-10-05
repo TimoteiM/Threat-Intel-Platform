@@ -263,12 +263,18 @@ def _walk(
         result.note(f"{path} is a compiled executable; its code is not readable as text.")
         return
 
+    if kind == "pdf":
+        # A PDF is not text, so the textual branch below would discard it. Its
+        # JavaScript is the executable part and the only part worth reading.
+        _read_pdf_scripts(data, path, result, depth=depth)
+        return
+
     # Anything left: read it if it is text, or if its name says it is source.
     if looks_textual(data) or extension in SOURCE_EXTENSIONS:
         _add(data, path, result, depth=depth, declared_size=declared_size,
              kind="source" if extension in SOURCE_EXTENSIONS else "text")
     elif kind == "pdf":
-        result.note(f"{path} is a PDF; its structure is reported separately.")
+        _read_pdf_scripts(data, path, result, depth=depth)
     else:
         result.note(f"{path} is not text and no reader recognised it.")
 
@@ -312,6 +318,88 @@ def _add(
             text=decode(body), truncated=truncated, depth=depth,
         )
     )
+
+
+# PDF JavaScript lives either as a literal string after /JS, or inside a
+# compressed stream the action points at. Both are matched here rather than by
+# parsing the object graph, because that needs a PDF library and the cost of
+# adding one is not obviously smaller than the cost of this.
+#
+# This is explicitly a heuristic, and says so when it finds nothing while the
+# document clearly declares JavaScript — "we could not read it" and "there was
+# none" must not look the same.
+_PDF_JS_MARKER = re.compile(rb"/(?:JS|JavaScript)\b")
+_PDF_JS_LITERAL = re.compile(rb"/JS\s*\((.{4,20000}?)\)\s*(?:/|>>|\n|\r)", re.DOTALL)
+_PDF_JS_HEX = re.compile(rb"/JS\s*<([0-9A-Fa-f\s]{8,40000})>")
+_PDF_STREAM = re.compile(rb"stream\r?\n(.*?)endstream", re.DOTALL)
+
+# What JavaScript in a PDF actually uses. A decompressed stream matching none
+# of these is font data or an image, not a script.
+_PDF_JS_HINTS = (
+    b"app.", b"this.", b"eval(", b"unescape(", b"util.", b"getAnnots",
+    b"exportDataObject", b"launchURL", b"submitForm", b"String.fromCharCode",
+    b"function ", b"var ",
+)
+
+# How many streams to decompress. A document with thousands is a document, and
+# the script is not in the thousandth.
+_PDF_MAX_STREAMS = 400
+
+
+def _pdf_unescape(raw: bytes) -> bytes:
+    """Undo the PDF string escapes that matter for reading code."""
+    return (
+        raw.replace(b"\\n", b"\n").replace(b"\\r", b"\r").replace(b"\\t", b"\t")
+        .replace(b"\\(", b"(").replace(b"\\)", b")").replace(b"\\\\", b"\\")
+    )
+
+
+def _read_pdf_scripts(data: bytes, path: str, result: ExtractionResult, *, depth: int) -> None:
+    """The JavaScript a PDF carries, which is the part of it that runs."""
+    import binascii
+    import zlib
+
+    declares_js = bool(_PDF_JS_MARKER.search(data))
+    found = 0
+
+    for match in _PDF_JS_LITERAL.finditer(data):
+        body = _pdf_unescape(match.group(1))
+        if looks_textual(body):
+            found += 1
+            _add(body, f"{path}!javascript-{found}", result, depth=depth, kind="pdf-js")
+
+    for match in _PDF_JS_HEX.finditer(data):
+        try:
+            body = binascii.unhexlify(re.sub(rb"\s", b"", match.group(1)))
+        except binascii.Error:
+            continue
+        if looks_textual(body):
+            found += 1
+            _add(body, f"{path}!javascript-{found}", result, depth=depth, kind="pdf-js")
+
+    for index, match in enumerate(_PDF_STREAM.finditer(data)):
+        if index >= _PDF_MAX_STREAMS or result.bytes_read >= MAX_TOTAL_BYTES:
+            break
+        raw = match.group(1)
+        try:
+            body = zlib.decompress(raw)
+        except zlib.error:
+            body = raw if looks_textual(raw) else b""
+        if not body or not looks_textual(body):
+            continue
+        if not any(hint in body for hint in _PDF_JS_HINTS):
+            continue
+        found += 1
+        _add(body[: MAX_FILE_BYTES + 1], f"{path}!stream-{index}", result,
+             depth=depth, kind="pdf-js", declared_size=len(body))
+
+    if declares_js and not found:
+        result.note(
+            f"{path} declares JavaScript that could not be extracted. Its absence here "
+            "is a limit of this reader, not evidence that the document is inert."
+        )
+    elif not declares_js:
+        result.note(f"{path} is a PDF and declares no JavaScript.")
 
 
 def _walk_archive(data: bytes, path: str, result: ExtractionResult, *, depth: int, kind: str) -> None:

@@ -1,6 +1,30 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services import hybrid_analysis_service as svc
+
+
+@pytest.fixture(autouse=True)
+def _no_live_anyrun(monkeypatch):
+    """Nothing in this file may call ANY.RUN.
+
+    `lookup_hybrid_analysis` tries ANY.RUN before Hybrid Analysis, and
+    `test_hash_lookup_bypasses_stale_unknown_cache` stubbed the cache and the
+    retry but not that. With a key configured it therefore made a real request
+    to a third-party service and asserted against whatever that service
+    happened to think — it began failing with `assert 'clean' == 'malicious'`
+    when ANY.RUN's opinion of the hash changed, on a day no code moved.
+
+    Every other test here already stubs it. Doing it once, automatically, is
+    what stops the next one forgetting. A test that wants ANY.RUN behaviour
+    still overrides this with its own monkeypatch.
+    """
+    monkeypatch.setattr(
+        svc,
+        "lookup_anyrun",
+        lambda **kwargs: {"checked": False, "verdict": "unknown", "error": "stubbed in tests"},
+    )
 
 
 class _DummyResponse:

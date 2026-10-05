@@ -222,3 +222,120 @@ def test_the_prompt_carries_the_source_fenced_and_not_as_an_evidence_field():
     assert "AKIAIOSFODNN7EXAMPLE" not in body
     evidence_blob = body.split("<supporting_evidence>")[1]
     assert "ActiveXObject" not in evidence_blob
+
+
+# --- PDFs carry their executable part as JavaScript ---------------------------
+
+
+def _pdf(body: bytes) -> bytes:
+    return b"%PDF-1.7\n" + body + b"\ntrailer<</Root 1 0 R>>\n%%EOF"
+
+
+PDF_JS = b"app.alert('x'); this.exportDataObject({cName:'f'}); var u='http://evil.example/p.exe';"
+
+
+def test_javascript_written_as_a_literal_string_is_extracted():
+    data = _pdf(b"1 0 obj<</OpenAction<</S/JavaScript/JS (" + PDF_JS + b")>>>>endobj")
+
+    result = fc.extract(data, "doc.pdf")
+
+    assert len(result.files) == 1
+    assert result.files[0].kind == "pdf-js"
+    assert "exportDataObject" in result.files[0].text
+
+
+def test_javascript_inside_a_compressed_stream_is_extracted():
+    """Where it actually lives. Detecting `/JavaScript` and stopping there told
+    an analyst a script existed and nothing about what it did."""
+    import zlib
+
+    compressed = zlib.compress(b"function go(){ " + PDF_JS + b" } go();")
+    data = _pdf(
+        b"1 0 obj<</OpenAction<</S/JavaScript/JS 2 0 R>>>>endobj\n"
+        b"2 0 obj<</Filter/FlateDecode>>stream\n" + compressed + b"\nendstream endobj"
+    )
+
+    result = fc.extract(data, "doc.pdf")
+
+    assert any(f.kind == "pdf-js" and "exportDataObject" in f.text for f in result.files)
+
+
+def test_a_pdf_without_javascript_says_so_rather_than_nothing():
+    result = fc.extract(_pdf(b"1 0 obj<</Type/Catalog>>endobj"), "clean.pdf")
+
+    assert result.files == []
+    assert any("declares no JavaScript" in note for note in result.limitations)
+
+
+def test_a_pdf_whose_javascript_cannot_be_read_does_not_pass_as_inert():
+    """The distinction that matters. This reader is a heuristic, and "we could
+    not extract it" must never render as "there was none"."""
+    data = _pdf(b"1 0 obj<</OpenAction<</S/JavaScript/JS 9 0 R>>>>endobj")
+
+    result = fc.extract(data, "opaque.pdf")
+
+    assert result.files == []
+    assert any("not evidence that the document is inert" in n for n in result.limitations)
+
+
+# --- the static analyser measures instead of guessing -------------------------
+
+
+def test_entropy_is_computed_from_the_file_rather_than_its_hash():
+    """It used to be the Shannon entropy of the digest's hex digits — a
+    constant with noise. 10,000 zero bytes and 10,000 random bytes differed by
+    0.013, and the number sat beside findings that were real."""
+    import base64
+    import os
+
+    from app.services.ml_attachment_analyzer import analyze_attachments_static
+
+    def entropy_of(data: bytes) -> float:
+        out = analyze_attachments_static(
+            [{"filename": "s.bin", "content_b64": base64.b64encode(data).decode()}]
+        )
+        return out["items"][0]["entropy"]
+
+    zeros = entropy_of(b"\x00" * 20000)
+    random = entropy_of(os.urandom(20000))
+
+    assert zeros < 0.05
+    assert random > 0.95
+    assert random - zeros > 0.9
+
+
+def test_without_bytes_entropy_is_absent_rather_than_invented():
+    """A bare hash with no upload behind it. None says "not measured", which
+    is true; a number says something false."""
+    from app.services.ml_attachment_analyzer import analyze_attachments_static
+
+    out = analyze_attachments_static([{"filename": "x.exe", "sha256": "ab" * 32}])
+    item = out["items"][0]
+
+    assert item["entropy"] is None
+    assert item["entropy_measured"] is False
+    assert item["content_examined"] is False
+
+
+def test_suspicious_apis_are_found_in_the_file_not_in_its_name():
+    """`suspicious_import_count` matched "powershell" and "invoice" against the
+    filename and read no imports at all."""
+    import base64
+
+    from app.services.ml_attachment_analyzer import analyze_attachments_static
+
+    innocent_name_hostile_body = analyze_attachments_static([{
+        "filename": "holiday_photos.txt",
+        "content_b64": base64.b64encode(
+            b"var ws=new ActiveXObject('WScript.Shell');ws.Run('powershell -enc AAA');"
+        ).decode(),
+    }])["items"][0]
+
+    hostile_name_empty_body = analyze_attachments_static([{
+        "filename": "powershell_invoice_macro.txt",
+        "content_b64": base64.b64encode(b"hello").decode(),
+    }])["items"][0]
+
+    assert innocent_name_hostile_body["suspicious_api_count"] >= 3
+    assert "wscript.shell" in innocent_name_hostile_body["suspicious_apis"]
+    assert hostile_name_empty_body["suspicious_api_count"] == 0

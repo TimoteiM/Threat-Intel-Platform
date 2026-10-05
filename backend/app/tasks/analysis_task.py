@@ -284,14 +284,12 @@ def _collect_redirect_destination_intel(
 _HEX_RE = re.compile(r"^[a-fA-F0-9]+$")
 
 
-def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
-    """Read the uploaded sample's own source, and anything packed inside it.
+def _uploaded_sample(investigation_id: str) -> tuple[str, bytes] | None:
+    """The uploaded sample's name and bytes, or None if there isn't one.
 
-    The static pass above decides from the name and the hash. This opens the
-    file. For a `.js`, a `.ps1` or a `.rar` that is the difference between
-    "a script, VirusTotal says X" and what the thing actually does — which was
-    the only question the analyst had, and the one that previously required
-    opening the file by hand and pasting it into the assistant.
+    Shared by the two static passes. The attachment analyser used to work from
+    the name and the hash alone and reported an "entropy" derived from the
+    digest; it reads the file now, and this is where the file comes from.
     """
     from pathlib import Path
     from uuid import UUID
@@ -300,7 +298,6 @@ def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
 
     from app.db.session import sync_engine
     from app.models.database import Artifact, Investigation
-    from app.services import file_content_service as fcs
 
     with Session(sync_engine) as db:
         try:
@@ -321,10 +318,27 @@ def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
         path = Path(str(artifact.storage_path).replace("\\", "/"))
 
     try:
-        data = path.read_bytes()
+        return name, path.read_bytes()
     except OSError as exc:
         logger.warning("[%s] Uploaded sample could not be read: %s", investigation_id, exc)
         return None
+
+
+def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
+    """Read the uploaded sample's own source, and anything packed inside it.
+
+    The static pass above decides from the name and the hash. This opens the
+    file. For a `.js`, a `.ps1` or a `.rar` that is the difference between
+    "a script, VirusTotal says X" and what the thing actually does — which was
+    the only question the analyst had, and the one that previously required
+    opening the file by hand and pasting it into the assistant.
+    """
+    from app.services import file_content_service as fcs
+
+    sample = _uploaded_sample(investigation_id)
+    if sample is None:
+        return None
+    name, data = sample
 
     result = fcs.extract(data, name)
     if not result.files and not result.limitations:
@@ -364,6 +378,14 @@ def _build_attachment_analysis_for_file_hash(*, investigation_id: str, domain: s
                         "sha256": (artifact.sha256_hash or "").lower(),
                     }
                 )
+
+    # The bytes, so entropy and the API scan are measurements rather than
+    # guesses from the filename. Absent — a bare hash with no upload behind it
+    # — both are reported as not measured.
+    if attachments:
+        sample = _uploaded_sample(investigation_id)
+        if sample is not None:
+            attachments[0]["data"] = sample[1]
     if not attachments and submitted and _HEX_RE.match(submitted):
         if len(submitted) == 64:
             attachments.append({"filename": "submitted_hash.bin", "sha256": submitted})
