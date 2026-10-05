@@ -971,9 +971,27 @@ def run_analysis(
     decision_report = build_decision_report(evidence_data, observable_type)
 
     # -- 4. Generate report  -  fast-path (rule-based) or Claude analyst --
-    # Domain and URL investigations use Claude for full AI interpretation.
-    # Hash/file/IP use fast-path rule-based classification (no Claude API call).
-    if observable_type not in ("domain", "url"):
+    # Domain and URL investigations use the analyst for full AI interpretation.
+    # Hash/file/IP take a rule-based fast path, because a hash lookup has
+    # nothing to interpret: the verdict is whatever VirusTotal said, and paying
+    # for a model call to restate it is waste.
+    #
+    # Unless the file was readable. An uploaded `.js`, `.ps1` or `.rar` is
+    # submitted as observable_type="hash", so the fast path caught every one of
+    # them — the source was extracted, stored, shown in Technical Evidence, and
+    # then a template wrote "Hash not found in VirusTotal database" while three
+    # unpacked scripts sat in the evidence unread. Content is the one thing on
+    # a file investigation that actually needs interpreting.
+    has_readable_content = bool((evidence_data.get("file_content") or {}).get("files"))
+    if has_readable_content:
+        logger.info(
+            "[%s] %s readable file(s) extracted; using the analyst rather than the "
+            "rule-based fast path.",
+            investigation_id,
+            len((evidence_data.get("file_content") or {}).get("files") or []),
+        )
+
+    if observable_type not in ("domain", "url") and not has_readable_content:
         report_phase_start = time.monotonic()
         _publish_progress(investigation_id, InvestigationState.EVALUATING, collector_statuses,
                           "Generating automated report...", 90)

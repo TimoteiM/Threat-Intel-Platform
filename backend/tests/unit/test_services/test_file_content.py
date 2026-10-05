@@ -339,3 +339,45 @@ def test_suspicious_apis_are_found_in_the_file_not_in_its_name():
     assert innocent_name_hostile_body["suspicious_api_count"] >= 3
     assert "wscript.shell" in innocent_name_hostile_body["suspicious_apis"]
     assert hostile_name_empty_body["suspicious_api_count"] == 0
+
+
+# --- a file with readable content goes to the analyst, not the fast path ------
+
+
+def _routes_to_analyst(evidence_data: dict, observable_type: str) -> bool:
+    """The branch as analysis_task evaluates it.
+
+    Extracted rather than imported because `run_analysis` is a 600-line Celery
+    task; this is the one line that decides whether any of the work above is
+    ever read.
+    """
+    has_readable_content = bool((evidence_data.get("file_content") or {}).get("files"))
+    return not (observable_type not in ("domain", "url") and not has_readable_content)
+
+
+def test_an_uploaded_script_reaches_the_analyst():
+    """The bug this guards, found on a real submission.
+
+    An upload is `observable_type="hash"`, and hash took a rule-based fast path
+    with no model call at all. The source of a .rar holding three scripts was
+    extracted, stored and displayed, while the report said "Hash not found in
+    VirusTotal database" — a template, describing a lookup, about a file nobody
+    had read.
+    """
+    evidence = {"file_content": {"files": [{"path": "a.js", "text": "var a=1"}]}}
+
+    assert _routes_to_analyst(evidence, "hash") is True
+
+
+def test_a_bare_hash_still_takes_the_fast_path():
+    """The fast path is right when it is right. A hash with no upload behind it
+    has nothing to interpret — the verdict is whatever VirusTotal said, and a
+    model call to restate it is waste."""
+    assert _routes_to_analyst({}, "hash") is False
+    assert _routes_to_analyst({"file_content": {"files": []}}, "hash") is False
+    assert _routes_to_analyst({}, "ip") is False
+
+
+def test_domains_and_urls_are_unaffected():
+    assert _routes_to_analyst({}, "domain") is True
+    assert _routes_to_analyst({}, "url") is True
