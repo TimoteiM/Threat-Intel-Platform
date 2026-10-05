@@ -1884,39 +1884,103 @@ def _ensure_report_completeness(report_data: dict, evidence_data: dict, observab
         if _blank(normalized.get(key)):
             normalized[key] = fallback.get(key)
 
-    # Keep primary reasoning short and SOC-usable even when model output is verbose.
+    # Keep primary reasoning short and SOC-usable even when model output is
+    # verbose — by shortening what the analyst said, not by replacing it.
+    #
+    # This used to substitute the rule-based template whenever a non-domain
+    # reasoning ran past 420 characters. On a file investigation that is the
+    # normal length of a real answer, so the analyst would read an uploaded
+    # script, explain what it does, and have that explanation swapped for
+    # "Automated analysis for HASH ... Hash not found in VirusTotal database" —
+    # a sentence about a lookup, contradicting the analysis it replaced, on the
+    # one field the case story reads first.
+    #
+    # Condensing keeps the analyst's own words and meaning. The template is
+    # still the answer when there is no analysis to condense.
+    # Two different problems, which had one answer and should not.
+    #
+    # Noisy reasoning — "satisfying the attacker-necessity test", numbered
+    # hypothesis comparisons — is the model showing its internal working. That
+    # text is not worth keeping, and the template replaces it.
+    #
+    # Long reasoning is just long. On a file investigation it is what a real
+    # answer looks like, and replacing it was how an analyst's reading of an
+    # uploaded script became "Hash not found in VirusTotal database".
     reasoning_text = str(normalized.get("primary_reasoning") or "")
-    if _should_simplify_primary_reasoning(reasoning_text, observable_type):
-        normalized["primary_reasoning"] = str(fallback.get("primary_reasoning") or reasoning_text).strip()
+    if _reasoning_is_noisy(reasoning_text):
+        normalized["primary_reasoning"] = str(
+            fallback.get("primary_reasoning") or reasoning_text
+        ).strip()
+    elif _reasoning_is_overlong(reasoning_text, observable_type):
+        condensed = _condense_reasoning(reasoning_text)
+        normalized["primary_reasoning"] = (
+            condensed or str(fallback.get("primary_reasoning") or reasoning_text).strip()
+        )
 
     return normalized
 
 
-def _should_simplify_primary_reasoning(text: str, observable_type: str | None = None) -> bool:
+def _condense_reasoning(text: str, *, limit: int = 420) -> str:
+    """The first whole thoughts of an analyst's reasoning, within the limit.
+
+    Cuts on bullet or sentence boundaries so the result reads as something a
+    person wrote, and returns "" rather than a fragment when even the first
+    unit does not fit — the caller then falls back rather than printing half a
+    sentence.
+    """
+    compact = " ".join(str(text or "").split())
+    if not compact:
+        return ""
+    if len(compact) <= limit:
+        return compact
+
+    # Bulleted output first: the analyst writes "• a; • b; • c".
+    units = [part.strip(" ;") for part in compact.split("•") if part.strip(" ;")]
+    if len(units) < 2:
+        units = re.split(r"(?<=[.!?])\s+", compact)
+
+    out = ""
+    for unit in units:
+        candidate = (out + " " + unit).strip() if out else unit.strip()
+        if len(candidate) > limit:
+            break
+        out = candidate
+    return out.strip()
+
+
+# The model narrating its own deliberation rather than reporting a conclusion.
+_NOISY_REASONING_MARKERS = (
+    "attacker-necessity",
+    "satisfying the",
+    "hypothesis comparison",
+    "(1)",
+    "(2)",
+    "(3)",
+)
+
+# Beyond this a non-domain reasoning is condensed. Domains and URLs are exempt:
+# their reasoning is expected to be discursive.
+_REASONING_LENGTH_LIMIT = 420
+
+
+def _reasoning_is_noisy(text: str) -> bool:
+    """Whether this reads as internal working rather than a finding."""
     if not text:
         return False
     compact = " ".join(text.split()).lower()
-    if observable_type in {"domain", "url", "email"}:
-        noisy_markers = (
-            "attacker-necessity",
-            "satisfying the",
-            "hypothesis comparison",
-            "(1)",
-            "(2)",
-            "(3)",
-        )
-        return any(marker in compact for marker in noisy_markers)
-    if len(compact) > 420:
-        return True
-    noisy_markers = (
-        "attacker-necessity",
-        "satisfying the",
-        "hypothesis comparison",
-        "(1)",
-        "(2)",
-        "(3)",
-    )
-    return any(marker in compact for marker in noisy_markers)
+    return any(marker in compact for marker in _NOISY_REASONING_MARKERS)
+
+
+def _reasoning_is_overlong(text: str, observable_type: str | None = None) -> bool:
+    """Whether it is merely long. Long is a formatting problem, not a content one."""
+    if not text or observable_type in {"domain", "url", "email"}:
+        return False
+    return len(" ".join(text.split())) > _REASONING_LENGTH_LIMIT
+
+
+def _should_simplify_primary_reasoning(text: str, observable_type: str | None = None) -> bool:
+    """Kept for callers that only ask whether anything needs doing."""
+    return _reasoning_is_noisy(text) or _reasoning_is_overlong(text, observable_type)
 
 
 def _apply_phishing_redirect_risk_floor(report_data: dict, evidence_data: dict, observable_type: str) -> None:

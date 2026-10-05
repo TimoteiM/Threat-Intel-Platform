@@ -381,3 +381,53 @@ def test_a_bare_hash_still_takes_the_fast_path():
 def test_domains_and_urls_are_unaffected():
     assert _routes_to_analyst({}, "domain") is True
     assert _routes_to_analyst({}, "url") is True
+
+
+# --- the analyst's reasoning must not be replaced by a template ---------------
+
+
+def test_long_analyst_reasoning_is_shortened_not_swapped_for_a_template():
+    """The bug that made the whole feature look broken.
+
+    Non-domain reasoning over 420 characters was replaced by the rule-based
+    template. On a file investigation that is the length of a real answer, so
+    the analyst read an uploaded script, explained it, and had the explanation
+    swapped for "Hash not found in VirusTotal database" — on the one field the
+    AI Case Story reads first. The reader saw a sentence about a lookup
+    contradicting an analysis that had actually happened.
+    """
+    from app.tasks.analysis_task import _condense_reasoning
+
+    reasoning = (
+        "• Classification: benign; confidence: medium; investigation concluded; "
+        "• Main risk drivers are deliberate malware-like PowerShell patterns, Base64 "
+        "plus Invoke-Expression, and inert IOC strings; "
+        "• VirusTotal has no record or detections and a second AnyRun result is clean; "
+        "• Main gaps are omitted sandbox telemetry, file metadata, and execution context; "
+        "• The decoded payload only writes to the host console and performs no network call."
+    )
+
+    condensed = _condense_reasoning(reasoning)
+
+    assert condensed, "there was an analysis to keep"
+    assert len(condensed) <= 420
+    # The meaning survives: it still says what the file is.
+    assert "benign" in condensed.lower()
+    # And it is the analyst's words, not a template about a hash lookup.
+    assert "VirusTotal database" not in condensed
+    assert "Automated analysis" not in condensed
+
+
+def test_short_reasoning_is_left_exactly_as_written():
+    from app.tasks.analysis_task import _condense_reasoning
+
+    assert _condense_reasoning("The script downloads and runs a payload.") == (
+        "The script downloads and runs a payload."
+    )
+
+
+def test_an_unsplittable_wall_of_text_falls_back_rather_than_printing_half():
+    """Returning a fragment would be worse than the template it replaced."""
+    from app.tasks.analysis_task import _condense_reasoning
+
+    assert _condense_reasoning("x" * 900) == ""
