@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdk-pixbuf-2.0-0 \
     libffi-dev \
     shared-mime-info \
+    # bsdtar, for reading the archives phishing actually uses. libarchive
+    # exports readers for rar, rar5, 7zip, cab, iso9660 and lha, which covers
+    # everything the stdlib does not — and it is free, where `unrar` is not.
+    libarchive-tools \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 

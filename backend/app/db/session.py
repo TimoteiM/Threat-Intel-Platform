@@ -37,8 +37,23 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 # ─── Sync engine (for Alembic / Celery workers) ───
+
+
+def _explicit_driver(url: str) -> str:
+    """Name the driver, because the default for `postgresql://` is not stable.
+
+    SQLAlchemy 2.1 resolves a bare `postgresql://` to psycopg v3 where 2.0
+    resolved it to psycopg2. We install psycopg2, so a rebuild that happened to
+    pick up 2.1 took the worker down on import — with no code change behind it.
+    Spelling the driver out costs nothing and cannot drift.
+    """
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
+
 sync_engine = create_engine(
-    settings.database_sync_url,
+    _explicit_driver(settings.database_sync_url),
     echo=settings.is_development,
     pool_size=10,
     max_overflow=5,

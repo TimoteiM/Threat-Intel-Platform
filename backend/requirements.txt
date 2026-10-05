@@ -7,7 +7,13 @@ aiofiles>=24.1.0
 python-multipart>=0.0.9
 
 # â”€â”€â”€ Database â”€â”€â”€
-sqlalchemy[asyncio]>=2.0.36
+# Held below 2.1 deliberately. 2.1 changed which driver a bare
+# `postgresql://` URL resolves to — psycopg v3 instead of psycopg2 — and
+# an unpinned rebuild therefore crashed the worker on startup with
+# ModuleNotFoundError: psycopg, on an image whose only change was an
+# apt package. The URL is explicit about its driver now too; this pin is
+# so that upgrading is a decision rather than a side effect of rebuilding.
+sqlalchemy[asyncio]>=2.0.36,<2.1
 asyncpg>=0.30.0
 psycopg2-binary>=2.9.0
 alembic>=1.14.0
