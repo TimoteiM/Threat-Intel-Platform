@@ -13,6 +13,7 @@ import CertTimelineSection from "@/components/report/CertTimelineSection";
 import AnyRunInteractiveEvidence from "@/components/report/AnyRunInteractiveEvidence";
 import AnyRunSandboxIntelligence from "@/components/report/AnyRunSandboxIntelligence";
 import CapeSandboxSection from "@/components/report/CapeSandboxSection";
+import FileContentSection from "@/components/report/FileContentSection";
 import LexicalRiskExplainer from "@/components/report/LexicalRiskExplainer";
 import FinalRiskExplainer from "@/components/report/FinalRiskExplainer";
 import RedirectDestinationGraph from "@/components/report/RedirectDestinationGraph";
@@ -93,6 +94,9 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
   const urlBehavior = evidence?.url_behavior || ({} as any);
   const contentMl = evidence?.content_ml || ({} as any);
   const attachmentAnalysis = evidence?.attachment_analysis || ({} as any);
+  // The submitted file's own source, and anything unpacked from it.
+  const fileContent = evidence?.file_content || null;
+  const hasFileContent = !!(fileContent?.files?.length || fileContent?.limitations?.length);
   const cape = evidence?.cape;
   const hybridAnalysis = evidence?.hybrid_analysis || ({} as any);
   const anyRunSensitiveFormDetection = arr(hybridAnalysis?.items)
@@ -223,6 +227,13 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: !!(contentMl && Object.keys(contentMl).length > 0),
       },
       {
+        // Before the static analysis, which reads the name and the hash. This
+        // is the file itself, and for a script it is the whole question.
+        title: "File Content",
+        visible: true,
+        hasData: hasFileContent,
+      },
+      {
         title: "Attachment Static Analysis",
         visible: true,
         hasData: !!(attachmentAnalysis?.items?.length),
@@ -293,7 +304,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         hasData: true,
       },
     ],
-    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, urlBehavior, hybridAnalysis, cape, openCti, finalRisk, hasRedirectDestinationIntel, intel, spamhausSia, type],
+    [isFileHash, evidence, dns, http, tls, whois, hosting, vt, braveOsint, urlscan, urlLexical, contentMl, attachmentAnalysis, hasFileContent, urlBehavior, hybridAnalysis, cape, openCti, finalRisk, hasRedirectDestinationIntel, intel, spamhausSia, type],
   );
   const availableSections = React.useMemo(
     () => sectionDefs.filter((s) => s.visible),
@@ -1970,6 +1981,17 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
           <EmptyNote>Content ML data not available</EmptyNote>
         ) : (
           <ContentMLSummary content={contentMl} />
+        )}
+      </Section>
+
+      <Section title="File Content">
+        {!hasFileContent ? (
+          <EmptyNote>
+            No file content was extracted. Scripts, archives, Office macros and PDF
+            JavaScript are read here; a compiled executable has no source to show.
+          </EmptyNote>
+        ) : (
+          <FileContentSection content={fileContent} />
         )}
       </Section>
 

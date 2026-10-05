@@ -881,6 +881,24 @@ export interface BraveOSINTEvidence {
 
 // --- Master Evidence ---
 
+export interface ExtractedFileEvidence {
+  path: string;
+  kind?: string;
+  size?: number;
+  truncated?: boolean;
+  depth?: number;
+  text?: string;
+}
+
+export interface FileContentEvidence {
+  files?: ExtractedFileEvidence[];
+  limitations?: string[];
+  entries_seen?: number;
+  bytes_read?: number;
+  encrypted?: boolean;
+  readable_files?: number;
+}
+
 export interface CollectedEvidence {
   domain: string;
   observable_type: ObservableType;
@@ -899,6 +917,8 @@ export interface CollectedEvidence {
   url_behavior?: URLBehaviorEvidence;
   content_ml?: ContentMLEvidence;
   attachment_analysis?: AttachmentAnalysisEvidence;
+  /** The submitted file's own source, and anything unpacked from it. */
+  file_content?: FileContentEvidence;
   hybrid_analysis?: HybridAnalysisEvidence;
   opencti?: OpenCTIEvidence;
   /**
