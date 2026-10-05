@@ -154,6 +154,22 @@ decisive JS signal, especially with impersonation.
 </js_analysis_context>
 """
 
+    # The submitted file's own source. Fenced and sanitised by
+    # file_content_prompt, and deliberately kept out of supporting_evidence:
+    # this is attacker-written text, and a field of an evidence blob is exactly
+    # where it would be read as fact rather than as the artefact under
+    # examination.
+    file_content_block = ""
+    if evidence.file_content and evidence.file_content.files:
+        from app.services import file_content_prompt
+
+        block, _summary = file_content_prompt.build(
+            [f.model_dump() for f in evidence.file_content.files],
+            limitations=list(evidence.file_content.limitations or []),
+        )
+        if block:
+            file_content_block = f"\n<file_content_context>\n{block}\n</file_content_context>\n"
+
     # Build operator-supplied context block â€” clearly fenced as TEXT DATA, not instructions.
     operator_context_block = ""
     if evidence.external_context:
@@ -215,7 +231,7 @@ decisive JS signal, especially with impersonation.
 <investigation_id>{evidence.investigation_id}</investigation_id>
 <iteration>{iteration} of {max_iterations}</iteration>
 <analyst_focus>{focus_line}</analyst_focus>
-{similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}{analyst_digest_block}
+{similarity_context}{visual_context}{email_sec_context}{redirect_context}{js_context}{file_content_block}{analyst_digest_block}
 <supporting_evidence>
 {evidence_json}
 </supporting_evidence>

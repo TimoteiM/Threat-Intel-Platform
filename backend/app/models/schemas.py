@@ -1169,6 +1169,31 @@ class CapeEvidence(BaseModel):
     pending_since: Optional[str] = None
 
 
+class ExtractedFileEvidence(BaseModel):
+    """One readable file found in what was submitted."""
+
+    path: str
+    kind: str = "text"
+    size: int = 0
+    truncated: bool = False
+    depth: int = 0
+    # Carried so the prompt builder can fence and budget it. Deliberately NOT
+    # in the supporting-evidence allowlist: attacker-written source must reach
+    # the model inside the fence, never as a field of an evidence blob.
+    text: str = ""
+
+
+class FileContentEvidence(BaseModel):
+    """The submitted file's own source, and anything unpacked from it."""
+
+    files: list[ExtractedFileEvidence] = []
+    limitations: list[str] = []
+    entries_seen: int = 0
+    bytes_read: int = 0
+    encrypted: bool = False
+    readable_files: int = 0
+
+
 class CollectedEvidence(BaseModel):
     """
     Everything passed to the Claude analyst.
@@ -1245,6 +1270,10 @@ class CollectedEvidence(BaseModel):
     content_ml: Optional[ContentMLEvidence] = None
     # Attachment static analysis (no execution)
     attachment_analysis: Optional[AttachmentAnalysisEvidence] = None
+    # The submitted file read as source. Declared here because
+    # CollectedEvidence(**evidence_data) drops undeclared keys without a word,
+    # so an extraction that ran perfectly would simply never arrive.
+    file_content: Optional[FileContentEvidence] = None
     # Hybrid Analysis sandbox verdicts
     hybrid_analysis: Optional[HybridAnalysisEvidence] = None
     # OpenCTI threat intelligence platform lookup

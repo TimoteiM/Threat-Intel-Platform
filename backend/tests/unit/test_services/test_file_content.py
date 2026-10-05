@@ -152,3 +152,73 @@ def test_nothing_to_read_produces_no_block():
 
     assert block == ""
     assert summary["files_sent"] == 0
+
+
+# --- how it reaches the model ------------------------------------------------
+
+
+def test_email_attachments_are_read_including_archives():
+    import base64
+
+    inner = _zip(Invoice__js=JS)
+    attachments = [
+        {"filename": "Invoice.zip", "content_b64": base64.b64encode(inner).decode()},
+        {"filename": "no_bytes.doc"},
+    ]
+
+    result = fc.extract_attachments(attachments)
+
+    assert any("Invoice.js" in f.path for f in result.files)
+    assert any("not retained" in note for note in result.limitations)
+
+
+def test_the_evidence_model_declares_the_field_so_it_is_not_dropped():
+    """`CollectedEvidence(**evidence_data)` ignores undeclared keys silently.
+
+    An extraction that ran perfectly would have reached the analyst task,
+    been put on the evidence dict, and vanished on the way into the model with
+    nothing logged.
+    """
+    from app.models.schemas import CollectedEvidence
+
+    evidence = CollectedEvidence(
+        domain="abc", investigation_id="i", observable_type="file",
+        file_content={"files": [{"path": "a.js", "text": "var a=1"}], "readable_files": 1},
+    )
+
+    assert evidence.file_content is not None
+    assert evidence.file_content.files[0].text == "var a=1"
+
+
+def test_the_prompt_carries_the_source_fenced_and_not_as_an_evidence_field():
+    """The distinction this whole path rests on.
+
+    Inside `supporting_evidence` the script is read as a fact about the file.
+    Inside the fence it is read as the artefact under examination, which is
+    what it is.
+    """
+    from app.analyst.prompt_builder import build_messages
+    from app.models.schemas import CollectedEvidence
+
+    evidence = CollectedEvidence(
+        domain="abc", investigation_id="i", observable_type="file",
+        file_content={
+            "files": [{
+                "path": "invoice.js", "kind": "source", "size": 90,
+                "text": "var ws=new ActiveXObject('WScript.Shell');"
+                        "var k='AKIAIOSFODNN7EXAMPLE';",
+            }],
+            "readable_files": 1,
+        },
+    )
+
+    _system, messages = build_messages(evidence)
+    body = messages[0]["content"]
+
+    assert "<file_content_context>" in body
+    assert fp.sanitizer.FENCE_OPEN in body
+    assert "ActiveXObject" in body
+    # Sanitised on the way, and never duplicated into the evidence blob.
+    assert "AKIAIOSFODNN7EXAMPLE" not in body
+    evidence_blob = body.split("<supporting_evidence>")[1]
+    assert "ActiveXObject" not in evidence_blob

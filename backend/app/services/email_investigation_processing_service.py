@@ -87,6 +87,10 @@ async def process_email_investigation(
         "sender_identity": checks.get("sender_identity") or {},
         "context": context or None,
         "ml_phishing_score": parsed_ml_score,
+        # Removed from the payload by the interpreter and appended as a fenced
+        # block instead. Carried here because this dict is the only thing that
+        # reaches it.
+        "file_content": checks.get("file_content") or {},
     }
 
     if run_ai:

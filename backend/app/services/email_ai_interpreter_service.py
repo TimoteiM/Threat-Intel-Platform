@@ -124,10 +124,27 @@ async def interpret_email_results_with_ai(
 ) -> dict[str, Any]:
     """Return structured email interpretation with analyst narratives for suspicious items."""
     settings = get_settings()
+    # The attachments' own source, if any was readable. Appended after the JSON
+    # rather than placed inside it: this is text the sender wrote, and a field
+    # of an evidence object is read as a fact about the email, where a fenced
+    # block is read as the artefact under examination.
+    file_block = ""
+    file_content = payload.pop("file_content", None) or {}
+    if file_content.get("files"):
+        from app.services import file_content_prompt
+
+        block, _summary = file_content_prompt.build(
+            list(file_content.get("files") or []),
+            limitations=list(file_content.get("limitations") or []),
+        )
+        if block:
+            file_block = "\n\n" + block
+
     user_text = (
         "Analyze the following email investigation evidence.\n"
         "Only suspicious/malicious URLs and attachments are included — clean items were excluded.\n\n"
         f"```json\n{json.dumps(payload, ensure_ascii=True, indent=2)}\n```"
+        + file_block
     )
 
     text = ""

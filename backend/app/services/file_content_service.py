@@ -195,6 +195,37 @@ def extract(data: bytes, filename: str = "submitted") -> ExtractionResult:
     return result
 
 
+def extract_attachments(attachments: Any) -> ExtractionResult:
+    """Read every attachment on an email, archives included.
+
+    Attachments arrive with their bytes already decoded once into base64 by the
+    parser, and the inspection pass alongside this one reads structure — is it
+    really a PDF, does the OOXML hold a macro. This reads the source.
+
+    One result covers all of them, so the bounds apply to the message rather
+    than to each attachment: ten archives of a megabyte each is the same
+    problem as one archive of ten.
+    """
+    import base64
+
+    result = ExtractionResult()
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        encoded = item.get("content_b64")
+        if not encoded:
+            name = str(item.get("filename") or "attachment")
+            result.note(f"{name}: content was not retained, so it could not be read.")
+            continue
+        try:
+            data = base64.b64decode(encoded)
+        except Exception:  # noqa: BLE001 — a malformed attachment is the point
+            result.note(f"{item.get('filename') or 'attachment'}: content could not be decoded.")
+            continue
+        _walk(data, str(item.get("filename") or "attachment"), result, depth=0)
+    return result
+
+
 def _walk(
     data: bytes, path: str, result: ExtractionResult, *, depth: int,
     declared_size: int | None = None,

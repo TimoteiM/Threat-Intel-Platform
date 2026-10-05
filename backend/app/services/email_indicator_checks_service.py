@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.collectors.email_security import analyze_email_security
 from app.collectors.urlscan_collector import URLScanCollector
 from app.services.email_attachment_inspection import inspect_attachments
+from app.services import file_content_service
 from app.services.email_sender_identity import analyse_sender_identity
 from app.services.email_url_triage import triage_email_urls
 from app.collectors.vt_collector import VTCollector
@@ -72,6 +73,15 @@ def run_email_indicator_checks(
     # invisible to a body-text scan and still needs checking, and because its
     # findings decide which attachment — if any — is worth a sandbox credit.
     attachment_inspection = inspect_attachments(attachments)
+
+    # What the attachments actually say. The inspection above reads structure —
+    # is this really a PDF, does the OOXML carry a macro — and answers "should
+    # anyone worry". This answers "what does it do", which is the question an
+    # analyst had to open the file by hand to settle.
+    try:
+        file_content = file_content_service.extract_attachments(attachments).as_dict()
+    except Exception as exc:  # noqa: BLE001 — never fail a message over it
+        file_content = {"files": [], "limitations": [f"Content could not be read: {exc}"]}
 
     body_urls = [u for u in (extracted.get("urls") or []) if isinstance(u, str) and u]
     attachment_urls = list(attachment_inspection.get("urls_found_in_attachments") or [])
@@ -159,6 +169,7 @@ def run_email_indicator_checks(
     # reputation or authentication check catches it.
     checks["sender_identity"] = analyse_sender_identity(extracted)
     checks["attachment_inspection"] = attachment_inspection
+    checks["file_content"] = file_content
 
     attachment_items = (checks.get("attachments") or {}).get("items") or []
     vt_by_sha: dict[str, dict[str, Any]] = {}

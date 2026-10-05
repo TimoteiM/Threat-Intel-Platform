@@ -284,6 +284,54 @@ def _collect_redirect_destination_intel(
 _HEX_RE = re.compile(r"^[a-fA-F0-9]+$")
 
 
+def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
+    """Read the uploaded sample's own source, and anything packed inside it.
+
+    The static pass above decides from the name and the hash. This opens the
+    file. For a `.js`, a `.ps1` or a `.rar` that is the difference between
+    "a script, VirusTotal says X" and what the thing actually does — which was
+    the only question the analyst had, and the one that previously required
+    opening the file by hand and pasting it into the assistant.
+    """
+    from pathlib import Path
+    from uuid import UUID
+
+    from sqlalchemy.orm import Session
+
+    from app.db.session import sync_engine
+    from app.models.database import Artifact, Investigation
+    from app.services import file_content_service as fcs
+
+    with Session(sync_engine) as db:
+        try:
+            inv = db.get(Investigation, UUID(investigation_id))
+        except Exception:  # noqa: BLE001
+            return None
+        if inv is None:
+            return None
+        artifact = (
+            db.query(Artifact)
+            .filter(Artifact.investigation_id == inv.id, Artifact.collector_name == "upload")
+            .order_by(Artifact.created_at.desc())
+            .first()
+        )
+        if artifact is None or not artifact.storage_path:
+            return None
+        name = artifact.artifact_name or "uploaded_sample.bin"
+        path = Path(str(artifact.storage_path).replace("\\", "/"))
+
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        logger.warning("[%s] Uploaded sample could not be read: %s", investigation_id, exc)
+        return None
+
+    result = fcs.extract(data, name)
+    if not result.files and not result.limitations:
+        return None
+    return result.as_dict()
+
+
 def _build_attachment_analysis_for_file_hash(*, investigation_id: str, domain: str, evidence_data: dict) -> dict | None:
     """
     Build static attachment analysis for file/hash observables.
@@ -836,6 +884,18 @@ def run_analysis(
         except Exception as e:
             logger.warning(f"[{investigation_id}] Attachment static analysis failed: {e}")
         _time_phase("attachment_static_analysis", attachment_phase_start)
+
+        # The sample's own source, and whatever was packed inside it. Separate
+        # from the pass above because that one reads the name and the hash,
+        # and this one reads the file.
+        content_phase_start = time.monotonic()
+        try:
+            file_content = _build_file_content_analysis(investigation_id=investigation_id)
+            if file_content:
+                evidence_data["file_content"] = file_content
+        except Exception as e:  # noqa: BLE001 — never fail an investigation over it
+            logger.warning(f"[{investigation_id}] File content extraction failed: {e}")
+        _time_phase("file_content_extraction", content_phase_start)
 
     # -- 4. Generate signals and detect gaps --
     from app.services.anyrun_scope import apply_anyrun_scope_guard
