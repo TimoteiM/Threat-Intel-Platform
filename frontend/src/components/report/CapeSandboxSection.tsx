@@ -446,8 +446,33 @@ function Result({ report }: { report: api.SandboxReport }) {
 
       {((network.domains?.length || 0) > 0 || (network.destinations?.length || 0) > 0) && (
         <Block title="Network">
-          <ListRow label="Contacted domains" values={network.domains} />
-          <ListRow label="DNS queries" values={network.dns_queries} />
+          {/* Split, not filtered. The guest image is a logged-in Office
+              workstation that phones home whether or not anything is detonated
+              on it, so nine or ten Microsoft and Adobe domains appeared in
+              every single report — measured at 100% of detonations for seven
+              of them. Listed together with the sample's own traffic they made
+              every analysis look identical, which is exactly what an analyst
+              reported.
+
+              A sample really can talk to login.microsoftonline.com, so none of
+              it is hidden: the background is collapsed behind its own row with
+              how often the sandbox reaches it unprompted. */}
+          <ListRow
+            label="Contacted domains"
+            values={attributed(network, "domains")}
+            hint={
+              baselineOf(network, "domains").length
+                ? `${baselineOf(network, "domains").length} more are sandbox background`
+                : undefined
+            }
+          />
+          <ListRow
+            label="Sandbox background"
+            values={baselineOf(network, "domains")}
+            startCollapsed
+            hint="Reached by the analysis VM on its own in most detonations — not attributed to this sample."
+          />
+          <ListRow label="DNS queries" values={attributed(network, "dns_queries")} />
           <ListRow label="Destinations" values={network.destinations} />
           <ListRow label="TLS SNI" values={network.tls_sni} />
           {(network.http_requests?.length || 0) > 0 && (
@@ -616,18 +641,53 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 
 const LIST_PREVIEW = 20;
 
-function ListRow({ label, values, mono }: { label: string; values?: string[]; mono?: boolean }) {
+/** The destinations this sample is credited with, and the ones the sandbox
+ *  reaches on its own. Falls back to the plain list when the server has not
+ *  annotated — an older cached response, or too few detonations to measure. */
+function attributed(network: any, field: string): string[] | undefined {
+  const rows = network?.annotated?.[field];
+  if (!Array.isArray(rows)) return network?.[field];
+  return rows.filter((r: any) => !r.baseline).map((r: any) => r.value);
+}
+
+function baselineOf(network: any, field: string): string[] {
+  const rows = network?.annotated?.[field];
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((r: any) => r.baseline).map((r: any) => r.value);
+}
+
+function ListRow({
+  label,
+  values,
+  mono,
+  hint,
+  startCollapsed,
+}: {
+  label: string;
+  values?: string[];
+  mono?: boolean;
+  hint?: string;
+  startCollapsed?: boolean;
+}) {
   // "+46 more" hid the ones an analyst was looking for, with no way to reach
   // them. The tail is one click away now, and stays collapsed by default so a
   // sample that contacted hundreds of hosts does not bury everything else.
   const [expanded, setExpanded] = useState(false);
   if (!values || values.length === 0) return null;
-  const shown = expanded ? values : values.slice(0, LIST_PREVIEW);
+  // Background starts fully collapsed: it is there to be checked, not read.
+  const shown = expanded ? values : values.slice(0, startCollapsed ? 0 : LIST_PREVIEW);
   const hidden = values.length - shown.length;
 
   return (
     <div style={{ marginTop: 6 }}>
-      <div style={labelStyle}>{label} ({values.length})</div>
+      <div style={labelStyle}>
+        {label} ({values.length})
+        {hint ? (
+          <span style={{ marginLeft: 6, textTransform: "none", letterSpacing: 0, opacity: 0.75 }}>
+            — {hint}
+          </span>
+        ) : null}
+      </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 3, alignItems: "center" }}>
         {shown.map((v) => (
           <span key={v} style={{ ...chip("var(--border)"), color: "var(--text-secondary)",

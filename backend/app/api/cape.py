@@ -40,6 +40,7 @@ from app.config import get_settings
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, Artifact, Investigation, SandboxAnalysis
 from app.services import cape_analysis_service as svc
+from app.services import cape_baseline_service as cape_baseline
 from app.api.auth import ROLE_ANALYST, ADMIN_ROLES, has_admin_rights
 from app.services import cape_client as cape
 
@@ -302,7 +303,9 @@ async def get_analysis_result(analysis_id: str, request: Request, db: DBSession)
     _require_signed_in(request)
     row = await _load(analysis_id, db)
     payload = svc.to_public_dict(row)
-    payload["result"] = dict(row.normalized_json or {}) or None
+    # Labelled on the way out, not on the way in: every analysis already
+    # stored gains the sandbox/sample distinction without being re-detonated.
+    payload["result"] = await cape_baseline.annotate(db, dict(row.normalized_json or {})) or None
     payload["available"] = row.status == svc.STATUS_REPORTED and bool(row.normalized_json)
     # Guest-image limitations travel with the result, not just the request, so
     # an empty PDF report is never read as "nothing happened".
