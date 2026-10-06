@@ -227,6 +227,20 @@ export default function InvestigationPage() {
     return [...known, ...extra];
   }, [detail?.collector_statuses, sse?.collectors, evidence]);
 
+  // One collector's status, by the same precedence the rows below use. The
+  // sandbox panel needs it to tell "never ran" from "still running": ANY.RUN
+  // exceeds its 90-second soft deadline on every real detonation and finishes
+  // in the background, so the report is written before its result exists.
+  const collectorStatus = (c: string): string => {
+    const evidenceKey = c === "asn" ? "hosting" : c;
+    return String(
+      sse.collectors[c]
+        || detail?.collector_statuses?.[c]
+        || evidence?.[evidenceKey]?.meta?.status
+        || "pending",
+    );
+  };
+
   const collectorRows = collectorKeys.map((c) => {
     const evidenceKey = c === "asn" ? "hosting" : c;
     const evidenceMeta = evidence?.[evidenceKey]?.meta || {};
@@ -726,7 +740,7 @@ export default function InvestigationPage() {
         case "intelligence":
           return <SocIntelligenceTab intelligence={intelligence} report={report} evidence={evidence} detail={detail} loading={!intelligence && !evidence && !report} />;
         case "evidence":
-          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} videoTaskId={detail?.sandbox_video_task_id} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
+          return evidence ? <TechnicalEvidenceTab evidence={evidence} domain={detail?.domain} observableType={detail?.observable_type} investigationId={investigationId} videoTaskId={detail?.sandbox_video_task_id} sandboxStatus={collectorStatus("hybrid_analysis")} onRefresh={() => fetchData({ silent: true })} /> : <NoData label="evidence" />;
         case "findings":
           return report ? <FindingsTab report={report} evidence={evidence} /> : <NoData label="report" />;
         case "indicators":

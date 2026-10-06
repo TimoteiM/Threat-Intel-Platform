@@ -25,6 +25,10 @@ type Props = {
   hybridAnalysis: any;
   investigationId?: string;
   onRefresh?: () => void;
+  /** The collector's own status. "deferred" means ANY.RUN exceeded its
+      90-second soft deadline and is still running — the investigation
+      concluded without it and the result merges when it lands. */
+  collectorStatus?: string;
   sensitiveFormDetection?: any;
 };
 
@@ -3369,6 +3373,7 @@ export default function AnyRunInteractiveEvidence({
   hybridAnalysis,
   investigationId,
   onRefresh,
+  collectorStatus,
   sensitiveFormDetection,
 }: Props) {
   const [rerunConfirm, setRerunConfirm] = React.useState(false);
@@ -3429,12 +3434,46 @@ export default function AnyRunInteractiveEvidence({
     }
   }, [investigationId, onRefresh, stopPolling]);
 
+  // Fill the panel in when the deferred run lands, rather than leaving the
+  // analyst to guess that a refresh would help. Placed above the early return
+  // because a hook cannot be conditional.
+  const pendingSandbox =
+    !arr(hybridAnalysis?.items).length
+    && ["deferred", "running", "pending"].includes(String(collectorStatus || ""));
+  React.useEffect(() => {
+    if (!pendingSandbox || !onRefresh) return undefined;
+    // Every 15s, and not for ever: a detonation runs for minutes, not hours,
+    // and a page left open overnight should not keep asking.
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - started > 10 * 60_000) {
+        clearInterval(timer);
+        return;
+      }
+      onRefresh();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [pendingSandbox, onRefresh]);
+
   const items = arr(hybridAnalysis?.items);
   if (!items.length) {
+    // Four different situations used to read as "collector not run", and the
+    // common one is the opposite of that: a real detonation takes about three
+    // minutes against a 90-second soft deadline, so ANY.RUN is handed to a
+    // background thread and the report is written before its result exists.
+    // Telling an analyst it never ran — while it is running — is how a
+    // working sandbox looked broken.
+    const status = String(collectorStatus || hybridAnalysis?.meta?.status || "");
+    const deferred = status === "deferred" || status === "running" || status === "pending";
     return (
       <EmptyNote>
-        {hybridAnalysis?.meta?.status === "failed"
+        {status === "failed"
           ? `Sandbox collector failed: ${hybridAnalysis?.meta?.error || "unknown error"}`
+          : deferred
+          ? "ANY.RUN is still running. A detonation takes a few minutes and the report was "
+            + "written before it finished; this panel fills in on its own when the result lands."
+          : status === "completed"
+          ? "ANY.RUN ran and returned nothing to show for this sample."
           : "Sandbox data not available (collector not run)"}
       </EmptyNote>
     );

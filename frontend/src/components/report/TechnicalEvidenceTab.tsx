@@ -27,6 +27,9 @@ interface Props {
   observableType?: string;
   investigationId?: string;
   onRefresh?: () => void;
+  /** The sandbox collector's own status, so the panel can tell "never ran"
+      from "still running in the background". */
+  sandboxStatus?: string;
 }
 
 const EvidenceSplitContext = React.createContext<{ activeTitle: string | null } | null>(null);
@@ -78,7 +81,7 @@ function CollectorRerunButton({ investigationId, collector, onRefresh, label }: 
   );
 }
 
-export default function TechnicalEvidenceTab({ evidence, domain, observableType, investigationId, videoTaskId, onRefresh }: Props) {
+export default function TechnicalEvidenceTab({ evidence, domain, observableType, investigationId, videoTaskId, onRefresh, sandboxStatus }: Props) {
   const dns = evidence?.dns || ({} as any);
   const tls = evidence?.tls || ({} as any);
   const http = evidence?.http || ({} as any);
@@ -2055,6 +2058,7 @@ export default function TechnicalEvidenceTab({ evidence, domain, observableType,
         <AnyRunInteractiveEvidence
           hybridAnalysis={hybridAnalysis}
           investigationId={investigationId}
+          collectorStatus={sandboxStatus}
           onRefresh={onRefresh}
           sensitiveFormDetection={sensitiveFormDetection}
         />
