@@ -25,6 +25,13 @@ import {
   type AlertLogEvent,
   type AnalysisStatus,
 } from "@/lib/api";
+import LogFieldControls, {
+  DEFAULT_COLUMNS,
+  labelFor,
+  matchesFilters,
+  valueOf,
+  type FieldFilter,
+} from "@/components/report/LogFieldControls";
 
 const STEP_DEFAULT = 5;
 
@@ -96,6 +103,10 @@ export function AlertLogContext({
   const [olderStep, setOlderStep] = useState(STEP_DEFAULT);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pinned, setPinned] = useState<Set<string>>(new Set());
+  // Which document fields the table shows, and which rows it keeps. Both start
+  // where they were: the six columns that make a window scannable.
+  const [columns, setColumns] = useState<string[]>([...DEFAULT_COLUMNS]);
+  const [filters, setFilters] = useState<FieldFilter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -131,11 +142,18 @@ export function AlertLogContext({
     void load();
   }, [load]);
 
+  // What survives the field filters. Computed before `displayed`, because
+  // "select all" has to mean the rows on screen — selecting filtered-out
+  // events would send the AI exactly what the analyst had just excluded.
+  const visibleBefore = page ? page.before.filter((e) => matchesFilters(e, filters)) : [];
+  const visibleAfter = page ? page.after.filter((e) => matchesFilters(e, filters)) : [];
+  const anchorMatches = page ? matchesFilters(page.anchor, filters) : true;
+
   // Every event currently on screen, in the order it is drawn. "Select all"
   // means exactly what is displayed — expanding the window and selecting again
   // adds the newly shown ones rather than silently re-selecting everything.
   const displayed: AlertLogEvent[] = page
-    ? [...[...page.after].reverse(), page.anchor, ...[...page.before].reverse()].filter(
+    ? [...[...visibleAfter].reverse(), page.anchor, ...[...visibleBefore].reverse()].filter(
         (e) => !(e as { synthetic?: boolean }).synthetic,
       )
     : [];
@@ -157,7 +175,19 @@ export function AlertLogContext({
   // has to mean all of them, and the view only ever holds a window of ten.
   const relevantKeys = page?.relevant_refs ?? [];
 
-  const selectedEvents = displayed.filter((e) => pinned.has(e.key));
+  // The token estimate is about what gets *sent*, and what gets sent is the
+  // pinned set (line below: `Array.from(pinned)`) — not the filtered view. A
+  // pin is a deliberate act, so adding a filter afterwards must not quietly
+  // drop events from the request; it would also under-report the budget and
+  // surface later as "did not fit the token budget". So: select-all means the
+  // rows on screen, the estimate means everything pinned in this window.
+  const windowEvents: AlertLogEvent[] = page
+    ? [...[...page.after].reverse(), page.anchor, ...[...page.before].reverse()].filter(
+        (e) => !(e as { synthetic?: boolean }).synthetic,
+      )
+    : [];
+  const selectedEvents = windowEvents.filter((e) => pinned.has(e.key));
+  const pinnedHidden = selectedEvents.filter((e) => !displayedKeys.includes(e.key)).length;
   const selectedTokens = estimateTokens(selectedEvents);
   const budget = page?.ai_budget_tokens ?? 6000;
   const overBudget = selectedTokens > budget;
@@ -455,6 +485,12 @@ export function AlertLogContext({
             ≈{selectedTokens.toLocaleString()} of {budget.toLocaleString()} token budget
             {overBudget ? " — over budget, the lowest-ranked will not fit" : ""}
           </span>
+          {pinnedHidden > 0 && (
+            <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              {pinnedHidden} of them {pinnedHidden === 1 ? "is" : "are"} hidden by the
+              current filter and will still be sent
+            </span>
+          )}
           <button type="button" onClick={() => setPinned(new Set())} style={secondaryBtn}>
             Clear
           </button>
@@ -466,6 +502,25 @@ export function AlertLogContext({
           >
             {busy ? "Queueing…" : `Send ${pinned.size} event${pinned.size === 1 ? "" : "s"} to the AI`}
           </button>
+        </div>
+      )}
+
+      {/* Which fields the table shows, and which rows survive. Every event
+          already carries its whole document; the six defaults are what makes a
+          window scannable, not the limit of what is there. */}
+      <LogFieldControls
+        events={[...page.before, page.anchor, ...page.after]}
+        columns={columns}
+        onColumns={setColumns}
+        filters={filters}
+        onFilters={setFilters}
+      />
+
+      {filters.length > 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          {visibleBefore.length + visibleAfter.length + (anchorMatches ? 1 : 0)} of{" "}
+          {page.before.length + page.after.length + 1} loaded events match.
+          {!anchorMatches && " The alert itself does not match, and is shown anyway."}
         </div>
       )}
 
@@ -500,19 +555,19 @@ export function AlertLogContext({
                   }
                 />
               </th>
-              {["", "Time", "Δ", "Agent", "Agent IP", "Domain", "System Channel", "Rule Description", ""].map(
-                (h, i) => (
-                  <th key={`${h}-${i}`} style={th}>
-                    {h}
-                  </th>
-                ),
-              )}
+              <th style={th} />
+              {columns.map((field) => (
+                <th key={field} style={th} title={field}>
+                  {labelFor(field, columns)}
+                </th>
+              ))}
+              <th style={th} />
             </tr>
           </thead>
           <tbody>
             {/* Newest first, matching how the window reads top-down from the
                 future into the past — the alert sits where it happened. */}
-            {[...page.after].reverse().map((event) => (
+            {[...visibleAfter].reverse().map((event) => (
               <Row
                 key={event.key}
                 event={event}
@@ -521,6 +576,7 @@ export function AlertLogContext({
                 onToggle={() => setExpanded(expanded === event.key ? null : event.key)}
                 pinned={pinned.has(event.key)}
                 onPin={() => togglePin(event.key)}
+                columns={columns}
               />
             ))}
 
@@ -533,9 +589,10 @@ export function AlertLogContext({
               onToggle={() => setExpanded(expanded === page.anchor.key ? null : page.anchor.key)}
               pinned={pinned.has(page.anchor.key)}
               onPin={() => togglePin(page.anchor.key)}
+              columns={columns}
             />
 
-            {[...page.before].reverse().map((event) => (
+            {[...visibleBefore].reverse().map((event) => (
               <Row
                 key={event.key}
                 event={event}
@@ -544,6 +601,7 @@ export function AlertLogContext({
                 onToggle={() => setExpanded(expanded === event.key ? null : event.key)}
                 pinned={pinned.has(event.key)}
                 onPin={() => togglePin(event.key)}
+                columns={columns}
               />
             ))}
           </tbody>
@@ -631,6 +689,7 @@ function Row({
   onToggle,
   pinned,
   onPin,
+  columns,
 }: {
   event: AlertLogEvent & { is_alert?: boolean; synthetic?: boolean };
   alertTime?: string | null;
@@ -639,6 +698,7 @@ function Row({
   onToggle: () => void;
   pinned: boolean;
   onPin: () => void;
+  columns: string[];
 }) {
   const rowStyle: React.CSSProperties = isAlert
     ? {
@@ -670,23 +730,59 @@ function Row({
         <td style={{ ...td, width: 20, color: "var(--text-muted)" }} aria-hidden>
           {expanded ? "⌄" : "›"}
         </td>
-        <td style={{ ...td, whiteSpace: "nowrap", fontFamily: "var(--font-mono, monospace)" }}>
-          {ts(event.timestamp)}
-        </td>
-        <td style={{ ...td, whiteSpace: "nowrap", color: "var(--text-muted)" }}>
-          {isAlert ? "—" : delta(event.timestamp, alertTime)}
-        </td>
-        <td style={td}>
-          <span style={agentChip}>{event.agent?.name || "—"}</span>
-        </td>
-        <td style={{ ...td, whiteSpace: "nowrap" }}>{event.agent?.ip || "—"}</td>
-        <td style={td}>{event.domain || "—"}</td>
-        <td style={td}>{event.channel || "—"}</td>
-        <td style={{ ...td, maxWidth: 520 }}>
-          <span style={{ fontWeight: isAlert ? 600 : 400 }}>
-            {event.rule?.description || event.full_log || "—"}
-          </span>
-        </td>
+        {columns.map((field) => {
+          if (field === "timestamp") {
+            return (
+              <td
+                key={field}
+                style={{ ...td, whiteSpace: "nowrap", fontFamily: "var(--font-mono, monospace)" }}
+              >
+                {ts(event.timestamp)}
+              </td>
+            );
+          }
+          if (field === "delta") {
+            return (
+              <td key={field} style={{ ...td, whiteSpace: "nowrap", color: "var(--text-muted)" }}>
+                {isAlert ? "—" : delta(event.timestamp, alertTime)}
+              </td>
+            );
+          }
+          if (field === "agent.name") {
+            return (
+              <td key={field} style={td}>
+                <span style={agentChip}>{event.agent?.name || "—"}</span>
+              </td>
+            );
+          }
+          if (field === "rule.description") {
+            return (
+              <td key={field} style={{ ...td, maxWidth: 520 }}>
+                <span style={{ fontWeight: isAlert ? 600 : 400 }}>
+                  {event.rule?.description || event.full_log || "—"}
+                </span>
+              </td>
+            );
+          }
+          const value = valueOf(event, field);
+          return (
+            <td
+              key={field}
+              style={{
+                ...td,
+                maxWidth: 420,
+                // Added columns are frequently paths and command lines.
+                fontFamily: field.includes("ommand") || field.includes("rocess")
+                  ? "var(--font-mono, monospace)"
+                  : undefined,
+                wordBreak: value.length > 60 ? "break-all" : undefined,
+              }}
+              title={value || undefined}
+            >
+              {value || "—"}
+            </td>
+          );
+        })}
         <td style={{ ...td, whiteSpace: "nowrap" }}>
           {isAlert && <Chip tone="accent">THIS ALERT</Chip>}
           {!isAlert && event.relevant && <Chip tone="relevant">RELEVANT</Chip>}
@@ -695,7 +791,7 @@ function Row({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={10} style={{ ...td, background: "var(--surface-2, transparent)" }}>
+          <td colSpan={columns.length + 2} style={{ ...td, background: "var(--surface-2, transparent)" }}>
             <div style={{ display: "grid", gap: 6 }}>
               {!event.synthetic && <Fact label="OpenSearch reference" value={event.key} mono />}
               {event.rule?.id && (
