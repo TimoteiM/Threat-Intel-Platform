@@ -156,9 +156,20 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
           </pre>
         ) : (
           <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+            {/* "Being written" was shown for every state that was not a
+                failure, including a case nothing had started on. The hourly
+                job that commissions these raised on every tick for weeks, and
+                this line reported it as work in progress the whole time.
+                Each state now says what is actually true of it. */}
             {data.narrative.status === "failed"
-              ? "The case analysis could not be written. Everything below is unaffected."
-              : "The case analysis is being written. Everything below is already complete."}
+              ? `The case analysis could not be written${
+                  data.narrative.error ? `: ${data.narrative.error}` : ""
+                }. Everything below is unaffected.`
+              : data.narrative.status === "running"
+              ? "The case analysis is being written now. Everything below is already complete."
+              : data.narrative.status === "stale"
+              ? "The case has changed since its analysis was written; a new one is queued. Everything below is current."
+              : "The case analysis is queued. It is written by the hourly correlation pass, so a case opened in the last hour will not have one yet. Everything below is already complete."}
           </div>
         )}
       </Panel>

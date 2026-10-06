@@ -87,9 +87,14 @@ def correlate_and_notify(hours: int | None = None, force: bool = False) -> dict[
     settings = get_settings()
     window = int(hours or getattr(settings, "correlation_window_hours", 48))
 
+    # Imported here rather than inside `_run`: `_pass` is a sibling closure,
+    # not nested inside it, so a name bound in `_run` was never in scope where
+    # it is used. The job raised NameError on every tick and the only visible
+    # symptom was a case analysis that said it was being written for ever.
+    from app.services import tenant_scope
+    from app.services.alert_correlation_service import correlate_alerts
+
     async def _run() -> dict[str, Any]:
-        from app.services import tenant_scope
-        from app.services.alert_correlation_service import correlate_alerts
 
         # A dedicated, unpooled engine per invocation, for the reason the two
         # neighbouring tasks already carry: Celery runs each task in a worker

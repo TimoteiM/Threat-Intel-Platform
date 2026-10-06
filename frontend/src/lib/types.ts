@@ -2390,9 +2390,13 @@ export interface CaseDetail {
   } | null;
   narrative: {
     markdown: string | null;
+    /** queued | running | stale | completed | failed */
     status: string | null;
     generated_at: string | null;
     assistant_session_id: string | null;
+    /** Why it could not be written. The API has always sent this; the type
+        did not declare it, so the page could not show the reason. */
+    error?: string | null;
   };
   profile: EntityProfile | null;
 }
