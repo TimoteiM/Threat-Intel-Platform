@@ -18,6 +18,7 @@ from app.services.alert_log_selection import (
     estimate_tokens,
     group_key_for,
     pivots_from_alert,
+    score_record,
     select_for_ai,
 )
 
@@ -51,7 +52,12 @@ def test_events_on_the_alerts_device_outrank_unrelated_ones():
         pivots=pivots, alert_time=ALERT_TIME, budget_tokens=200,
     )
     assert result.selected[0]["ref"].endswith(":b")
-    assert any("same device" in w for w in result.selected[0]["why"])
+    assert any("on the device the alert came from" in w for w in result.selected[0]["why"])
+    # Ranked higher, but not *linked* by it: every event in a window retrieved
+    # for this device shares the device, so it cannot tie one of them to the
+    # alert in particular.
+    assert "links_to_alert" in result.selected[0]
+    assert all("device" not in link for link in result.selected[0]["links_to_alert"])
 
 
 def test_events_naming_the_alerts_account_are_linked_exactly():
@@ -115,13 +121,18 @@ def test_grouping_ignores_the_numbers_that_vary_between_repeats():
 
 
 def test_rule_level_ranks_but_does_not_decide():
-    """Level 12 on an unrelated host must not outrank a linked event on the
-    alert's own device."""
-    linked = _event("linked", agent="EXP-01", level=3)
+    """Level 12 elsewhere must not outrank an event genuinely tied to the alert.
+
+    The tie used to be the device, which every retrieved event shares — so
+    this passed while asserting nothing. It is now the account, which is a
+    fact about this event rather than about the window it came from.
+    """
+    linked = _event("linked", agent="EXP-01", user="CORP\\jdoe", level=3)
     loud = _event("loud", agent="OTHER-99", level=12)
-    result = select_for_ai([loud, linked], pivots=AlertPivots(hosts={"exp-01"}),
+    result = select_for_ai([loud, linked], pivots=AlertPivots(hosts={"exp-01"}, users={"jdoe"}),
                            alert_time=ALERT_TIME, budget_tokens=200)
     assert result.selected[0]["ref"].endswith(":linked")
+    assert result.selected[0]["links_to_alert"] == ["same account as the alert"]
 
 
 def test_the_counts_distinguish_selected_from_represented_from_omitted():
@@ -434,22 +445,36 @@ def test_the_ranking_runs_but_sends_nothing_by_default():
         budget_tokens=6000, only_pinned=True,
     )
     assert digest == "", "nothing may be sent unless a person chose it"
-    assert result.relevant_refs, "the ranking still has to produce advice"
+    assert result.selected, "the ranking still has to produce advice"
+    # None of these twelve share anything with the alert but the device they
+    # ran on, so none is marked relevant. That is the honest answer: the badge
+    # used to appear on whatever filled the budget, which is always something.
+    assert result.relevant_refs == []
 
 
 def test_an_analysts_picks_are_what_gets_sent():
+    """What was sent is the analyst's choice; what is *relevant* is a separate
+    claim about ties to the alert, and the two lists are allowed to disagree.
+
+    Two of these share the alert's rule id and so are genuinely linked. The
+    analyst picks two others. Both facts have to survive: the model receives
+    exactly what was picked, and the ranking's advice still names the events
+    that are actually tied to the alert — including ones nobody sent.
+    """
     events = [_event(f"e{i}", offset=i * 7, desc=f"event {i}", rule_id=str(i)) for i in range(12)]
     picks = [events[3]["key"], events[7]["key"]]
     digest, result, _ = alert_log_prompt.build(
-        events, pivots=AlertPivots(hosts={"exp-01"}), alert_time=ALERT_TIME,
-        budget_tokens=6000, only_pinned=True, pinned_keys=picks,
+        events, pivots=AlertPivots(hosts={"exp-01"}, rule_ids={"5", "9"}),
+        alert_time=ALERT_TIME, budget_tokens=6000, only_pinned=True, pinned_keys=picks,
     )
     assert digest
     sent = {s["ref"] for s in result.selected}
-    assert sent == set(picks)
-    # And the advice survives the narrowing, because they answer different
-    # questions: what is worth reading, and what was read.
-    assert len(result.summary()["relevant_refs"]) == 12
+    assert sent == set(picks), "the model gets what the analyst chose"
+    # The linked pair, neither of which was picked.
+    assert sorted(result.summary()["relevant_refs"]) == sorted(
+        [events[5]["key"], events[9]["key"]]
+    )
+    assert not set(result.summary()["relevant_refs"]) & set(picks)
 
 
 def test_the_header_counts_describe_what_is_actually_below_it():
@@ -714,3 +739,154 @@ def test_chosen_fields_are_charged_to_the_budget():
     loaded, _ = _block(events, budget=1500, extra_fields=names)
     assert estimate_tokens(loaded) <= 1500 * 1.4
     assert estimate_tokens(loaded) > estimate_tokens(plain)
+
+
+# --- what "relevant" is allowed to mean --------------------------------------
+#
+# A Windows Defender alert ("Antimalware scan was stopped before it finished")
+# showed nine events badged RELEVANT: process creations for chrome.exe,
+# ctfmon.exe, dllhost.exe, consent.exe and the Intel graphics service. None of
+# them has anything to do with the alert beyond running on the same machine in
+# the same minute.
+#
+# Two causes, measured over 40 real windows and 16,737 events:
+#   - `relevant_refs` was a copy of what the ranking selected, and the ranking
+#     fills a budget, so it always selects something;
+#   - the only link that ever fired was "same device as the alert", true of
+#     16,737 of 16,737 events, because the window is retrieved *by* device.
+
+
+def _win(key, *, channel, event_id, offset=0, rule_id="1002", **kw):
+    event = _event(key, offset=offset, rule_id=rule_id, event_id=event_id, **kw)
+    event["channel"] = channel
+    return event
+
+
+DEFENDER = "Microsoft-Windows-Windows Defender/Operational"
+SECURITY = "Security"
+
+
+def _defender_pivots():
+    return AlertPivots(
+        hosts={"exp-01"},
+        channels={DEFENDER.casefold()},
+        event_ids={"1002"},
+        rule_ids={"1002"},
+    )
+
+
+def test_the_device_is_not_a_link_because_every_event_shares_it():
+    event = _event("a", agent="EXP-01")
+    scored = score_record(event, pivots=AlertPivots(hosts={"exp-01"}),
+                          alert_time=ALERT_TIME, window_seconds=600.0)
+    assert scored.links == []
+    # It still ranks: an event on the alert's own machine is a better
+    # candidate than one retrieved by account from somewhere else.
+    assert any("on the device the alert came from" in r for r in scored.reasons)
+
+
+def test_routine_process_creations_are_not_relevant_to_a_defender_alert():
+    """The screenshot, as a test."""
+    noise = [
+        _win(f"p{i}", channel=SECURITY, event_id="4688", offset=i + 1,
+             rule_id="60106", cmd=image)
+        for i, image in enumerate([
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Windows\System32\ctfmon.exe",
+            r"C:\Windows\System32\dllhost.exe",
+            r"C:\Windows\System32\consent.exe",
+            r"C:\Windows\System32\svchost.exe",
+        ])
+    ]
+    alert = _win("alert", channel=DEFENDER, event_id="1002",
+                 desc="Antimalware scan was stopped before it finished")
+
+    result = select_for_ai(noise + [alert], pivots=_defender_pivots(),
+                           alert_time=ALERT_TIME, budget_tokens=6000)
+
+    assert result.relevant_refs == [alert["key"]]
+    # They are still sent and still readable — being close in time is a reason
+    # to look. They are background, and the badge no longer says otherwise.
+    # (The five process creations collapse into one representative entry:
+    # near-identical events are grouped, which is a separate, older behaviour.)
+    background = [s for s in result.selected if s["ref"] != alert["key"]]
+    assert background, "the noise is still sent"
+    assert all(s["links_to_alert"] == [] for s in background)
+
+
+def test_another_event_on_the_alerts_own_channel_is_relevant():
+    """A Defender configuration change beside a stopped scan is the pairing an
+    analyst wants, and it was buried among the chrome.exe rows."""
+    config = _win("config", channel=DEFENDER, event_id="5007", offset=-30,
+                  rule_id="60107", desc="Antimalware platform configuration changed")
+    noise = _win("noise", channel=SECURITY, event_id="4688", offset=-20, rule_id="60106")
+    alert = _win("alert", channel=DEFENDER, event_id="1002")
+
+    result = select_for_ai([config, noise, alert], pivots=_defender_pivots(),
+                           alert_time=ALERT_TIME, budget_tokens=6000)
+
+    assert set(result.relevant_refs) == {config["key"], alert["key"]}
+    linked = {s["ref"]: s["links_to_alert"] for s in result.selected}
+    assert linked[config["key"]] == ["same log channel as the alert"]
+    assert linked[noise["key"]] == []
+
+
+def test_the_channel_is_a_link_and_not_a_filter():
+    """The analyst's own words: a good criterion, "but depends on the alert, it
+    is not a rule". An event on another channel that shares the account is
+    still linked — excluding by channel would hide the explanation."""
+    other = _win("other", channel=SECURITY, event_id="4624", user="CORP\\jdoe",
+                 rule_id="60106")
+    pivots = _defender_pivots()
+    pivots.users = {"jdoe"}
+
+    scored = score_record(other, pivots=pivots, alert_time=ALERT_TIME, window_seconds=600.0)
+    assert scored.links == ["same account as the alert"]
+
+
+def test_the_devices_own_address_is_not_a_shared_address():
+    """`agent.ip` is on every event in the window for the same reason the
+    hostname is. It was scoring as "shares IP with the alert"."""
+    event = _event("a", agent="EXP-01")          # agent ip 10.0.0.5 in the helper
+    pivots = AlertPivots(hosts={"exp-01"}, ips={"10.0.0.5"})
+    assert score_record(event, pivots=pivots, alert_time=ALERT_TIME,
+                        window_seconds=600.0).links == []
+
+    # A genuinely different address still links.
+    pivots_external = AlertPivots(hosts={"exp-01"}, ips={"203.0.113.9"})
+    linked = _event("b", agent="EXP-01", src="203.0.113.9")
+    assert score_record(linked, pivots=pivots_external, alert_time=ALERT_TIME,
+                        window_seconds=600.0).links == [
+        "shares IP 203.0.113.9 with the alert"
+    ]
+
+
+def test_a_version_string_is_not_an_ip_address():
+    """"003.001.000.000" in an alert body was parsed as an address the alert
+    named, which made every event mentioning it score as linked."""
+    pivots = pivots_from_alert(
+        entity_host="EXP-01", entity_user=None,
+        alert_body="ScreenConnect 003.001.000.000 contacted 203.0.113.9",
+        alert_fields={},
+    )
+    assert pivots.ips == {"203.0.113.9"}
+
+
+def test_the_alerts_channel_and_event_id_are_read_from_its_body():
+    pivots = pivots_from_alert(
+        entity_host="EXP-CZ6DY24", entity_user=None,
+        alert_body=(
+            "Alert: EXP-CZ6DY24 - Windows Defender: Antimalware scan was stopped "
+            "before it finished | Channel: Microsoft-Windows-Windows Defender/Operational "
+            "Event ID: 1002"
+        ),
+        alert_fields={"event_id": "1002 | ThreatHunting", "agent_ip": "10.10.126.63"},
+    )
+    assert DEFENDER.casefold() in pivots.channels
+    assert "1002" in pivots.event_ids
+    # The parsed field reads "1002 | ThreatHunting"; stored whole it matches
+    # no event's event_id.
+    assert "1002 | ThreatHunting" not in pivots.event_ids
+    # The device's own address is held apart from addresses the alert names.
+    assert pivots.agent_ips == {"10.10.126.63"}
+    assert "10.10.126.63" not in pivots.ips

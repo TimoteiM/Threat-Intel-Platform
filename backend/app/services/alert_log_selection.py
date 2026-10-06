@@ -99,9 +99,19 @@ SIGNIFICANT_EVENT_IDS: dict[str, int] = {
     "1102": 7,   # audit log cleared
 }
 
-_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Octet-accurate, and no leading zeros. The permissive form matched
+# "003.001.000.000" — a version string in an alert body — and filed it as an
+# address the alert named, so every event mentioning it scored as linked.
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_IPV4 = re.compile(rf"(?<![\w.]){_OCTET}(?:\.{_OCTET}){{3}}(?![\w.])")
 _HASH = re.compile(r"\b[a-fA-F0-9]{32,64}\b")
 _WORD = re.compile(r"[A-Za-z0-9._:/\\-]{3,}")
+# "Channel: Microsoft-Windows-Windows Defender/Operational", and the Sysmon /
+# Security spellings an alert body uses for an event id.
+_CHANNEL_IN_BODY = re.compile(
+    r"(?:channel|Channel)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9 \-]*(?:/[A-Za-z]+)?)"
+)
+_EVENT_ID_IN_BODY = re.compile(r"(?:EID|[Ee]vent\s*ID)\s*[:=]?\s*(\d{1,5})\b")
 
 
 @dataclass
@@ -115,6 +125,16 @@ class AlertPivots:
     processes: set[str] = field(default_factory=set)
     domains: set[str] = field(default_factory=set)
     rule_ids: set[str] = field(default_factory=set)
+    # The log source the alert came from. A Defender alert and a process
+    # creation on the Security channel are different kinds of record about the
+    # same machine; sharing a channel is weak evidence of belonging together,
+    # and not sharing one is a reason to read an event as background.
+    channels: set[str] = field(default_factory=set)
+    event_ids: set[str] = field(default_factory=set)
+    # The device's own address. Held separately from `ips` because it is a
+    # property of the window, not of the alert: every event retrieved for this
+    # device carries it, so matching on it says nothing.
+    agent_ips: set[str] = field(default_factory=set)
 
     def is_empty(self) -> bool:
         return not any((self.hosts, self.users, self.ips, self.hashes, self.processes, self.domains))
@@ -150,15 +170,40 @@ def pivots_from_alert(
             pivots.users.add(raw.split("\\", 1)[1].casefold())
         if "@" in raw:
             pivots.users.add(raw.split("@", 1)[0].casefold())
-    for value in (fields.get("agent_ip"), fields.get("src"), fields.get("dst")):
+    # The device's own address is kept apart. It is a property of the window
+    # rather than something the alert names: every event retrieved for this
+    # device carries it, so treating it as a shared address made the whole
+    # window look linked.
+    agent_ip = str(fields.get("agent_ip") or "").strip()
+    if agent_ip and _IPV4.fullmatch(agent_ip):
+        pivots.agent_ips.add(agent_ip)
+    for value in (fields.get("src"), fields.get("dst")):
         if value and _IPV4.fullmatch(str(value).strip()):
             pivots.ips.add(str(value).strip())
     if fields.get("rule_id"):
         pivots.rule_ids.add(str(fields["rule_id"]).strip())
+    for key in ("channel", "win_channel", "system_channel"):
+        value = str(fields.get(key) or "").strip()
+        if value:
+            pivots.channels.add(value.casefold())
+    for key in ("event_id", "eventid", "win_event_id"):
+        # The parsed field reads "10 | ThreatHunting" — the id with the rule
+        # group tacked on. Stored whole it matches no event's `event_id`.
+        match = re.match(r"\s*(\d{1,5})\b", str(fields.get(key) or ""))
+        if match:
+            pivots.event_ids.add(match.group(1))
 
     body = str(alert_body or "")[:200_000]
     pivots.ips.update(_IPV4.findall(body))
     pivots.hashes.update(h.casefold() for h in _HASH.findall(body))
+    # The channel and event id as the alert text spells them. Wazuh writes the
+    # channel into the body of a Windows alert even when the parsed fields do
+    # not carry it, and this is the signal an analyst reaches for first.
+    for match in _CHANNEL_IN_BODY.finditer(body):
+        pivots.channels.add(match.group(1).strip().casefold())
+    for match in _EVENT_ID_IN_BODY.finditer(body):
+        pivots.event_ids.add(match.group(1))
+    pivots.ips -= pivots.agent_ips
 
     for indicator in indicators or []:
         kind = str(indicator.get("type") or "").lower()
@@ -271,10 +316,17 @@ def score_record(
     haystack = _text_of(record).casefold()
 
     # -- exact links to the alert (the strongest signal, by design) ----------
+    #
+    # The device is deliberately NOT a link. The window is retrieved *by*
+    # device, so every event in it shares one: measured over 40 real windows,
+    # 16,737 of 16,737 events carried "same device as the alert" and nothing
+    # else, which made "relevant" mean "was in the window". It still scores,
+    # because an event retrieved by account on another machine is a weaker
+    # candidate — but a fact true of everything cannot distinguish anything.
     host = str(agent.get("name") or "").casefold()
     if host and host in pivots.hosts:
-        score += 10
-        _link("same device as the alert")
+        score += 2
+        reasons.append("on the device the alert came from")
     users = {str(u).casefold() for u in (record.get("users") or [])}
     users |= {u.split("\\", 1)[-1] for u in users if "\\" in u}
     if users & pivots.users:
@@ -282,7 +334,10 @@ def score_record(
         _link("same account as the alert")
     event_ips = {str(network.get("src_ip") or ""), str(network.get("dst_ip") or "")} - {""}
     event_ips |= set(_IPV4.findall(str(record.get("full_log") or "")))
-    shared_ips = event_ips & pivots.ips
+    # The device's own address is not a shared address. Every event on this
+    # machine carries it, in the same way every event carries the hostname.
+    own_ip = str(agent.get("ip") or "").strip()
+    shared_ips = (event_ips & pivots.ips) - pivots.agent_ips - ({own_ip} if own_ip else set())
     if shared_ips:
         score += 8
         _link(f"shares IP {sorted(shared_ips)[0]} with the alert")
@@ -300,6 +355,21 @@ def score_record(
     if str(rule.get("id") or "") in pivots.rule_ids:
         score += 4
         _link("same detection rule as the alert")
+
+    # The log source. An analyst reads a Defender alert against other Defender
+    # records, not against every process creation the Security channel wrote
+    # in the same minute. It is a real tie and a weak one — which is why it is
+    # a link with a small weight rather than a filter: plenty of alerts are
+    # explained by an event on a different channel, and excluding those
+    # outright would hide the explanation.
+    channel = str(record.get("channel") or "").casefold()
+    if channel and pivots.channels and channel in pivots.channels:
+        score += 5
+        _link("same log channel as the alert")
+
+    if pivots.event_ids and str(record.get("event_id") or "") in pivots.event_ids:
+        score += 5
+        _link(f"same event id ({record.get('event_id')}) as the alert")
 
     # -- significance, as a ranking signal only ------------------------------
     groups = rule.get("groups") or []
@@ -515,7 +585,22 @@ def select_for_ai(
     ordered = sorted(chosen.values(), key=lambda s: (_parse_time(s.record.get("timestamp")) or alert_time))
     result.selected = [_for_prompt(s, extra_fields=extra_fields) for s in ordered]
     result.used_tokens = used
-    result.relevant_refs = [s.get("ref") for s in result.selected if s.get("ref")]
+    # Relevant means *tied to this alert*, not "made it into the budget".
+    #
+    # These two were the same list, so the RELEVANT badge appeared on whatever
+    # the ranking happened to send — and since the ranking fills a budget, it
+    # always sends something. An analyst looking at a Defender alert saw nine
+    # process creations for chrome.exe, ctfmon.exe and dllhost.exe all marked
+    # relevant, which is not a near miss: those events have nothing to do with
+    # the alert beyond running on the same machine at the same minute.
+    #
+    # An event with no link is still shown and still sent — being notable or
+    # close in time is a reason to read it — but it is background, and the
+    # badge no longer claims otherwise.
+    linked = {s.key for s in chosen.values() if s.links}
+    result.relevant_refs = [
+        s.get("ref") for s in result.selected if s.get("ref") and s.get("ref") in linked
+    ]
     result.represented = sum(int(s.record.get("duplicate_count") or 1) for s in chosen.values())
     result.omitted = max(0, len(records) - result.represented)
     return result

@@ -326,7 +326,13 @@ def run_alert_body_investigation(
     # Built before the call so the selection summary is recorded whether or not
     # the model answers: "what did we decide to send" is an audit fact, not a
     # by-product of a successful analysis.
-    log_digest, log_selection = _build_log_digest(log_context, alert_body, alert_fields)
+    # The extracted indicators are handed over too: without them the process,
+    # domain and hash pivots were never populated, so the only tie an event
+    # could have to its alert was the device it ran on — which every retrieved
+    # event shares.
+    log_digest, log_selection = _build_log_digest(
+        log_context, alert_body, alert_fields, indicators=indicators
+    )
 
     if run_ai:
         try:
@@ -1119,7 +1125,8 @@ def _verdict(
 
 
 def _build_log_digest(
-    log_context: dict | None, alert_body: str, alert_fields: dict | None
+    log_context: dict | None, alert_body: str, alert_fields: dict | None,
+    indicators: list[dict] | None = None,
 ) -> tuple[str, dict]:
     """Select and format the SIEM events the model will read.
 
@@ -1156,6 +1163,7 @@ def _build_log_digest(
             entity_user=log_context.get("entity_user"),
             alert_body=alert_body,
             alert_fields=alert_fields,
+            indicators=indicators or [],
         )
         pinned = list(log_context.get("pinned_keys") or ())
         extra_fields = list(log_context.get("extra_fields") or ())
