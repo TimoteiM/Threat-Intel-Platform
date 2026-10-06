@@ -437,7 +437,25 @@ def lookup_anyrun(
             # TI returned an error that isn't "not found" — reuse sandbox if available
             if sandbox_result is not None:
                 return _attach_domain_intel(sandbox_result)
-            return _attach_domain_intel(lookup_result)
+            # For an uploaded file there is no parallel sandbox result to reuse:
+            # the hash sandbox is deliberately left until TI has answered,
+            # because it needs the bytes. So an error here used to end the
+            # analysis with the error itself — an archive submitted during one
+            # transient "Status code: 408: Search request timed out" was never
+            # detonated at all, and the report showed MODE: LOOKUP with a
+            # Hybrid fallback verdict.
+            #
+            # An unavailable answer is not an answer. We hold the file; the
+            # sandbox is exactly what should happen next. Falling through
+            # submits it, and if the provider is genuinely unreachable that
+            # submission reports its own error rather than this one.
+            if not (indicator_type == "hash" and file_bytes):
+                return _attach_domain_intel(lookup_result)
+            logger.info(
+                "ANY.RUN intelligence lookup failed (%s); submitting the uploaded file "
+                "to the sandbox rather than reporting the lookup error.",
+                str(lookup_result.get("error") or "")[:120],
+            )
 
         # TI said "not found" — reuse the already-collected parallel sandbox result
         # instead of submitting a redundant second sandbox task.
