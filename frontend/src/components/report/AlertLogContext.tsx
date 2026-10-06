@@ -107,6 +107,10 @@ export function AlertLogContext({
   // where they were: the six columns that make a window scannable.
   const [columns, setColumns] = useState<string[]>([...DEFAULT_COLUMNS]);
   const [filters, setFilters] = useState<FieldFilter[]>([]);
+  // The ranking's picks, as a filter rather than only as a chip on the row.
+  // "Show me the ones worth reading" is the first thing an analyst does with a
+  // hundred-event window, and the chip made them findable only by scrolling.
+  const [onlyRelevant, setOnlyRelevant] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -145,9 +149,14 @@ export function AlertLogContext({
   // What survives the field filters. Computed before `displayed`, because
   // "select all" has to mean the rows on screen — selecting filtered-out
   // events would send the AI exactly what the analyst had just excluded.
-  const visibleBefore = page ? page.before.filter((e) => matchesFilters(e, filters)) : [];
-  const visibleAfter = page ? page.after.filter((e) => matchesFilters(e, filters)) : [];
-  const anchorMatches = page ? matchesFilters(page.anchor, filters) : true;
+  const keep = (e: AlertLogEvent) =>
+    matchesFilters(e, filters) && (!onlyRelevant || Boolean((e as { relevant?: boolean }).relevant));
+  const visibleBefore = page ? page.before.filter(keep) : [];
+  const visibleAfter = page ? page.after.filter(keep) : [];
+  // The alert itself is drawn whatever the filter says — see the note by the
+  // count line. It is never "relevant" in the ranking's sense; it is the thing
+  // the ranking is about.
+  const anchorMatches = page ? keep(page.anchor) : true;
 
   // Every event currently on screen, in the order it is drawn. "Select all"
   // means exactly what is displayed — expanding the window and selecting again
@@ -546,6 +555,51 @@ export function AlertLogContext({
       {/* Which fields the table shows, and which rows survive. Every event
           already carries its whole document; the six defaults are what makes a
           window scannable, not the limit of what is there. */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+        {/* Disabled rather than hidden when nothing is ranked: an analyst who
+            has seen this control before should find it where it was, told that
+            there is nothing to narrow to, not left wondering if it moved. A
+            run analysed before the ranking existed has no relevant set. */}
+        <label
+          title={
+            (page.relevant_total ?? 0) > 0
+              ? "Show only the events the ranking flagged"
+              : "Nothing in this window is ranked relevant"
+          }
+          style={{
+            display: "flex", gap: 6, alignItems: "center", fontSize: 12,
+            cursor: (page.relevant_total ?? 0) > 0 ? "pointer" : "default",
+            color: onlyRelevant ? "var(--text)" : "var(--text-muted)",
+            opacity: (page.relevant_total ?? 0) > 0 ? 1 : 0.55,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={onlyRelevant}
+            disabled={(page.relevant_total ?? 0) === 0}
+            onChange={(e) => setOnlyRelevant(e.target.checked)}
+          />
+          Only relevant events
+          {page.relevant_total != null && ` (${page.relevant_total})`}
+        </label>
+        {/* Until now this action existed only inside the "did not see all of
+            these events" panel, so once an analysis was current there was no
+            way to ask for the ranking's picks at all. It is the same request
+            either way, and it is worth making from a window that is complete. */}
+        {!stale && page.analysis_basis !== "partial" && relevantKeys.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void requestReanalysis(relevantKeys)}
+            disabled={busy}
+            style={{ ...secondaryBtn, opacity: busy ? 0.6 : 1 }}
+          >
+            {busy
+              ? "Queueing…"
+              : `Re-analyse with the ${relevantKeys.length} relevant event${relevantKeys.length === 1 ? "" : "s"}`}
+          </button>
+        )}
+      </div>
+
       <LogFieldControls
         events={[...page.before, page.anchor, ...page.after]}
         columns={columns}
@@ -554,7 +608,7 @@ export function AlertLogContext({
         onFilters={setFilters}
       />
 
-      {filters.length > 0 && (
+      {(filters.length > 0 || onlyRelevant) && (
         <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
           {visibleBefore.length + visibleAfter.length + (anchorMatches ? 1 : 0)} of{" "}
           {page.before.length + page.after.length + 1} loaded events match.

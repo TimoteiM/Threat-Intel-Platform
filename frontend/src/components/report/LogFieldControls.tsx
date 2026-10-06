@@ -170,12 +170,24 @@ export default function LogFieldControls({
   onColumns,
   filters,
   onFilters,
+  locked = [],
+  scopeNote,
 }: {
   events: AlertLogEvent[];
   columns: string[];
   onColumns: (next: string[]) => void;
   filters: FieldFilter[];
   onFilters: (next: FieldFilter[]) => void;
+  /**
+   * Fields the table always draws and the picker must not offer to remove.
+   * "All retrieved events" builds several of its columns from more than one
+   * value — the rule cell is id, event id and level together — so they cannot
+   * be toggled like a plain field. Showing them ticked and disabled says they
+   * are already there, which is what an analyst is checking for.
+   */
+  locked?: readonly string[];
+  /** Said plainly where filtering only reaches the rows already loaded. */
+  scopeNote?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -203,14 +215,17 @@ export default function LogFieldControls({
     return Array.from(seen).sort();
   };
 
-  const toggle = (field: string) =>
+  const toggle = (field: string) => {
+    if (locked.includes(field)) return;
     onColumns(columns.includes(field) ? columns.filter((c) => c !== field) : [...columns, field]);
+  };
+  const shownCount = columns.length + locked.filter((f) => !columns.includes(f)).length;
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <button type="button" onClick={() => setOpen((v) => !v)} style={btn}>
-          {open ? "Hide fields" : `Fields (${columns.length} shown of ${fields.length + 1})`}
+          {open ? "Hide fields" : `Fields (${shownCount} shown of ${fields.length + 1})`}
         </button>
         <button
           type="button"
@@ -219,11 +234,11 @@ export default function LogFieldControls({
         >
           + Filter
         </button>
-        {(columns.length !== DEFAULT_COLUMNS.length || filters.length > 0) && (
+        {(columns.length !== (locked.length ? 0 : DEFAULT_COLUMNS.length) || filters.length > 0) && (
           <button
             type="button"
             onClick={() => {
-              onColumns([...DEFAULT_COLUMNS]);
+              onColumns(locked.length ? [] : [...DEFAULT_COLUMNS]);
               onFilters([]);
             }}
             style={{ ...btn, color: "var(--text-dim)" }}
@@ -259,11 +274,12 @@ export default function LogFieldControls({
             </span>
           )}
           {shown.map((field) => {
-            const on = columns.includes(field);
+            const isLocked = locked.includes(field);
+            const on = isLocked || columns.includes(field);
             return (
               <label
                 key={field}
-                title={field}
+                title={isLocked ? `${field} — always shown` : field}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -273,15 +289,25 @@ export default function LogFieldControls({
                   borderRadius: 999,
                   border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`,
                   color: on ? "var(--text)" : "var(--text-dim)",
-                  cursor: "pointer",
+                  cursor: isLocked ? "default" : "pointer",
+                  opacity: isLocked ? 0.75 : 1,
                 }}
               >
-                <input type="checkbox" checked={on} onChange={() => toggle(field)} />
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={isLocked}
+                  onChange={() => toggle(field)}
+                />
                 {labelFor(field, fields)}
               </label>
             );
           })}
         </div>
+      )}
+
+      {scopeNote && filters.length > 0 && (
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{scopeNote}</div>
       )}
 
       {filters.map((filter, index) => (

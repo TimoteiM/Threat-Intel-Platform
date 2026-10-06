@@ -19,6 +19,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getAlertLogs, reanalyseWithLogContext, type AlertLogEvent, type AlertLogPage } from "@/lib/api";
+import LogFieldControls, {
+  labelFor,
+  matchesFilters,
+  valueOf,
+  type FieldFilter,
+} from "./LogFieldControls";
+
+/**
+ * The columns this table always draws. Several are built from more than one
+ * value — the rule cell is id, event id and level together — so they are
+ * locked in the picker rather than toggleable, and anything the analyst adds
+ * is appended after them.
+ */
+const BASE_FIELDS = [
+  "timestamp", "agent.name", "users", "rule.id", "event_id", "rule.level", "rule.description",
+] as const;
 
 const PAGE_SIZE = 100;
 
@@ -64,6 +80,11 @@ export function AlertLogView({ runId }: { runId: string }) {
   const [onlyRelevant, setOnlyRelevant] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pinned, setPinned] = useState<Set<string>>(new Set());
+  // Columns beyond the fixed ones, and filters across any field. The expanded
+  // row already held the whole document; reading it meant opening one row at a
+  // time, which is not how you compare a hundred events.
+  const [extraColumns, setExtraColumns] = useState<string[]>([]);
+  const [fieldFilters, setFieldFilters] = useState<FieldFilter[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -113,7 +134,15 @@ export function AlertLogView({ runId }: { runId: string }) {
     setBusy(true);
     setNote(null);
     try {
-      const result = await reanalyseWithLogContext(runId, Array.from(pinned));
+      const result = await reanalyseWithLogContext(runId, Array.from(pinned), {
+        extraFields: Array.from(
+          new Set([
+            ...extraColumns,
+            ...fieldFilters.filter((f) => f.field && f.value).map((f) => f.field),
+          ]),
+        ),
+        filters: fieldFilters.filter((f) => f.field && f.value),
+      });
       setNote(result.note);
     } catch (err) {
       setNote(err instanceof Error ? err.message : "Re-analysis could not be queued.");
@@ -122,7 +151,14 @@ export function AlertLogView({ runId }: { runId: string }) {
     }
   };
 
-  const rows = page?.logs ?? [];
+  // The server has already applied the search, the side and the level; these
+  // filters narrow what came back. That distinction is stated under the
+  // controls, because "12 matching" would otherwise read as 12 in the whole
+  // retrieval rather than 12 on this page.
+  const allRows = page?.logs ?? [];
+  const rows = fieldFilters.length
+    ? allRows.filter((e) => matchesFilters(e, fieldFilters))
+    : allRows;
   const alertTime = page?.alert_time ?? null;
 
   // Where the alert falls in this page, so it can be drawn between two rows
@@ -229,17 +265,35 @@ export function AlertLogView({ runId }: { runId: string }) {
         </label>
         <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
           {page.filtered_total} matching
+          {fieldFilters.length > 0 && ` · ${rows.length} of ${allRows.length} on this page`}
         </span>
       </div>
+
+      {/* Which fields the table shows, and which of the loaded rows survive. */}
+      <LogFieldControls
+        events={allRows}
+        columns={extraColumns}
+        onColumns={setExtraColumns}
+        filters={fieldFilters}
+        onFilters={setFieldFilters}
+        locked={BASE_FIELDS}
+        scopeNote={`These narrow the ${allRows.length} events loaded on this page. The search, side and level boxes above query the whole retrieval.`}
+      />
 
       {/* The timeline. */}
       <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              {["", "Time", "Δ", "Device", "User", "Rule / event", "Message", "Source"].map((h) => (
+              {["", "Time", "Δ", "Device", "User", "Rule / event", "Message"].map((h) => (
                 <th key={h} style={th}>{h}</th>
               ))}
+              {extraColumns.map((field) => (
+                <th key={field} style={th} title={field}>
+                  {labelFor(field, extraColumns)}
+                </th>
+              ))}
+              <th style={th}>Source</th>
             </tr>
           </thead>
           <tbody>
@@ -250,7 +304,7 @@ export function AlertLogView({ runId }: { runId: string }) {
                 <React.Fragment key={event.key}>
                   {index === markerIndex && markerIndex >= 0 && (
                     <tr>
-                      <td colSpan={8} style={markerRow}>
+                      <td colSpan={8 + extraColumns.length} style={markerRow}>
                         ▶ THIS ALERT — {ts(alertTime)}
                       </td>
                     </tr>
@@ -287,6 +341,26 @@ export function AlertLogView({ runId }: { runId: string }) {
                         {event.rule?.description || event.full_log || "—"}
                       </span>
                     </td>
+                    {extraColumns.map((field) => {
+                      const value = valueOf(event, field);
+                      return (
+                        <td
+                          key={field}
+                          style={{
+                            ...td,
+                            maxWidth: 360,
+                            fontFamily:
+                              field.includes("ommand") || field.includes("rocess") || field.includes("mage")
+                                ? "var(--font-mono, monospace)"
+                                : undefined,
+                            wordBreak: value.length > 60 ? "break-all" : undefined,
+                          }}
+                          title={value || undefined}
+                        >
+                          {value || "—"}
+                        </td>
+                      );
+                    })}
                     <td style={{ ...td, whiteSpace: "nowrap" }}>
                       {event.relevant && <Chip>RELEVANT</Chip>}
                       {event.sent_to_ai && <Chip>SENT</Chip>}
@@ -294,7 +368,7 @@ export function AlertLogView({ runId }: { runId: string }) {
                   </tr>
                   {isExpanded && (
                     <tr>
-                      <td colSpan={8} style={{ ...td, background: "var(--surface-2, transparent)" }}>
+                      <td colSpan={8 + extraColumns.length} style={{ ...td, background: "var(--surface-2, transparent)" }}>
                         <div style={{ display: "grid", gap: 6 }}>
                           <Fact label="OpenSearch reference" value={event.key} mono />
                           {event.process?.command_line && (
@@ -314,6 +388,23 @@ export function AlertLogView({ runId }: { runId: string }) {
                           {event.matched_on?.length ? (
                             <Fact label="Matched on" value={event.matched_on.join(", ")} />
                           ) : null}
+                          {event.fields && event.fields.length > 0 && (
+                            <div style={{ marginTop: 4 }}>
+                              <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 4 }}>
+                                Document summary
+                              </div>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                <tbody>
+                                  {event.fields.map((f) => (
+                                    <tr key={f.name}>
+                                      <td style={summaryKey}>{f.name}</td>
+                                      <td style={summaryValue}>{f.value}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                           {event.full_log && (
                             <pre style={pre}>{event.full_log}</pre>
                           )}
@@ -326,7 +417,7 @@ export function AlertLogView({ runId }: { runId: string }) {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ ...td, color: "var(--text-muted)" }}>
+                <td colSpan={8 + extraColumns.length} style={{ ...td, color: "var(--text-muted)" }}>
                   No events match these filters.
                 </td>
               </tr>
@@ -468,3 +559,22 @@ function Fact({ label, value, mono }: { label: string; value: React.ReactNode; m
 }
 
 export default AlertLogView;
+
+// The document summary table, same shape as the one in "Around the alert" so
+// an event reads identically whichever window an analyst opened it from.
+const summaryKey: React.CSSProperties = {
+  padding: "4px 10px 4px 0",
+  borderBottom: "1px solid var(--border)",
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono, monospace)",
+  whiteSpace: "nowrap",
+  verticalAlign: "top",
+  width: "1%",
+};
+const summaryValue: React.CSSProperties = {
+  padding: "4px 0",
+  borderBottom: "1px solid var(--border)",
+  color: "var(--text)",
+  fontFamily: "var(--font-mono, monospace)",
+  wordBreak: "break-all",
+};
