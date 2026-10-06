@@ -39,6 +39,10 @@ class _Run:
         self.alert_kind = "alert"
         self.detection_rule_id = rule
         self.detection_rule_name = rule
+        # What the alert is about, as opposed to the rule that carried it.
+        # Correlation counts distinct detections, so a stub without this tests
+        # a row shape the query no longer returns.
+        self.detection_name = rule
         self.overall_verdict = verdict
         self.highest_risk_score = 40
         self.result_attack_assessment = None

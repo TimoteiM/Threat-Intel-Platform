@@ -148,6 +148,20 @@ class Settings(BaseSettings):
     api_health_daily_limit_overrides: str = ""
     api_health_monthly_limit_overrides: str = ""
 
+    # Hosts whose alerts are excluded from *measurement* only — detection
+    # quality, ATT&CK coverage and tuning advice. Comma-separated SQL LIKE
+    # patterns, matched case-insensitively.
+    #
+    # Windows-Test-Device alone is 3,274 of 14,542 runs: 22.6% of the corpus is
+    # a lab machine. Rule signal-to-noise computed over it describes the lab,
+    # and a tuning recommendation derived from it would be applied to a real
+    # estate.
+    #
+    # Deliberately never applied to alert lists, cases or scoring. A test host
+    # that is genuinely compromised is still an incident, and a filter that
+    # hides alerts is a filter that hides one of those.
+    metrics_excluded_host_patterns: str = "%test-device%,%pftest%,%-teste-%"
+
     # —— Database ———
     database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"
     database_sync_url: str = "postgresql://threatintel:threatintel@localhost:5432/threatintel"
@@ -540,6 +554,12 @@ class Settings(BaseSettings):
                     "INGEST_TRUSTED_CIDRS entry %r is not an address or CIDR — ignoring it", entry
                 )
         return networks
+
+    @property
+    def metrics_excluded_hosts(self) -> tuple[str, ...]:
+        return tuple(
+            p.strip() for p in str(self.metrics_excluded_host_patterns or "").split(",") if p.strip()
+        )
 
     @property
     def ingest_trusted_path_set(self) -> frozenset[str]:

@@ -68,6 +68,43 @@ def _field(label: str | None, keys: list[str], text: str) -> str | None:
     return _first(patterns, text)
 
 
+_ALERT_LINE = re.compile(r"^[ \t]*Alert[ \t]*:[ \t]*(.+)$", re.MULTILINE)
+
+
+def detection_name_of(alert_body: str) -> str | None:
+    """The detection the alert names, as opposed to the Wazuh rule that carried it.
+
+    These alerts arrive shaped like:
+
+        Alert: exprevpxy002 - Shell Execution Of Process Located In Tmp Directory | Unknown problem somewhere in the system.
+        Rule: 1002
+
+    Left of the pipe is the detection somebody wrote and tunes. Right of it is
+    the description of the Wazuh rule that matched, and for generic base rules
+    — 1002 is "unknown problem somewhere in the system", 81640 is "URL belongs
+    to an allowed category" — that description says nothing about the alert and
+    is shared by detections with nothing in common.
+
+    Both are kept. The rule id and its description stay the rule's identity,
+    because that is what a tuning change acts on. This is what the alert is
+    *about*, and it is what stops three unrelated detections on one host
+    counting as one rule and failing to form a case: measured on this data,
+    exprevpxy002 carries 2,686 alerts under rule 1002 alone, which is one
+    distinct rule, which is one short of a case.
+
+    Returns None when there is no Alert: line, which is most pasted bodies.
+    """
+    match = _ALERT_LINE.search(str(alert_body or ""))
+    if not match:
+        return None
+    left = match.group(1).split("|", 1)[0].strip()
+    # "<agent> - <detection>". The agent half repeats the Agent: field, and
+    # keeping it would make the same detection look different on every host.
+    if " - " in left:
+        left = left.split(" - ", 1)[1].strip()
+    return left[:512] or None
+
+
 def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
                          rule_name: str | None = None) -> dict[str, Any]:
     """
@@ -92,6 +129,7 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
     fields: dict[str, Any] = {
         "rule_id": (str(rule_id).strip() if rule_id else None) or _field("Rule", ["rule_id", "ruleid"], text),
         "rule_name": (str(rule_name).strip() if rule_name else None),
+        "detection_name": detection_name_of(text),
         "agent": agent,
         "agent_ip": _field("Agent IP", ["agent_ip", "dvc", "src"], text),
         "agent_id": agent_id,
@@ -123,6 +161,10 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
 # suppression built from the top of this list is narrow; one built from the
 # bottom alone is a blunt instrument, which is why the UI orders them this way.
 SUPPRESSIBLE_FIELDS: tuple[str, ...] = (
+    # First, because it is what the alert actually is. A carrier rule can hold
+    # several unrelated detections, so suppressing by rule_id silences more
+    # than the analyst is looking at.
+    "detection_name",
     "rule_id",
     "rule_name",
     "agent",

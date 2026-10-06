@@ -411,6 +411,9 @@ async def build_tuning_recommendations(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.detection_rule_id.isnot(None),
                 tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+                # A recommendation derived from lab traffic would be applied to
+                # a real estate.
+                tenant_scope.not_a_lab_host(AlertBodyInvestigationRun.entity_host),
             )
             .order_by(AlertBodyInvestigationRun.created_at.desc())
             .execution_options(query_name="tuning_scan")

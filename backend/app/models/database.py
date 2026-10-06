@@ -711,6 +711,9 @@ class AlertBodyInvestigationRun(Base):
     # producing them, which is what detection-quality reporting groups by.
     detection_rule_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     detection_rule_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # What the alert says it is, as opposed to the rule that carried it. See
+    # alert_field_service.detection_name_of for why both are kept.
+    detection_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # Who the alert is about. An attack chain is (entity, time window, tactics),
     # and nothing here previously identified the device or the account — so no

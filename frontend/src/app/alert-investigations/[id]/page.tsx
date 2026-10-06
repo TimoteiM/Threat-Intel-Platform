@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import AnalystFeedbackControl from "@/components/shared/AnalystFeedbackControl";
 import ConsoleModule from "@/components/ui/ConsoleModule";
+import AnalystVerdictControl from "@/components/report/AnalystVerdictControl";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
 import { AlertLogContext } from "@/components/report/AlertLogContext";
 import { AlertLogView } from "@/components/report/AlertLogView";
@@ -431,6 +432,16 @@ export default function AlertInvestigationDetailPage() {
       {!isActive && <AnalystFeedbackControl subjectType="alert_run" subjectId={runId} compact />}
 
       {run.alert_body && (
+        <ConsoleModule
+          title="Was this right?"
+          description="Recorded against this alert and used by the platform accuracy report."
+          compact
+        >
+          <AnalystVerdictControl subjectType="alert_run" subjectId={runId} />
+        </ConsoleModule>
+      )}
+
+      {run && (
         <ConsoleModule
           title="Alert body"
           description={

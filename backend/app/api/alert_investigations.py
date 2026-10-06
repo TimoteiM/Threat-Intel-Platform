@@ -75,6 +75,7 @@ from app.services.alert_field_service import (
     extract_alert_fields,
     is_pre_correlated,
     source_of,
+    detection_name_of,
 )
 from app.services.endpoint_event_service import parse_endpoint_events
 from app.services.indicator_history_service import (
@@ -593,6 +594,11 @@ async def _create_alert_run(
     alert_fields = extract_alert_fields(
         analysed_body, rule_id=rule_id, rule_name=rule_name
     )
+    # What the alert is about, beside the rule that carried it. A generic base
+    # rule — 1002, 81640 — describes nothing about the alert and is shared by
+    # detections with nothing in common, so the rule alone cannot be the
+    # identity of what fired.
+    detection_name = detection_name_of(analysed_body)
     entity_host, entity_user = entity_of(alert_fields)
     alert_source = source_of(alert_fields, declared=(request.source or "").strip() or None)
     alert_client = client_of(alert_fields, declared=(request.client or "").strip() or None)
@@ -684,6 +690,7 @@ async def _create_alert_run(
         external_ref=external_ref,
         detection_rule_id=(rule_id or "")[:120] or None,
         detection_rule_name=(rule_name or "")[:512] or None,
+        detection_name=detection_name,
         entity_host=entity_host,
         entity_user=entity_user,
         alert_source=alert_source,
@@ -1373,7 +1380,12 @@ def _event_time(event: dict[str, Any]):
 
 @router.get("/{run_id}/suppression-candidate")
 async def get_suppression_candidate(
-    run_id: uuid.UUID, db: DBSession) -> dict[str, Any]:
+    run_id: uuid.UUID,
+    db: DBSession,
+    # Scoping reads this, and without it the handler raised NameError on every
+    # call — the route had never been exercised, by a test or by the UI.
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
     """
     The fields this alert could be suppressed on, and a proposed selection.
 
@@ -1392,11 +1404,17 @@ async def get_suppression_candidate(
     tenant_scope.assert_can_read(_scope(request), run.tenant_id)
 
     stored = (run.result_json or {}).get("alert_fields")
-    fields = stored if isinstance(stored, dict) and stored else extract_alert_fields(
+    fields = dict(stored) if isinstance(stored, dict) and stored else extract_alert_fields(
         run.alert_body or "",
         rule_id=run.detection_rule_id,
         rule_name=run.detection_rule_name,
     )
+    # What the alert is, which is the thing worth suppressing. Suppressing the
+    # carrier rule instead silences everything that rule carries: rule 1002
+    # holds "Disable Or Stop Services" and "Shell Execution Of Process Located
+    # In Tmp Directory", and muting it mutes both.
+    if run.detection_name and not fields.get("detection_name"):
+        fields["detection_name"] = run.detection_name
 
     available = [
         {
@@ -1413,7 +1431,10 @@ async def get_suppression_candidate(
 
     # The proposal: what the alert is, where it came from, and what kind of
     # event it was. Identity before severity, and never severity alone.
-    preferred = [f for f in ("rule_id", "agent", "event_id", "event_name") if fields.get(f)]
+    preferred = [
+        f for f in ("detection_name", "rule_id", "agent", "event_id", "event_name")
+        if fields.get(f)
+    ]
     if len(preferred) < 2:
         preferred = [f["field"] for f in available if not f["severity_only"]][:3]
 

@@ -194,7 +194,15 @@ def case_label(
     else:
         counts: dict[str, int] = defaultdict(int)
         for member in members:
-            name = str(getattr(member, "detection_rule_name", "") or "").strip()
+            # The detection first. Falling back to the carrier rule named a
+            # case "exprevpxy002 — Unknown problem somewhere in the system",
+            # which is the description of Wazuh rule 1002 and not what the
+            # case is about.
+            name = str(
+                getattr(member, "detection_name", "")
+                or getattr(member, "detection_rule_name", "")
+                or ""
+            ).strip()
             if name:
                 counts[name] += 1
         if counts:
@@ -505,6 +513,7 @@ _RUN_COLUMNS = (
     AlertBodyInvestigationRun.event_time,
     AlertBodyInvestigationRun.detection_rule_id,
     AlertBodyInvestigationRun.detection_rule_name,
+    AlertBodyInvestigationRun.detection_name,
     AlertBodyInvestigationRun.overall_verdict,
     AlertBodyInvestigationRun.highest_risk_score,
     AlertBodyInvestigationRun.result_attack_assessment,
@@ -716,7 +725,20 @@ async def correlate_alerts(
             if not any(m.id in in_window for m in members):
                 continue
             session = session_of[case_key]
-            rules = {str(m.detection_rule_id or m.detection_rule_name or "") for m in members}
+            # What fired, not what carried it.
+            #
+            # A case needs two *independent* detections. Counting by rule id
+            # alone made every alert under a generic Wazuh carrier look like
+            # one rule: exprevpxy002 holds 2,686 alerts under rule 1002, which
+            # is three different detections counted as one, which is one short
+            # of a case. The busiest host after the test machine formed none.
+            #
+            # detection_name is preferred where the alert carries one; the rule
+            # id remains the identity when it does not.
+            rules = {
+                str(m.detection_name or m.detection_rule_id or m.detection_rule_name or "")
+                for m in members
+            }
             rules.discard("")
             if len(rules) < min_rules:
                 continue

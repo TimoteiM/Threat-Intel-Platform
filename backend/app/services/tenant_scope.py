@@ -133,6 +133,24 @@ def requested_scope(scope: TenantScope, requested: str | None) -> TenantScope:
 INTERNAL = TenantScope(all_tenants=True, actor="internal")
 
 
+def not_a_lab_host(column: Any) -> Any:
+    """Exclude hosts configured as lab machines — for measurement only.
+
+    Lives here beside `clause` because both narrow the same reads and both
+    must be applied the same way everywhere. It is never used on alert lists,
+    cases or scoring: a test host that is genuinely compromised is still an
+    incident.
+    """
+    from sqlalchemy import and_, not_, or_
+
+    from app.config import get_settings
+
+    patterns = get_settings().metrics_excluded_hosts
+    if not patterns:
+        return sql_true()
+    return or_(column.is_(None), and_(*[not_(column.ilike(p)) for p in patterns]))
+
+
 def clause(column: Any, scope: TenantScope) -> Any:
     """The tenant restriction on its own, for a query that already has a where().
 

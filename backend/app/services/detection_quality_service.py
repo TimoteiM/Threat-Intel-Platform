@@ -66,6 +66,9 @@ async def detection_quality(
                 AlertBodyInvestigationRun.created_at >= cutoff,
                 AlertBodyInvestigationRun.detection_rule_id.isnot(None),
                 tenant_scope.clause(AlertBodyInvestigationRun.tenant_id, scope),
+                # Measurement only. 22.6% of stored runs are a lab machine, and
+                # a rule's signal-to-noise computed over it describes the lab.
+                tenant_scope.not_a_lab_host(AlertBodyInvestigationRun.entity_host),
             )
         )
     ).all()
