@@ -954,3 +954,126 @@ def _read_macros(data: bytes, path: str, result: ExtractionResult, *, depth: int
         parser.close()
     except Exception as exc:  # noqa: BLE001 — a malformed document is the point
         result.note(f"{path}: macros could not be read ({type(exc).__name__}).")
+
+
+# ── choosing what to detonate ────────────────────────────────────────────────
+
+# The largest member that will be handed to a sandbox. ANY.RUN's upload limit
+# is the real bound; this keeps a decompression bomb from being read into
+# memory on the way there.
+MAX_DETONATION_BYTES = 100_000_000
+
+
+@dataclass
+class DetonationTarget:
+    """The file inside a submission that is worth running, and why."""
+
+    name: str
+    data: bytes
+    sha256: str
+    source_path: str
+    reason: str
+
+
+def read_member(
+    data: bytes, member_path: str, *, password: str | None = None
+) -> bytes | None:
+    """The full bytes of one member, re-read from the archive.
+
+    Extraction keeps a member's bytes only when the whole thing fitted inside
+    the read limit — a 5.6 MB installer is streamed through a digest and
+    dropped, because the limit bounds what is *kept* for reading as text. A
+    sandbox needs the file itself, so it is read again here, once, for the one
+    member that is going to be run.
+
+    `member_path` is as `EmbeddedBinary.path` records it: the archive's own
+    name, a slash, then the member. Only members directly inside the submitted
+    archive are returned — a file nested two archives deep is not something to
+    hand a sandbox without being asked.
+    """
+    if "/" not in str(member_path or ""):
+        return None
+    name = str(member_path).split("/", 1)[1]
+    if "/" in name.rstrip("/") and name.count("/") > 3:
+        return None
+
+    kind = sniff(data)
+    if kind == "zip":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                info = next((i for i in archive.infolist() if i.filename == name), None)
+                if info is None or info.file_size > MAX_DETONATION_BYTES:
+                    return None
+                pwd = password.encode("utf-8") if (info.flag_bits & 0x1 and password) else None
+                with archive.open(info, pwd=pwd) as handle:
+                    return handle.read(MAX_DETONATION_BYTES + 1)[:MAX_DETONATION_BYTES]
+        except NotImplementedError:
+            # WinZip AES. libarchive can, the stdlib cannot.
+            pass
+        except Exception:  # noqa: BLE001 — a member we cannot read is not a target
+            return None
+
+    if kind == "zip" or kind in _EXTERNAL_ARCHIVES:
+        handle, archive_path = tempfile.mkstemp(prefix="detonate-", suffix=f".{kind}")
+        try:
+            with os.fdopen(handle, "wb") as fh:
+                fh.write(data)
+            payload = _bsdtar(
+                ["-xO"], archive_path, members=[name], binary=True, passphrase=password,
+            )
+            if not payload or len(payload) > MAX_DETONATION_BYTES:
+                return None
+            return payload
+        finally:
+            try:
+                os.unlink(archive_path)
+            except OSError:
+                pass
+    return None
+
+
+def detonation_target(
+    data: bytes, filename: str = "submitted", *, password: str | None = None
+) -> DetonationTarget | None:
+    """The executable to send to a sandbox instead of the archive carrying it.
+
+    A sandbox handed a zip has to open it and find the payload itself, with
+    whatever time its automated interactivity has. Handed the executable, it
+    runs it. The platform has already opened the archive — so the thing worth
+    running is known before anything is submitted.
+
+    Returns None, meaning "submit what was submitted", whenever the answer is
+    not obvious:
+
+      * the submission is not an archive;
+      * it holds no compiled file;
+      * it holds *several*, because choosing between them is a guess, and a
+        guess that runs the decoy instead of the payload is worse than letting
+        the sandbox decide.
+    """
+    if sniff(data) not in _EXTERNAL_ARCHIVES and sniff(data) not in _STDLIB_ARCHIVES:
+        return None
+
+    result = extract(data, filename, password=password)
+    if len(result.binaries) != 1:
+        return None
+
+    binary = result.binaries[0]
+    payload = binary.data or read_member(data, binary.path, password=password)
+    if not payload:
+        return None
+    # The hash is what the extraction recorded over the whole member. If the
+    # re-read disagrees, the two are not the same bytes and nothing is run.
+    if hashlib.sha256(payload).hexdigest() != binary.sha256:
+        return None
+
+    return DetonationTarget(
+        name=binary.path.split("/")[-1],
+        data=payload,
+        sha256=binary.sha256,
+        source_path=binary.path,
+        reason=(
+            f"{filename} is an archive holding one executable; it was submitted to the "
+            "sandbox in place of the archive so the payload runs directly."
+        ),
+    )

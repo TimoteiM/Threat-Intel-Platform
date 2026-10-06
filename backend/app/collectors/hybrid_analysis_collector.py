@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -45,6 +46,15 @@ class HybridAnalysisCollector(BaseCollector):
             # For uploaded file submissions (hash mode), fallback to quick-scan file
             # when hash lookup is not yet present in Hybrid.
             file_name, file_bytes = self._load_uploaded_file()
+            # A sandbox given an archive must open it before anything runs,
+            # using whatever time its automated interactivity has. The platform
+            # has already opened it, so when the archive carries exactly one
+            # executable that executable is submitted instead and runs directly.
+            if file_bytes:
+                swapped = self._detonation_substitution(file_name, file_bytes)
+                if swapped is not None:
+                    evidence.detonated = swapped[0]
+                    file_name, file_bytes = swapped[1], swapped[2]
             submit_on_not_found = bool(file_bytes)
         elif self.observable_type == "domain":
             indicator_type = "url"
@@ -240,6 +250,46 @@ class HybridAnalysisCollector(BaseCollector):
 
     def _empty_evidence(self, meta: CollectorMeta) -> HybridAnalysisEvidence:
         return HybridAnalysisEvidence(meta=meta)
+
+    def _detonation_substitution(
+        self, file_name: str | None, file_bytes: bytes,
+    ) -> tuple[Any, str, bytes] | None:
+        """The executable inside a submitted archive, when there is just one.
+
+        Returns None — meaning submit what was submitted — for anything that
+        is not an archive, an archive with no executable, or an archive with
+        several, because choosing between several is a guess and a guess that
+        runs the decoy is worse than letting the sandbox decide.
+
+        A password-protected archive is left alone: the password is used at
+        upload and discarded, so it is not available here, and a sandbox
+        cannot open one either.
+        """
+        from app.models.schemas import DetonatedFile
+        from app.services import file_content_service as fcs
+
+        try:
+            target = fcs.detonation_target(file_bytes, file_name or "submitted")
+        except Exception as exc:  # noqa: BLE001 — never fail a collector over this
+            logger.warning("Could not choose a detonation target: %s", exc)
+            return None
+        if target is None:
+            return None
+
+        logger.info(
+            "Submitting %s from %s to the sandbox instead of the archive",
+            target.name, file_name,
+        )
+        return (
+            DetonatedFile(
+                name=target.name,
+                sha256=target.sha256,
+                source_path=target.source_path,
+                reason=target.reason,
+            ),
+            target.name,
+            target.data,
+        )
 
     def _load_uploaded_file(self) -> tuple[str | None, bytes | None]:
         if not self.file_artifact_id:

@@ -855,9 +855,26 @@ class HybridAnalysisItem(BaseModel):
     domain_intelligence: Optional[dict[str, Any]] = None
 
 
+class DetonatedFile(BaseModel):
+    """The file a sandbox was actually given, when it was not the submission.
+
+    An archive handed to a sandbox has to be opened by the sandbox before
+    anything runs. The platform has already opened it, so the executable
+    inside is submitted instead — and the verdict that comes back is about
+    *that* file, not about the zip it arrived in. Said here so a report can
+    never imply otherwise.
+    """
+
+    name: str
+    sha256: str
+    source_path: str
+    reason: str = ""
+
+
 class HybridAnalysisEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="hybrid_analysis"))
     items: list[HybridAnalysisItem] = []
+    detonated: Optional[DetonatedFile] = None
 
 
 # ─── OpenCTI ───

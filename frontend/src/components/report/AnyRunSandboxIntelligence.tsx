@@ -134,8 +134,39 @@ export default function AnyRunSandboxIntelligence({ hybridAnalysis, screenshot, 
     { processes: 0, hosts: 0, ips: 0, files: 0, commands: 0, iocs: 0 }
   );
 
+  // What the sandbox was actually given. When a submitted archive carried one
+  // executable, that executable was submitted instead so it would run directly
+  // — and everything below is then a verdict on *it*, not on the zip it came
+  // in. A report that does not say so is claiming the wrong thing about the
+  // wrong file.
+  const detonated = (hybridAnalysis as any)?.detonated;
+
   return (
     <div style={{ marginBottom: 18 }}>
+      {detonated?.sha256 && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: "9px 12px",
+            borderLeft: "3px solid var(--status-info, #388bfd)",
+            borderRadius: "0 8px 8px 0",
+            background: "var(--panel-card-bg, transparent)",
+            fontSize: 12,
+            color: "var(--text-secondary)",
+            lineHeight: 1.6,
+          }}
+        >
+          <strong style={{ color: "var(--text)" }}>
+            The sandbox ran {text(detonated.name)}, unpacked from the submitted archive.
+          </strong>
+          <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, marginTop: 3 }}>
+            {text(detonated.source_path)} · sha256 {text(detonated.sha256)}
+          </div>
+          <div style={{ marginTop: 3 }}>
+            Everything below is a verdict on that file. The archive itself was not run.
+          </div>
+        </div>
+      )}
       <div style={statGrid}>
         <KeyStat label="Processes" value={summary.processes} />
         <KeyStat label="Hosts" value={hosts.length || summary.hosts} />
