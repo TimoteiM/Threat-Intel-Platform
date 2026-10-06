@@ -8,6 +8,8 @@ source of truth for classification, risk score, or action.
 
 from __future__ import annotations
 
+from app.services import hosting_platform_service as platform
+
 from typing import Any
 
 
@@ -414,6 +416,9 @@ def community_listing_weight(
 
 
 def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, str, list[str], list[dict[str, Any]], list[str]]:
+    # The observable this evidence is about, needed to tell a finding on it
+    # from a finding on something it hosts.
+    domain = str(evidence_data.get("domain") or "").strip()
     vt = evidence_data.get("vt") or {}
     threat_feeds = evidence_data.get("threat_feeds") or {}
     intel = evidence_data.get("intel") or {}
@@ -431,9 +436,31 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     urlscan = evidence_data.get("urlscan") or {}
     urlscan_verdict = str(urlscan.get("verdict") or "").strip().lower()
     urlscan_score = int(urlscan.get("score") or 0)
-    urlscan_malicious = urlscan_verdict == "malicious" or urlscan_score >= 70
-    urlscan_suspicious = urlscan_verdict == "suspicious" or (
-        urlscan_verdict not in {"benign", "malicious", ""} and urlscan_score > 0
+
+    # Whose page was scanned. URLScan is searched by domain and returns scans
+    # of subdomains too, so the verdict on hand is not necessarily a verdict
+    # about the observable.
+    #
+    # github.io scored 90 — malicious, high confidence — on
+    # "malicious, score 100, tags: phishing" for
+    # https://hstephan-create.github.io/2-play/, somebody's phishing page on
+    # GitHub Pages. VirusTotal was 0 of 91. A platform is not malicious because
+    # one of its tenants is; every hosting provider has malicious tenants, and
+    # that is a property of hosting.
+    scanned_host = platform.host_of(urlscan.get("page_url"))
+    urlscan_about_target = platform.evidence_is_about(scanned_host, domain)
+
+    urlscan_malicious = urlscan_about_target and (
+        urlscan_verdict == "malicious" or urlscan_score >= 70
+    )
+    urlscan_suspicious = urlscan_about_target and (
+        urlscan_verdict == "suspicious"
+        or (urlscan_verdict not in {"benign", "malicious", ""} and urlscan_score > 0)
+    )
+    urlscan_about_other_host = (
+        not urlscan_about_target
+        and bool(scanned_host)
+        and (urlscan_verdict in {"malicious", "suspicious"} or urlscan_score > 0)
     )
 
     domain_age_days = (evidence_data.get("whois") or {}).get("domain_age_days")
@@ -781,11 +808,26 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
             "evidence_refs": ["hybrid_analysis.items.scope_validation"],
         })
     if urlscan_verdict:
-        key_evidence.append(
+        tags = (
+            f", tags: {', '.join(str(t) for t in (urlscan.get('tags') or [])[:4])}"
+            if urlscan.get("tags") else ""
+        )
+        detail = (
             f"URLScan verdict: {urlscan_verdict}"
             + (f" (score {urlscan_score})" if urlscan_score else "")
-            + (f", tags: {', '.join(str(t) for t in (urlscan.get('tags') or [])[:4])}" if urlscan.get("tags") else "")
+            + tags
         )
+        if urlscan_about_other_host:
+            # Named, not hidden. An analyst must be able to see that a site on
+            # this platform is malicious; what must not happen is the platform
+            # inheriting that verdict.
+            key_evidence.append(
+                f"{detail} — but that scan is of {scanned_host}, a site hosted on "
+                f"{domain} rather than {domain} itself. It is not counted towards this "
+                "verdict."
+            )
+        else:
+            key_evidence.append(detail)
     if newly_registered:
         key_evidence.append(f"Newly registered domain — {domain_age} day(s) old")
     elif recently_registered:
@@ -1075,13 +1117,25 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
         isinstance(email, dict) and str(email.get("spoofability_score") or "").lower() == "high"
     )
 
+    # Crowded infrastructure describes a hosting platform; it does not accuse
+    # one. github.io resolves to four GitHub/Fastly addresses shared by every
+    # Pages site in existence and is registered through MarkMonitor with
+    # thousands of siblings — both of which this block scored as weak signals
+    # of compromise. For a public-suffix apex they are what the thing *is*.
+    is_platform = platform.is_platform_apex(evidence_data.get("domain"))
+
     infra = evidence_data.get("infrastructure_pivot") or {}
     shared_hosting = False
-    if isinstance(infra, dict):
+    if isinstance(infra, dict) and not is_platform:
         shared_hosting = bool(infra.get("shared_hosting_detected"))
         if _pivots_to_other_domains(infra, evidence_data):
             score += 1
             reasons.append("Registrant/registrar pivot links to other investigated domains")
+    elif is_platform:
+        reasons.append(
+            "Shared hosting and registrar pivots were not counted: this is a hosting "
+            "platform, where both are expected"
+        )
 
     signals = evidence_data.get("signals") or []
     if isinstance(signals, list):
@@ -1095,10 +1149,11 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
         # These two used to come in through a second door: when the checks above
         # declined to score a self-pivot, the signal id scored it anyway under
         # another name. Route them through the same rules instead.
-        if "sig_shared_hosting" in signal_ids:
+        if "sig_shared_hosting" in signal_ids and not is_platform:
             shared_hosting = True
         if (
             "sig_registrant_pivot" in signal_ids
+            and not is_platform
             and _pivots_to_other_domains(infra if isinstance(infra, dict) else {}, evidence_data)
             and not any("pivot" in reason.lower() for reason in reasons)
         ):
