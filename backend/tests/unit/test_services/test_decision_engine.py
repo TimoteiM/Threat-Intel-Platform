@@ -677,3 +677,125 @@ def test_a_named_campaign_cluster_is_not_overturned_by_a_clean_virustotal():
     ]
     decision = build_decision_report(evidence, "url")
     assert decision["classification"] == "malicious"
+
+
+# --- a form arriving at an identity provider is not credential theft ---------
+#
+# `https://primary.eu-central.ysoft.cloud/callback/oidc-login` scored 76 and
+# read as malicious on three observations that describe every SSO integration
+# in the estate: a form posting to login.microsoftonline.com, the word "login"
+# in the path, and a Microsoft brand reference on a non-Microsoft domain. The
+# finding's own text already said input fields and brand references are common
+# on legitimate sites — and then carried severity "high" anyway, because
+# "form posts to external domain" was high-confidence whatever the destination.
+#
+# The destination is the whole distinction. A kit impersonating a Microsoft
+# sign-in page posts the credentials to the attacker. A form that genuinely
+# posts to login.microsoftonline.com hands them to Microsoft.
+
+from app.services.decision_engine import (  # noqa: E402
+    _is_contextual_http_signal,
+    _is_high_confidence_http_signal,
+    form_target_is_identity_provider,
+)
+
+_FORM = "Form posts to external domain: "
+
+
+def test_a_form_posting_to_a_real_identity_provider_is_not_high_confidence():
+    for host in (
+        "login.microsoftonline.com",
+        "accounts.google.com",
+        "acme.okta.com",
+        "tenant.b2clogin.com",
+        "login.salesforce.com",
+    ):
+        signal = _FORM + host
+        assert form_target_is_identity_provider(signal), host
+        assert not _is_high_confidence_http_signal(signal), host
+        # Still reported, and still able to count once something else is
+        # suspicious about the domain itself.
+        assert _is_contextual_http_signal(signal), host
+
+
+def test_a_form_posting_anywhere_else_is_still_high_confidence():
+    """The negative control. This must keep catching credential theft."""
+    for host in (
+        "evil.test",
+        "crm.adflex.com.tr",
+        "darkforums.su",
+        "pastebin.com",
+    ):
+        signal = _FORM + host
+        assert not form_target_is_identity_provider(signal), host
+        assert _is_high_confidence_http_signal(signal), host
+
+
+def test_a_lookalike_of_an_identity_provider_is_not_one():
+    """`login.microsoftonline.com.evil.test` is the attack, not the exception."""
+    for host in (
+        "login.microsoftonline.com.evil.test",
+        "login-microsoftonline.com",
+        "okta.com.evil.test",
+        "accounts.google.com.phish.test",
+    ):
+        signal = _FORM + host
+        assert not form_target_is_identity_provider(signal), host
+        assert _is_high_confidence_http_signal(signal), host
+
+
+def test_the_exemption_is_only_about_form_targets():
+    """It must not leak into the other high-confidence signals: a page that
+    exfiltrates to a Telegram bot is not excused by mentioning a provider."""
+    assert _is_high_confidence_http_signal(
+        "Credential exfiltration to telegram bot api from login.microsoftonline.com page"
+    )
+    assert not form_target_is_identity_provider("ClickFix fake CAPTCHA instructs user")
+
+
+def test_the_reported_case_comes_back_benign():
+    """The investigation from the report, end to end."""
+    evidence = {
+        "domain": "https://primary.eu-central.ysoft.cloud/callback/oidc-login",
+        "http": {
+            "phishing_indicators": [
+                "Form posts to external domain: login.microsoftonline.com",
+                "Suspicious path keywords in URL: login",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+            "has_login_form": True,
+        },
+    }
+
+    report = build_decision_report(evidence, "url")
+
+    # Not malicious, and not suspicious either: these three observations
+    # describe an SSO callback. "inconclusive" is the honest verdict on this
+    # much evidence alone — the real investigation, which also had a clean
+    # VirusTotal result, re-scores from 76/malicious to benign/15.
+    assert report["classification"] not in {"malicious", "suspicious"}
+    assert (report["risk_score"] or 0) <= 30
+    finding = next(f for f in report["findings"] if f["id"] == "static_http_phishing")
+    # Shown, because an analyst should see it. Not evidence, because it is not.
+    assert finding["severity"] == "low"
+
+
+def test_the_same_observations_still_escalate_on_a_suspicious_domain():
+    """The contextual signals are not discarded — they count as soon as
+    something independent says the domain itself is suspicious."""
+    evidence = {
+        "domain": "microsoft-login-verify.test",
+        "http": {
+            "phishing_indicators": [
+                "Form posts to external domain: credential-collector.test",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+            "has_login_form": True,
+        },
+        "threat_feeds": {"phishtank": {"in_database": True, "verified": True}},
+    }
+
+    report = build_decision_report(evidence, "url")
+
+    assert report["classification"] in {"malicious", "suspicious"}
+    assert report["risk_score"] >= 50

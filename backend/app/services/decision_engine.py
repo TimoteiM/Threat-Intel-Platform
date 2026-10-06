@@ -1519,7 +1519,82 @@ def _merge_findings(primary: list[Any], secondary: list[Any]) -> list[dict[str, 
     return out
 
 
+# Hosts that receive a sign-in form because that is how federated login works.
+#
+# "Form posts to external domain" was high-confidence whatever the destination,
+# so `https://primary.eu-central.ysoft.cloud/callback/oidc-login` — an OIDC
+# callback posting to Microsoft's own identity provider — scored 76 and read as
+# malicious on the strength of three observations that describe every SSO
+# integration in the estate: the form target, the word "login" in the path, and
+# the Microsoft brand on a non-Microsoft domain.
+#
+# The destination is what separates the two cases. A kit that impersonates a
+# Microsoft sign-in page posts the credentials to the *attacker*; a form that
+# genuinely posts to login.microsoftonline.com hands them to Microsoft, which
+# is the opposite of exfiltration. So this is not a general allowlist and must
+# never become one — it says only that a form arriving at a real identity
+# provider is not, by itself, evidence of credential theft.
+#
+# Matched on the exact host, or on a suffix with its dot, so a lookalike like
+# `login.microsoftonline.com.evil.test` cannot satisfy it.
+_IDENTITY_PROVIDER_HOSTS = frozenset({
+    "login.microsoftonline.com",
+    "login.microsoft.com",
+    "login.live.com",
+    "login.windows.net",
+    "sts.windows.net",
+    "login.partner.microsoftonline.cn",
+    "accounts.google.com",
+    "appleid.apple.com",
+    "login.salesforce.com",
+    "signin.aws.amazon.com",
+    "github.com",
+    "gitlab.com",
+    "auth.atlassian.com",
+    "slack.com",
+    "login.yahoo.com",
+})
+
+_IDENTITY_PROVIDER_SUFFIXES = (
+    ".okta.com",
+    ".oktapreview.com",
+    ".auth0.com",
+    ".onelogin.com",
+    ".pingidentity.com",
+    ".duosecurity.com",
+    ".jumpcloud.com",
+    ".cloudflareaccess.com",
+    ".b2clogin.com",
+    ".ciamlogin.com",
+)
+
+
+def _form_target_host(signal: object) -> str:
+    """The destination in a "Form posts to external domain: host" signal."""
+    text = str(signal or "").strip().lower()
+    if "form posts to external domain" not in text or ":" not in text:
+        return ""
+    return text.rsplit(":", 1)[1].strip().strip("/")
+
+
+def form_target_is_identity_provider(signal: object) -> bool:
+    """Whether this form posts to a real identity provider rather than away.
+
+    Public because it is a claim about the world, not an implementation detail:
+    a test asserts the lookalike cases, and they are the ones that matter.
+    """
+    host = _form_target_host(signal)
+    if not host:
+        return False
+    return host in _IDENTITY_PROVIDER_HOSTS or host.endswith(_IDENTITY_PROVIDER_SUFFIXES)
+
+
 def _is_contextual_http_signal(signal: object) -> bool:
+    # A form arriving at a real identity provider belongs here, with the input
+    # fields and brand references: worth showing an analyst, and not evidence
+    # of anything on its own.
+    if form_target_is_identity_provider(signal):
+        return True
     text = str(signal or "").strip().lower()
     return any(
         marker in text
@@ -1533,6 +1608,8 @@ def _is_contextual_http_signal(signal: object) -> bool:
 
 
 def _is_high_confidence_http_signal(signal: object) -> bool:
+    if form_target_is_identity_provider(signal):
+        return False
     text = str(signal or "").strip().lower()
     return any(
         marker in text

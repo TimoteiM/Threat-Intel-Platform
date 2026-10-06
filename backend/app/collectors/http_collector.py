@@ -163,6 +163,35 @@ def _detect_clickfix_fake_verification(body: str) -> bool:
     return bool(CLICKFIX_USER_ACTION_RE.search(text))
 
 
+def _is_external_form_target(action_host: str, own_host: str) -> bool:
+    """Whether a form action really leaves the site it was served from.
+
+    The comparison used to be `action_domain != own_host`, so `otar.nl`
+    posting to `www.otar.nl` was reported as a form posting to an external
+    domain — and that signal is read downstream as high-confidence evidence of
+    credential theft. Measured across the stored investigations, five of the
+    fourteen distinct form targets were the site's own `www.` host or the
+    apex it redirects to: tarom.ro, otar.nl, decoder.name, linkedin.com and
+    meubels-van-steigerhout.nl, all of them posting to themselves.
+
+    Compared on the registrable name, so a subdomain counts as the same site
+    while `otar.nl.evil.test` does not. The public suffix list does the work,
+    which also means two tenants of a hosting platform are correctly different
+    sites.
+    """
+    from app.services import hosting_platform_service as platform
+
+    action = str(action_host or "").strip().lower().rstrip(".")
+    own = str(own_host or "").strip().lower().rstrip(".")
+    if not action or not own or action == own:
+        return False
+    action_site = platform.registrable(action)
+    own_site = platform.registrable(own)
+    if not action_site or not own_site:
+        return action != own
+    return action_site != own_site
+
+
 class HTTPCollector(BaseCollector):
     name = "http"
     supported_types = frozenset({"domain", "url"})
@@ -294,7 +323,7 @@ class HTTPCollector(BaseCollector):
         for action_url in form_actions:
             try:
                 action_domain = urlparse(action_url).hostname
-                if action_domain and action_domain != own_host:
+                if action_domain and _is_external_form_target(action_domain, own_host):
                     evidence.phishing_indicators.append(
                         f"Form posts to external domain: {action_domain}"
                     )
