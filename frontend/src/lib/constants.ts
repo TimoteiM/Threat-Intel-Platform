@@ -50,7 +50,11 @@ export type AppFooterLinkGroup = {
 
 export const APP_NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard", group: "workspace", icon: "grid" },
-  { href: "/investigations", label: "All Cases", group: "workspace", icon: "cases" },
+  // "All Cases" collided with Security Threats -> Cases, which is a different
+  // thing entirely: those are alerts correlated into one incident, these are
+  // investigations of a single observable. The page this opens has always been
+  // headed "Investigations".
+  { href: "/investigations", label: "All Investigations", group: "workspace", icon: "cases" },
   { href: "/batches", label: "Bulk Analysis", group: "workspace", icon: "bulk" },
   { href: "/watchlist", label: "Watchlist", group: "workspace", icon: "watch" },
   // What is threatening a client right now: the alerts that arrived, and the
@@ -82,7 +86,7 @@ export const APP_FOOTER_LINK_GROUPS = [
     title: "Platform",
     links: [
       { href: "/", label: "New Investigation" },
-      { href: "/investigations", label: "All Cases" },
+      { href: "/investigations", label: "All Investigations" },
       { href: "/batches", label: "Bulk Analysis" },
       { href: "/dashboard", label: "Dashboard" },
     ],
