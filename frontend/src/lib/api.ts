@@ -557,8 +557,12 @@ export interface AlertLogContextPage {
 }
 
 /** The alert with N events either side of it, the way Discover shows context. */
-export function getAlertLogContext(runId: string, before = 5, after = 5) {
+export function getAlertLogContext(runId: string, before = 5, after = 5, onlyRelevant = false) {
   const qs = new URLSearchParams({ before: String(before), after: String(after) });
+  // Narrows the window to the ranking's picks and returns all of them, rather
+  // than a page the caller then has to filter — the flagged set is bounded, so
+  // there is nothing to walk.
+  if (onlyRelevant) qs.set("only_relevant", "true");
   return request<AlertLogContextPage>(`/alert-investigations/${runId}/logs/context?${qs}`);
 }
 

@@ -1075,15 +1075,34 @@ async def get_run_logs(
     return await run_in_threadpool(_read)
 
 
+# The most relevant events one request will return. The ranking's flagged set
+# is bounded by the selection budget — sixteen in the window that prompted
+# this — so the cap is a guard against a pathological ranking, not a page size.
+_RELEVANT_PAGE_CAP = 500
+
+
 @router.get("/{run_id}/logs/context")
 async def get_run_log_context(
     run_id: uuid.UUID,
     db: DBSession,
     before: int = Query(default=5, ge=0, le=500),
     after: int = Query(default=5, ge=0, le=500),
+    # A plain default, not `Query(default=False)`: FastAPI infers a query
+    # parameter for a bare bool either way, but the Query object *is* the
+    # default when the function is called directly, and it is truthy — so
+    # every direct caller would silently get the narrowed window.
+    only_relevant: bool = False,
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """The alert with the events immediately either side of it.
+
+    `only_relevant` narrows the window to the events the ranking tied to this
+    alert, and returns *all* of them rather than a page. Filtering the loaded
+    page instead showed "4 of 11 match" when sixteen events were flagged across
+    the window — the analyst had to page through 554 events to collect the
+    sixteen the platform had already identified, which is the opposite of what
+    the control is for. The flagged set is bounded by the ranking, so there is
+    no page to walk.
 
     The shape an analyst actually reads a window in: the alert highlighted in
     place, a handful of events before and after, and the ability to pull in more
@@ -1156,9 +1175,23 @@ async def get_run_log_context(
                 split = len([e for e in events if str(e.get("timestamp") or "") <= stamp])
                 head, tail = events[:split], events[split:]
 
+            if only_relevant:
+                # The anchor stays whatever it is: hiding the alert you opened
+                # is never the helpful answer, and it is not "relevant" in the
+                # ranking's sense — it is the thing the ranking is about.
+                head = [e for e in head if e.get("relevant")]
+                tail = [e for e in tail if e.get("relevant")]
+
             payload["anchor"] = anchor
-            payload["before"] = head[-before:] if before else []
-            payload["after"] = tail[:after] if after else []
+            if only_relevant:
+                # All of them, both sides. Capped at the same bound the paging
+                # parameters carry, so a pathological ranking cannot return an
+                # unbounded page.
+                payload["before"] = head[-_RELEVANT_PAGE_CAP:]
+                payload["after"] = tail[:_RELEVANT_PAGE_CAP]
+            else:
+                payload["before"] = head[-before:] if before else []
+                payload["after"] = tail[:after] if after else []
             payload["available_before"] = len(head)
             payload["available_after"] = len(tail)
             payload["retrieved_total"] = len(events)

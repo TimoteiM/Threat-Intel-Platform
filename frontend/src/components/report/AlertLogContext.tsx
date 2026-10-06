@@ -134,13 +134,13 @@ export function AlertLogContext({
     setLoading(true);
     setError(null);
     try {
-      setPage(await getAlertLogContext(runId, before, after));
+      setPage(await getAlertLogContext(runId, before, after, onlyRelevant));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the surrounding events.");
     } finally {
       setLoading(false);
     }
-  }, [runId, before, after]);
+  }, [runId, before, after, onlyRelevant]);
 
   useEffect(() => {
     void load();
@@ -149,8 +149,11 @@ export function AlertLogContext({
   // What survives the field filters. Computed before `displayed`, because
   // "select all" has to mean the rows on screen — selecting filtered-out
   // events would send the AI exactly what the analyst had just excluded.
-  const keep = (e: AlertLogEvent) =>
-    matchesFilters(e, filters) && (!onlyRelevant || Boolean((e as { relevant?: boolean }).relevant));
+  // `onlyRelevant` is applied by the server, which returns the whole flagged
+  // set rather than a page — so there is nothing left to filter for it here.
+  // Doing it in both places is how "4 of 11 match" was shown for a window the
+  // ranking had flagged sixteen events in.
+  const keep = (e: AlertLogEvent) => matchesFilters(e, filters);
   const visibleBefore = page ? page.before.filter(keep) : [];
   const visibleAfter = page ? page.after.filter(keep) : [];
   // The alert itself is drawn whatever the filter says — see the note by the
@@ -608,11 +611,21 @@ export function AlertLogContext({
         onFilters={setFilters}
       />
 
-      {(filters.length > 0 || onlyRelevant) && (
+      {/* Only for the field filters. Relevance is now applied by the server,
+          which returns the whole flagged set, so there is no "N of M loaded"
+          to report for it — every one of them is on screen. */}
+      {filters.length > 0 && (
         <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
           {visibleBefore.length + visibleAfter.length + (anchorMatches ? 1 : 0)} of{" "}
           {page.before.length + page.after.length + 1} loaded events match.
           {!anchorMatches && " The alert itself does not match, and is shown anyway."}
+        </div>
+      )}
+      {onlyRelevant && filters.length === 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          Showing all {page.before.length + page.after.length} event
+          {page.before.length + page.after.length === 1 ? "" : "s"} the ranking tied to this
+          alert, either side of it. The alert itself is shown whether or not it was flagged.
         </div>
       )}
 

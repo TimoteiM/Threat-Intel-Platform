@@ -318,3 +318,122 @@ def test_the_status_separates_fields_asked_for_from_fields_sent():
     source = inspect.getsource(api.get_analysis_status)
     assert '"extra_fields_requested"' in source
     assert '"extra_fields_sent"' in source
+
+
+# --- "Only relevant events" has to mean all of them ---------------------------
+#
+# The checkbox filtered the rows already on screen. On a window of 554 events
+# with sixteen flagged, it reported "4 of 11 loaded events match" and left the
+# analyst to page through the rest by hand to collect the sixteen the platform
+# had already identified — which is the opposite of what the control is for.
+#
+# The flagged set is bounded by the ranking, so there is no page to walk: the
+# server now returns all of it, both sides of the alert.
+
+
+class _StoreRow:
+    def __init__(self, logs):
+        self.logs = logs
+        self.status = "collected"
+        self.reason = None
+        self.truncated = False
+
+
+def _ev(key, stamp, *, relevant):
+    return {"key": key, "id": key, "timestamp": stamp, "agent": {"name": "EXP-01"},
+            "rule": {"id": "1", "description": "d"}, "users": [], "relevant_hint": relevant}
+
+
+def _context(monkeypatch, *, only_relevant, before=5, after=5):
+    """Run the real endpoint body against a stubbed store."""
+    import asyncio
+    import uuid as _uuid
+
+    from app.services import alert_log_context_store as store
+
+    # Twelve before the alert and twelve after; every third one is flagged.
+    events = []
+    for i in range(25):
+        key = f"idx:{i:02d}"
+        events.append(_ev(key, f"2026-10-06T12:{i:02d}:00.000+0000", relevant=(i % 3 == 0)))
+    flagged = [e["key"] for e in events if e.pop("relevant_hint")]
+    alert_key = events[12]["key"]
+
+    run_id = _uuid.uuid4()
+
+    class _Run:
+        id = run_id
+        tenant_id = "c00"
+        external_ref = alert_key
+        event_time = None
+        entity_host = "EXP-01"
+        entity_user = None
+        detection_rule_id = "1"
+        detection_rule_name = "d"
+        title = "d"
+        result_json = {"ai_report": {"log_selection": {
+            "relevant_refs": flagged, "sent_refs": [],
+        }}}
+
+    class _DB:
+        async def get(self, _model, _id):
+            return _Run()
+
+    monkeypatch.setattr(store, "for_run", lambda db, rid: _StoreRow(events))
+    # Same shortcut the helper above takes: `as_payload` reads a dozen more
+    # columns, and none of them is what these tests are about.
+    monkeypatch.setattr(store, "as_payload", lambda _row, include_logs=True: {"status": "collected"})
+    monkeypatch.setattr(api.tenant_scope, "assert_can_read", lambda *a, **k: None)
+    monkeypatch.setattr(api, "_scope", lambda request: None)
+
+    return asyncio.run(api.get_run_log_context(
+        run_id, _DB(), before=before, after=after,
+        only_relevant=only_relevant, request=None,
+    )), flagged, alert_key
+
+
+def test_without_the_filter_the_window_is_a_page(monkeypatch):
+    page, flagged, _ = _context(monkeypatch, only_relevant=False)
+
+    assert len(page["before"]) == 5
+    assert len(page["after"]) == 5
+    # And there is more to load, which is the state the report described.
+    assert page["available_before"] > len(page["before"])
+    assert page["available_after"] > len(page["after"])
+
+
+def test_with_the_filter_every_flagged_event_is_on_screen(monkeypatch):
+    page, flagged, alert_key = _context(monkeypatch, only_relevant=True)
+
+    shown = {e["key"] for e in page["before"] + page["after"]}
+    # Every flagged event, bar the alert itself, which is the anchor row.
+    assert shown == set(flagged) - {alert_key}
+    # Flagged events on both sides, not just whichever end a page reached.
+    assert page["before"] and page["after"]
+
+
+def test_with_the_filter_there_is_nothing_left_to_load(monkeypatch):
+    """The analyst should never have to press Load to see the rest of a set
+    the platform has already chosen."""
+    page, _, _ = _context(monkeypatch, only_relevant=True)
+
+    assert page["available_before"] == len(page["before"])
+    assert page["available_after"] == len(page["after"])
+
+
+def test_the_alert_is_shown_whether_or_not_it_was_flagged(monkeypatch):
+    """Hiding the alert you opened is never the helpful answer, and it is not
+    'relevant' in the ranking's sense — it is what the ranking is about."""
+    page, _, alert_key = _context(monkeypatch, only_relevant=True)
+
+    assert page["anchor"]["key"] == alert_key
+    assert page["anchor"]["is_alert"] is True
+
+
+def test_the_counts_still_describe_the_whole_retrieval(monkeypatch):
+    """`retrieved_total` is what was read from the log store; narrowing the
+    view must not restate it as the size of the narrowed set."""
+    page, flagged, _ = _context(monkeypatch, only_relevant=True)
+
+    assert page["retrieved_total"] == 25
+    assert page["relevant_total"] == len(flagged)
