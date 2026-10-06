@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     anyrun_timeout_url_domain_seconds: int = 120
     anyrun_timeout_file_hash_seconds: int = 90
     anyrun_url_sandbox_analysis_timeout: int = 120  # opt_timeout sent to AnyRun for URL/domain tasks
+    # How long ANY.RUN runs a submitted *file*, in seconds — the `opt_timeout`
+    # it is given, not how long we wait for the answer.
+    #
+    # This was hardcoded at 60, against an SDK default of 240. Sixty seconds
+    # covers booting the VM and opening the sample, and leaves ANY.RUN's
+    # automated interactivity almost nothing: an analyst watching the video of
+    # a submitted zip saw the archive unpacked and then nothing at all until
+    # the recording ended. The run had finished.
+    anyrun_file_sandbox_analysis_timeout: int = 240
     anyrun_url_sandbox_mitm: bool = True            # HTTPS MITM proxy — captures form POSTs on phishing pages
     anyrun_max_upload_mb: int = 100
     # How many sandbox tasks this plan may run at once. Submissions are queued

@@ -159,7 +159,18 @@ def lookup_anyrun(
     except Exception as exc:
         return _error(indicator_type, f"anyrun-sdk unavailable: {exc}")
 
-    sandbox_timeout = timeout_file_hash if indicator_type in {"hash", "file"} else timeout_url_domain
+    # Derived from the detonation we are about to ask for, not set beside it.
+    # These were two independent numbers — a 60-second run and a 150-second
+    # poll budget — and the run length had been cut to fit the budget. When
+    # the budget expires with the task still going, the result is discarded
+    # entirely, so the two must not be allowed to drift apart.
+    file_detonation = int(getattr(settings, "anyrun_file_sandbox_analysis_timeout", 240) or 240)
+    url_detonation = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
+    if indicator_type in {"hash", "file"}:
+        # Plus boot, upload and report assembly.
+        sandbox_timeout = max(timeout_file_hash, file_detonation + 90)
+    else:
+        sandbox_timeout = max(timeout_url_domain, url_detonation + 60)
     can_run_sandbox_first = bool(
         sandbox_first
         and submit_on_not_found
@@ -1433,6 +1444,7 @@ def _submit_anyrun_task_with_fallback(
     max_transient_retries = int(getattr(settings, "anyrun_transient_retries", 3) or 3)
     base_transient_backoff_seconds = int(getattr(settings, "anyrun_transient_backoff_seconds", 6) or 6)
     url_analysis_timeout = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
+    file_analysis_timeout = int(getattr(settings, "anyrun_file_sandbox_analysis_timeout", 240) or 240)
     url_mitm = bool(getattr(settings, "anyrun_url_sandbox_mitm", True))
     anyrun_proxy_country = _normalize_anyrun_proxy_country(proxy_country)
     use_residential_proxy = bool(use_residential_proxy or anyrun_proxy_country)
@@ -1463,7 +1475,7 @@ def _submit_anyrun_task_with_fallback(
                 file_kwargs: dict[str, Any] = {
                     "file_content": file_bytes,
                     "filename": (file_name or "sample.bin"),
-                    "opt_timeout": 60,
+                    "opt_timeout": file_analysis_timeout,
                     "opt_automated_interactivity": _ANYRUN_AUTOMATED_INTERACTIVITY,
                 }
                 if privacy:
