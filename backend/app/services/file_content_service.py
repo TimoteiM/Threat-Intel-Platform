@@ -48,6 +48,21 @@ logger = logging.getLogger(__name__)
 # One entry, and everything extracted, in bytes. A phishing script is a few
 # kilobytes; these are generous enough that hitting one is itself a finding.
 MAX_FILE_BYTES = 1_000_000
+# How much of a compiled member will be streamed through a hash function.
+#
+# Separate from MAX_FILE_BYTES, and far larger, because the two limits exist
+# for different reasons. MAX_FILE_BYTES bounds what is *kept* — text that goes
+# into evidence, into the prompt and onto the screen, where a megabyte is
+# already more than anyone reads. A hash keeps nothing: the bytes stream
+# through a digest and are dropped, so the only cost is the time to decompress
+# them, and the only thing worth bounding is a decompression bomb.
+#
+# 5.6 MB installers are ordinary. Capping the hash at a megabyte meant the one
+# member of a dropper archive that actually runs could not be identified.
+MAX_HASH_BYTES = 256_000_000
+# Enough to recognise a format from its magic bytes before deciding whether to
+# read the rest of the member.
+SNIFF_BYTES = 65_536
 MAX_TOTAL_BYTES = 8_000_000
 MAX_ENTRIES = 200
 
@@ -370,7 +385,7 @@ def extract_attachments(attachments: Any, *, password: str | None = None) -> Ext
 
 def _walk(
     data: bytes, path: str, result: ExtractionResult, *, depth: int,
-    declared_size: int | None = None,
+    declared_size: int | None = None, digests: dict[str, Any] | None = None,
 ) -> None:
     if depth > MAX_DEPTH:
         result.note(
@@ -402,7 +417,8 @@ def _walk(
         return
 
     if kind in {"pe", "elf"}:
-        _add_binary(data, path, result, kind=kind, declared_size=declared_size)
+        _add_binary(data, path, result, kind=kind, declared_size=declared_size,
+                    digests=digests)
         return
 
     if kind == "pdf":
@@ -421,38 +437,90 @@ def _walk(
         result.note(f"{path} is not text and no reader recognised it.")
 
 
+def _digests(data: bytes) -> dict[str, Any]:
+    """The three hashes every reputation source takes, plus the length."""
+    return {
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sha1": hashlib.sha1(data).hexdigest(),   # noqa: S324 — an identifier, not a signature
+        "md5": hashlib.md5(data).hexdigest(),     # noqa: S324 — same
+        "size": len(data),
+        "complete": True,
+    }
+
+
+def _stream_digests(head: bytes, handle: Any) -> dict[str, Any]:
+    """Hash a member that is too large to keep, without keeping it.
+
+    The bytes are decompressed in chunks, fed to the digests and dropped, so
+    peak memory is one chunk regardless of how big the executable is. Returns
+    `complete: False` if the member runs past MAX_HASH_BYTES — a partial hash
+    is never recorded, because an identifier that matches nothing is worse
+    than no identifier at all.
+    """
+    sha256, sha1, md5 = hashlib.sha256(), hashlib.sha1(), hashlib.md5()  # noqa: S324
+    total = 0
+    chunk = head
+    while chunk:
+        total += len(chunk)
+        if total > MAX_HASH_BYTES:
+            return {"complete": False, "size": total}
+        sha256.update(chunk)
+        sha1.update(chunk)
+        md5.update(chunk)
+        chunk = handle.read(1_048_576)
+    return {
+        "sha256": sha256.hexdigest(),
+        "sha1": sha1.hexdigest(),
+        "md5": md5.hexdigest(),
+        "size": total,
+        "complete": True,
+    }
+
+
 def _add_binary(
     data: bytes, path: str, result: ExtractionResult, *, kind: str,
-    declared_size: int | None = None,
+    declared_size: int | None = None, digests: dict[str, Any] | None = None,
 ) -> None:
     """Record a compiled member so something else can look it up.
 
-    Hashed over the bytes actually read. When the archive declared a longer
-    length than the cap allowed, the hash is of a prefix and would not match
-    the real file, so it is not recorded at all — a hash that silently means
-    "the first megabyte of" is worse than no hash, because every reputation
-    source would answer confidently about the wrong file.
+    `digests` are hashes of the *whole* member, computed by streaming it past
+    the read limit — a 5.6 MB installer is ordinary and must still be
+    identifiable. Without them the member is hashed from `data`, which is only
+    valid when `data` is the whole thing: a hash of the first megabyte looks
+    real, matches nothing, and makes every reputation source answer
+    confidently about a file that does not exist.
     """
     if len(result.binaries) >= MAX_ENTRIES:
         return
-    size = declared_size if declared_size is not None else len(data)
-    if declared_size is not None and len(data) < declared_size:
-        result.note(
-            f"{path} is a compiled executable larger than the {MAX_FILE_BYTES:,}-byte read "
-            "limit, so it could not be hashed or looked up."
-        )
-        return
     if any(b.path == path for b in result.binaries):
         return
+
+    if digests is None and declared_size is not None and len(data) < declared_size:
+        # Nothing streamed it and what is in hand is a prefix.
+        result.note(
+            f"{path} is a compiled executable that could not be read in full, so it could "
+            "not be hashed or looked up."
+        )
+        return
+    if digests is not None and not digests.get("complete"):
+        result.note(
+            f"{path} is a compiled executable larger than the {MAX_HASH_BYTES:,}-byte hash "
+            "limit, so it could not be identified. That size is itself unusual."
+        )
+        return
+
+    computed = digests or _digests(data)
     result.binaries.append(
         EmbeddedBinary(
             path=path,
             kind=kind,
-            size=size,
-            sha256=hashlib.sha256(data).hexdigest(),
-            sha1=hashlib.sha1(data).hexdigest(),   # noqa: S324 — an identifier, not a signature
-            md5=hashlib.md5(data).hexdigest(),     # noqa: S324 — same
-            data=data,
+            size=computed.get("size") or declared_size or len(data),
+            sha256=computed["sha256"],
+            sha1=computed["sha1"],
+            md5=computed["md5"],
+            # Only when the whole member is in hand. A prefix is useless to a
+            # sandbox and dangerous to store as if it were the sample.
+            data=data if len(data) >= (computed.get("size") or 0) else None,
         )
     )
     result.note(
@@ -599,12 +667,28 @@ def _walk_archive(data: bytes, path: str, result: ExtractionResult, *, depth: in
                     locked = bool(info.flag_bits & 0x1)
                     if locked:
                         result.encrypted = True
+                    digests: dict[str, Any] | None = None
                     try:
                         with archive.open(
                             info,
                             pwd=(result.password.encode("utf-8") if locked and result.password else None),
                         ) as handle:
-                            payload = handle.read(MAX_FILE_BYTES + 1)
+                            # The format is decided from the magic bytes before
+                            # anything else is read, because what to do next
+                            # depends on it: a compiled member is streamed to
+                            # the end to be hashed, everything else stops at
+                            # the read limit. Reading every member to the end
+                            # just in case would decompress an archive of
+                            # videos in full to learn nothing.
+                            head = handle.read(SNIFF_BYTES)
+                            if sniff(head) in {"pe", "elf"}:
+                                keep = head[: MAX_FILE_BYTES + 1]
+                                digests = _stream_digests(head, handle)
+                                payload = keep
+                            else:
+                                payload = head + handle.read(
+                                    max(0, MAX_FILE_BYTES + 1 - len(head))
+                                )
                     except NotImplementedError:
                         # WinZip AES (compression method 99). The stdlib reads
                         # the flag but will not decrypt it; libarchive will, so
@@ -640,7 +724,8 @@ def _walk_archive(data: bytes, path: str, result: ExtractionResult, *, depth: in
                             return
                         raise
                     _walk(payload, f"{path}/{info.filename}", result,
-                          depth=depth + 1, declared_size=info.file_size)
+                          depth=depth + 1, declared_size=info.file_size,
+                          digests=digests)
         elif kind == "tar":
             with tarfile.open(fileobj=io.BytesIO(data)) as archive:
                 for member in archive:
@@ -653,9 +738,18 @@ def _walk_archive(data: bytes, path: str, result: ExtractionResult, *, depth: in
                     handle = archive.extractfile(member)
                     if handle is None:
                         continue
-                    _walk(handle.read(MAX_FILE_BYTES + 1),
-                          f"{path}/{member.name}", result, depth=depth + 1,
-                          declared_size=member.size)
+                    head = handle.read(SNIFF_BYTES)
+                    if sniff(head) in {"pe", "elf"}:
+                        member_digests = _stream_digests(head, handle)
+                        member_payload = head[: MAX_FILE_BYTES + 1]
+                    else:
+                        member_digests = None
+                        member_payload = head + handle.read(
+                            max(0, MAX_FILE_BYTES + 1 - len(head))
+                        )
+                    _walk(member_payload, f"{path}/{member.name}", result,
+                          depth=depth + 1, declared_size=member.size,
+                          digests=member_digests)
         elif kind == "gzip":
             import gzip
 
@@ -755,8 +849,15 @@ def _walk_external(data: bytes, path: str, result: ExtractionResult, *, depth: i
                     return
                 result.note(f"{path}/{name} could not be extracted from the archive.")
                 continue
+            # `payload` is the whole member: bsdtar writes it to stdout and
+            # subprocess buffers all of it. Truncating before hashing threw
+            # away an identifier that was already in hand.
+            member_digests = (
+                _digests(payload) if sniff(payload[:SNIFF_BYTES]) in {"pe", "elf"} else None
+            )
             _walk(payload[: MAX_FILE_BYTES + 1], f"{path}/{name}", result,
-                  depth=depth + 1, declared_size=len(payload))
+                  depth=depth + 1, declared_size=len(payload),
+                  digests=member_digests)
 
         if len(names) > MAX_ENTRIES:
             result.note(f"{path} holds {len(names)} entries; the first {MAX_ENTRIES} were read.")

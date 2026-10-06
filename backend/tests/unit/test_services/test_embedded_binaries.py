@@ -262,3 +262,88 @@ def test_the_evidence_model_keeps_the_binaries_and_the_password_state():
 
     assert dumped["password_required"] is True
     assert dumped["binaries"][0]["verdict"] == "malicious"
+
+
+# --- executables bigger than the read limit ----------------------------------
+#
+# A real submission carried a 5,647,616-byte installer and the extractor said
+# it was "larger than the 1,000,000-byte read limit, so it could not be hashed
+# or looked up". The read limit bounds what is *kept* — text that goes into
+# evidence, the prompt and the screen. A hash keeps nothing, so the two limits
+# have no business being the same number.
+
+
+def _big_pe(size: int = 5_647_616) -> bytes:
+    """Incompressible, so a zip cannot quietly shrink it under the limit."""
+    import secrets
+
+    head = _pe(b"")
+    return head + secrets.token_bytes(size - len(head))
+
+
+def test_a_five_megabyte_executable_is_hashed_in_full():
+    payload = _big_pe()
+    data = _archive({"manifest.json": b"[]", "Setup.exe": payload})
+
+    result = fcs.extract(data, "dropper.zip")
+
+    assert len(result.binaries) == 1
+    binary = result.binaries[0]
+    assert binary.size == len(payload)
+    # The hash of the whole file, not of the megabyte that fitted.
+    assert binary.sha256 == hashlib.sha256(payload).hexdigest()
+    assert binary.md5 == hashlib.md5(payload).hexdigest()
+
+
+def test_the_same_holds_for_a_tar():
+    import io as _io
+    import tarfile
+
+    payload = _big_pe(3_000_000)
+    buf = _io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        info = tarfile.TarInfo("Setup.exe")
+        info.size = len(payload)
+        tar.addfile(info, _io.BytesIO(payload))
+
+    result = fcs.extract(buf.getvalue(), "dropper.tar")
+
+    assert result.binaries[0].sha256 == hashlib.sha256(payload).hexdigest()
+
+
+def test_hashing_a_large_member_does_not_spend_the_text_budget():
+    """The content budget is for things an analyst reads. A 5 MB binary that
+    contributes no readable text must not consume it and push out the scripts
+    packed beside it."""
+    data = _archive({"a.js": b"var a = 1;", "Setup.exe": _big_pe()})
+
+    result = fcs.extract(data, "dropper.zip")
+
+    assert result.bytes_read < 1000, "only the script counted against the budget"
+    assert [f.path for f in result.files] == ["dropper.zip/a.js"]
+    assert len(result.binaries) == 1
+
+
+def test_a_streamed_member_keeps_no_bytes_pretending_to_be_the_sample():
+    data = _archive({"Setup.exe": _big_pe()})
+    result = fcs.extract(data, "dropper.zip")
+    # The prefix is not the file. Storing it, or handing it to a sandbox,
+    # would be worse than having nothing.
+    assert result.binaries[0].data is None
+
+
+def test_a_decompression_bomb_is_refused_rather_than_half_hashed(monkeypatch):
+    """Past the hash budget no hash is recorded at all. A partial digest looks
+    real and matches nothing."""
+    data = _archive({"Setup.exe": _big_pe(2_000_000)})
+    monkeypatch.setattr(fcs, "MAX_HASH_BYTES", 100_000)
+
+    result = fcs.extract(data, "bomb.zip")
+
+    assert result.binaries == []
+    assert any("hash limit" in note for note in result.limitations)
+
+
+def test_the_hash_limit_is_far_above_the_read_limit():
+    """They bound different things and must not be collapsed back together."""
+    assert fcs.MAX_HASH_BYTES > fcs.MAX_FILE_BYTES * 100
