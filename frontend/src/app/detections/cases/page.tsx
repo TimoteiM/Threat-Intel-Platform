@@ -37,7 +37,7 @@ export default function CasesPage() {
     <Page>
       <PageHeader
         title="Cases"
-        subtitle="Alerts that belong to the same activity on the same device, grouped into one case."
+        subtitle="Alerts on one device that share evidence — an indicator, an account, or the same detection — grouped into one case."
         actions={
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div className="ds-toolbar" role="group" aria-label="Time window">

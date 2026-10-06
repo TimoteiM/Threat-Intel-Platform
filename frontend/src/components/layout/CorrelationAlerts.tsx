@@ -7,7 +7,8 @@ import type { CorrelatedCase } from "@/lib/types";
 /**
  * Cases the analyst has not read yet, said where they cannot miss it.
  *
- * A case forms when several independent detections land on one entity inside a
+ * A case forms when detections on one entity are tied together by shared
+ * evidence — an indicator, an account, or the same rule firing — inside a
  * window. Nobody watches for that by opening alerts one at a time, which is
  * exactly why chains go unseen — so the count lives in the top bar and follows
  * you between pages.

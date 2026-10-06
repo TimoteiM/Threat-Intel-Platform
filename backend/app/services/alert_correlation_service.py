@@ -25,7 +25,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AlertBodyInvestigationRun
@@ -50,12 +50,17 @@ from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 from app.services import tenant_scope
 from app.tasks.case_event_task import dispatch
 from app.tasks.case_narrative_task import dispatch as dispatch_narratives
+from app.services.alert_case_linkage_service import (
+    cluster_linked,
+    ubiquitous_values,
+)
 from app.services.alert_session_service import (
     SCORE_VERSION,
     SESSION_GAP,
     SESSION_LOOKBACK_CHUNK,
     anchor_index,
     assign_sessions,
+    case_key_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -434,7 +439,14 @@ def score_case(
     # interesting case on the estate last.
     if distinct_rules >= 2:
         score += 30 * min(distinct_rules - 1, 3)
-        reasons.append(f"{distinct_rules} independent detections agree on this entity")
+        # "agree on this entity" was written when membership was device plus
+        # clock, so it claimed corroboration for alerts that shared nothing but
+        # a machine and an afternoon. Membership now requires shared evidence,
+        # and the wording says what is actually true: these detections fired on
+        # activity that is tied together.
+        reasons.append(
+            f"{distinct_rules} independent detections on linked activity"
+        )
 
     for tactic in tactics:
         if tactic.casefold() not in _TACTIC_RANK:
@@ -496,6 +508,21 @@ def score_case(
     return min(score, 100), reasons
 
 
+# The indicator values this alert carries, as an array, so case membership can
+# ask what two alerts have in common without pulling every run's result_json
+# back across the wire. Addresses the platform itself skipped as private or
+# reserved are left out here rather than filtered later: they are the device's
+# own address, which every alert on the device carries.
+_IOCS = literal_column(
+    "(SELECT array_agg(DISTINCT lower(rep->'indicator'->>'value')) "
+    " FROM jsonb_array_elements("
+    "   coalesce(alert_body_investigation_runs.result_json->'indicator_reports', '[]'::jsonb)"
+    " ) AS rep"
+    " WHERE rep->'indicator'->>'value' IS NOT NULL"
+    "   AND coalesce(rep->>'skip_reason', '') <> 'private_or_reserved_address')"
+).label("ioc_values")
+
+
 _RUN_COLUMNS = (
     AlertBodyInvestigationRun.id,
     AlertBodyInvestigationRun.title,
@@ -517,6 +544,7 @@ _RUN_COLUMNS = (
     AlertBodyInvestigationRun.overall_verdict,
     AlertBodyInvestigationRun.highest_risk_score,
     AlertBodyInvestigationRun.result_attack_assessment,
+    _IOCS,
 )
 
 # When the alert happened, falling back to when we were told. Runs predating the
@@ -525,6 +553,7 @@ _RUN_COLUMNS = (
 _EVT = func.coalesce(
     AlertBodyInvestigationRun.event_time, AlertBodyInvestigationRun.created_at
 )
+
 
 # The anchor walk pages backwards; this bounds how many pages before it gives up
 # and treats what it holds as the session start. Hit only by a chain of unbroken
@@ -597,6 +626,11 @@ async def _extend_to_anchor(
         "not a measured boundary", host, MAX_ANCHOR_PAGES,
     )
     return ordered
+
+
+def _iocs_of(row: Any) -> list[str]:
+    """The indicator values projected alongside the run, or none."""
+    return list(getattr(row, "ioc_values", None) or ())
 
 
 async def correlate_alerts(
@@ -689,6 +723,11 @@ async def correlate_alerts(
             str(row.entity_host),
         )].append(row)
 
+    # Learned once for the whole request, like the pair baseline above and for
+    # the same reason: whether an indicator describes the estate or an incident
+    # is not a property of any one case.
+    ubiquitous = ubiquitous_values(rows, _iocs_of)
+
     settings = get_settings()
     emissions: list[dict[str, Any]] = []
     narrative_jobs: list[tuple[str, dict[str, Any], str]] = []
@@ -716,6 +755,34 @@ async def correlate_alerts(
         for assignment, row in zip(assignments, history):
             sessions[assignment.case_key].append(row)
             session_of.setdefault(assignment.case_key, assignment)
+
+        # The session bounds a case in time; evidence decides who is in it.
+        # Grouping by device and clock alone put a password change, a system
+        # critical event six hours later and a .NET crash in one case, and
+        # then told the analyst three independent detections agreed.
+        linked_sessions: dict[str, list[Any]] = {}
+        session_anchor: dict[str, Any] = {}
+        for base_key, session_members in sessions.items():
+            ordered_members = sorted(session_members, key=lambda m: _event_time(m, cutoff))
+            clusters = cluster_linked(ordered_members, _iocs_of, ubiquitous=ubiquitous)
+            for cluster in clusters:
+                # Identity comes from the cluster's own earliest event, the same
+                # way a session's does: a property of what happened, never of
+                # where the query happened to start. Clusters that begin at the
+                # same instant are told apart by their earliest run id, which is
+                # stable for as long as the membership is.
+                first = min(cluster, key=lambda m: (_event_time(m, cutoff), str(m.id)))
+                cluster_key = (
+                    base_key if len(clusters) == 1
+                    else case_key_for(
+                        source, client, entity, _event_time(first, cutoff),
+                        discriminator=str(first.id),
+                    )
+                )
+                linked_sessions[cluster_key] = cluster
+                session_anchor[cluster_key] = session_of[base_key]
+        sessions = linked_sessions
+        session_of = session_anchor
 
         for case_key, members in sessions.items():
             # A session is shown when the window reaches any part of it, and is

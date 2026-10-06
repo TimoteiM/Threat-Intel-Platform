@@ -9,7 +9,7 @@ looks exactly like the finding the feature exists to produce.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -20,7 +20,7 @@ from app.services import tenant_scope
 
 class _Run:
     def __init__(self, host, source, rule, verdict="suspicious", event_time=None,
-                 tenant_id="c00"):
+                 tenant_id="c00", iocs=("203.0.113.7",)):
         self.id = uuid4()
         self.title = f"{rule} on {host}"
         self.created_at = datetime.now(timezone.utc)
@@ -46,6 +46,11 @@ class _Run:
         self.overall_verdict = verdict
         self.highest_risk_score = 40
         self.result_attack_assessment = None
+        # What ties this alert to another. A case is no longer every alert on a
+        # device within six hours — members must share evidence — so a stub
+        # without indicators models two alerts that have nothing to do with
+        # each other, and the case under test would correctly never form.
+        self.ioc_values = list(iocs)
 
 
 class _Result:
@@ -179,3 +184,41 @@ async def test_an_incident_is_never_a_member_of_a_case():
     other.alert_kind = "alert"
     result = await correlate_alerts(_DB([incident, other]), scope=tenant_scope.INTERNAL, hours=48)
     assert result["total_cases"] == 0
+
+
+@pytest.mark.asyncio
+async def test_two_alerts_sharing_only_a_device_do_not_form_a_case():
+    """The review that prompted this: a password change and a .NET crash hours
+    apart on one server were reported as one case, with the page saying two
+    independent detections agreed on the entity.
+
+    They are on the same host, inside the same session, and share no
+    indicator, account or detection — so there are two cases, not one.
+    """
+    a = _Run("EXPSQL004", "Siembiot", "User Account Password Last Set Changed",
+             iocs=["198.51.100.4"])
+    b = _Run("EXPSQL004", "Siembiot", "A .NET application crashed",
+             iocs=["203.0.113.9"])
+    b.event_time = a.event_time + timedelta(hours=5)
+
+    result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
+
+    # Neither is a multi-alert case, so neither reaches the correlation
+    # threshold that `total_cases` counts.
+    assert result["total_cases"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_shared_indicator_is_enough_to_make_them_one_case():
+    """The same two alerts, now with an address in common. Shared evidence is
+    exactly what membership asks for."""
+    a = _Run("EXPSQL004", "Siembiot", "User Account Password Last Set Changed",
+             iocs=["203.0.113.9"])
+    b = _Run("EXPSQL004", "Siembiot", "A .NET application crashed",
+             iocs=["203.0.113.9"])
+    b.event_time = a.event_time + timedelta(hours=5)
+
+    result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
+
+    assert result["total_cases"] == 1
+    assert result["cases"][0]["alert_count"] == 2

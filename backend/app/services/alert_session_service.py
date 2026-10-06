@@ -88,13 +88,21 @@ class SessionAssignment:
 
 
 def case_key_for(
-    source: str, client: str, host: str, session_started_at: datetime
+    source: str, client: str, host: str, session_started_at: datetime,
+    *, discriminator: str = "",
 ) -> str:
-    """The stable identity of one session.
+    """The stable identity of one case.
 
-    Derived from the session's first event time, never from the ordinal. The
-    separator is a unit separator rather than a character a hostname or client
-    name could contain, so ("a|b", "c") and ("a", "b|c") cannot collide.
+    Derived from its first event time, never from the ordinal. The separator is
+    a unit separator rather than a character a hostname or client name could
+    contain, so ("a|b", "c") and ("a", "b|c") cannot collide.
+
+    `discriminator` separates two cases that begin in the same session, which
+    happens now that a session can hold more than one: its alerts are grouped
+    by what ties them together, and unrelated activity on a device no longer
+    shares an identity just because it shared an afternoon. It is left empty
+    for a session that yields a single case, so those keys are unchanged and
+    every case already on screen keeps the identity it had.
     """
     started = _as_utc(session_started_at)
     parts = (
@@ -103,6 +111,8 @@ def case_key_for(
         str(host or ""),
         started.isoformat(),
     )
+    if discriminator:
+        parts = parts + (str(discriminator),)
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
