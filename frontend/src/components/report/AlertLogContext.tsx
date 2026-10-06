@@ -212,7 +212,21 @@ export function AlertLogContext({
     // request had touched it.
     setJobPhase("submitting");
     try {
-      const result = await reanalyseWithLogContext(runId, refs ?? Array.from(pinned));
+      // What the analyst was actually reading. Columns beyond the six
+      // defaults, plus any field they filtered on — narrowing on `logonId` is
+      // as clear a statement that it matters as putting it on screen, and the
+      // projection the model receives carried neither. `delta` is computed
+      // from the window, not a field of any document.
+      const chosen = Array.from(
+        new Set([
+          ...columns.filter((c) => c !== "delta" && !DEFAULT_COLUMNS.includes(c as never)),
+          ...filters.filter((f) => f.field && f.value).map((f) => f.field),
+        ]),
+      );
+      const result = await reanalyseWithLogContext(runId, refs ?? Array.from(pinned), {
+        extraFields: chosen,
+        filters: filters.filter((f) => f.field && f.value),
+      });
       // Matched exactly, by the id of this request. Comparing completion
       // timestamps left a hole whenever the run had no completion to compare
       // against, and a poll landing before the worker started then reported
@@ -379,6 +393,30 @@ export function AlertLogContext({
               </Muted>
             )}
           </div>
+
+          {/* Which of the fields the analyst added actually reached the model.
+              Asked and sent differ whenever no selected event carried the
+              field, and "the model saw my column" is a claim they should be
+              able to check rather than assume. */}
+          {jobPhase === "done" && job && (job.log_selection.extra_fields_requested?.length ?? 0) > 0 && (
+            <Muted>
+              {(() => {
+                const asked = job.log_selection.extra_fields_requested ?? [];
+                const sent = job.log_selection.extra_fields_sent ?? [];
+                const missing = asked.filter((f) => !sent.includes(f));
+                return (
+                  <>
+                    Fields you added, sent with your events:{" "}
+                    {sent.length > 0 ? sent.map((f) => labelFor(f, asked)).join(", ") : "none"}
+                    {missing.length > 0 &&
+                      ` · not sent, because no selected event carried a value: ${missing
+                        .map((f) => labelFor(f, asked))
+                        .join(", ")}`}
+                  </>
+                );
+              })()}
+            </Muted>
+          )}
 
           {(jobPhase === "submitting" || jobPhase === "queued" || jobPhase === "running") && (
             <div style={progressTrack} role="progressbar" aria-label="Re-analysis progress">

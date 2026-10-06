@@ -406,12 +406,18 @@ def select_for_ai(
     window_seconds: float = 600.0,
     budget_tokens: int = DEFAULT_BUDGET_TOKENS,
     pinned_keys: Sequence[str] = (),
+    extra_fields: Sequence[str] = (),
 ) -> SelectionResult:
     """Rank, group, and fill the budget lane by lane.
 
     `pinned_keys` are events an analyst chose by hand. They are placed first and
     charged to the budget before anything else, because a person asking for a
     specific event to be considered is a stronger signal than any rule here.
+
+    `extra_fields` are document fields the analyst added as columns in the log
+    view. They are charged to the budget like everything else — the cost is
+    counted by `_take` from the same projection that is emitted, so adding ten
+    fields narrows the selection rather than silently overflowing the request.
     """
     result = SelectionResult(found=len(records), budget_tokens=budget_tokens)
     if not records or budget_tokens <= 0:
@@ -465,7 +471,7 @@ def select_for_ai(
 
     def _take(item: Scored, budget: int) -> bool:
         nonlocal used
-        cost = estimate_tokens(_for_prompt(item))
+        cost = estimate_tokens(_for_prompt(item, extra_fields=extra_fields))
         if used + cost > budget:
             return False
         chosen[item.key] = item
@@ -507,7 +513,7 @@ def select_for_ai(
                 break
 
     ordered = sorted(chosen.values(), key=lambda s: (_parse_time(s.record.get("timestamp")) or alert_time))
-    result.selected = [_for_prompt(s) for s in ordered]
+    result.selected = [_for_prompt(s, extra_fields=extra_fields) for s in ordered]
     result.used_tokens = used
     result.relevant_refs = [s.get("ref") for s in result.selected if s.get("ref")]
     result.represented = sum(int(s.record.get("duplicate_count") or 1) for s in chosen.values())
@@ -515,12 +521,64 @@ def select_for_ai(
     return result
 
 
-def _for_prompt(item: Scored) -> dict[str, Any]:
+# Paths `_for_prompt` already emits under another name. Requesting one of
+# these adds a duplicate key and costs tokens to say what the model was told
+# anyway, so they are resolved and then skipped.
+_ALREADY_PROJECTED = frozenset({
+    "timestamp", "agent.name", "users", "rule.description", "rule.id",
+    "rule.level", "event_id", "process.image", "process.command_line",
+    "network.src_ip", "network.dst_ip", "full_log",
+})
+
+
+def _requested_value(record: dict[str, Any], path: str) -> Any:
+    """One requested field's value, from wherever that field actually lives.
+
+    Two shapes, because the log view offers both and an analyst does not
+    distinguish them. `data.win.eventdata.logonId` is an entry in the record's
+    `fields` list; `agent.ip`, `channel` and `domain` are keys on the record
+    itself — and those three are *defaults* in the table that the thirteen-key
+    projection never carried, so resolving only the document fields would have
+    left the most ordinary request unanswered.
+
+    Scalars only. A nested object would be emitted as JSON nobody asked for.
+    """
+    for entry in record.get("fields") or ():
+        if isinstance(entry, dict) and entry.get("name") == path:
+            value = entry.get("value")
+            return value if isinstance(value, (str, int, float, bool)) else None
+
+    node: Any = record
+    if path in node:
+        node = node[path]
+    else:
+        for part in path.split("."):
+            if not isinstance(node, dict):
+                return None
+            node = node.get(part)
+    if isinstance(node, (str, int, float, bool)):
+        return node
+    if isinstance(node, list) and node and all(isinstance(v, str) for v in node):
+        return ", ".join(node[:4])
+    return None
+
+
+def _for_prompt(item: Scored, *, extra_fields: Sequence[str] = ()) -> dict[str, Any]:
     """The compact shape an event takes in the prompt.
 
     Carries `ref` — the OpenSearch `index:id` — so any statement the model makes
     can be traced to the document it came from, and `why` so an analyst can see
     what put it in front of the model.
+
+    This is a *projection*, not the event: for a long time it carried thirteen
+    keys and nothing else, so a field an analyst had put on screen — a logon id,
+    a target account, a parent image, a file hash — was visible to them and
+    invisible to the model. `extra_fields` closes that: whatever they added as a
+    column rides along under `extra`.
+
+    The values come from the record's own `fields` list, which the sanitiser has
+    already been through, so a secret in an unenumerated vendor field is a
+    placeholder here rather than plaintext in the request.
     """
     record = item.record
     agent = record.get("agent") or {}
@@ -560,6 +618,22 @@ def _for_prompt(item: Scored) -> dict[str, Any]:
             "span": record.get("duplicate_span"),
             "other_refs": record.get("duplicate_refs"),
         }
+    if extra_fields:
+        # Only fields this event actually carries. A Sysmon window and a
+        # Security-channel window do not hold the same keys, and emitting
+        # `"logonId": null` for every event that has no logon id spends tokens
+        # to tell the model nothing.
+        extra: dict[str, Any] = {}
+        for name in extra_fields:
+            if name in _ALREADY_PROJECTED:
+                continue
+            value = _requested_value(record, name)
+            if value in (None, "", [], {}):
+                continue
+            extra[name] = str(value)[:300] if isinstance(value, str) else value
+        if extra:
+            out["extra"] = extra
+
     # Empty values are dropped to save tokens — except `links_to_alert`, where
     # empty is the message. "This event shares nothing with the alert" is the
     # difference between evidence and background, and an absent key says that

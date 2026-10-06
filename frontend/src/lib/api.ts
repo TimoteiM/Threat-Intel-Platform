@@ -558,6 +558,15 @@ export interface AnalysisStatus {
     sent?: number | null;
     analyst_pinned: string[];
     analyst_pinned_dropped: string[];
+    /** Fields the analyst asked to be considered. */
+    extra_fields_requested?: string[];
+    /**
+     * Fields that actually reached the provider. Shorter than requested
+     * whenever no selected event carried the field — asked and sent are
+     * genuinely different, and "did the model see it" is the second one.
+     */
+    extra_fields_sent?: string[];
+    log_filters?: Array<{ field: string; value: string }>;
     /** What the prompt block actually cost. Zero when nothing was sent. */
     sent_tokens?: number | null;
     /** What the ranking's arithmetic came to, sent or not. */
@@ -569,6 +578,8 @@ export interface AnalysisStatus {
     requested_by?: string | null;
     requested_at?: string | null;
     pinned_refs: string[];
+    extra_fields?: string[];
+    log_filters?: Array<{ field: string; value: string }>;
   };
   previous_analyses: number;
   previous?: {
@@ -587,17 +598,34 @@ export function getAnalysisStatus(runId: string) {
   return request<AnalysisStatus>(`/alert-investigations/${runId}/analysis-status`);
 }
 
-export function reanalyseWithLogContext(runId: string, pinnedRefs: string[] = []) {
+export function reanalyseWithLogContext(
+  runId: string,
+  pinnedRefs: string[] = [],
+  // The analyst's own view of the logs: document fields they added as columns,
+  // and the filters they narrowed with. Without these the model received a
+  // thirteen-key projection of each event and never saw the field the analyst
+  // had put on screen in order to look at it.
+  view: { extraFields?: string[]; filters?: Array<{ field: string; value: string }> } = {},
+) {
   return request<{
     run_id: string;
     status: string;
     pinned_refs: string[];
+    extra_fields: string[];
+    log_filters: Array<{ field: string; value: string }>;
     note: string;
     request_id?: string | null;
     previous_completed_at?: string | null;
   }>(
     `/alert-investigations/${runId}/reanalyse`,
-    { method: "POST", body: JSON.stringify({ pinned_refs: pinnedRefs }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        pinned_refs: pinnedRefs,
+        extra_fields: view.extraFields ?? [],
+        filters: view.filters ?? [],
+      }),
+    },
   );
 }
 

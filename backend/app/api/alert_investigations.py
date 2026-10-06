@@ -1230,6 +1230,12 @@ async def get_analysis_status(
             "sent": len(selection.get("sent_refs") or []),
             "analyst_pinned": selection.get("analyst_pinned") or [],
             "analyst_pinned_dropped": selection.get("analyst_pinned_dropped") or [],
+            # Asked for, and actually sent. They differ whenever no selected
+            # event carries the field, and an analyst checking "did the model
+            # see the logon id" needs the second list, not the first.
+            "extra_fields_requested": selection.get("extra_fields_requested") or [],
+            "extra_fields_sent": selection.get("extra_fields_sent") or [],
+            "log_filters": selection.get("log_filters") or [],
             # What the prompt block actually cost, not what the ranking's
             # arithmetic came to. `used_tokens` is the budget the *selection*
             # would have spent; reporting it when nothing was sent told an
@@ -1243,6 +1249,8 @@ async def get_analysis_status(
             "requested_by": requested.get("requested_by"),
             "requested_at": requested.get("requested_at"),
             "pinned_refs": requested.get("pinned_refs") or [],
+            "extra_fields": requested.get("extra_fields") or [],
+            "log_filters": requested.get("log_filters") or [],
         },
         "previous_analyses": len(result.get("previous_analyses") or []),
         # Whether the re-run reached a different conclusion, stated rather than
@@ -1270,6 +1278,66 @@ def _previous_analysis(result: dict[str, Any]) -> dict[str, Any] | None:
         # comparable" instead of claiming the wording is unchanged.
         "interpretation_changed": (None if not previous_md else previous_md != current_md),
     }
+
+
+# A document field name as OpenSearch spells it: `data.win.eventdata.logonId`.
+# Deliberately strict, and deliberately *not* a query input — these names only
+# ever project fields out of log records already retrieved and stored. Nothing
+# here is ever interpolated into an OpenSearch request, so the rule about not
+# accepting index patterns or filters from a caller is not weakened: the caller
+# is choosing what to read of what we already hold.
+_LOG_FIELD_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,118}$")
+_MAX_REQUESTED_FIELDS = 12
+_MAX_REQUESTED_FILTERS = 8
+
+
+def _requested_log_fields(value: Any) -> list[str]:
+    """Field names an analyst put on screen, bounded and de-duplicated.
+
+    Bounded because every field is charged to the AI token budget on every
+    selected event: an unbounded list would push the events themselves out of
+    the request it was meant to enrich.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        # Only strings. `str(None)` is "None", which matches the pattern and
+        # would sit in the requested list as a field that can never resolve.
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        if _LOG_FIELD_NAME.match(name) and name not in out:
+            out.append(name)
+        if len(out) >= _MAX_REQUESTED_FIELDS:
+            break
+    return out
+
+
+def _requested_log_filters(value: Any) -> list[dict[str, str]]:
+    """The analyst's narrowing, as text for the prompt — never as a query.
+
+    The value is whatever they typed, so it is truncated and carried as data.
+    The prompt block is fenced and says in as many words that this is the
+    analyst's line of enquiry and not an instruction.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("field")
+        text = item.get("value")
+        if not isinstance(name, str) or not isinstance(text, str):
+            continue
+        name, text = name.strip(), text.strip()
+        if not _LOG_FIELD_NAME.match(name) or not text:
+            continue
+        out.append({"field": name, "value": text[:120]})
+        if len(out) >= _MAX_REQUESTED_FILTERS:
+            break
+    return out
 
 
 @router.post("/{run_id}/reanalyse")
@@ -1301,6 +1369,8 @@ async def reanalyse_with_log_context(
         raise HTTPException(403, "Re-analysis is an analyst action and needs a signed-in account.")
 
     pinned = [str(r) for r in (body.get("pinned_refs") or []) if str(r).strip()][:50]
+    extra_fields = _requested_log_fields(body.get("extra_fields"))
+    log_filters = _requested_log_filters(body.get("filters"))
 
     from app.tasks.alert_body_task import run_alert_body_investigation_task
 
@@ -1331,6 +1401,12 @@ async def reanalyse_with_log_context(
         "requested_by": str(identity.get("username") or "unknown"),
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "pinned_refs": pinned,
+        # The analyst's own view: the document fields they added as columns and
+        # the filters they narrowed with. Carried so the model is shown what
+        # they were actually reading, instead of the thirteen-key projection
+        # they had already looked past.
+        "extra_fields": extra_fields,
+        "log_filters": log_filters,
     }
     previous_completed_at = run.completed_at.isoformat() if run.completed_at else None
 
@@ -1344,6 +1420,8 @@ async def reanalyse_with_log_context(
         "run_id": str(run_id),
         "status": "queued",
         "pinned_refs": pinned,
+        "extra_fields": extra_fields,
+        "log_filters": log_filters,
         "request_id": request_id,
         # So a caller polling for the result can tell a fresh answer from the
         # one that was already on screen. Without it the first poll could land

@@ -233,9 +233,13 @@ def _collect_log_context(run_uuid: uuid.UUID, run: Any) -> tuple[dict[str, Any] 
         # Events an analyst chose by hand, recorded by the re-analysis request.
         # Without this the picks were accepted, stored, and then ignored by the
         # run they were supposed to steer.
-        payload["pinned_keys"] = list(
-            ((run.result_json or {}).get("reanalysis") or {}).get("pinned_refs") or []
-        )
+        reanalysis = ((run.result_json or {}).get("reanalysis") or {})
+        payload["pinned_keys"] = list(reanalysis.get("pinned_refs") or [])
+        # The fields and filters the analyst had on screen when they chose.
+        # Same reason as the pins: accepted and stored is not the same as used,
+        # and this is the hop where that difference used to be lost.
+        payload["extra_fields"] = list(reanalysis.get("extra_fields") or [])
+        payload["log_filters"] = list(reanalysis.get("log_filters") or [])
         return payload, row_id
     except Exception as exc:  # noqa: BLE001 — enrichment never fails an alert
         logger.warning("Log context for run %s could not be collected: %s", run_uuid, exc)

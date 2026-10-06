@@ -249,3 +249,72 @@ def test_each_reanalysis_is_identified_so_its_own_result_can_be_recognised():
 
     status = inspect.getsource(api.get_analysis_status)
     assert '"request_id": requested.get("request_id")' in status
+
+
+# --- the fields and filters an analyst had on screen -------------------------
+
+
+def test_requested_field_names_are_bounded_and_strict():
+    """These names project fields out of records already retrieved. They are
+    never interpolated into an OpenSearch request — but a name is still caller
+    input, so the shape is checked rather than trusted."""
+    assert api._requested_log_fields(
+        ["data.win.eventdata.logonId", "channel", "agent.ip"]
+    ) == ["data.win.eventdata.logonId", "channel", "agent.ip"]
+    # Nothing that is not a field name.
+    assert api._requested_log_fields(
+        ["../../etc/passwd", "a b", '{"match_all":{}}', "", None, 0, ["x"], "a" * 200]
+    ) == []
+    # Bounded, because every field is charged to the token budget on every
+    # selected event: an unbounded list pushes out the events it was meant to
+    # enrich.
+    assert len(api._requested_log_fields([f"f{i}" for i in range(50)])) == 12
+    assert api._requested_log_fields(["dup", "dup"]) == ["dup"]
+    assert api._requested_log_fields("channel") == []
+
+
+def test_requested_filters_keep_the_analysts_words_bounded():
+    assert api._requested_log_filters(
+        [{"field": "channel", "value": "Security"}]
+    ) == [{"field": "channel", "value": "Security"}]
+    # A filter with no value narrows nothing and says nothing.
+    assert api._requested_log_filters([{"field": "channel", "value": ""}]) == []
+    assert api._requested_log_filters([{"field": "bad name", "value": "x"}]) == []
+    assert api._requested_log_filters([{"field": None, "value": "x"}]) == []
+    assert len(api._requested_log_filters([{"field": "c", "value": "y" * 500}])[0]["value"]) == 120
+
+
+def test_the_reanalysis_records_the_view_not_just_the_picks():
+    """The pins were once accepted, stored, and then ignored by the run they
+    were meant to steer. The fields and filters travel the same three hops, so
+    each one is asserted rather than assumed."""
+    import inspect
+
+    source = inspect.getsource(api.reanalyse_with_log_context)
+    assert "_requested_log_fields(body.get(\"extra_fields\"))" in source
+    assert "_requested_log_filters(body.get(\"filters\"))" in source
+    assert '"extra_fields": extra_fields' in source
+    assert '"log_filters": log_filters' in source
+
+    from app.tasks import alert_body_task
+
+    carried = inspect.getsource(alert_body_task._collect_log_context)
+    assert 'payload["extra_fields"]' in carried
+    assert 'payload["log_filters"]' in carried
+
+    from app.services import alert_body_investigation_service as svc
+
+    used = inspect.getsource(svc)
+    assert "extra_fields=extra_fields" in used
+    assert "analyst_filters=log_filters" in used
+
+
+def test_the_status_separates_fields_asked_for_from_fields_sent():
+    """A field no selected event carries is dropped from the projection to save
+    tokens. An analyst checking "did the model see the logon id" needs the sent
+    list, not the asked list."""
+    import inspect
+
+    source = inspect.getsource(api.get_analysis_status)
+    assert '"extra_fields_requested"' in source
+    assert '"extra_fields_sent"' in source

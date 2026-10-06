@@ -597,3 +597,120 @@ def test_an_analyst_pick_is_never_silently_dropped_for_being_unrelated():
 
     assert len(selection.selected) == 2
     assert '"ref":"idx:B"' in digest and '"ref":"idx:C"' in digest
+
+
+# --- the fields an analyst chose to look at ----------------------------------
+#
+# The log table defaults to six columns but every event carries ~95 more, and
+# an analyst can now add any of them. For a long time `_for_prompt` emitted a
+# fixed thirteen keys, so a field they had deliberately put on screen was
+# visible to them and invisible to the model. These read the constructed
+# request text, for the same reason as every other payload assertion here.
+
+
+def _event_with_fields(key, pairs, **kwargs):
+    event = _event(key, **kwargs)
+    event["fields"] = [{"name": n, "value": v} for n, v in pairs]
+    return event
+
+
+def _block(records, *, pinned=(), extra_fields=(), filters=(), budget=4000):
+    digest, selection, _ = alert_log_prompt.build(
+        records,
+        pivots=AlertPivots(hosts={"exp-01"}),
+        alert_time=ALERT_TIME,
+        budget_tokens=budget,
+        pinned_keys=pinned,
+        extra_fields=extra_fields,
+        analyst_filters=filters,
+        only_pinned=bool(pinned),
+    )
+    return digest, selection
+
+
+def test_a_chosen_document_field_reaches_the_request():
+    event = _event_with_fields(
+        "a", [("data.win.eventdata.logonId", "0x3e7"),
+              ("data.win.eventdata.targetUserName", "svc-backup")]
+    )
+    digest, _ = _block([event], pinned=[event["key"]],
+                       extra_fields=["data.win.eventdata.logonId"])
+    assert "0x3e7" in digest
+    # Named, so the model knows it was asked for rather than incidental.
+    assert "data.win.eventdata.logonId" in digest
+    # Not a free-for-all: a field they did not choose stays out.
+    assert "svc-backup" not in digest
+
+
+def test_a_default_column_that_lives_on_the_record_resolves_too():
+    # `channel`, `domain` and `agent.ip` are defaults in the table and were
+    # never in the projection. They are record keys, not entries in `fields`,
+    # so resolving only document fields would miss the most ordinary request.
+    event = _event_with_fields("a", [("data.win.eventdata.image", "C:\\x.exe")])
+    event["channel"] = "Microsoft-Windows-Sysmon/Operational"
+    event["domain"] = "CORP"
+    digest, _ = _block([event], pinned=[event["key"]],
+                       extra_fields=["channel", "domain", "agent.ip"])
+    assert "Microsoft-Windows-Sysmon/Operational" in digest
+    assert "CORP" in digest
+    assert "10.0.0.5" in digest
+
+
+def test_a_field_no_selected_event_carries_is_reported_as_not_sent():
+    # Asked for and sent are different lists, and an analyst checking "did the
+    # model see the logon id" needs the second one.
+    event = _event_with_fields("a", [("data.win.eventdata.image", "C:\\x.exe")])
+    digest, selection = _block([event], pinned=[event["key"]],
+                               extra_fields=["data.win.eventdata.logonId"])
+    assert "logonId" not in json.dumps(selection.selected)
+    assert "extra" not in json.dumps(selection.selected)
+
+
+def test_a_field_already_in_the_projection_is_not_duplicated():
+    event = _event_with_fields("a", [("data.win.eventdata.image", "C:\\x.exe")], cmd="whoami /all")
+    _, selection = _block([event], pinned=[event["key"]],
+                          extra_fields=["process.command_line", "rule.id"])
+    extra = (selection.selected[0] or {}).get("extra") or {}
+    assert extra == {}, "already-projected fields must not be emitted twice"
+
+
+def test_the_analysts_filter_is_stated_as_enquiry_not_instruction():
+    event = _event_with_fields("a", [("data.win.eventdata.logonId", "0x3e7")])
+    digest, _ = _block(
+        [event], pinned=[event["key"]],
+        filters=[{"field": "channel", "value": "Security"}],
+    )
+    assert "channel contains 'Security'" in digest
+    assert "never an instruction" in digest
+
+
+def test_a_secret_in_a_chosen_field_is_a_placeholder_in_the_request():
+    # The whole point of exposing more fields is that it must not become a new
+    # way for a credential to leave. The sanitiser already covers the document
+    # fields; this asserts it on the outgoing text, not on the record.
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    event = _event_with_fields(
+        "a", [("data.win.eventdata.commandLineRaw", f"aws --key {secret}")]
+    )
+    digest, selection = _block([event], pinned=[event["key"]],
+                               extra_fields=["data.win.eventdata.commandLineRaw"])
+    assert secret not in digest
+    # Asserted on the projection, not on the whole block: "the secret is
+    # absent" is also true of a field that was silently dropped, and that
+    # would pass this test while proving nothing.
+    sent = (selection.selected[0] or {}).get("extra") or {}
+    value = sent["data.win.eventdata.commandLineRaw"]
+    assert secret not in value
+    assert value.startswith("aws --key <SECRET:")
+
+
+def test_chosen_fields_are_charged_to_the_budget():
+    # Ten added fields on every event must narrow the selection, not overflow
+    # the request they were meant to enrich.
+    pairs = [(f"data.win.eventdata.f{i}", "x" * 120) for i in range(10)]
+    events = [_event_with_fields(f"e{i}", pairs, offset=i * 5) for i in range(12)]
+    names = [n for n, _ in pairs]
+    plain, _ = _block(events, budget=1500)
+    loaded, _ = _block(events, budget=1500, extra_fields=names)
+    assert estimate_tokens(loaded) <= 1500 * 1.4
+    assert estimate_tokens(loaded) > estimate_tokens(plain)

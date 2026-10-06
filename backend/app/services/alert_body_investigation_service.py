@@ -1158,6 +1158,8 @@ def _build_log_digest(
             alert_fields=alert_fields,
         )
         pinned = list(log_context.get("pinned_keys") or ())
+        extra_fields = list(log_context.get("extra_fields") or ())
+        log_filters = [f for f in (log_context.get("log_filters") or ()) if isinstance(f, dict)]
         autosend = bool(getattr(settings, "alert_log_ai_autosend", False))
 
         digest, selection, redactions = alert_log_prompt.build(
@@ -1167,6 +1169,8 @@ def _build_log_digest(
             window_seconds=float(settings.alert_log_window_minutes) * 60.0,
             budget_tokens=int(settings.alert_log_ai_budget_tokens),
             pinned_keys=pinned,
+            extra_fields=extra_fields,
+            analyst_filters=log_filters,
             window_complete=bool((log_context.get("window") or {}).get("complete", True)),
             # Off by default. The ranking still runs — its picks are what the
             # log view marks "relevant" — but sending them costs about 16% more
@@ -1188,6 +1192,24 @@ def _build_log_digest(
             else ("advisory_only" if summary["relevant_refs"] else "nothing_selected")
         )
         summary["secrets_redacted"] = redactions
+        # The fields that actually reached the provider, not the ones that were
+        # asked for. An analyst adds `logonId` as a column, pins three events,
+        # and is entitled to know whether the model saw it — a field no selected
+        # event carries is dropped from the projection to save tokens, so asked
+        # and sent are genuinely different lists.
+        summary["extra_fields_requested"] = list(extra_fields)
+        summary["extra_fields_sent"] = sorted(
+            {
+                name
+                for entry in (selection.selected or [])
+                for name in (entry.get("extra") or {})
+            }
+        ) if digest else []
+        summary["log_filters"] = [
+            {"field": str(f.get("field")), "value": str(f.get("value"))}
+            for f in log_filters
+            if f.get("field") and f.get("value")
+        ]
         summary["digest_tokens"] = alert_log_prompt.measure(digest) if digest else 0
         return digest, summary
     except Exception as exc:  # noqa: BLE001
