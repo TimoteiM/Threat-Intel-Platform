@@ -1183,6 +1183,32 @@ class ExtractedFileEvidence(BaseModel):
     text: str = ""
 
 
+class EmbeddedBinaryEvidence(BaseModel):
+    """A compiled file found inside the submission, and what is known of it.
+
+    An archive holding a one-line manifest and a 5 MB installer was reported as
+    "1 readable file" — true, and silent about the only part that executes.
+    The binary cannot be read as text, so it is identified by hash and looked
+    up like any other sample; what comes back is attached here.
+    """
+
+    path: str
+    kind: str = "pe"
+    size: int = 0
+    sha256: str
+    sha1: str | None = None
+    md5: str | None = None
+    # What the reputation lookup said. None means it was never run — which is
+    # a different thing from "nothing known about this file", and the report
+    # has to be able to tell an analyst which of the two happened.
+    verdict: str | None = None
+    malicious_count: int | None = None
+    total_engines: int | None = None
+    names: list[str] = []
+    first_seen: str | None = None
+    note: str | None = None
+
+
 class FileContentEvidence(BaseModel):
     """The submitted file's own source, and anything unpacked from it."""
 
@@ -1192,6 +1218,12 @@ class FileContentEvidence(BaseModel):
     bytes_read: int = 0
     encrypted: bool = False
     readable_files: int = 0
+    # Declared, or pydantic drops them and the report cannot tell "locked, no
+    # key" from "locked, wrong key" — which is the whole point of having them.
+    password_required: bool = False
+    password_incorrect: bool = False
+    encryption_unsupported: bool = False
+    binaries: list[EmbeddedBinaryEvidence] = []
 
 
 class CollectedEvidence(BaseModel):

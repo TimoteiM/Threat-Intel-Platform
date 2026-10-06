@@ -76,10 +76,25 @@ def _file_collector_signal(evidence_data: dict[str, Any]) -> dict[str, Any] | No
         suspicious_apis.extend([str(a) for a in (item.get("suspicious_apis") or [])])
 
     readable_files = len(((evidence_data.get("file_content") or {}).get("files")) or [])
+
+    # A compiled file packed inside the submission. Its reputation is about the
+    # thing that actually runs, so it is read with the same weight as a verdict
+    # on the submission itself: an archive is a wrapper, and "the wrapper is
+    # unknown to VirusTotal" says nothing about the installer inside it.
+    embedded = [
+        b for b in (((evidence_data.get("file_content") or {}).get("binaries")) or [])
+        if isinstance(b, dict)
+    ]
+    embedded_malicious = [b for b in embedded if str(b.get("verdict") or "") == "malicious"]
+    embedded_suspicious = [b for b in embedded if str(b.get("verdict") or "") == "suspicious"]
+
     composite = (evidence_data.get("final_risk") or {}).get("risk_score")
     composite = int(composite) if isinstance(composite, (int, float)) else None
 
-    if not sandbox_verdicts and not static_level and not readable_files and composite is None:
+    if (
+        not sandbox_verdicts and not static_level and not readable_files
+        and not embedded and composite is None
+    ):
         return None
 
     key_evidence: list[str] = []
@@ -94,6 +109,31 @@ def _file_collector_signal(evidence_data: dict[str, Any]) -> dict[str, Any] | No
         key_evidence.append(
             f"{readable_files} readable file(s) extracted and read"
         )
+    for binary in embedded:
+        name = str(binary.get("path") or "").rsplit("/", 1)[-1]
+        verdict = str(binary.get("verdict") or "") or "not looked up"
+        detail = ""
+        if binary.get("malicious_count") is not None and binary.get("total_engines"):
+            detail = f" ({binary['malicious_count']}/{binary['total_engines']} engines)"
+        key_evidence.append(
+            f"Packed executable {name}: {verdict}{detail} — sha256 {str(binary.get('sha256') or '')[:16]}…"
+        )
+
+    if embedded_malicious:
+        names = ", ".join(
+            str(b.get("path") or "").rsplit("/", 1)[-1] for b in embedded_malicious
+        )
+        return {
+            "classification": "malicious", "confidence": "high",
+            # The same floor a sandbox verdict earns. A reputation hit on the
+            # executable inside the archive is a statement about the payload,
+            # not about the container it travelled in.
+            "risk_score": max(75, composite or 0),
+            "recommended_action": "block",
+            "key_evidence": key_evidence + [
+                f"The archive carries an executable already known to be malicious: {names}."
+            ],
+        }
 
     if any(v == "malicious" for v in sandbox_verdicts):
         return {
@@ -103,7 +143,7 @@ def _file_collector_signal(evidence_data: dict[str, Any]) -> dict[str, Any] | No
             "risk_score": max(75, composite or 0),
             "recommended_action": "block", "key_evidence": key_evidence,
         }
-    if any(v == "suspicious" for v in sandbox_verdicts) or static_level == "high":
+    if embedded_suspicious or any(v == "suspicious" for v in sandbox_verdicts) or static_level == "high":
         return {
             "classification": "suspicious", "confidence": "medium",
             "risk_score": max(45, composite or 0),

@@ -31,6 +31,7 @@ as unreadable rather than treated as empty, because "we could not look" and
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -102,6 +103,37 @@ class ExtractedFile:
 
 
 @dataclass
+class EmbeddedBinary:
+    """A compiled file found inside a submission.
+
+    The content reader has nothing to say about a PE beyond "this is not text",
+    which is true and useless: the executable packed next to a one-line
+    manifest is usually the whole point of the archive. Its hash is what every
+    reputation source takes, so the hash is what gets recorded — and the bytes
+    are kept on the object, out of `as_dict`, for a caller that wants to store
+    or detonate it.
+    """
+
+    path: str
+    kind: str
+    size: int
+    sha256: str
+    sha1: str
+    md5: str
+    data: bytes | None = field(default=None, repr=False)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "kind": self.kind,
+            "size": self.size,
+            "sha256": self.sha256,
+            "sha1": self.sha1,
+            "md5": self.md5,
+        }
+
+
+@dataclass
 class ExtractionResult:
     files: list[ExtractedFile] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
@@ -117,6 +149,8 @@ class ExtractionResult:
     password_required: bool = False
     password_incorrect: bool = False
     encryption_unsupported: bool = False
+    # Compiled files found inside, each worth a reputation lookup of its own.
+    binaries: list[EmbeddedBinary] = field(default_factory=list)
     # The caller's password, riding along with the accumulator rather than as
     # a second parameter through six recursive calls. Never serialised: it
     # leaves this object only as an argument to an extractor.
@@ -137,6 +171,7 @@ class ExtractionResult:
             "password_incorrect": self.password_incorrect,
             "encryption_unsupported": self.encryption_unsupported,
             "readable_files": len(self.files),
+            "binaries": [b.as_dict() for b in self.binaries],
         }
 
 
@@ -367,7 +402,7 @@ def _walk(
         return
 
     if kind in {"pe", "elf"}:
-        result.note(f"{path} is a compiled executable; its code is not readable as text.")
+        _add_binary(data, path, result, kind=kind, declared_size=declared_size)
         return
 
     if kind == "pdf":
@@ -384,6 +419,46 @@ def _walk(
         _read_pdf_scripts(data, path, result, depth=depth)
     else:
         result.note(f"{path} is not text and no reader recognised it.")
+
+
+def _add_binary(
+    data: bytes, path: str, result: ExtractionResult, *, kind: str,
+    declared_size: int | None = None,
+) -> None:
+    """Record a compiled member so something else can look it up.
+
+    Hashed over the bytes actually read. When the archive declared a longer
+    length than the cap allowed, the hash is of a prefix and would not match
+    the real file, so it is not recorded at all — a hash that silently means
+    "the first megabyte of" is worse than no hash, because every reputation
+    source would answer confidently about the wrong file.
+    """
+    if len(result.binaries) >= MAX_ENTRIES:
+        return
+    size = declared_size if declared_size is not None else len(data)
+    if declared_size is not None and len(data) < declared_size:
+        result.note(
+            f"{path} is a compiled executable larger than the {MAX_FILE_BYTES:,}-byte read "
+            "limit, so it could not be hashed or looked up."
+        )
+        return
+    if any(b.path == path for b in result.binaries):
+        return
+    result.binaries.append(
+        EmbeddedBinary(
+            path=path,
+            kind=kind,
+            size=size,
+            sha256=hashlib.sha256(data).hexdigest(),
+            sha1=hashlib.sha1(data).hexdigest(),   # noqa: S324 — an identifier, not a signature
+            md5=hashlib.md5(data).hexdigest(),     # noqa: S324 — same
+            data=data,
+        )
+    )
+    result.note(
+        f"{path} is a compiled executable; its code is not readable as text, so it is "
+        "identified by hash and looked up separately."
+    )
 
 
 def _add(

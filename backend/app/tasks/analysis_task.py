@@ -324,6 +324,84 @@ def _uploaded_sample(investigation_id: str) -> tuple[str, bytes] | None:
         return None
 
 
+# How many packed executables are looked up. An archive of two hundred DLLs is
+# a real shape, and each lookup is a request against a shared per-minute VT
+# budget that the investigation's own hash is also drawing on.
+MAX_EMBEDDED_LOOKUPS = 5
+
+
+def _look_up_embedded_binaries(
+    file_content: dict, *, investigation_id: str, external_context: dict | None = None,
+) -> None:
+    """Run a reputation lookup on each executable found inside the submission.
+
+    Appended to this investigation rather than raised as its own: the analyst
+    submitted one archive and is answering one question, and a second
+    investigation for the file that was inside the first is a second thing to
+    find, correlate and close.
+
+    Failure is recorded on the binary, never raised. "We did not ask" and
+    "we asked and nothing is known" are different answers and the report has
+    to be able to tell them apart — a silent absence reads as the second when
+    it is usually the first.
+    """
+    from app.collectors.vt_collector import VTCollector
+
+    binaries = file_content.get("binaries") or []
+    for index, binary in enumerate(binaries):
+        sha256 = str(binary.get("sha256") or "")
+        if len(sha256) != 64:
+            continue
+        if index >= MAX_EMBEDDED_LOOKUPS:
+            binary["note"] = (
+                f"Not looked up: only the first {MAX_EMBEDDED_LOOKUPS} packed executables "
+                "are queried, to stay inside the reputation budget."
+            )
+            continue
+        try:
+            evidence, meta, _ = VTCollector(
+                domain=sha256,
+                investigation_id=investigation_id,
+                observable_type="hash",
+                external_context=external_context,
+            ).run()
+        except Exception as exc:  # noqa: BLE001 — a lookup never fails the investigation
+            binary["note"] = f"Reputation lookup failed: {type(exc).__name__}"
+            logger.warning(
+                "[%s] Embedded binary %s could not be looked up: %s",
+                investigation_id, sha256[:12], exc,
+            )
+            continue
+
+        status = getattr(meta, "status", None)
+        if status is not None and str(getattr(status, "value", status)).lower() not in ("success", "complete", "completed"):
+            binary["note"] = f"Reputation lookup did not complete ({getattr(status, 'value', status)})."
+            continue
+
+        data = evidence.model_dump() if hasattr(evidence, "model_dump") else dict(evidence or {})
+        # The collector's own fields. `found` is the one that separates "we
+        # asked and VirusTotal has no record" from "we asked and it is clean" —
+        # reading a count of zero as clean would call every unpacked sample
+        # benign, which is the opposite of what an unknown dropper means.
+        if not data.get("found"):
+            binary["verdict"] = "unknown"
+            binary["note"] = "Not known to VirusTotal."
+            continue
+
+        malicious = int(data.get("malicious_count") or 0)
+        suspicious = int(data.get("suspicious_count") or 0)
+        binary["malicious_count"] = malicious
+        binary["total_engines"] = int(data.get("total_vendors") or 0) or None
+        binary["names"] = [str(n) for n in (data.get("file_names") or [])[:5]]
+        binary["first_seen"] = str(data.get("vt_creation_date") or "") or None
+        if malicious > 0:
+            binary["verdict"] = "malicious"
+        elif suspicious > 0:
+            binary["verdict"] = "suspicious"
+        else:
+            binary["verdict"] = "benign"
+
+
 def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
     """Read the uploaded sample's own source, and anything packed inside it.
 
@@ -943,6 +1021,13 @@ def run_analysis(
         try:
             file_content = _build_file_content_analysis(investigation_id=investigation_id)
             if file_content:
+                # A compiled member cannot be read, so it is looked up instead.
+                # This is the part of a dropper archive that actually runs, and
+                # it was previously reported only as "not readable as text".
+                _look_up_embedded_binaries(
+                    file_content, investigation_id=investigation_id,
+                    external_context=external_context,
+                )
                 evidence_data["file_content"] = file_content
         except Exception as e:  # noqa: BLE001 — never fail an investigation over it
             logger.warning(f"[{investigation_id}] File content extraction failed: {e}")
@@ -1011,13 +1096,18 @@ def run_analysis(
     # then a template wrote "Hash not found in VirusTotal database" while three
     # unpacked scripts sat in the evidence unread. Content is the one thing on
     # a file investigation that actually needs interpreting.
-    has_readable_content = bool((evidence_data.get("file_content") or {}).get("files"))
+    # A packed executable counts. An archive holding nothing but a known-bad
+    # installer has no readable text, so the fast path took it and the report
+    # was written by template — about the container, with the verdict on the
+    # payload sitting unread in the evidence.
+    _content = evidence_data.get("file_content") or {}
+    has_readable_content = bool(_content.get("files") or _content.get("binaries"))
     if has_readable_content:
         logger.info(
             "[%s] %s readable file(s) extracted; using the analyst rather than the "
             "rule-based fast path.",
             investigation_id,
-            len((evidence_data.get("file_content") or {}).get("files") or []),
+            len(_content.get("files") or []) + len(_content.get("binaries") or []),
         )
 
     if observable_type not in ("domain", "url") and not has_readable_content:

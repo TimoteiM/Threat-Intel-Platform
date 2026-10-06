@@ -56,6 +56,7 @@ def build(
     files: Sequence[dict[str, Any]],
     *,
     limitations: Sequence[str] = (),
+    binaries: Sequence[dict[str, Any]] = (),
     budget_tokens: int = DEFAULT_BUDGET_TOKENS,
 ) -> tuple[str, dict[str, Any]]:
     """The prompt block, and what it cost. Empty string when there is nothing."""
@@ -63,11 +64,17 @@ def build(
     summary: dict[str, Any] = {
         "files_found": len(files),
         "files_sent": 0,
+        "binaries_sent": 0,
         "tokens": 0,
         "secrets_redacted": {},
         "truncated": [],
     }
-    if not readable:
+    # A packed executable has no source to read, so it never reached the model
+    # — including the case where it was the *only* thing in the archive and
+    # the block was skipped entirely. Its hash and what the reputation lookup
+    # said are facts about the thing that runs, and the model should have them
+    # whether or not anything beside it was readable.
+    if not readable and not binaries:
         return "", summary
 
     per_file = max(200, int(budget_tokens * MAX_SHARE_PER_FILE))
@@ -81,6 +88,38 @@ def build(
     ]
     for note in limitations:
         lines.append(f"Limitation: {note}")
+
+    if binaries:
+        lines.append("")
+        lines.append(
+            "COMPILED FILES PACKED INSIDE — these have no source to read. They are "
+            "identified by hash and looked up separately; the verdict below is about the "
+            "executable itself, not about the archive that carried it."
+        )
+        for binary in binaries:
+            if not isinstance(binary, dict):
+                continue
+            verdict = str(binary.get("verdict") or "") or "not looked up"
+            counts = ""
+            if binary.get("malicious_count") is not None and binary.get("total_engines"):
+                counts = f", {binary['malicious_count']}/{binary['total_engines']} engines"
+            names = ", ".join(str(n) for n in (binary.get("names") or [])[:3])
+            lines.append(
+                f"  - {binary.get('path')} ({binary.get('kind') or 'pe'}, "
+                f"{binary.get('size') or 0} bytes) sha256 {binary.get('sha256')} — "
+                f"VirusTotal: {verdict}{counts}"
+                + (f"; also seen as {names}" if names else "")
+                + (f". {binary.get('note')}" if binary.get("note") else "")
+            )
+            summary["binaries_sent"] += 1
+        lines.append(
+            "  A verdict of \"unknown\" means VirusTotal has no record of the file, which is "
+            "not the same as clean — say which of the two you are relying on."
+        )
+
+    if not readable:
+        # Nothing to read, but the hashes above are worth a verdict on their own.
+        return sanitizer.fence("\n".join(lines), preamble=sanitizer.FENCE_PREAMBLE_FILE), summary
     lines += [
         "",
         "This is the artefact under investigation. Read it and report:",

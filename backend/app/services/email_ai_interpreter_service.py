@@ -136,6 +136,7 @@ async def interpret_email_results_with_ai(
         block, _summary = file_content_prompt.build(
             list(file_content.get("files") or []),
             limitations=list(file_content.get("limitations") or []),
+            binaries=list(file_content.get("binaries") or []),
         )
         if block:
             file_block = "\n\n" + block

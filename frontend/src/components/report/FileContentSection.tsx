@@ -26,13 +26,37 @@ type ExtractedFile = {
   text?: string;
 };
 
+type EmbeddedBinary = {
+  path: string;
+  kind?: string;
+  size?: number;
+  sha256: string;
+  sha1?: string | null;
+  md5?: string | null;
+  verdict?: string | null;
+  malicious_count?: number | null;
+  total_engines?: number | null;
+  names?: string[];
+  first_seen?: string | null;
+  note?: string | null;
+};
+
 type FileContent = {
   files?: ExtractedFile[];
   limitations?: string[];
   entries_seen?: number;
   bytes_read?: number;
   encrypted?: boolean;
+  password_required?: boolean;
   readable_files?: number;
+  binaries?: EmbeddedBinary[];
+};
+
+const VERDICT_TONE: Record<string, string> = {
+  malicious: "var(--status-critical)",
+  suspicious: "var(--status-warning)",
+  benign: "var(--status-ok, var(--text-muted))",
+  unknown: "var(--text-muted)",
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -60,8 +84,9 @@ function bytes(n?: number): string {
 export default function FileContentSection({ content }: { content?: FileContent | null }) {
   const files = content?.files || [];
   const limitations = content?.limitations || [];
+  const binaries = content?.binaries || [];
 
-  if (!files.length && !limitations.length) {
+  if (!files.length && !limitations.length && !binaries.length) {
     return (
       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
         No readable content was extracted from the submitted file.
@@ -77,8 +102,18 @@ export default function FileContentSection({ content }: { content?: FileContent 
           <Fact label="Archive entries" value={String(content.entries_seen)} />
         ) : null}
         <Fact label="Content read" value={bytes(content?.bytes_read)} />
+        {/* Still locked, or opened? The old wording said "password needed"
+            whenever the archive was encrypted, including after the analyst had
+            supplied the password and the contents had been read from it. */}
         {content?.encrypted ? (
-          <Fact label="Encrypted" value="yes — password needed" tone="var(--status-warning)" />
+          content?.password_required ? (
+            <Fact label="Encrypted" value="yes — password needed" tone="var(--status-warning)" />
+          ) : (
+            <Fact label="Encrypted" value="yes — opened with the supplied password" />
+          )
+        ) : null}
+        {binaries.length > 0 ? (
+          <Fact label="Packed executables" value={String(binaries.length)} />
         ) : null}
       </div>
 
@@ -92,9 +127,68 @@ export default function FileContentSection({ content }: { content?: FileContent 
         </ul>
       )}
 
+      {/* The compiled members. A PE cannot be read as text, which is why it
+          used to appear only as a line saying so — while being the part of a
+          dropper archive that actually runs. It is identified by hash and
+          looked up like any other sample. */}
+      {binaries.map((binary) => (
+        <BinaryBlock key={binary.sha256} binary={binary} />
+      ))}
+
       {files.map((file, index) => (
         <FileBlock key={`${file.path}:${index}`} file={file} openByDefault={index === 0} />
       ))}
+    </div>
+  );
+}
+
+function BinaryBlock({ binary }: { binary: EmbeddedBinary }) {
+  const verdict = binary.verdict || "";
+  const tone = VERDICT_TONE[verdict] || "var(--text-muted)";
+  const name = binary.path.split("/").pop() || binary.path;
+  return (
+    <div
+      style={{
+        borderLeft: `3px solid ${tone}`,
+        background: "var(--panel-card-bg, transparent)",
+        borderRadius: "0 8px 8px 0",
+        padding: "10px 12px",
+        display: "grid",
+        gap: 6,
+      }}
+    >
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+        <strong style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 12.5, color: "var(--text)" }}>
+          {name}
+        </strong>
+        <span style={{ fontSize: 10.5, letterSpacing: 0.4, color: "var(--text-dim)" }}>
+          {(binary.kind || "PE").toUpperCase()}
+        </span>
+        {binary.size ? (
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{bytes(binary.size)}</span>
+        ) : null}
+        <span style={{ fontSize: 11.5, color: tone, fontWeight: 600 }}>
+          {verdict
+            ? verdict === "unknown"
+              ? "not known to VirusTotal"
+              : verdict
+            : "not looked up"}
+          {binary.malicious_count != null && binary.total_engines
+            ? ` · ${binary.malicious_count}/${binary.total_engines} engines`
+            : ""}
+        </span>
+      </div>
+      <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--text-muted)", wordBreak: "break-all" }}>
+        sha256 {binary.sha256}
+      </div>
+      {binary.names && binary.names.length > 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          Also seen as: {binary.names.join(", ")}
+        </div>
+      )}
+      {binary.note && (
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{binary.note}</div>
+      )}
     </div>
   );
 }
