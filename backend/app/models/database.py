@@ -275,6 +275,12 @@ class Artifact(Base):
     content_type: Mapped[str | None] = mapped_column(String(100))
     size_bytes: Mapped[int | None] = mapped_column(Integer)
     storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    # What reading this file's contents found, when the reading had to happen
+    # at upload time. That is the case for a password-protected archive: the
+    # password opens it in the request that carried it and is then discarded,
+    # rather than being handed to a worker through the broker. Null for
+    # everything else, which the analysis task extracts itself as before.
+    extraction_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

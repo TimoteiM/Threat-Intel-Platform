@@ -197,14 +197,30 @@ export function getProxyCountries() {
   );
 }
 
+/**
+ * Thrown when the submitted archive is locked. Carries the flag the form needs
+ * to ask for a password and keep the chosen file, rather than a bare message
+ * the caller has to pattern-match on.
+ */
+export class ArchivePasswordRequired extends Error {
+  readonly needsPassword = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "ArchivePasswordRequired";
+  }
+}
+
 export async function uploadFileInvestigation(
   file: File,
   context?: string,
-  options?: { use_residential_proxy?: boolean; proxy_country?: string },
+  options?: { use_residential_proxy?: boolean; proxy_country?: string; archive_password?: string },
 ): Promise<{ investigation_id: string; domain: string; observable_type: string; state: string }> {
   const formData = new FormData();
   formData.append("file", file);
   if (context) formData.append("context", context);
+  if (options?.archive_password) {
+    formData.append("archive_password", options.archive_password);
+  }
   if (options?.use_residential_proxy !== undefined) {
     formData.append("use_residential_proxy", String(options.use_residential_proxy));
   }
@@ -219,7 +235,16 @@ export async function uploadFileInvestigation(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(body || res.statusText);
+    let detail = body;
+    try {
+      detail = (JSON.parse(body) as { detail?: string }).detail || body;
+    } catch {
+      // A plain-text error body is fine; it is already the message.
+    }
+    // 409 means the file is acceptable but locked: the server is asking for
+    // the archive password, not rejecting the submission.
+    if (res.status === 409) throw new ArchivePasswordRequired(detail || res.statusText);
+    throw new Error(detail || res.statusText);
   }
 
   return res.json();

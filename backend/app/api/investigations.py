@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import base64
+import logging
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -47,6 +48,8 @@ from app.collectors.registry import get_collector, get_collectors_for_type
 from app.services.proxy_profiles import configured_proxy_profiles
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations"])
+
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -666,6 +669,106 @@ def _url_host(value: Any) -> str:
         return ""
 
 
+# The states a submitted archive can be in, as the uploader must answer them.
+# 409 rather than 400: the request is well-formed and the file is accepted in
+# principle — what is missing is a credential for the archive, and the client
+# retries the same request with it.
+def _read_submitted_content(data: bytes, filename: str, password: str) -> dict | None:
+    """Read the submission's contents, refusing a locked archive without a key.
+
+    Returns the extraction to store, or None when there was nothing to read
+    here and the analysis task should do its usual pass.
+    """
+    from app.services import file_content_service as fcs
+
+    password = (password or "").strip()
+    lock = fcs.probe(data, filename)
+    if lock.encrypted and not lock.supported:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This {lock.kind.upper()} archive is encrypted in a form the content reader "
+                "cannot decrypt, so a password will not help. Submit it for sandbox detonation, "
+                "or repack the sample as a zip to have its contents read."
+            ),
+        )
+    if lock.encrypted and not password:
+        inside = ", ".join(lock.entries[:5]) or "its contents"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This archive is password-protected ({lock.reason}). It holds {inside}. "
+                "Re-submit it with the password — it is usually in the message that carried "
+                "the file."
+            ),
+        )
+    if not lock.encrypted and not password and not _is_archive(lock.kind):
+        # A bare script or document has no lock to check and nothing to say
+        # about one. The analysis task reads it as it always has, rather than
+        # this endpoint doing the same work twice.
+        return None
+
+    # Archives are read here even when the probe found no lock, because the
+    # probe cannot always see one: a 7z lists its entry names happily and only
+    # refuses when you ask for the bytes. Accepting that file and reporting
+    # "nothing found" half a minute later is the exact failure this endpoint
+    # exists to prevent. The work is not duplicated — what it produces is
+    # stored, and the task uses it instead of extracting again.
+    result = fcs.extract(data, filename, password=password or None)
+    if result.password_incorrect:
+        raise HTTPException(
+            status_code=409,
+            detail="That password did not open the archive. Archive passwords are case-sensitive.",
+        )
+    if result.password_required:
+        raise HTTPException(
+            status_code=409,
+            detail="This archive is password-protected. Re-submit it with the password.",
+        )
+    if result.encryption_unsupported:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This archive is encrypted in a form the content reader cannot decrypt, so a "
+                "password will not help whatever it is. Submit it for sandbox detonation, or "
+                "repack the sample as a zip to have its contents read."
+            ),
+        )
+    if not result.files and not result.limitations:
+        return None
+    return result.as_dict()
+
+
+def _is_archive(kind: str) -> bool:
+    """Whether a lock could be hiding in this format."""
+    from app.services import file_content_service as fcs
+
+    return kind in fcs._EXTERNAL_ARCHIVES or kind in fcs._STDLIB_ARCHIVES or kind == "zip"
+
+
+async def _attach_extraction(session: Any, created: Any, extraction: dict) -> None:
+    """Hang the extraction on the uploaded artifact."""
+    from app.models.database import Artifact
+
+    investigation_id = (
+        created.get("investigation_id") if isinstance(created, dict)
+        else getattr(created, "investigation_id", None)
+    )
+    if not investigation_id:
+        return
+    try:
+        rows = await session.execute(
+            select(Artifact).where(Artifact.investigation_id == uuid.UUID(str(investigation_id)))
+        )
+        artifact = rows.scalars().first()
+        if artifact is None:
+            return
+        artifact.extraction_json = extraction
+        await session.commit()
+    except Exception:  # noqa: BLE001 — the investigation is already created
+        logger.warning("Could not attach extracted content to the uploaded artifact")
+
+
 @router.post("/upload-file")
 async def upload_file_investigation(
     session: DBSession,
@@ -673,6 +776,7 @@ async def upload_file_investigation(
     context: str = Form(default=""),
     use_residential_proxy: bool = Form(default=False),
     proxy_country: str = Form(default=""),
+    archive_password: str = Form(default=""),
 ):
     """
     Upload a file sample for fast hash-based analysis.
@@ -691,6 +795,13 @@ async def upload_file_investigation(
     sha256 = hashlib.sha256(file_bytes).hexdigest()
     filename = file.filename or "unknown"
 
+    # A locked archive is refused rather than accepted and silently reported as
+    # empty. Nothing is created, so the analyst re-submits the same file with
+    # the password instead of ending up with an investigation that looked at
+    # nothing. The password is used here and discarded: it is never logged,
+    # never stored, never returned, and never handed to the worker.
+    extraction = _read_submitted_content(file_bytes, filename, archive_password)
+
     # Create the investigation via the service (hash-first for speed)
     request = InvestigationCreate(
         domain=sha256,
@@ -706,9 +817,14 @@ async def upload_file_investigation(
     service = InvestigationService(session)
     try:
         result = await service.create_file(request, file_bytes, sha256, filename)
-        return result
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+    # Attached to the artifact so the analysis task uses what the password
+    # opened instead of re-reading a file it cannot unlock.
+    if extraction is not None:
+        await _attach_extraction(session, result, extraction)
+    return result
 
 
 @router.post("/{investigation_id}/cancel")

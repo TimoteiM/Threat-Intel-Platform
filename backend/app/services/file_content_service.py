@@ -33,9 +33,11 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from typing import Any
@@ -106,6 +108,19 @@ class ExtractionResult:
     entries_seen: int = 0
     bytes_read: int = 0
     encrypted: bool = False
+    # Three different answers that all used to read as "encrypted, sorry":
+    #   password_required     — it is locked and nobody gave us a key
+    #   password_incorrect    — a key was given and the archive rejected it
+    #   encryption_unsupported— the key may well be right, the extractor
+    #                           cannot decrypt this format at all (7z)
+    # An analyst retypes a password for the second and never for the third.
+    password_required: bool = False
+    password_incorrect: bool = False
+    encryption_unsupported: bool = False
+    # The caller's password, riding along with the accumulator rather than as
+    # a second parameter through six recursive calls. Never serialised: it
+    # leaves this object only as an argument to an extractor.
+    password: str | None = field(default=None, repr=False)
 
     def note(self, text: str) -> None:
         if text not in self.limitations:
@@ -118,7 +133,36 @@ class ExtractionResult:
             "entries_seen": self.entries_seen,
             "bytes_read": self.bytes_read,
             "encrypted": self.encrypted,
+            "password_required": self.password_required,
+            "password_incorrect": self.password_incorrect,
+            "encryption_unsupported": self.encryption_unsupported,
             "readable_files": len(self.files),
+        }
+
+
+@dataclass
+class EncryptionProbe:
+    """Whether this submission is locked, and whether a password would help.
+
+    Answered before anything is extracted, so the app can ask for a password
+    instead of accepting a file it cannot read and reporting "nothing found"
+    — and so it never shells out to an extractor that would sit at an
+    interactive prompt (see `_bsdtar`).
+    """
+
+    encrypted: bool = False
+    kind: str = ""
+    supported: bool = True
+    entries: list[str] = field(default_factory=list)
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "encrypted": self.encrypted,
+            "kind": self.kind,
+            "supported": self.supported,
+            "entries": list(self.entries[:20]),
+            "reason": self.reason,
         }
 
 
@@ -188,14 +232,77 @@ def sniff(data: bytes) -> str:
     return "unknown"
 
 
-def extract(data: bytes, filename: str = "submitted") -> ExtractionResult:
-    """Everything readable in this file, following archives to MAX_DEPTH."""
-    result = ExtractionResult()
+def extract(
+    data: bytes, filename: str = "submitted", *, password: str | None = None
+) -> ExtractionResult:
+    """Everything readable in this file, following archives to MAX_DEPTH.
+
+    `password` opens an encrypted archive. It is used and discarded: it is not
+    logged, not returned in `as_dict`, and not written anywhere.
+    """
+    result = ExtractionResult(password=password or None)
     _walk(data, filename, result, depth=0)
     return result
 
 
-def extract_attachments(attachments: Any) -> ExtractionResult:
+def probe(data: bytes, filename: str = "submitted") -> EncryptionProbe:
+    """Is this a locked archive, and could a password open it?
+
+    Reads headers only. For a zip that is the general-purpose bit flag, which
+    is in the local header of every member and needs no password to read, so
+    the answer costs nothing and involves no subprocess. For the formats
+    libarchive handles it is a listing, which succeeds for an encrypted 7z or
+    RAR whose *names* are readable even when the contents are not.
+    """
+    kind = sniff(data)
+    if kind == "zip":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                members = [i for i in archive.infolist() if not i.is_dir()]
+                locked = [i for i in members if i.flag_bits & 0x1]
+                if not locked:
+                    return EncryptionProbe(kind="zip", entries=[i.filename for i in members])
+                # Compression method 99 is WinZip AES. Python's zipfile reads
+                # the flag but cannot decrypt it; libarchive can, so this is
+                # supported — just not in process.
+                return EncryptionProbe(
+                    encrypted=True,
+                    kind="zip",
+                    supported=True,
+                    entries=[i.filename for i in locked],
+                    reason="AES" if any(i.compress_type == 99 for i in locked) else "ZipCrypto",
+                )
+        except Exception:  # noqa: BLE001 — a corrupt zip is not an encrypted one
+            return EncryptionProbe(kind="zip")
+
+    if kind in _EXTERNAL_ARCHIVES:
+        handle, archive_path = tempfile.mkstemp(prefix="probe-", suffix=f".{kind}")
+        try:
+            with os.fdopen(handle, "wb") as fh:
+                fh.write(data)
+            listing, stderr = _bsdtar_raw(["-t"], archive_path)
+            names = [l for l in (listing or "").splitlines() if l and not l.endswith("/")]
+            lowered = (stderr or "").lower()
+            if "passphrase" in lowered or "encrypted" in lowered:
+                # 7z content encryption is the one libarchive declines
+                # outright, whatever password it is handed.
+                unsupported = "not supported" in lowered or kind == "7z"
+                return EncryptionProbe(
+                    encrypted=True, kind=kind, supported=not unsupported,
+                    entries=names,
+                    reason="encrypted header" if not names else "encrypted contents",
+                )
+            return EncryptionProbe(kind=kind, entries=names)
+        finally:
+            try:
+                os.unlink(archive_path)
+            except OSError:
+                pass
+
+    return EncryptionProbe(kind=kind or "")
+
+
+def extract_attachments(attachments: Any, *, password: str | None = None) -> ExtractionResult:
     """Read every attachment on an email, archives included.
 
     Attachments arrive with their bytes already decoded once into base64 by the
@@ -208,7 +315,7 @@ def extract_attachments(attachments: Any) -> ExtractionResult:
     """
     import base64
 
-    result = ExtractionResult()
+    result = ExtractionResult(password=password or None)
     for item in attachments or []:
         if not isinstance(item, dict):
             continue
@@ -414,16 +521,47 @@ def _walk_archive(data: bytes, path: str, result: ExtractionResult, *, depth: in
                         result.note(f"Stopped after {MAX_ENTRIES} archive entries.")
                         return
                     result.entries_seen += 1
+                    locked = bool(info.flag_bits & 0x1)
+                    if locked:
+                        result.encrypted = True
                     try:
-                        with archive.open(info) as handle:
+                        with archive.open(
+                            info,
+                            pwd=(result.password.encode("utf-8") if locked and result.password else None),
+                        ) as handle:
                             payload = handle.read(MAX_FILE_BYTES + 1)
-                    except RuntimeError as exc:
-                        if "password" in str(exc).lower():
-                            result.encrypted = True
+                    except NotImplementedError:
+                        # WinZip AES (compression method 99). The stdlib reads
+                        # the flag but will not decrypt it; libarchive will, so
+                        # the archive goes out to bsdtar rather than being
+                        # written off as unreadable.
+                        if result.password:
+                            _walk_external(data, path, result, depth=depth, kind="zip")
+                        else:
+                            result.password_required = True
                             result.note(
-                                f"{path} is password-protected, so its contents could not be "
-                                "read. The password is often in the message that carried it."
+                                f"{path} is an AES-encrypted zip. Supply the password to read "
+                                "what is inside."
                             )
+                        return
+                    except RuntimeError as exc:
+                        message = str(exc).lower()
+                        if "password" in message:
+                            # "Bad password" and "password required" are both
+                            # RuntimeError from zipfile; only the wording says
+                            # which, and the analyst's next action differs.
+                            if result.password and "bad password" in message:
+                                result.password_incorrect = True
+                                result.note(
+                                    f"{path} did not open with the password supplied. "
+                                    "Archive passwords are case-sensitive."
+                                )
+                            else:
+                                result.password_required = True
+                                result.note(
+                                    f"{path} is password-protected. Supply the password to read "
+                                    "what is inside; it is often in the message that carried it."
+                                )
                             return
                         raise
                     _walk(payload, f"{path}/{info.filename}", result,
@@ -465,15 +603,36 @@ def _walk_external(data: bytes, path: str, result: ExtractionResult, *, depth: i
     bsdtar's stdout, so nothing an archive *claims* about its own paths is ever
     acted on.
     """
-    import os
-    import tempfile
-
     handle, archive_path = tempfile.mkstemp(prefix="submitted-", suffix=f".{kind}")
     try:
         with os.fdopen(handle, "wb") as fh:
             fh.write(data)
 
-        listing = _bsdtar(["-t"], archive_path)
+        # Decided before anything is extracted: an encrypted archive with no
+        # password must not reach the extractor at all, because bsdtar sits at
+        # an interactive prompt rather than failing.
+        lock = probe(data, path)
+        if lock.encrypted and not lock.supported:
+            result.encrypted = True
+            result.encryption_unsupported = True
+            result.note(
+                f"{path} is an encrypted {kind.upper()} archive. The extractor can list its "
+                "contents but cannot decrypt them, so a password does not help here — send "
+                "the file to the sandbox, or repack it as a zip."
+            )
+            return
+        if lock.encrypted and not result.password:
+            result.encrypted = True
+            result.password_required = True
+            result.note(
+                f"{path} is a password-protected {kind.upper()} archive. Supply the password "
+                "to read what is inside; it is often in the message that carried it."
+            )
+            return
+        if lock.encrypted:
+            result.encrypted = True
+
+        listing = _bsdtar(["-t"], archive_path, passphrase=result.password)
         if listing is None:
             result.note(
                 f"{path} is a {kind.upper()} archive that could not be read. It may be "
@@ -492,13 +651,34 @@ def _walk_external(data: bytes, path: str, result: ExtractionResult, *, depth: i
                 return
             result.entries_seen += 1
             # -O sends the member to stdout: read, never written.
-            payload = _bsdtar(["-xO"], archive_path, members=[name], binary=True)
+            payload, stderr = _bsdtar_raw(
+                ["-xO"], archive_path, members=[name], binary=True,
+                passphrase=result.password,
+            )
             if payload is None:
-                result.encrypted = True
-                result.note(
-                    f"{path}/{name} could not be extracted — the archive may be "
-                    "password-protected. The password is often in the message that carried it."
-                )
+                lowered = stderr.lower()
+                if "incorrect passphrase" in lowered:
+                    result.encrypted = True
+                    result.password_incorrect = True
+                    result.note(
+                        f"{path} did not open with the password supplied. Archive passwords "
+                        "are case-sensitive."
+                    )
+                    return
+                if "not supported" in lowered and "encrypt" in lowered:
+                    result.encrypted = True
+                    result.encryption_unsupported = True
+                    result.note(
+                        f"{path} is encrypted in a form the extractor cannot decrypt, whatever "
+                        "password is given."
+                    )
+                    return
+                if "passphrase" in lowered:
+                    result.encrypted = True
+                    result.password_required = True
+                    result.note(f"{path} is password-protected. Supply the password to read it.")
+                    return
+                result.note(f"{path}/{name} could not be extracted from the archive.")
                 continue
             _walk(payload[: MAX_FILE_BYTES + 1], f"{path}/{name}", result,
                   depth=depth + 1, declared_size=len(payload))
@@ -514,7 +694,7 @@ def _walk_external(data: bytes, path: str, result: ExtractionResult, *, depth: i
 
 def _bsdtar(
     flags: list[str], archive_path: str, *, members: list[str] | None = None,
-    binary: bool = False,
+    binary: bool = False, passphrase: str | None = None,
 ) -> Any:
     """Run bsdtar against an archive on disk. None means it could not read it.
 
@@ -523,20 +703,58 @@ def _bsdtar(
     back "Not found in archive" — which this module then reported as the
     archive being password-protected.
     """
+    stdout, _ = _bsdtar_raw(flags, archive_path, members=members, binary=binary,
+                            passphrase=passphrase)
+    return stdout
+
+
+def _bsdtar_raw(
+    flags: list[str], archive_path: str, *, members: list[str] | None = None,
+    binary: bool = False, passphrase: str | None = None,
+) -> tuple[Any, str]:
+    """`(stdout, stderr)`. stdout is None when the archive could not be read.
+
+    stderr is returned because it is the only thing that distinguishes "wrong
+    passphrase" from "this encryption is not supported" from "no passphrase
+    given", and those need three different answers.
+
+    Two things that are not optional:
+
+    `stdin` is closed. Handed an encrypted archive and no `--passphrase`,
+    bsdtar prompts — and with no terminal it re-prompts in a tight loop. It
+    produced 332 KB of "Enter passphrase:" and then died on the timeout, so
+    every locked archive cost a full timeout and a flooded pipe. Closing stdin
+    is not enough on its own, which is why `probe` decides whether a password
+    is needed before anything calls this.
+
+    `--passphrase` is only passed when there is one. An empty value is still a
+    value, and bsdtar treats it as a wrong password rather than as absent —
+    which would report "incorrect password" to an analyst who never gave one.
+    """
+    argv = ["bsdtar"]
+    if passphrase:
+        # The passphrase is in argv, so it is visible in /proc to anything
+        # running in this container for the life of the call. Unavoidable with
+        # bsdtar, which has no stdin or environment form — and the reason the
+        # in-process zipfile path is tried first for ZipCrypto.
+        argv += ["--passphrase", passphrase]
+    argv += [*flags, "-f", archive_path, *(members or [])]
     try:
         completed = subprocess.run(  # noqa: S603 — fixed binary, no shell
-            ["bsdtar", *flags, "-f", archive_path, *(members or [])],
+            argv,
             capture_output=True,
             timeout=EXTERNAL_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError:
-        return None
+        return None, ""
     except subprocess.TimeoutExpired:
         logger.warning("bsdtar timed out reading an archive")
-        return None
+        return None, "timed out"
+    stderr = completed.stderr.decode("utf-8", "replace") if completed.stderr else ""
     if completed.returncode != 0 and not completed.stdout:
-        return None
-    return completed.stdout if binary else completed.stdout.decode("utf-8", "replace")
+        return None, stderr
+    return (completed.stdout if binary else completed.stdout.decode("utf-8", "replace")), stderr
 
 
 def _read_macros(data: bytes, path: str, result: ExtractionResult, *, depth: int) -> None:

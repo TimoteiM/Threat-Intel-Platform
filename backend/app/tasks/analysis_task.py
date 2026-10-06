@@ -335,6 +335,14 @@ def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
     """
     from app.services import file_content_service as fcs
 
+    # An archive that needed a password was read at upload time, because that
+    # is the only request the password was ever in. Re-extracting here would
+    # produce "password-protected, nothing read" for a file the analyst had
+    # already unlocked.
+    stored = _stored_extraction(investigation_id)
+    if stored is not None:
+        return stored
+
     sample = _uploaded_sample(investigation_id)
     if sample is None:
         return None
@@ -344,6 +352,27 @@ def _build_file_content_analysis(*, investigation_id: str) -> dict | None:
     if not result.files and not result.limitations:
         return None
     return result.as_dict()
+
+
+def _stored_extraction(investigation_id: str) -> dict | None:
+    """The extraction the upload already performed, if there was one."""
+    from uuid import UUID
+    from sqlalchemy.orm import Session
+    from app.db.session import sync_engine
+    from app.models.database import Artifact
+
+    try:
+        with Session(sync_engine) as db:
+            row = (
+                db.query(Artifact)
+                .filter(Artifact.investigation_id == UUID(str(investigation_id)))
+                .filter(Artifact.extraction_json.isnot(None))
+                .first()
+            )
+            return dict(row.extraction_json) if row and row.extraction_json else None
+    except Exception as exc:  # noqa: BLE001 — fall through to reading the file
+        logger.warning("[%s] Stored extraction could not be read: %s", investigation_id, exc)
+        return None
 
 
 def _build_attachment_analysis_for_file_hash(*, investigation_id: str, domain: str, evidence_data: dict) -> dict | None:

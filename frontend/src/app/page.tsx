@@ -8,6 +8,7 @@ import {
   createInvestigation,
   deleteInvestigation,
   uploadFileInvestigation,
+  ArchivePasswordRequired,
   listInvestigations,
   getDashboardStats,
 } from "@/lib/api";
@@ -429,6 +430,106 @@ function RecentInvestigations({
 
 // ─── Duplicate investigation modal ────────────────────────────────────────────
 
+/**
+ * Asks for the password to an archive the platform has just refused to accept.
+ *
+ * It is a prompt, not an error: nothing was created, the file the analyst
+ * chose is still held, and typing the password re-submits the same thing. The
+ * reason from the server is shown verbatim because it names the archive's
+ * contents and its encryption, which is how an analyst tells "I mistyped it"
+ * from "this format cannot be opened at all".
+ */
+function ArchivePasswordModal({
+  reason,
+  filename,
+  onSubmit,
+  onCancel,
+}: {
+  reason: string;
+  filename: string;
+  onSubmit: (password: string) => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Archive password"
+      style={{
+        position: "fixed", inset: 0, zIndex: 50, display: "grid", placeItems: "center",
+        background: "rgba(0,0,0,0.55)", padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (password.trim()) onSubmit(password.trim());
+        }}
+        style={{
+          width: "min(520px, 100%)", display: "grid", gap: 12,
+          background: "var(--panel-bg, #0d1117)",
+          border: "1px solid var(--panel-divider-strong, #30363d)",
+          borderRadius: 12, padding: 20,
+        }}
+      >
+        <strong style={{ color: "var(--text)", fontSize: 15 }}>
+          {filename} is password-protected
+        </strong>
+        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13, lineHeight: 1.5 }}>
+          {reason}
+        </p>
+        <input
+          autoFocus
+          type="text"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Archive password"
+          aria-label="Archive password"
+          /* Deliberately not a password input: this is the key to a malware
+             sample quoted in a phishing email, not a secret of the analyst's.
+             Masking it only invites the typo that sends them round again. */
+          autoComplete="off"
+          spellCheck={false}
+          style={{
+            borderRadius: 8, border: "1px solid var(--panel-divider-strong, #30363d)",
+            background: "var(--panel-card-bg, transparent)", color: "var(--text-strong, #e6edf3)",
+            padding: "8px 10px", fontSize: 14, fontFamily: "var(--font-mono, monospace)",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              borderRadius: 8, border: "1px solid var(--panel-divider-strong, #30363d)",
+              background: "transparent", color: "var(--text-muted)", padding: "7px 14px",
+              fontSize: 13, cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!password.trim()}
+            style={{
+              borderRadius: 8, border: "1px solid var(--accent, #1f6feb)",
+              background: password.trim() ? "var(--accent, #1f6feb)" : "transparent",
+              color: password.trim() ? "#fff" : "var(--text-dim)",
+              padding: "7px 14px", fontSize: 13,
+              cursor: password.trim() ? "pointer" : "not-allowed",
+            }}
+          >
+            Unlock and analyse
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 interface SubmitArgs {
   domain: string;
   context?: string;
@@ -440,6 +541,8 @@ interface SubmitArgs {
   fileToUpload?: File;
   proxyCountry?: string;
   useResidentialProxy?: boolean;
+  /** Opens a password-protected archive so its contents can be read. */
+  archivePassword?: string;
 }
 
 function getTypeLabel(observableType?: string): string {
@@ -659,6 +762,10 @@ export default function HomePage() {
   // Duplicate-check modal state
   const [duplicates, setDuplicates] = useState<any[] | null>(null);
   const [pendingArgs, setPendingArgs] = useState<SubmitArgs | null>(null);
+  // A locked archive: the file is fine, the server just cannot open it. The
+  // submission is held here with the reason so the analyst types a password
+  // instead of picking the same file again.
+  const [lockedUpload, setLockedUpload] = useState<{ args: SubmitArgs; reason: string } | null>(null);
 
   const refreshHomeData = useCallback(() => {
     listInvestigations({ limit: 10 })
@@ -720,6 +827,7 @@ export default function HomePage() {
         const result = await uploadFileInvestigation(args.fileToUpload, args.context, {
           use_residential_proxy: !!args.useResidentialProxy,
           proxy_country: args.proxyCountry,
+          archive_password: args.archivePassword,
         });
         investigationId = result.investigation_id;
       } else {
@@ -740,6 +848,13 @@ export default function HomePage() {
 
       router.push(`/investigations/${investigationId}`);
     } catch (e: any) {
+      if (e instanceof ArchivePasswordRequired) {
+        // Not a failure: the server is asking for the archive password and
+        // has created nothing, so the same submission can be retried with it.
+        setLockedUpload({ args, reason: e.message });
+        setLoading(false);
+        return;
+      }
       alert(`Failed: ${e.message}`);
       setLoading(false);
     }
@@ -799,6 +914,20 @@ export default function HomePage() {
 
   return (
     <div style={{ paddingBottom: 56 }}>
+
+      {/* ── Locked archive ── */}
+      {lockedUpload && (
+        <ArchivePasswordModal
+          reason={lockedUpload.reason}
+          filename={lockedUpload.args.fileToUpload?.name || "the archive"}
+          onCancel={() => setLockedUpload(null)}
+          onSubmit={(password) => {
+            const next = { ...lockedUpload.args, archivePassword: password };
+            setLockedUpload(null);
+            void doCreate(next);
+          }}
+        />
+      )}
 
       {/* ── Duplicate modal ── */}
       {duplicates && pendingArgs && (
