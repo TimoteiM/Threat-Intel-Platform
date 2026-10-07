@@ -180,3 +180,37 @@ def cluster_linked(
     for index, row in enumerate(members):
         groups[find(index)].append(row)
     return [groups[root] for root in sorted(groups)]
+
+
+async def ubiquitous_values_across_estate(
+    db: Any, *, since: Any, limit: int = UBIQUITY_HOST_LIMIT,
+) -> set[str]:
+    """The estate-wide indicator spread, as one aggregate query.
+
+    Whether an indicator describes the estate or an incident is a property of
+    the estate, never of the rows a particular pass happened to fetch. Counting
+    it from those rows made the answer depend on the question: a pass narrowed
+    to one host saw every value on exactly one host, so nothing was ever
+    ubiquitous, the linking changed, and the same host produced 12 cases
+    scoped and 34 unscoped — only 2 of them the same case.
+
+    Cheap now that the values are a column: one GROUP BY over `ioc_values`
+    rather than a scan of every alert's JSON.
+    """
+    from sqlalchemy import text as _text
+
+    rows = await db.execute(
+        _text(
+            """
+            SELECT lower(value) AS value
+            FROM alert_body_investigation_runs r,
+                 LATERAL unnest(coalesce(r.ioc_values, ARRAY[]::text[])) AS value
+            WHERE r.entity_host IS NOT NULL
+              AND coalesce(r.event_time, r.created_at) >= :since
+            GROUP BY lower(value)
+            HAVING count(DISTINCT r.entity_host) > :limit
+            """
+        ),
+        {"since": since, "limit": int(limit)},
+    )
+    return {row[0] for row in rows.all() if row[0]}

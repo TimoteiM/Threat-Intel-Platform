@@ -102,8 +102,16 @@ class _DB:
     # default is how the spine lookup ended up being handed detection runs.
     _ALERT_READS = {"correlation_window", "pair_baseline"}
 
-    async def execute(self, query):
-        name = (query.get_execution_options() or {}).get("query_name")
+    async def execute(self, query, params=None):
+        # `params` because correlation now asks for the estate-wide indicator
+        # spread with a bound textual query. A stub that only accepts a
+        # statement models a caller that no longer exists.
+        try:
+            name = (query.get_execution_options() or {}).get("query_name")
+        except AttributeError:
+            # A textual query — the ubiquity aggregate. Nothing in these
+            # fixtures is carried across enough hosts to be estate-wide.
+            return _Result([])
         if name in self._ALERT_READS:
             return _Result(self._rows)
         if name == "anchor_walk":

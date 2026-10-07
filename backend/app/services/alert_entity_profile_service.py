@@ -71,10 +71,13 @@ def _tactics_of(assessment: Any) -> set[str]:
     return evidenced
 
 
-def _indicators_of(result_json: Any) -> list[dict[str, Any]]:
-    if not isinstance(result_json, dict):
-        return []
-    summary = result_json.get("indicator_summary")
+def _indicators_of(summary: Any) -> list[dict[str, Any]]:
+    """The indicators from one alert's `indicator_summary`.
+
+    Takes the sub-document rather than the whole `result_json`: the query
+    selects only that key, because pulling every alert's complete result for
+    one host was the slowest thing the case page did.
+    """
     if not isinstance(summary, dict):
         return []
     items = summary.get("indicators")
@@ -112,7 +115,14 @@ async def build_entity_profile(
                     AlertBodyInvestigationRun.overall_verdict,
                     AlertBodyInvestigationRun.highest_risk_score,
                     AlertBodyInvestigationRun.result_attack_assessment,
-                    AlertBodyInvestigationRun.result_json,
+                    # Only the sub-document this profile reads. Selecting the
+                    # whole `result_json` pulled every alert's indicator
+                    # reports, previous analyses and AI report across the wire
+                    # for one host — measured at 3,953 ms, the largest single
+                    # cost of opening a case page.
+                    AlertBodyInvestigationRun.result_json["indicator_summary"].label(
+                        "indicator_summary"
+                    ),
                 )
                 .where(AlertBodyInvestigationRun.entity_host == host)
                 .order_by(AlertBodyInvestigationRun.event_time.desc().nullslast()),
@@ -173,7 +183,7 @@ async def build_entity_profile(
     seen: dict[tuple[str, str], dict[str, Any]] = {}
     for row in ordered:
         when = _iso(_event_time(row))
-        for item in _indicators_of(row.result_json):
+        for item in _indicators_of(row.indicator_summary):
             kind = str(item.get("type") or "").strip().lower()
             value = str(item.get("value") or "").strip()
             if not kind or not value:

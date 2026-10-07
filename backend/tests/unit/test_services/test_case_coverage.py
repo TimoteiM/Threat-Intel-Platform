@@ -207,3 +207,51 @@ def test_the_entity_s_cases_are_loaded_once_per_entity():
     # And the two readers consult it rather than the database.
     assert "known=existing" in source
     assert "existing.get(closed_key)" in source
+
+
+def test_the_estate_wide_spread_does_not_depend_on_what_a_pass_fetched():
+    """Whether an indicator describes the estate or an incident is a property
+    of the estate, never of the rows one pass happened to read.
+
+    It was counted from those rows, so narrowing a pass to a single host saw
+    every value on exactly one host, nothing was ever ubiquitous, the linking
+    changed and the same host came back as 12 cases scoped against 34
+    unscoped — with only 2 of them the same case. Opening one case therefore
+    could not use a scoped pass at all, and paid for the whole estate."""
+    import inspect
+
+    from app.services import alert_case_linkage_service as linkage
+    from app.services import alert_correlation_service as svc
+
+    assert hasattr(linkage, "ubiquitous_values_across_estate")
+    source = inspect.getsource(svc.correlate_alerts)
+    assert "ubiquitous_values_across_estate(db" in source
+    assert "ubiquitous_values(rows" not in source, (
+        "the spread must not be derived from the rows this pass fetched"
+    )
+
+
+def test_one_case_is_looked_up_without_correlating_the_estate():
+    """`case_by_key` ran a 720-hour whole-estate pass and then scanned the
+    result for one key — and the case page paid it twice, once for the case
+    and once for its observables."""
+    import inspect
+
+    from app.services import alert_correlation_service as svc
+
+    source = inspect.getsource(svc.case_by_key)
+    assert "only_entity=only_entity" in source
+    assert "AlertCaseSpine" in source, "the spine row names the entity to scope by"
+
+
+def test_the_entity_profile_selects_only_the_sub_document_it_reads():
+    """It selected every alert's whole `result_json` for one host — indicator
+    reports, previous analyses, the AI report — to read one key out of each.
+    3,953 ms, the largest single cost of opening a case."""
+    import inspect
+
+    from app.services import alert_entity_profile_service as profile
+
+    source = inspect.getsource(profile.build_entity_profile)
+    assert 'result_json["indicator_summary"]' in source
+    assert "AlertBodyInvestigationRun.result_json,\n" not in source

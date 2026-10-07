@@ -55,7 +55,7 @@ from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 from app.services import alert_case_closure_service as closure_rules
 from app.services.alert_case_linkage_service import (
     cluster_linked,
-    ubiquitous_values,
+    ubiquitous_values_across_estate,
 )
 from app.services.alert_session_service import (
     SCORE_VERSION,
@@ -653,6 +653,9 @@ async def correlate_alerts(
     since: datetime | None = None,
     until: datetime | None = None,
     min_rules: int = MIN_DISTINCT_RULES,
+    # (source, client, host) — restricts the pass to one entity, for a caller
+    # that wants one case rather than the estate.
+    only_entity: tuple[str, str, str] | None = None,
     min_score: int = 0,
     limit: int = 50,
     emit: bool = False,
@@ -691,10 +694,22 @@ async def correlate_alerts(
         )
         .subquery()
     )
+    entity_filter = []
+    if only_entity:
+        # One case's page asks for one case. Without this, opening a case ran
+        # the whole estate's correlation over thirty days and then scanned the
+        # result for a single key — and the Observables tab ran it again. Both
+        # measured in seconds; both are one host's work.
+        entity_filter = [
+            scoped.c.alert_source == only_entity[0],
+            scoped.c.alert_client == only_entity[1],
+            scoped.c.entity_host == only_entity[2],
+        ]
+
     rows = (
         await db.execute(
             select(scoped)
-            .where(scoped.c.evt >= scoped.c.entity_latest - window)
+            .where(scoped.c.evt >= scoped.c.entity_latest - window, *entity_filter)
             .order_by(scoped.c.evt.desc())
             # Named so a reader — a log line, a test double — can tell the
             # three reads this function makes apart without parsing SQL.
@@ -749,7 +764,11 @@ async def correlate_alerts(
     # Learned once for the whole request, like the pair baseline above and for
     # the same reason: whether an indicator describes the estate or an incident
     # is not a property of any one case.
-    ubiquitous = ubiquitous_values(rows, _iocs_of)
+    # Estate-wide, computed independently of whatever this pass fetched. It
+    # used to be derived from `rows`, so narrowing the pass to one entity
+    # silently changed which indicators could link — and the same host came
+    # back as 12 cases scoped and 34 unscoped.
+    ubiquitous = await ubiquitous_values_across_estate(db, since=cutoff)
     # case_key -> the answered case it carries on from, filled while clusters
     # are assembled and read when the spine rows are written.
     continuations: dict[str, tuple[str, str | None]] = {}
@@ -1300,6 +1319,24 @@ async def case_by_key(
     days, so a bookmarked case page does not depend on the window it was opened
     with.
     """
+    # The spine row names the entity, so the pass can be restricted to it.
+    # Correlating the whole estate to find one case took seconds, and the case
+    # page paid it twice — once for the case, once for its observables.
+    spine = await db.get(AlertCaseSpine, case_key)
+    only_entity = (
+        (spine.alert_source, spine.alert_client, spine.entity_host) if spine else None
+    )
+    result = await correlate_alerts(
+        db, scope=scope, hours=hours, limit=500, only_entity=only_entity,
+    )
+    for case in result["cases"]:
+        if case.get("case_key") == case_key:
+            return case
+    # A continuation or a split cluster carries a synthetic entity key, and an
+    # unknown case_key has no spine row to narrow by. Falling back to the full
+    # pass keeps those answerable rather than returning a wrong "no such case".
+    if only_entity is None:
+        return None
     result = await correlate_alerts(db, scope=scope, hours=hours, limit=500)
     for case in result["cases"]:
         if case.get("case_key") == case_key:

@@ -66,6 +66,31 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   // and React threw #310 — the case page crashed to "a client-side exception
   // has occurred" the moment its data arrived.
   const [tab, setTab] = useState<"analysis" | "observables" | "alerts">("analysis");
+  // Fetched once, here, rather than inside the tab. The panel used to own
+  // this: switching away unmounted it and switching back re-ran the request,
+  // so every visit to Observables paid for it again.
+  const [observables, setObservables] = useState<
+    Awaited<ReturnType<typeof api.getCaseObservables>> | null
+  >(null);
+  const [observablesError, setObservablesError] = useState<string | null>(null);
+
+  // Lazily: a case opened and never switched away from should not pay for a
+  // tab nobody looked at.
+  useEffect(() => {
+    if (tab !== "observables" || observables || observablesError) return;
+    let cancelled = false;
+    api
+      .getCaseObservables(caseKey)
+      .then((d) => !cancelled && setObservables(d))
+      .catch(
+        (e) =>
+          !cancelled &&
+          setObservablesError(e instanceof Error ? e.message : "Could not load observables."),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, caseKey, observables, observablesError]);
 
   // Re-read the case. Also called after "Send to AI now", so the header
   // flips to Closed without the analyst reloading the page.
@@ -249,7 +274,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
       </div>
 
       {tab === "observables" ? (
-        <ObservablesPanel caseKey={caseKey} />
+        <ObservablesPanel data={observables} error={observablesError} />
       ) : tab === "alerts" ? null : (
       <>
       <Panel title="CASE ANALYSIS" hint="One reading of the whole case. Each alert keeps its own below.">
@@ -390,21 +415,13 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
  * for, one it only extracted. Showing them together is how an analyst comes
  * to believe an address was checked when it was merely seen.
  */
-function ObservablesPanel({ caseKey }: { caseKey: string }) {
-  const [data, setData] = useState<Awaited<ReturnType<typeof api.getCaseObservables>> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getCaseObservables(caseKey)
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Could not load observables."));
-    return () => {
-      cancelled = true;
-    };
-  }, [caseKey]);
-
+function ObservablesPanel({
+  data,
+  error,
+}: {
+  data: Awaited<ReturnType<typeof api.getCaseObservables>> | null;
+  error: string | null;
+}) {
   if (error) return <Panel title="OBSERVABLES"><div style={obsNote}>{error}</div></Panel>;
   if (!data) return <Panel title="OBSERVABLES"><div style={obsNote}>Loading…</div></Panel>;
 
