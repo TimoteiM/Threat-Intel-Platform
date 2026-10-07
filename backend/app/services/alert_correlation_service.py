@@ -42,6 +42,7 @@ from app.services.alert_case_narrative_service import (
 )
 from app.services.alert_case_store import (
     case_reference,
+    spines_for_entity,
     absorb_superseded,
     supersession_state,
     snapshot_if_changed,
@@ -523,19 +524,12 @@ def score_case(
     return min(score, 100), reasons
 
 
-# The indicator values this alert carries, as an array, so case membership can
-# ask what two alerts have in common without pulling every run's result_json
-# back across the wire. Addresses the platform itself skipped as private or
-# reserved are left out here rather than filtered later: they are the device's
-# own address, which every alert on the device carries.
-_IOCS = literal_column(
-    "(SELECT array_agg(DISTINCT lower(rep->'indicator'->>'value')) "
-    " FROM jsonb_array_elements("
-    "   coalesce(alert_body_investigation_runs.result_json->'indicator_reports', '[]'::jsonb)"
-    " ) AS rep"
-    " WHERE rep->'indicator'->>'value' IS NOT NULL"
-    "   AND coalesce(rep->>'skip_reason', '') <> 'private_or_reserved_address')"
-).label("ioc_values")
+# The indicator values this alert carries. A column now, kept in step with
+# `result_json` by a database trigger (migration 040): deriving it here with a
+# correlated `jsonb_array_elements` subquery cost 2,398 ms against 30 ms for
+# the same query without it — two and a half seconds of every page load spent
+# re-deriving a value that never changes.
+_IOCS = AlertBodyInvestigationRun.ioc_values.label("ioc_values")
 
 
 _RUN_COLUMNS = (
@@ -831,8 +825,9 @@ async def correlate_alerts(
         # brings a detection the case never saw. Reopening is deliberately not
         # an option: closing stops the SLA clock, and a straggler at hour
         # sixteen would turn a four-minute resolution into a sixteen-hour one.
+        existing = await spines_for_entity(db, source=source, client=client, host=entity)
         for closed_key in list(linked_sessions):
-            spine_row = await db.get(AlertCaseSpine, closed_key)
+            spine_row = existing.get(closed_key)
             if spine_row is None or spine_row.closed_at is None:
                 continue
             answered, late = closure_rules.split_after_closure(
@@ -1059,6 +1054,7 @@ async def correlate_alerts(
                 host=entity,
                 session_started_at=session.session_started_at,
                 session_ended_at=last_event,
+                known=existing,
             )
             spine = await upsert_spine(
                 db,
@@ -1075,6 +1071,7 @@ async def correlate_alerts(
                 # and a continuation can name the case it follows exactly as
                 # that case names itself.
                 title=case_payload.get("label"),
+                known=existing,
             )
             # Said on the case itself, so an analyst reading a continuation can
             # see which answered case it carries on from without re-deriving

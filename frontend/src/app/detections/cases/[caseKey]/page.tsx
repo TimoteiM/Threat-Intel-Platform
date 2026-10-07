@@ -59,6 +59,14 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Named tabs, so a case reads the same way every time.
+  //
+  // Declared here, above the early returns. It was below them, so a render
+  // that bailed out at `if (loading)` ran fewer hooks than the one after it
+  // and React threw #310 — the case page crashed to "a client-side exception
+  // has occurred" the moment its data arrived.
+  const [tab, setTab] = useState<"analysis" | "observables" | "alerts">("analysis");
+
   // Re-read the case. Also called after "Send to AI now", so the header
   // flips to Closed without the analyst reloading the page.
   const reload = React.useCallback(() => {
@@ -102,8 +110,6 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   const number = item?.case_number ?? (data.spine as any)?.case_number;
   const lifecycle = item?.lifecycle;
   const continues = item?.continues;
-  // Named tabs, so a case reads the same way every time.
-  const [tab, setTab] = useState<"analysis" | "observables" | "alerts">("analysis");
 
   return (
     <Page>

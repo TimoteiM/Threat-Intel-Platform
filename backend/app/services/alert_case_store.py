@@ -28,6 +28,16 @@ from app.services.alert_session_service import SCORE_VERSION
 
 logger = logging.getLogger(__name__)
 
+
+def _as_utc_value(value: datetime) -> datetime:
+    """Compare a stored stamp and a computed one on the same footing.
+
+    Postgres hands these back aware, but a freshly built one in the same pass
+    may not be, and comparing the two raises.
+    """
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 # How often a late-arriving alert re-anchored a session and re-identified its
 # case. anchor_index returns 0 when it exhausts history without finding a gap,
 # and 46.8% of measured walks end that way — every one of those is a latent
@@ -146,14 +156,19 @@ async def upsert_spine(
     score: int,
     score_version: str = SCORE_VERSION,
     title: str | None = None,
+    known: dict[str, AlertCaseSpine] | None = None,
 ) -> AlertCaseSpine:
     """Create or refresh the persisted spine for one session.
+
+    `known` is the entity's existing rows, already loaded. Passed in, a miss
+    costs nothing; without it every new case is a round trip that finds
+    nothing.
 
     Only the fields a recompute owns are touched. status and assignee are
     written by people, so a recompute that overwrote them would silently undo an
     analyst's work every time the page was opened.
     """
-    row = await db.get(AlertCaseSpine, case_key)
+    row = known.get(case_key) if known is not None else await db.get(AlertCaseSpine, case_key)
     now = datetime.now(timezone.utc)
 
     if row is None:
@@ -178,18 +193,32 @@ async def upsert_spine(
             updated_at=now,
         )
         db.add(row)
+        if known is not None:
+            known[case_key] = row
         return row
 
-    row.session_seq = session_seq
-    row.last_activity_at = max(row.last_activity_at, last_activity_at)
-    row.updated_at = now
+    # Only touch the row when something actually changed. It used to stamp
+    # `updated_at` on every recompute, so one page load issued 673 UPDATEs
+    # against a table nobody had asked to change — and made `updated_at`
+    # useless as a record of when the case last moved, because it meant "when
+    # somebody last looked".
+    changed = False
+    if row.session_seq != session_seq:
+        row.session_seq = session_seq
+        changed = True
+    newest = max(row.last_activity_at, last_activity_at)
+    if newest != row.last_activity_at:
+        row.last_activity_at = newest
+        changed = True
     if row.case_number is None:
         row.case_number = await next_case_number(db)
+        changed = True
     # Kept current while the case is open; frozen once it closes, so a
     # continuation that names the case it follows names it the same way the
     # case does.
-    if title and row.closed_at is None:
+    if title and row.closed_at is None and row.title != title:
         row.title = title
+        changed = True
 
     # A peak is only a peak of the formula that produced it. Carrying one across
     # a scoring change compares two different questions: the Stealth fix moved a
@@ -199,9 +228,14 @@ async def upsert_spine(
         row.peak_score = score
         row.peak_score_version = score_version
         row.peak_at = now
+        changed = True
     elif score > row.peak_score:
         row.peak_score = score
         row.peak_at = now
+        changed = True
+
+    if changed:
+        row.updated_at = now
     return row
 
 
@@ -325,8 +359,15 @@ async def absorb_superseded(
     host: str,
     session_started_at: datetime,
     session_ended_at: datetime,
+    known: dict[str, AlertCaseSpine] | None = None,
 ) -> list[str]:
     """Point every dead key inside this session's span at the live one.
+
+    `known` is the entity's rows, already loaded. With it the candidates are
+    selected in memory and the database is touched only when there is
+    something to absorb — which is almost never. Without it this ran one
+    query per cluster: 1,056 on a single page load, for an answer that was
+    empty every time.
 
     A late-arriving alert can close a gap that previously split two sessions.
     The merged session starts earlier, so it hashes to a key nothing has seen,
@@ -340,12 +381,23 @@ async def absorb_superseded(
     like a complete one — a silent failure, which is the property this build
     keeps removing.
     """
-    dead = (
-        await db.execute(
-            select(AlertCaseSpine).where(
-                AlertCaseSpine.alert_source == source,
-                AlertCaseSpine.alert_client == client,
-                AlertCaseSpine.entity_host == host,
+    if known is not None:
+        dead = [
+            row for row in known.values()
+            if row.case_key != live_case_key
+            and row.superseded_by_case_key is None
+            and _as_utc_value(row.session_started_at) > _as_utc_value(session_started_at)
+            and _as_utc_value(row.session_started_at) <= _as_utc_value(session_ended_at)
+        ]
+        if not dead:
+            return []
+    else:
+        dead = (
+            await db.execute(
+                select(AlertCaseSpine).where(
+                    AlertCaseSpine.alert_source == source,
+                    AlertCaseSpine.alert_client == client,
+                    AlertCaseSpine.entity_host == host,
                 # Strictly later. A session this one swallowed must have
                 # started *after* the merged start — that is what being
                 # swallowed means.
@@ -358,16 +410,16 @@ async def absorb_superseded(
                 # by the parent it continues. 94 of 96 supersession pointers
                 # in the database targeted a row with the same host and the
                 # same session start.
-                AlertCaseSpine.session_started_at > session_started_at,
-                AlertCaseSpine.session_started_at <= session_ended_at,
-                AlertCaseSpine.case_key != live_case_key,
-                AlertCaseSpine.superseded_by_case_key.is_(None),
+                    AlertCaseSpine.session_started_at > session_started_at,
+                    AlertCaseSpine.session_started_at <= session_ended_at,
+                    AlertCaseSpine.case_key != live_case_key,
+                    AlertCaseSpine.superseded_by_case_key.is_(None),
+                )
+                .execution_options(query_name="spine_superseded")
             )
-            .execution_options(query_name="spine_superseded")
-        )
-    ).scalars().all()
-    if not dead:
-        return []
+        ).scalars().all()
+        if not dead:
+            return []
 
     dead_keys = [row.case_key for row in dead]
     now = datetime.now(timezone.utc)
@@ -568,3 +620,28 @@ async def case_reference(db: AsyncSession, case_key: str | None) -> dict[str, An
         "resolution": row.resolution,
         "closed_at": row.closed_at.isoformat() if row.closed_at else None,
     }
+
+
+async def spines_for_entity(
+    db: AsyncSession, *, source: str, client: str, host: str,
+) -> dict[str, AlertCaseSpine]:
+    """Every spine row this entity already has, in one query.
+
+    Correlation reads a spine row twice per cluster — once to ask whether the
+    case is closed, once to upsert it — and a *missing* row costs a round trip
+    just the same, because `db.get` has nothing to find. At 27 cases that was
+    noise; at 941 it was 1,403 round trips and most of a nine-second page
+    load, almost all of them misses.
+
+    Loading the entity's rows up front answers both questions from memory: a
+    key in the map is the row, a key not in it is a new case. It also tells
+    `absorb_superseded` whether there is anything to absorb before it asks.
+    """
+    rows = await db.execute(
+        select(AlertCaseSpine).where(
+            AlertCaseSpine.alert_source == source,
+            AlertCaseSpine.alert_client == client,
+            AlertCaseSpine.entity_host == host,
+        )
+    )
+    return {row.case_key: row for row in rows.scalars().all()}

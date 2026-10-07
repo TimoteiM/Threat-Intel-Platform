@@ -25,7 +25,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -706,6 +706,11 @@ class AlertBodyInvestigationRun(Base):
     overall_verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
     highest_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # The alert's indicator values, kept in step with result_json by a
+    # database trigger (migration 040). Correlation reads this to ask what
+    # two alerts have in common; deriving it from the JSON on every page
+    # load cost 2.4 seconds a time.
+    ioc_values: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     # sha256 of the normalised alert body — lets a repeated delivery reuse the
     # run it already produced instead of investigating the same alert twice.
     alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

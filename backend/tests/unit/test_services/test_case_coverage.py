@@ -157,3 +157,53 @@ def test_nothing_is_closed_merely_for_being_absent_from_the_listing():
     assert 'resolution="aged_out"' not in source, (
         "absence from a filtered listing is not a resolution"
     )
+
+
+# --- the Cases page has to be fast enough to use -----------------------------
+
+
+def test_indicator_values_are_read_from_a_column_not_re_derived():
+    """Projecting them with a correlated `jsonb_array_elements` subquery cost
+    2,398 ms against 30 ms for the same query without it — two and a half
+    seconds of every page load, spent re-deriving a value that never changes
+    once the investigation has concluded."""
+    import inspect
+
+    from app.services import alert_correlation_service as svc
+
+    source = inspect.getsource(svc)
+    assert "_IOCS = AlertBodyInvestigationRun.ioc_values" in source
+    # Asserted on the code, not the prose: the comment above the projection
+    # names the subquery it replaced, and should keep doing so.
+    assert "literal_column(" not in source, (
+        "the indicator values come from a column, maintained by a trigger"
+    )
+
+
+def test_a_recompute_that_changes_nothing_writes_nothing():
+    """A page load issued 673 UPDATEs against a table nobody had asked to
+    change, and made `updated_at` mean "when somebody last looked"."""
+    import inspect
+
+    from app.services import alert_case_store as store
+
+    source = inspect.getsource(store.upsert_spine)
+    assert "if changed:" in source
+    assert source.index("changed = False") < source.index("if changed:")
+
+
+def test_the_entity_s_cases_are_loaded_once_per_entity():
+    """Correlation read a spine row twice per cluster, and a *missing* row
+    costs a round trip just the same — 1,403 of them on one page load, almost
+    all misses."""
+    import inspect
+
+    from app.services import alert_case_store as store
+    from app.services import alert_correlation_service as svc
+
+    assert hasattr(store, "spines_for_entity")
+    source = inspect.getsource(svc.correlate_alerts)
+    assert "spines_for_entity(" in source
+    # And the two readers consult it rather than the database.
+    assert "known=existing" in source
+    assert "existing.get(closed_key)" in source
