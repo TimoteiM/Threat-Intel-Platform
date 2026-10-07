@@ -314,7 +314,11 @@ async def get_correlated_cases(
     # Up to two years, so "all cases" is a real option rather than a 30-day
     # cap wearing that name. Retention decides what it actually reaches.
     hours: int = Query(default=48, ge=1, le=17520),
-    min_rules: int = Query(default=2, ge=1, le=10),
+    # One, because a case is now the unit of coverage: every ingested alert
+    # belongs to one, and the score separates the interesting from the
+    # routine. At the previous default of 2 this endpoint hid 97% of the
+    # clusters it computed and 55% of all alerts had no case at all.
+    min_rules: int = Query(default=1, ge=1, le=10),
     min_score: int = Query(default=0, ge=0, le=100),
     limit: int = Query(default=50, ge=1, le=500),
     tenant: str | None = None,

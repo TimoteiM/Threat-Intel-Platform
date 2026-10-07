@@ -130,10 +130,13 @@ async def test_two_sources_on_one_hostname_are_not_one_case():
     """
     rows = [_Run("SRV-01", "Siembiot", "rule-a"), _Run("SRV-01", "tracecat", "rule-b")]
     result = await correlate_alerts(_DB(rows), scope=tenant_scope.INTERNAL, hours=48)
-    assert result["total_cases"] == 0
-    # Counted as two separate entity groups, not one.
+    # Two cases of one alert each, never one case of two. The old assertion
+    # was `total_cases == 0`, which only held while a case needed two
+    # independent rules to exist at all — a threshold that hid 97% of cases
+    # and is no longer how coverage works.
     assert result["entities_seen"] == 2
     assert result["sources_seen"] == 2
+    assert all(c["alert_count"] == 1 for c in result["cases"])
 
 
 @pytest.mark.asyncio
@@ -154,8 +157,10 @@ async def test_an_absent_source_does_not_pool_every_platform():
     """
     rows = [_Run("SRV-01", None, "rule-a"), _Run("SRV-01", "Siembiot", "rule-b")]
     result = await correlate_alerts(_DB(rows), scope=tenant_scope.INTERNAL, hours=48)
-    assert result["total_cases"] == 0
+    # Two entity groups, never pooled into one. The old `total_cases == 0`
+    # depended on the two-rule threshold, not on the pooling this is about.
     assert {c for c in result} and result["entities_seen"] == 2
+    assert all(c["alert_count"] == 1 for c in result["cases"])
 
 
 @pytest.mark.asyncio
@@ -170,8 +175,9 @@ async def test_two_clients_sharing_a_hostname_are_not_one_case():
     b = _Run("DC01", "Siembiot", "rule-b")
     b.alert_client = "GLOBEX"
     result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
-    assert result["total_cases"] == 0
     assert result["clients_seen"] == 2
+    # Two cases, one alert each — never merged across clients.
+    assert all(c["alert_count"] == 1 for c in result["cases"])
 
 
 @pytest.mark.asyncio
@@ -192,7 +198,11 @@ async def test_an_incident_is_never_a_member_of_a_case():
     other = _Run("mvapsupm01", "tracecat", "another rule")
     other.alert_kind = "alert"
     result = await correlate_alerts(_DB([incident, other]), scope=tenant_scope.INTERNAL, hours=48)
-    assert result["total_cases"] == 0
+    # One case, holding only the alert. The incident is not a member of it —
+    # previously expressed as "no cases at all", which held only while a case
+    # needed two rules to exist.
+    assert result["total_cases"] == 1
+    assert result["cases"][0]["alert_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -212,9 +222,10 @@ async def test_two_alerts_sharing_only_a_device_do_not_form_a_case():
 
     result = await correlate_alerts(_DB([a, b]), scope=tenant_scope.INTERNAL, hours=48)
 
-    # Neither is a multi-alert case, so neither reaches the correlation
-    # threshold that `total_cases` counts.
-    assert result["total_cases"] == 0
+    # Two cases of one alert each — never one case of two. (It used to be
+    # "no cases", which was the two-rule threshold talking, not membership.)
+    assert result["total_cases"] == 2
+    assert all(c["alert_count"] == 1 for c in result["cases"])
 
 
 @pytest.mark.asyncio

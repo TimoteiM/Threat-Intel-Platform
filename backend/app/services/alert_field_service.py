@@ -68,6 +68,10 @@ def _field(label: str | None, keys: list[str], text: str) -> str | None:
     return _first(patterns, text)
 
 
+# Wazuh's own id for the manager. An alert attributed to it was forwarded,
+# not observed on a device.
+_MANAGER_AGENT_ID = "000"
+
 _ALERT_LINE = re.compile(r"^[ \t]*Alert[ \t]*:[ \t]*(.+)$", re.MULTILINE)
 
 
@@ -126,6 +130,27 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
     if agent and "|" in agent:
         agent, _, agent_id = (part.strip() for part in agent.partition("|"))
 
+    # A forwarded log names its own device inside the payload, and that device
+    # is the entity the alert is about.
+    #
+    # Refusing agent 000 is right — it is the manager, and correlating on it
+    # would group every forwarded log in the estate under one machine that saw
+    # none of it. But refusing it and stopping there left the alert with no
+    # host at all, and an alert with no host reaches no case: 3,195 of 11,376
+    # rows, of which 2,471 are one FortiGate detection whose body carries
+    # `devname="FortiGate-200F-FW01"` in plain sight.
+    #
+    # Only consulted for a forwarded alert. On a log a real agent observed,
+    # the agent is the device and a `devname` in the payload names something
+    # the device was talking about, not the device itself.
+    forwarded_device = None
+    if agent_id == _MANAGER_AGENT_ID:
+        forwarded_device = _field(
+            None, ["devname", "dvchost", "deviceExternalId", "hostname", "shost"], text,
+        )
+        if forwarded_device:
+            agent = forwarded_device
+
     fields: dict[str, Any] = {
         "rule_id": (str(rule_id).strip() if rule_id else None) or _field("Rule", ["rule_id", "ruleid"], text),
         "rule_name": (str(rule_name).strip() if rule_name else None),
@@ -133,6 +158,9 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         "agent": agent,
         "agent_ip": _field("Agent IP", ["agent_ip", "dvc", "src"], text),
         "agent_id": agent_id,
+        # Set when the host was taken from a forwarded log's own payload
+        # rather than from the Wazuh agent that relayed it.
+        "forwarded_device": forwarded_device,
         "manager": _field("Manager", ["manager"], text),
         # An incident names its own subject; trust that over a parsed header.
         "entity_id": _field("entity_id", ["entity_id"], text),

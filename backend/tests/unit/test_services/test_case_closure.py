@@ -116,16 +116,32 @@ def test_a_single_alert_case_is_never_escalating():
 
 # --- what happens to late alerts ---------------------------------------------
 
-def test_a_straggler_repeating_a_known_detection_is_appended_silently():
-    """99% of late alerts. Re-answering would spend a model call to produce
-    the same sentence."""
-    members = [alert("A"), alert("A", minutes=30)]
+def test_a_closed_case_stops_taking_alerts():
+    """The regression this replaced. An earlier rule appended a late alert to
+    the closed case whenever its detection was already known — which read well
+    against the measurement (99% of late alerts are repeats) but the
+    measurement was about minutes, not hours. In production case #117 closed
+    at 09:48 and was still taking alerts at 10:59, so a morning of real alerts
+    produced no case an analyst could see and no SLA clock that was running."""
+    members = [alert("A"), alert("A", minutes=71)]
     answered, late = closure.split_after_closure(
-        members, closed_at=T0 + timedelta(minutes=10), now=T0 + timedelta(minutes=40),
+        members, closed_at=T0 + timedelta(minutes=10), now=T0 + timedelta(minutes=90),
     )
-    assert len(answered) == 1
-    assert len(late.appended) == 1
-    assert not late.needs_continuation
+    assert len(answered) == 1, "the case keeps only what it was answered on"
+    assert len(late.continuation) == 1, "the rest is a new episode"
+    assert late.needs_continuation
+
+
+def test_a_continuation_bringing_nothing_new_inherits_the_answer():
+    """Membership and cost are separate questions. Every post-closure alert
+    gets a case; only one bringing a detection the parent never answered
+    costs a model call. Measured: 915 calls for 1,728 cases."""
+    members = [alert("A"), alert("A", minutes=71)]
+    _answered, late = closure.split_after_closure(
+        members, closed_at=T0 + timedelta(minutes=10), now=T0 + timedelta(minutes=90),
+    )
+    assert late.inherits
+    assert late.new_detections == set()
 
 
 def test_a_straggler_with_a_new_detection_starts_a_continuation():
@@ -139,9 +155,9 @@ def test_a_straggler_with_a_new_detection_starts_a_continuation():
     assert late.new_detections == {"lateral movement"}
 
 
-def test_everything_after_the_new_detection_goes_with_it():
-    """Once a case has moved on, its later activity belongs to the part that
-    moved — including repeats of the original detection."""
+def test_everything_after_the_answer_goes_into_the_continuation():
+    """Including repeats of a detection the parent already held — once a case
+    is answered, what follows is one episode, not two."""
     members = [
         alert("A"), alert("lateral movement", minutes=30), alert("A", minutes=35),
     ]
@@ -149,7 +165,7 @@ def test_everything_after_the_new_detection_goes_with_it():
         members, closed_at=T0 + timedelta(minutes=10), now=T0 + timedelta(minutes=40),
     )
     assert len(late.continuation) == 2
-    assert late.appended == []
+    assert not late.inherits, "a new detection is present, so it is answered afresh"
 
 
 def test_nothing_arriving_after_closure_means_nothing_to_do():
@@ -158,7 +174,7 @@ def test_nothing_arriving_after_closure_means_nothing_to_do():
         members, closed_at=T0 + timedelta(minutes=10), now=T0 + timedelta(minutes=20),
     )
     assert len(answered) == 2
-    assert late.appended == [] and not late.needs_continuation
+    assert not late.needs_continuation
 
 
 # --- resolutions and metrics -------------------------------------------------

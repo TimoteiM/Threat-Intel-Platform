@@ -138,9 +138,22 @@ def _note_unranked(tactic: str) -> None:
         )
 
 DEFAULT_WINDOW_HOURS = 48
-# One rule firing repeatedly is one detection, however loud. A case needs two
-# independent rules to agree before it is worth anyone's attention.
-MIN_DISTINCT_RULES = 2
+# How many independent detections a cluster needs before it becomes a case.
+#
+# This was 2, on the reasoning that one rule firing repeatedly is one
+# detection however loud, and a case needs corroboration to be worth anyone's
+# attention. That is a good rule for a page of *notable* cases and the wrong
+# one for a page that has to account for every alert: measured over the
+# estate, 863 of 890 linked clusters (97%) were dropped by it before a spine
+# row was ever written, and 6,249 of 11,376 alerts (55%) were in no case at
+# all. An analyst looking for this morning's alerts found nothing, because
+# nothing had been created.
+#
+# Cases are the unit of coverage now — every alert belongs to one, and the
+# score is what separates the interesting from the routine. Notability is
+# still a threshold, but it belongs to escalation (see decide_emission and
+# correlation_escalation_min_score), not to whether a case exists.
+MIN_DISTINCT_RULES = 1
 
 
 def _event_time(row: Any, fallback: datetime) -> datetime:
@@ -731,7 +744,7 @@ async def correlate_alerts(
     ubiquitous = ubiquitous_values(rows, _iocs_of)
     # case_key -> the answered case it carries on from, filled while clusters
     # are assembled and read when the spine rows are written.
-    continuations: dict[str, str] = {}
+    continuations: dict[str, tuple[str, str | None]] = {}
 
     settings = get_settings()
     emissions: list[dict[str, Any]] = []
@@ -802,7 +815,11 @@ async def correlate_alerts(
             )
             if not late.needs_continuation:
                 continue
-            linked_sessions[closed_key] = answered + late.appended
+            # The closed case keeps exactly what it was answered on. It does
+            # not go on absorbing alerts: case #117 closed at 09:48 and was
+            # still taking alerts at 10:59, so a morning of activity produced
+            # no case an analyst could see.
+            linked_sessions[closed_key] = answered
             follow_on = late.continuation
             first = min(follow_on, key=lambda m: (_event_time(m, cutoff), str(m.id)))
             follow_key = case_key_for(
@@ -811,7 +828,13 @@ async def correlate_alerts(
             )
             linked_sessions[follow_key] = follow_on
             session_anchor[follow_key] = session_anchor[closed_key]
-            continuations[follow_key] = closed_key
+            # The parent, and whether this continuation can inherit its answer.
+            # A continuation bringing nothing new is closed with the parent's
+            # resolution and never reaches a model — 47% of them, measured.
+            continuations[follow_key] = (
+                closed_key,
+                spine_row.resolution if late.inherits else None,
+            )
 
         sessions = linked_sessions
         session_of = session_anchor
@@ -1024,7 +1047,13 @@ async def correlate_alerts(
             # see which answered case it carries on from without re-deriving
             # the chain from timestamps.
             if case_key in continuations and not spine.continues_case_key:
-                spine.continues_case_key = continuations[case_key]
+                parent_key, inherited = continuations[case_key]
+                spine.continues_case_key = parent_key
+                if inherited and not spine.resolution:
+                    # An answer already given. The closing job sees a case that
+                    # arrives with its resolution and closes it without asking
+                    # a model the same question twice.
+                    spine.resolution = inherited
             # Score history and escalation are the scheduled job's business,
             # not a page load's.
             #

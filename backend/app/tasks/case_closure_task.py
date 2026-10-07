@@ -125,7 +125,12 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     # Another pass is already answering it.
                     continue
 
-                resolution = closure.resolution_for(
+                # A continuation that brought nothing its parent had not
+                # already answered arrives with the answer on it. Asking a
+                # model the same question again would cost a call to produce
+                # the same sentence — 47% of continuations, measured.
+                inherited = bool(row.resolution) and row.continues_case_key
+                resolution = row.resolution if inherited else closure.resolution_for(
                     verdict=case.get("verdict") or case.get("overall_verdict"),
                     risk_score=case.get("score"),
                 )
@@ -136,9 +141,10 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     title=case.get("label") or row.title,
                     alerts_at_close=len(members) or int(case.get("alert_count") or 0),
                     closed_at=now,
-                    closure_kind="auto",
+                    closure_kind="inherited" if inherited else "auto",
                 )
                 answered.append({
+                    "inherited": bool(inherited),
                     "case": case,
                     "case_key": row.case_key,
                     "case_number": row.case_number,
@@ -173,6 +179,8 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     ),
                 )
                 for entry in answered
+                # Nothing new to say, so nothing is asked.
+                if not entry["inherited"]
             ])
 
         return {

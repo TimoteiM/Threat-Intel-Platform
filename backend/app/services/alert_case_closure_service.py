@@ -161,9 +161,12 @@ def decide(
 
 @dataclass
 class LateArrival:
-    """What to do with alerts that land after the case was answered."""
+    """Alerts that landed after the case was answered.
 
-    appended: list[Any] = field(default_factory=list)
+    All of them continue the case. `new_detections` decides only whether the
+    continuation needs its own answer or can inherit the one already given.
+    """
+
     continuation: list[Any] = field(default_factory=list)
     new_detections: set[str] = field(default_factory=set)
 
@@ -171,19 +174,35 @@ class LateArrival:
     def needs_continuation(self) -> bool:
         return bool(self.continuation)
 
+    @property
+    def inherits(self) -> bool:
+        """Nothing the parent had not already answered — no model call."""
+        return bool(self.continuation) and not self.new_detections
+
 
 def split_after_closure(
     members: Sequence[Any], *, closed_at: datetime, now: datetime | None = None,
 ) -> tuple[list[Any], LateArrival]:
     """Divide a case's alerts into what it was answered on, and what came after.
 
-    A late alert whose detection the case already held is appended to it: the
-    resolution does not change, so re-answering would cost a model call to
-    produce the same sentence. Ninety-nine per cent of late alerts are this.
+    **Everything after the answer continues it.** An earlier version appended a
+    late alert to the closed case whenever its detection was already known,
+    which read well against the measurement — 99% of late alerts are repeats —
+    but the measurement was about alerts arriving minutes after a quiet
+    period, not about the next six hours. In production a closed case went on
+    swallowing alerts for over an hour: case #117 closed at 09:48 and its last
+    activity was 10:59, so a morning of real alerts produced no case anybody
+    could see and no SLA clock that was running.
 
-    One bringing a detection the case has not seen goes to a continuation —
-    along with every later alert, including repeats, because once a case has
-    moved on its subsequent activity belongs with the part that moved.
+    A case that has been answered is finished. What happens next is a new
+    episode, and it gets a case of its own so the alerts are visible and the
+    clock restarts.
+
+    `new_detections` still matters, but for cost rather than membership: a
+    continuation that brings nothing the parent had not already answered
+    inherits the parent's resolution and never reaches a model. Measured over
+    the estate, that is 47% of continuations — 915 model calls for 1,728
+    cases, against 1,728 if every one were answered afresh.
     """
     closed_at = _as_utc(closed_at)
     now = now or datetime.now(timezone.utc)
@@ -194,17 +213,8 @@ def split_after_closure(
         (answered if _event_time(member, now) <= closed_at else late).append(member)
 
     known = {detection_of(m) for m in answered} - {""}
-    result = LateArrival()
-    for index, member in enumerate(late):
-        name = detection_of(member)
-        if name and name not in known:
-            # From here on it is a different case, repeats included.
-            result.continuation = late[index:]
-            result.new_detections = {
-                detection_of(m) for m in result.continuation
-            } - known - {""}
-            break
-        result.appended.append(member)
+    result = LateArrival(continuation=list(late))
+    result.new_detections = ({detection_of(m) for m in late} - known) - {""}
     return answered, result
 
 
