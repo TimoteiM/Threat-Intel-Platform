@@ -171,8 +171,15 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
       )}
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <Link href="/detections" style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}>
-          ← all correlated cases
+        {/* /detections/cases, not /detections. A case lives under Cases, and
+            the back link dropped the analyst on the Detections overview —
+            one more click, from the wrong page, every time they closed a
+            case. The label says Cases because that is where it goes. */}
+        <Link
+          href="/detections/cases"
+          style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}
+        >
+          ← all cases
         </Link>
         {item && (
           <span style={{ ...MONO, fontSize: 13, color: riskColor(item.score) }}>

@@ -10,7 +10,8 @@
  * every link already written to a case keeps working.
  */
 
-import React, { useState } from "react";
+import React, { Suspense, useCallback, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import CasesList from "@/components/detections/CasesList";
 import { Button, Page, PageHeader } from "@/components/ui/Primitives";
 
@@ -27,9 +28,52 @@ const PRESETS = [
 ] as const;
 
 export default function CasesPage() {
-  const [hours, setHours] = useState<number>(168);
-  const [since, setSince] = useState("");
-  const [until, setUntil] = useState("");
+  // useSearchParams needs a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={null}>
+      <CasesPageInner />
+    </Suspense>
+  );
+}
+
+function CasesPageInner() {
+  // The window lives in the URL, not in component state.
+  //
+  // It was state, so opening a case and coming back dropped the analyst on a
+  // list reset to 7 days — they re-picked the window every single time, and
+  // on the wider ones that is a few seconds of waiting for a view they had
+  // already chosen. In the URL it survives the round trip, the browser's own
+  // Back button restores exactly what they were looking at, and the view is
+  // a link somebody can send to a colleague.
+  const router = useRouter();
+  const params = useSearchParams();
+
+  const hours = Number(params.get("hours")) || 168;
+  const since = params.get("since") || "";
+  const until = params.get("until") || "";
+
+  const write = useCallback(
+    (next: { hours?: number; since?: string; until?: string }) => {
+      const query = new URLSearchParams(params.toString());
+      const apply = (key: string, value: string | number | undefined) => {
+        if (value === undefined) return;
+        if (!value) query.delete(key);
+        else query.set(key, String(value));
+      };
+      apply("hours", next.hours);
+      apply("since", next.since);
+      apply("until", next.until);
+      // `replace`, not `push`: choosing a window is changing what you are
+      // looking at, not navigating somewhere new, and `push` would make Back
+      // step through every window the analyst tried.
+      router.replace(`?${query.toString()}`, { scroll: false });
+    },
+    [params, router],
+  );
+
+  const setHours = (value: number) => write({ hours: value, since: "", until: "" });
+  const setSince = (value: string) => write({ since: value });
+  const setUntil = (value: string) => write({ until: value });
 
   const custom = Boolean(since || until);
 
