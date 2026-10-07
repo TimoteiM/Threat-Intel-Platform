@@ -55,7 +55,7 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
     from app.services import alert_case_closure_service as closure
     from app.services import alert_case_store as store
     from app.services import tenant_scope
-    from app.services.alert_correlation_service import correlate_alerts
+    from app.services.alert_correlation_service import case_by_key
 
     async def _run() -> dict[str, Any]:
         # A dedicated unpooled engine per invocation, as the neighbouring
@@ -74,26 +74,58 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
         answered: list[dict[str, Any]] = []
         skipped = 0
         unreadable = 0
+        expired = 0
 
         async with factory() as db:
             open_cases = await store.cases_awaiting_closure(db, limit=batch * 4)
             if not open_cases:
                 return {"ran": True, "open": 0, "closed": 0}
 
-            # One correlation read serves every case in the pass: membership is
-            # recomputed, not stored, and doing it per case would re-derive the
-            # same window once for each.
+            # Each case is looked up on its own, scoped to its entity.
+            #
+            # It used to be one bulk correlation whose *listing* was then
+            # searched for each key — and a listing filters on wall-clock
+            # time, on score and on a row limit, while membership is relative
+            # to each entity's own newest event. A case created seconds
+            # earlier could be missing from it, which this job once read as
+            # "unreadable" and closed unanswered. A scoped lookup asks the
+            # question the job actually has, and costs about a second.
             window_hours = int(getattr(settings, "correlation_window_hours", 48) or 48)
-            correlated = await correlate_alerts(
-                db, scope=tenant_scope.INTERNAL, hours=window_hours, limit=2000,
-            )
-            by_key = {c.get("case_key"): c for c in (correlated.get("cases") or [])}
 
             for row in open_cases:
                 if len(answered) >= batch:
                     break
-                case = by_key.get(row.case_key)
+                # Reach back far enough to cover the case's own activity: an
+                # old case is still readable, it is simply not in the last
+                # 48 hours.
+                age_hours = max(
+                    window_hours,
+                    int((now - _as_utc(row.last_activity_at)).total_seconds() // 3600) + 24,
+                )
+                case = await case_by_key(
+                    db, row.case_key, scope=tenant_scope.INTERNAL, hours=age_hours,
+                )
                 if case is None:
+                    # Genuinely unreadable: its alerts no longer form this
+                    # case at all. A case that can never gain another member
+                    # — its last activity is older than the session horizon —
+                    # is finished whether or not we can answer it, and leaving
+                    # it open for ever is an unbounded MTTR. It is closed as
+                    # what it is, with no resolution invented from nothing.
+                    if _as_utc(row.last_activity_at) < now - timedelta(hours=window_hours):
+                        if await store.claim_for_closure(db, case_key=row.case_key, now=now):
+                            await store.close_case(
+                                db,
+                                case_key=row.case_key,
+                                resolution="expired",
+                                title=row.title,
+                                alerts_at_close=row.alerts_at_close or 0,
+                                closed_at=now,
+                                closure_kind="expired",
+                            )
+                            expired += 1
+                        continue
+
                     # Absence from the listing is never evidence about a case.
                     #
                     # The listing filters on wall-clock time, on score and on a
@@ -190,7 +222,8 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             "ran": True,
             "open": len(open_cases),
             "closed": len(answered),
-            "outside_window": unreadable,
+            # Closed because no alert can ever join them again.
+            "expired": expired,
             # Open, in the window, but not in the listing. Reported rather
             # than closed: a number that stays high means the listing and the
             # membership have drifted apart.

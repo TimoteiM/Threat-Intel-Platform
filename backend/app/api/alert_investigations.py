@@ -25,8 +25,8 @@ import logging
 import time
 import re
 import uuid
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
@@ -786,18 +786,59 @@ async def _create_alert_run(
     return _ingest_response(run, deduplicated=False, indicators=extraction["indicators"])
 
 
+def _parse_moment(value: str | None) -> datetime | None:
+    """An ISO-8601 instant from a query string, or None.
+
+    A bare date is read as midnight UTC, so `since=2026-10-07` means the whole
+    day; a full stamp is honoured to the minute. A naive stamp is read as UTC,
+    because every other time in this platform is.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 @router.get("")
 async def list_alert_investigations(
     request: Request,
     db: DBSession,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    search: str | None = Query(default=None),
-    verdict: str | None = Query(default=None),
-    tenant: str | None = Query(
-        default=None,
-        description="Narrow to one tenant, or '__unassigned__'. Omit for every tenant you may see.",
-    ),
+    # `Annotated[..., Query(...)]` with a real default, never `= Query(...)`.
+    #
+    # Both spellings give FastAPI the same validation over HTTP. They differ
+    # for anything that calls this function directly — the service tests, and
+    # the scheduled jobs — because `= Query(...)` makes the *default* a Query
+    # instance rather than the value it describes. It is truthy and it is not
+    # a str or an int, so "the caller passed nothing" silently becomes "the
+    # caller passed an object", and the body then takes the branch meant for
+    # a supplied argument.
+    #
+    # Three times in this file now: six log-context tests, then the window
+    # below, then `search`, which raised AttributeError on `.strip()` the
+    # first time anything called this in process. Annotated removes the trap
+    # instead of asking the next person to remember it.
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    search: str | None = None,
+    verdict: str | None = None,
+    # When the alert happened, not when we were told. An alert replayed from a
+    # backlog belongs in the window it occurred in, which is the window an
+    # analyst is thinking about.
+    #
+    # ISO-8601, so a bare date is midnight UTC and a full stamp is a minute —
+    # "between 14:05 and 14:20 yesterday" is a real question on a busy estate
+    # and a date-only control cannot ask it.
+    since: str | None = None,
+    until: str | None = None,
+    hours: int | None = None,
+    tenant: Annotated[
+        str | None,
+        Query(description="Narrow to one tenant, or '__unassigned__'. Omit for every tenant you may see."),
+    ] = None,
 ) -> dict[str, Any]:
     # The body is deferred, not selected. _list_item never reads it, and now
     # that any size is accepted a page of 25 rows would otherwise detoast 25
@@ -829,6 +870,27 @@ async def list_alert_investigations(
         clause = AlertBodyInvestigationRun.overall_verdict == normalized_verdict
         query = query.where(clause)
         count_query = count_query.where(clause)
+
+    # The window. An explicit range wins over a preset: an analyst who typed
+    # dates means them, and silently combining the two would answer a question
+    # nobody asked.
+    occurred = func.coalesce(
+        AlertBodyInvestigationRun.event_time, AlertBodyInvestigationRun.created_at
+    )
+    start = _parse_moment(since)
+    end = _parse_moment(until)
+    if start is None and end is None and isinstance(hours, int) and hours > 0:
+        # Bounded here rather than by Query, so the validation holds for every
+        # caller and not only for one arriving over HTTP. Two years, matching
+        # the Cases window.
+        start = datetime.now(timezone.utc) - timedelta(hours=min(int(hours), 17_520))
+    for clause in (
+        occurred >= start if start is not None else None,
+        occurred <= end if end is not None else None,
+    ):
+        if clause is not None:
+            query = query.where(clause)
+            count_query = count_query.where(clause)
 
     rows = (
         (

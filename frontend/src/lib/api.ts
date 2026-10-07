@@ -416,6 +416,11 @@ export function listAlertInvestigations(params?: {
   verdict?: string;
   /** A tenant id, or "__unassigned__". Omit for every client you may see. */
   tenant?: string;
+  /** Hours back from now. Ignored by the server when a range is given. */
+  hours?: number;
+  /** ISO-8601 instants, not wall-clock text — see `toInstant`. */
+  since?: string;
+  until?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
@@ -423,6 +428,9 @@ export function listAlertInvestigations(params?: {
   if (params?.search?.trim()) qs.set("search", params.search.trim());
   if (params?.verdict && params.verdict !== "all") qs.set("verdict", params.verdict);
   if (params?.tenant && params.tenant !== "all") qs.set("tenant", params.tenant);
+  if (params?.hours !== undefined) qs.set("hours", String(params.hours));
+  if (params?.since) qs.set("since", params.since);
+  if (params?.until) qs.set("until", params.until);
   const query = qs.toString();
   return request<
     PaginatedResponse<AlertInvestigationRun> & {

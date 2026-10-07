@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import ConsoleModule from "@/components/ui/ConsoleModule";
+import TimeWindow, { toInstant } from "@/components/shared/TimeWindow";
 import PageHero from "@/components/ui/PageHero";
 import { alertInvestigationExportUrl, deleteAlertInvestigation, listAlertInvestigations, type TenantOption } from "@/lib/api";
 import type { AlertInvestigationRun } from "@/lib/types";
@@ -37,6 +38,12 @@ export default function AlertInvestigationsPage() {
   // carries an empty tenant_ids, so building the list here showed internal
   // staff no client to select.
   const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
+  // The window the list is cut to. "All" by default, because this page is
+  // where somebody goes looking for a specific alert they already know about,
+  // and a window applied before they asked for one would hide it.
+  const [hours, setHours] = useState(17520);
+  const [since, setSince] = useState("");
+  const [until, setUntil] = useState("");
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -64,6 +71,12 @@ export default function AlertInvestigationsPage() {
         search: debouncedSearch,
         verdict,
         tenant,
+        hours,
+        // Sent as instants: the input gives wall-clock text and the server
+        // reads a zoneless timestamp as UTC, so the two disagree by the
+        // analyst's offset unless the conversion is explicit.
+        since: toInstant(since) || undefined,
+        until: toInstant(until) || undefined,
       });
       setItems(data.items || []);
       setTotal(data.total || 0);
@@ -78,7 +91,7 @@ export default function AlertInvestigationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, verdict, tenant, pageSize, offset]);
+  }, [debouncedSearch, verdict, tenant, hours, since, until, pageSize, offset]);
 
   useEffect(() => {
     load();
@@ -98,6 +111,13 @@ export default function AlertInvestigationsPage() {
   const canGoNext = offset + pageSize < total;
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = Math.min(offset + pageSize, total);
+
+  const applyWindow = useCallback((next: { hours: number; since: string; until: string }) => {
+    setHours(next.hours);
+    setSince(next.since);
+    setUntil(next.until);
+    setOffset(0);
+  }, []);
 
   const handleDelete = async (run: AlertInvestigationRun) => {
     const spawned = run.spawned_investigation_count || 0;
@@ -141,6 +161,8 @@ export default function AlertInvestigationsPage() {
           </span>
         }
       />
+
+      <TimeWindow value={{ hours, since, until }} onChange={applyWindow} />
 
       <ConsoleModule
         title="Runs"

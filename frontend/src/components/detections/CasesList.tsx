@@ -18,6 +18,8 @@ import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
 import CaseNarrative from "@/components/detections/CaseNarrative";
 import { shortDate } from "@/components/detections/panels";
+import Pager from "@/components/shared/Pager";
+import { toInstant } from "@/components/shared/TimeWindow";
 import ClientFilter from "@/components/detections/ClientFilter";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
@@ -118,8 +120,8 @@ export default function CasesList({
         .getCorrelatedCases({
           hours,
           tenant: tenant || undefined,
-          since: since || undefined,
-          until: until || undefined,
+          since: toInstant(since) || undefined,
+          until: toInstant(until) || undefined,
           // A wide window returns far more than the default 50, and a list
           // that silently stops at 50 while the header says 300 is worse than
           // a slow one.
@@ -187,6 +189,28 @@ export default function CasesList({
     else list.sort((a, b) => (b.score || 0) - (a.score || 0) || (b.distinct_rules || 0) - (a.distinct_rules || 0));
     return list;
   }, [data, search, verdict, order]);
+
+  // 25 a page. The list ran to 946 rows in one scroll, which is not a list
+  // anybody reads — it is a list somebody gives up on.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+
+  // Any change to what is being shown returns to the first page. Staying on
+  // page 12 of a filter that now has three results shows nothing, and reads
+  // as "no cases" rather than "you are past the end".
+  useEffect(() => {
+    setPage(0);
+  }, [search, verdict, order, tenant, hours, since, until, pageSize]);
+
+  // Clamped the same way the pager clamps it. A background refresh can return
+  // fewer cases without any filter changing — a case closing out of the
+  // window does it — and an unclamped slice would then render an empty table
+  // under a pager still reporting a valid page.
+  const paged = useMemo(() => {
+    const last = Math.max(0, Math.ceil(shown.length / pageSize) - 1);
+    const current = Math.min(page, last);
+    return shown.slice(current * pageSize, current * pageSize + pageSize);
+  }, [shown, page, pageSize]);
 
   if (loading && !data) return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</div>;
   if (!data) return <EmptyState title="Correlation could not be read" hint="The endpoint did not answer." />;
@@ -325,7 +349,7 @@ export default function CasesList({
                 </tr>
               </thead>
               <tbody>
-                {shown.map((item) => {
+                {paged.map((item) => {
                   // Keyed on the case, not its host: a host holds several
                   // sessions now, so source:client:host collided and React
                   // kept stale rows beside new ones.
@@ -389,6 +413,14 @@ export default function CasesList({
               </tbody>
             </table>
           </div>
+          <Pager
+            total={shown.length}
+            page={page}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={setPageSize}
+            noun="cases"
+          />
         </Section>
       )}
     </div>
