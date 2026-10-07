@@ -1779,3 +1779,33 @@ export function subscribeToProgress(
   };
   return es;
 }
+
+/** Every indicator a case's alerts carry, split by what is known of each. */
+export function getCaseObservables(caseKey: string) {
+  return request<{
+    case_key: string;
+    alerts: number;
+    /** Looked up, with a verdict. */
+    verified: Array<{
+      value: string; type: string; alerts: number;
+      verdict: string | null; risk_score: number | null; sources: string[];
+    }>;
+    /** Extracted from the alert but never investigated, and why. */
+    identified: Array<{
+      value: string; type: string; alerts: number; reason: string | null;
+    }>;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/observables`);
+}
+
+/**
+ * Answer this case now rather than waiting out its quiet period.
+ *
+ * The automatic close waits ten minutes for alerts to stop arriving. An
+ * analyst who has already read the case should not have to.
+ */
+export function analyseCaseNow(caseKey: string) {
+  return request<{
+    case_key: string; case_number: number | null; status: string;
+    resolution: string; alerts: number; closed_by: string; note: string;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/analyse`, { method: "POST" });
+}

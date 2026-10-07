@@ -346,7 +346,19 @@ async def absorb_superseded(
                 AlertCaseSpine.alert_source == source,
                 AlertCaseSpine.alert_client == client,
                 AlertCaseSpine.entity_host == host,
-                AlertCaseSpine.session_started_at >= session_started_at,
+                # Strictly later. A session this one swallowed must have
+                # started *after* the merged start — that is what being
+                # swallowed means.
+                #
+                # It was `>=`, which also matched every row sharing this
+                # session's own start. One session now yields several cases
+                # (its alerts are grouped by evidence, not just by time), and
+                # they all carry the same session_started_at — so sibling
+                # cases cannibalised each other, and a continuation was eaten
+                # by the parent it continues. 94 of 96 supersession pointers
+                # in the database targeted a row with the same host and the
+                # same session start.
+                AlertCaseSpine.session_started_at > session_started_at,
                 AlertCaseSpine.session_started_at <= session_ended_at,
                 AlertCaseSpine.case_key != live_case_key,
                 AlertCaseSpine.superseded_by_case_key.is_(None),
@@ -368,7 +380,15 @@ async def absorb_superseded(
     collapsed = (
         await db.execute(
             update(AlertCaseSpine)
-            .where(AlertCaseSpine.superseded_by_case_key.in_(dead_keys))
+            .where(
+                AlertCaseSpine.superseded_by_case_key.in_(dead_keys),
+                # Never point the survivor at itself. Without this, a live case
+                # that happened to be pointing at a key dying in this pass was
+                # repointed to its own key — 92 rows in the database had
+                # superseded_by_case_key = case_key, which resolves forward
+                # for ever and makes the case unreachable.
+                AlertCaseSpine.case_key != live_case_key,
+            )
             .values(superseded_by_case_key=live_case_key, updated_at=now)
         )
     ).rowcount or 0

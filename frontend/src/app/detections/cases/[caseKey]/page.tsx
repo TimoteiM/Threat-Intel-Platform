@@ -59,6 +59,12 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Re-read the case. Also called after "Send to AI now", so the header
+  // flips to Closed without the analyst reloading the page.
+  const reload = React.useCallback(() => {
+    api.getCase(caseKey).then(setData).catch(() => undefined);
+  }, [caseKey]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -96,6 +102,8 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   const number = item?.case_number ?? (data.spine as any)?.case_number;
   const lifecycle = item?.lifecycle;
   const continues = item?.continues;
+  // Named tabs, so a case reads the same way every time.
+  const [tab, setTab] = useState<"analysis" | "observables" | "alerts">("analysis");
 
   return (
     <Page>
@@ -203,6 +211,41 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
         </div>
       )}
 
+      {/* One shape for every case: a header that always says the same things,
+          then named tabs. The page used to be a vertical pile whose height and
+          colour varied with whatever the AI had written, so no two cases
+          looked alike and the analyst had to re-find each section. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {(["analysis", "observables", "alerts"] as const).map((name) => (
+          <button
+            key={name}
+            type="button"
+            onClick={() => setTab(name)}
+            aria-pressed={tab === name}
+            style={{
+              padding: "5px 14px", borderRadius: 8, fontSize: 12.5,
+              textTransform: "capitalize", cursor: "pointer",
+              border: `1px solid ${tab === name ? "var(--accent)" : "var(--panel-divider-strong)"}`,
+              background: tab === name ? "var(--accent-subtle, rgba(56,139,253,0.16))" : "transparent",
+              color: tab === name ? "var(--text)" : "var(--text-muted)",
+            }}
+          >
+            {name}
+          </button>
+        ))}
+        <div style={{ marginLeft: "auto" }}>
+          <AnalyseNowButton
+            caseKey={caseKey}
+            closed={Boolean(lifecycle?.closed_at)}
+            onDone={reload}
+          />
+        </div>
+      </div>
+
+      {tab === "observables" ? (
+        <ObservablesPanel caseKey={caseKey} />
+      ) : tab === "alerts" ? null : (
+      <>
       <Panel title="CASE ANALYSIS" hint="One reading of the whole case. Each alert keeps its own below.">
         {data.narrative.markdown ? (
           <pre
@@ -228,7 +271,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
               ? "The case analysis is being written now. Everything below is already complete."
               : data.narrative.status === "stale"
               ? "The case has changed since its analysis was written; a new one is queued. Everything below is current."
-              : "The case analysis is queued. It is written by the hourly correlation pass, so a case opened in the last hour will not have one yet. Everything below is already complete."}
+              : "The case analysis is queued. It is written when the case goes quiet — ten minutes after its last alert — or immediately if you send it now. Everything below is already complete."}
           </div>
         )}
       </Panel>
@@ -263,7 +306,10 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
           themselves — below the fold. They are on Detections → Devices, where
           one row is one machine. */}
 
-      {profile && Object.keys(profile.indicators || {}).length > 0 && (
+      </>
+      )}
+
+      {tab === "analysis" && profile && Object.keys(profile.indicators || {}).length > 0 && (
         <Panel title="INDICATORS" hint="Every indicator seen in this host's alerts, worst conclusion kept.">
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
             {Object.entries(profile.indicators || {}).map(([type, items]) => (
@@ -296,7 +342,9 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
         </Panel>
       )}
 
-      {item && (
+      {/* Always available, on its own tab and under the analysis, because the
+          alerts are the case and an analyst reaches for them from both. */}
+      {item && tab !== "observables" && (
         <Panel title="ALERTS IN THIS CASE" hint="In the order they happened. Each keeps its own investigation.">
           <div style={{ display: "grid", gap: 4 }}>
             {item.alerts.map((alert) => (
@@ -328,3 +376,172 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
     </Page>
   );
 }
+
+/**
+ * The indicators a case's alerts carry, split by what is actually known.
+ *
+ * Two populations, never merged: one the platform looked up and has a verdict
+ * for, one it only extracted. Showing them together is how an analyst comes
+ * to believe an address was checked when it was merely seen.
+ */
+function ObservablesPanel({ caseKey }: { caseKey: string }) {
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.getCaseObservables>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getCaseObservables(caseKey)
+      .then((d) => !cancelled && setData(d))
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Could not load observables."));
+    return () => {
+      cancelled = true;
+    };
+  }, [caseKey]);
+
+  if (error) return <Panel title="OBSERVABLES"><div style={obsNote}>{error}</div></Panel>;
+  if (!data) return <Panel title="OBSERVABLES"><div style={obsNote}>Loading…</div></Panel>;
+
+  return (
+    <>
+      <Panel
+        title="VERIFIED OBSERVABLES"
+        hint="Looked up by the platform, with the verdict it reached."
+      >
+        {data.verified.length === 0 ? (
+          <div style={obsNote}>Nothing in this case was investigated.</div>
+        ) : (
+          <ObservableTable
+            rows={data.verified.map((o) => ({
+              value: o.value,
+              type: o.type,
+              alerts: o.alerts,
+              right: o.verdict
+                ? `${o.verdict}${o.risk_score != null ? ` · ${o.risk_score}/100` : ""}`
+                : "—",
+              tone:
+                o.verdict === "malicious"
+                  ? "var(--status-critical)"
+                  : o.verdict === "suspicious"
+                  ? "var(--status-warning)"
+                  : "var(--text-muted)",
+            }))}
+          />
+        )}
+      </Panel>
+
+      <Panel
+        title="IDENTIFIED OBSERVABLES"
+        hint="Extracted from the alerts but not investigated, and why."
+      >
+        {data.identified.length === 0 ? (
+          <div style={obsNote}>Everything extracted from this case was investigated.</div>
+        ) : (
+          <ObservableTable
+            rows={data.identified.map((o) => ({
+              value: o.value,
+              type: o.type,
+              alerts: o.alerts,
+              right: (o.reason || "not investigated").replace(/_/g, " "),
+              tone: "var(--text-muted)",
+            }))}
+          />
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function ObservableTable({
+  rows,
+}: {
+  rows: Array<{ value: string; type: string; alerts: number; right: string; tone: string }>;
+}) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={`${r.type}:${r.value}`}>
+              <td style={{ ...obsCell, width: "1%", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 11 }}>
+                {r.type || "—"}
+              </td>
+              <td style={{ ...obsCell, ...MONO, wordBreak: "break-all", color: "var(--text)" }}>
+                {r.value}
+              </td>
+              <td style={{ ...obsCell, width: "1%", whiteSpace: "nowrap", color: "var(--text-muted)", fontSize: 11 }}>
+                {r.alerts} alert{r.alerts === 1 ? "" : "s"}
+              </td>
+              <td style={{ ...obsCell, width: "1%", whiteSpace: "nowrap", color: r.tone, fontSize: 11.5, textTransform: "capitalize" }}>
+                {r.right}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Answer the case now instead of waiting out its quiet period.
+ *
+ * The automatic close waits ten minutes for alerts to stop arriving. An
+ * analyst who has already read the case should not have to — and closing
+ * early is a decision, so it is recorded as one rather than disguised as the
+ * automatic close.
+ */
+function AnalyseNowButton({
+  caseKey,
+  closed,
+  onDone,
+}: {
+  caseKey: string;
+  closed: boolean;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  if (closed) {
+    return <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Already answered</span>;
+  }
+
+  return (
+    <span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+      {note && <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{note}</span>}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setNote(null);
+          try {
+            const result = await api.analyseCaseNow(caseKey);
+            setNote(result.note);
+            onDone();
+          } catch (e) {
+            setNote(e instanceof Error ? e.message : "Could not send this case for analysis.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        style={{
+          padding: "5px 14px", borderRadius: 8, fontSize: 12.5, cursor: busy ? "wait" : "pointer",
+          border: "1px solid var(--accent)",
+          background: busy ? "transparent" : "var(--accent-subtle, rgba(56,139,253,0.16))",
+          color: "var(--text)",
+        }}
+      >
+        {busy ? "Sending…" : "Send to AI now"}
+      </button>
+    </span>
+  );
+}
+
+const obsNote: React.CSSProperties = { fontSize: 12, color: "var(--text-muted)" };
+const obsCell: React.CSSProperties = {
+  padding: "6px 12px 6px 0",
+  borderBottom: "1px solid var(--panel-divider, var(--border))",
+  verticalAlign: "top",
+};

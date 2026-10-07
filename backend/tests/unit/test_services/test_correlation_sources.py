@@ -198,11 +198,15 @@ async def test_an_incident_is_never_a_member_of_a_case():
     other = _Run("mvapsupm01", "tracecat", "another rule")
     other.alert_kind = "alert"
     result = await correlate_alerts(_DB([incident, other]), scope=tenant_scope.INTERNAL, hours=48)
-    # One case, holding only the alert. The incident is not a member of it —
-    # previously expressed as "no cases at all", which held only while a case
-    # needed two rules to exist.
-    assert result["total_cases"] == 1
-    assert result["cases"][0]["alert_count"] == 1
+    # Two cases of one member each: the alert's, and the incident's own.
+    # The incident is never *inside* the alert's case — that is the thing
+    # being asserted — but it is no longer dropped on the floor either. It
+    # used to be skipped here and picked up nowhere, so 18 incident rows on 8
+    # hosts produced zero cases, with no SLA clock and nothing on the page.
+    assert result["total_cases"] == 2
+    assert all(c["alert_count"] == 1 for c in result["cases"])
+    hosts = {c["entity_host"] for c in result["cases"]}
+    assert hosts == {"mvapsupm01"}, "the synthetic key must not reach the display"
 
 
 @pytest.mark.asyncio

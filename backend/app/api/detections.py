@@ -469,6 +469,15 @@ async def get_case(
             "status": spine.status,
             "assignee": spine.assignee,
             "peak_score": spine.peak_score,
+            # The lifecycle an analyst reads: the handle they say out loud,
+            # whether it has been answered, and what it was answered as.
+            "case_number": spine.case_number,
+            "title": spine.title,
+            "closed_at": spine.closed_at.isoformat() if spine.closed_at else None,
+            "closure_kind": spine.closure_kind,
+            "resolution": spine.resolution,
+            "alerts_at_close": spine.alerts_at_close,
+            "continues_case_key": spine.continues_case_key,
             # When the activity began, and separately when this platform first
             # recorded the case. They differ whenever alerts arrive replayed,
             # which here is most of the time.
@@ -769,3 +778,157 @@ async def case_sla_summary(
     # number can never be read as being about one client when it is not.
     summary["scope"] = "all tenants" if getattr(scope, "all_tenants", False) else "scoped"
     return summary
+
+
+@router.get("/case/{case_key}/observables")
+async def get_case_observables(
+    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Every indicator the case's alerts carry, split by what is known of it.
+
+    Two populations, because they answer different questions and merging them
+    is how an analyst comes to believe an address was checked when it was only
+    seen:
+
+      verified    the platform looked it up and has a verdict for it
+      identified  extracted from the alert, not investigated — a private
+                  address, an internal domain, something the exclusions hold
+                  back. Still worth showing: it is what the alert was about.
+
+    Aggregated across the case's alerts, deduplicated by value, with the alert
+    count so an indicator in nine alerts is visibly not the same as one in a
+    single alert.
+    """
+    import json as _json
+
+    from app.models.database import AlertBodyInvestigationRun
+
+    scope = _scope(request)
+    case = await case_by_key(db, case_key, scope=scope)
+    if case is None:
+        raise HTTPException(404, "No such case")
+
+    run_ids = [
+        str(m.get("run_id") or m.get("id") or "")
+        for m in (case.get("alerts") or [])
+    ]
+    run_ids = [r for r in run_ids if r]
+    if not run_ids:
+        return {"case_key": case_key, "verified": [], "identified": [], "alerts": 0}
+
+    rows = (
+        await db.execute(
+            select(AlertBodyInvestigationRun.id, AlertBodyInvestigationRun.result_json)
+            .where(AlertBodyInvestigationRun.id.in_([uuid.UUID(r) for r in run_ids]))
+        )
+    ).all()
+
+    verified: dict[str, dict[str, Any]] = {}
+    identified: dict[str, dict[str, Any]] = {}
+    for _run_id, result_json in rows:
+        for report in ((result_json or {}).get("indicator_reports") or []):
+            if not isinstance(report, dict):
+                continue
+            indicator = report.get("indicator") or {}
+            value = str(indicator.get("value") or "").strip()
+            if not value:
+                continue
+            skipped = bool(report.get("skip_reason"))
+            bucket = identified if skipped else verified
+            entry = bucket.setdefault(value, {
+                "value": value,
+                "type": str(indicator.get("type") or indicator.get("observable_type") or ""),
+                "alerts": 0,
+                "verdict": None,
+                "risk_score": None,
+                "sources": [],
+                "reason": report.get("skip_reason") or None,
+            })
+            entry["alerts"] += 1
+            verdict = (report.get("verdict") or {})
+            classification = str(verdict.get("classification") or "")
+            if classification and classification != "not_investigated":
+                entry["verdict"] = classification
+                entry["risk_score"] = verdict.get("risk_score")
+                entry["sources"] = [str(x) for x in (verdict.get("sources") or [])][:5]
+
+    def _rank(entry: dict[str, Any]) -> tuple:
+        return (-(entry.get("risk_score") or 0), -entry["alerts"], entry["value"])
+
+    return {
+        "case_key": case_key,
+        "alerts": len(run_ids),
+        "verified": sorted(verified.values(), key=_rank),
+        "identified": sorted(identified.values(), key=_rank),
+    }
+
+
+@router.post("/case/{case_key}/analyse")
+async def analyse_case_now(
+    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Answer this case now, without waiting for its quiet period.
+
+    The automatic close waits ten minutes for the case to stop receiving
+    alerts. An analyst who has already read it should not have to: this runs
+    the same closing path immediately, on whatever the case holds right now.
+
+    Closing early is a real decision, so it is recorded as one — `closure_kind`
+    is 'analyst', not 'auto', and the resolution says who asked.
+    """
+    from app.config import get_settings as _settings
+    from app.services import alert_case_closure_service as closure
+    from app.services import alert_case_store as store
+    from app.services.alert_case_narrative_service import narrative_fingerprint
+    from app.tasks.case_narrative_task import dispatch as dispatch_narratives
+
+    identity = _identity(request)
+    scope = _scope(request)
+    spine = await db.get(AlertCaseSpine, case_key)
+    if spine is None:
+        raise HTTPException(404, "No such case")
+    if spine.closed_at is not None:
+        raise HTTPException(409, "This case has already been answered.")
+
+    case = await case_by_key(db, case_key, scope=scope)
+    if case is None:
+        raise HTTPException(
+            409,
+            "This case's alerts are outside the correlation window, so there is "
+            "nothing to analyse. It can still be closed by hand.",
+        )
+
+    members = case.get("alerts") or []
+    resolution = closure.resolution_for(
+        verdict=case.get("verdict") or case.get("overall_verdict"),
+        risk_score=case.get("score"),
+    )
+    await store.close_case(
+        db,
+        case_key=case_key,
+        resolution=resolution,
+        title=case.get("label") or spine.title,
+        alerts_at_close=len(members),
+        closure_kind="analyst",
+    )
+    await db.commit()
+
+    dispatch_narratives([(
+        case_key,
+        case,
+        narrative_fingerprint(
+            score=int(case.get("score") or 0),
+            member_count=len(members),
+            tactics=case.get("tactics") or [],
+        ),
+    )])
+
+    return {
+        "case_key": case_key,
+        "case_number": spine.case_number,
+        "status": "closed",
+        "resolution": resolution,
+        "alerts": len(members),
+        "closed_by": str((identity or {}).get("username") or "analyst"),
+        "note": "Analysing now. The written resolution appears here when it lands.",
+    }

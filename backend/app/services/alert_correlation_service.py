@@ -724,6 +724,9 @@ async def correlate_alerts(
     # about a similarly named host — a fabrication that looks exactly like the
     # finding this exists to produce.
     grouped: dict[tuple[str, str, str], list[Any]] = defaultdict(list)
+    # Pre-correlated payloads, each its own case. Held apart from `grouped`
+    # so nothing can pool them with the alerts they summarise.
+    incidents: list[Any] = []
     for row in rows:
         # A payload that is already a session is a case, not a member of one.
         # A TraceCat incident arrives carrying fifty events and their triggered
@@ -731,6 +734,17 @@ async def correlate_alerts(
         # its own parts and count one platform's summary as corroboration of
         # another's detail.
         if str(row.alert_kind or "alert") == "incident":
+            # A payload that is already a session is a case, not a member of
+            # one — grouping it beside single alerts would compare a case to
+            # its own parts and count one platform's summary as corroboration
+            # of another's detail.
+            #
+            # It used to be dropped here and nowhere picked up, so the premise
+            # was never implemented: 18 incident rows on 8 hosts produced
+            # exactly zero cases, with no SLA clock and nothing on the page.
+            # It gets a case of its own instead, keyed on the row so it can
+            # never be pooled with anything.
+            incidents.append(row)
             continue
         grouped[(
             str(row.alert_source or UNKNOWN_SOURCE),
@@ -750,6 +764,17 @@ async def correlate_alerts(
     emissions: list[dict[str, Any]] = []
     narrative_jobs: list[tuple[str, dict[str, Any], str]] = []
     cases: list[dict[str, Any]] = []
+    # Each incident becomes a group of its own, keyed on the row, so it forms
+    # a single-member case and can never be pooled with the alerts it
+    # summarises. Added before the loop below so it takes the same path as
+    # everything else — session, spine row, case number, closure, SLA.
+    for incident in incidents:
+        grouped[(
+            str(incident.alert_source or UNKNOWN_SOURCE),
+            str(incident.alert_client or UNKNOWN_CLIENT),
+            f"{incident.entity_host or 'unknown'}\x1fincident:{incident.id}",
+        )].append(incident)
+
     for (source, client, entity), group_members in grouped.items():
         in_window = {m.id for m in group_members}
         # The window framed these members; the session they belong to may start
@@ -862,7 +887,15 @@ async def correlate_alerts(
                 for m in members
             }
             rules.discard("")
-            if len(rules) < min_rules:
+            # `rules` empty means the alerts carry no detection identity at
+            # all — not that they carry too few. The threshold answers "did
+            # enough independent detections agree", which is a question about
+            # a cluster that has detections; applied to one that has none it
+            # silently deleted the alerts. 805 rows estate-wide have no
+            # detection_name, rule id or rule name, and 151 of them concluded
+            # malicious: every one was invisible to the analyst and outside
+            # MTTD and MTTR.
+            if rules and len(rules) < min_rules:
                 continue
 
             tactics: set[str] = set()
@@ -937,7 +970,7 @@ async def correlate_alerts(
                     "session_started_at": _iso(session.session_started_at),
                     "source": source,
                     "client": client,
-                    "entity_host": entity,
+                    "entity_host": entity.split("\x1f", 1)[0],
                     # Whose case this is. Every member shares a client and a
                     # host, so a case has one tenant; `sorted(...)[0]` is a
                     # formality that also refuses to invent one when the

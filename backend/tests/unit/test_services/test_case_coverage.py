@@ -103,3 +103,57 @@ def test_a_forwarded_alert_with_no_device_in_it_stays_hostless():
     )
     assert not fields.get("forwarded_device")
     assert fields["agent"] == "Siembiot"
+
+
+# --- the two holes an adversarial audit found -------------------------------
+#
+# Found by five independent hunters and upheld by three refuters each, after
+# the two the analyst reported had been fixed.
+
+
+def test_an_alert_with_no_detection_identity_still_gets_a_case():
+    """`rules.discard("")` leaves an empty set for a cluster whose alerts
+    carry no detection_name, rule id or rule name — and `0 < min_rules` is
+    true for every allowed threshold, so the cluster was dropped before a
+    spine row existed. 805 rows estate-wide are like this and 151 of them
+    concluded *malicious*: every one invisible and outside MTTD/MTTR.
+
+    "No detection identity" is a different thing from "too few detections",
+    and the threshold only answers the second."""
+    import inspect
+
+    from app.services import alert_correlation_service as svc
+
+    source = inspect.getsource(svc.correlate_alerts)
+    assert "if rules and len(rules) < min_rules:" in source, (
+        "the threshold must not fire on a cluster that has no rules at all"
+    )
+
+
+def test_an_incident_gets_a_case_of_its_own():
+    """The skip said an incident 'is a case, not a member of one' — and then
+    nothing created that case. 18 rows on 8 hosts produced zero cases."""
+    import inspect
+
+    from app.services import alert_correlation_service as svc
+
+    source = inspect.getsource(svc.correlate_alerts)
+    assert "incidents.append(row)" in source
+    assert "incident:" in source, "keyed on the row so it is never pooled"
+
+
+def test_nothing_is_closed_merely_for_being_absent_from_the_listing():
+    """The listing filters on wall-clock time, on score and on a row limit;
+    membership is relative to each entity's own newest event. A case created
+    seconds ago can be missing from the listing while its membership was read
+    in that very call. Closing on that absence destroyed 575 cases, 504 of
+    them within two minutes of creation, every one with zero alerts."""
+    import inspect
+
+    from app.tasks import case_closure_task
+
+    source = inspect.getsource(case_closure_task.close_quiet_cases)
+    assert "unreadable += 1" in source
+    assert 'resolution="aged_out"' not in source, (
+        "absence from a filtered listing is not a resolution"
+    )

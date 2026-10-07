@@ -81,12 +81,26 @@ def detection_of(member: Any) -> str:
 
 
 def _event_time(member: Any, fallback: datetime) -> datetime:
-    for attribute in ("event_time", "when", "created_at"):
-        value = getattr(member, attribute, None) or (
-            member.get(attribute) if isinstance(member, dict) else None
-        )
+    """One alert's time, whether it arrives as a row or as its JSON payload.
+
+    The closing job reads cases from `correlate_alerts`, whose members are
+    payload dicts with ISO *strings*, not ORM rows with datetimes. Accepting
+    only datetimes meant every member fell back to `now`, so every
+    first-seen time was identical and `is_escalating` was true for any case
+    with two detections — which held it to the six-hour maximum and meant no
+    such case ever closed on the ten-minute quiet period at all.
+    """
+    for attribute in ("event_time", "when", "created_at", "first_seen"):
+        value = getattr(member, attribute, None)
+        if value is None and isinstance(member, dict):
+            value = member.get(attribute)
         if isinstance(value, datetime):
             return _as_utc(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                return _as_utc(datetime.fromisoformat(value.strip().replace("Z", "+00:00")))
+            except ValueError:
+                continue
     return fallback
 
 

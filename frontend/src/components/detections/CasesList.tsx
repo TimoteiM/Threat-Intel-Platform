@@ -17,6 +17,7 @@ import { EmptyState, MetricStrip, Section } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
 import CaseNarrative from "@/components/detections/CaseNarrative";
+import { shortDate } from "@/components/detections/panels";
 import ClientFilter from "@/components/detections/ClientFilter";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
@@ -304,141 +305,189 @@ export default function CasesList({
               ? "Cases"
               : `Cases — ${shown.length} of ${data.cases.length}`
           }
-          hint="Alerts within a case are newest first. Select one to open it."
+          hint="Every case has the same shape. Select one to open it."
         >
-          <div style={{ display: "grid", gap: "var(--space-4)" }}>
-            {shown.map((item) => (
-              // Keyed on the case, not on its host. A host can hold several
-              // sessions now, so source:client:host collided — 20 cases shared
-              // 13 keys — and React kept stale rows from the previous window
-              // alongside the new ones. That is why the list could be counted
-              // as thirty while the header, reading the same response, said
-              // twenty.
-              <div key={item.case_key} style={{ display: "grid", gap: 6 }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <a
-                    href={`/detections/cases/${item.case_key}`}
-                    title="Open the full case"
-                    style={{
-                      color: "var(--text)", fontSize: 13, fontWeight: 600,
-                      textDecoration: "none",
-                      borderBottom: "1px solid var(--panel-divider-strong)",
-                    }}
-                  >
-                    {item.case_number ? `#${item.case_number} — ` : ""}
-                    {item.label || item.entity_host}
-                  </a>
-                  {/* Answered, and what it was answered as. A closed case is
-                      the normal state now: cases close themselves ten minutes
-                      after their last alert. */}
-                  {item.lifecycle?.resolution && (
-                    <span
-                      title={
-                        item.lifecycle.resolve_seconds != null
-                          ? `Resolved in ${Math.round(item.lifecycle.resolve_seconds / 60)} min`
-                          : undefined
-                      }
-                      style={{
-                        ...MONO, fontSize: 10, letterSpacing: 0.3, textTransform: "uppercase",
-                        padding: "1px 6px", borderRadius: 999,
-                        border: "1px solid var(--panel-divider-strong)",
-                        color:
-                          item.lifecycle.resolution === "true_positive"
-                            ? "var(--status-critical)"
-                            : item.lifecycle.resolution === "false_positive"
-                            ? "var(--text-muted)"
-                            : "var(--status-warning)",
-                      }}
-                    >
-                      {String(item.lifecycle.resolution).replace(/_/g, " ")}
-                    </span>
-                  )}
-                  {item.continues?.case_number && (
-                    <span
-                      title="A detection the earlier case had not seen arrived after it closed"
-                      style={{ fontSize: 10.5, color: "var(--text-muted)" }}
-                    >
-                      continues #{item.continues.case_number}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setOpenHost(item.entity_host)}
-                    title={`Everything collected about ${item.entity_host}, across all its cases`}
-                    style={{
-                      color: "var(--text)", fontSize: 13, fontWeight: 600, padding: 0,
-                      background: "none", border: "none",
-                      borderBottom: "1px dotted var(--panel-divider-strong)",
-                      cursor: "pointer", fontFamily: "inherit",
-                    }}
-                  >
-                    device
-                  </button>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)", ...MONO }}>
-                    {item.source}
-                    {item.client && item.client !== "unknown" ? ` / ${item.client}` : ""}
-                  </span>
-                  <span
-                    style={{
-                      marginLeft: "auto", ...MONO, fontSize: 12,
-                      color: item.score >= 70 ? "var(--status-danger)" : "var(--status-warning)",
-                    }}
-                  >
-                    {item.score}/100
-                  </span>
-                </div>
-                {/* The conclusion first. The reasons below explain why the
-                    engine grouped these alerts; this says what they were. An
-                    analyst who reads only one thing on this row should read
-                    this one. */}
-                {(item.members_investigating ?? 0) > 0 && (
-                  <div style={{ fontSize: 11, color: "var(--status-warning)" }}>
-                    {item.members_investigating} of {item.alert_count} alerts still
-                    investigating — tactics, verdicts and the score will rise as they finish
-                  </div>
-                )}
-
-                <CaseNarrative item={item} />
-
-                {/* The list is scanned, so it carries the conclusion and one line
-                    of why. Everything that used to compete for room here — the
-                    reasons, the rules, the timeline, the indicators — is on the
-                    case page, which is where the case is actually worked. */}
-                <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    {item.distinct_rules} independent detections ·{" "}
-                    {(item.tactics || []).length} tactic(s)
-                    {item.tactics?.length ? ` reaching ${item.tactics[item.tactics.length - 1]}` : ""}
-                  </span>
-                  {/* Dated on event time, and separately on when we were told.
-                      Alerts here arrive replayed — this deployment has an
-                      18-day gap on a live case — so "when did this happen" and
-                      "when did we find out" are different questions and a row
-                      showing only one of them invites the wrong answer. */}
-                  <span
-                    style={{ fontSize: 11, color: "var(--text-muted)" }}
-                    title={
-                      item.first_ingested
-                        ? `Reported to this platform ${new Date(item.first_ingested).toLocaleString()}`
-                        : undefined
-                    }
-                  >
-                    began {item.first_seen ? new Date(item.first_seen).toLocaleString() : "—"}
-                    {" · last activity "}
-                    {item.last_seen ? new Date(item.last_seen).toLocaleString() : "—"}
-                  </span>
-                  <a
-                    href={`/detections/cases/${item.case_key}`}
-                    style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}
-                  >
-                    open the full case →
-                  </a>
-                </div>
-              </div>
-            ))}
+          {/* One shape for every case.
+              The list used to render each case as a card whose body was the AI
+              narrative, tinted by verdict — so a page of cases was a page of
+              green, red and grey blocks of different heights, and two cases
+              were never comparable at a glance. A case is a record with a
+              status, a number, a severity and an owner; it reads as a table,
+              and colour carries severity and nothing else. */}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  {["Status", "Case", "Severity", "Source", "Resolution", "Alerts",
+                    "Opened", "Last activity", "Closed"].map((head) => (
+                    <th key={head} style={th}>{head}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((item) => {
+                  // Keyed on the case, not its host: a host holds several
+                  // sessions now, so source:client:host collided and React
+                  // kept stale rows beside new ones.
+                  const lifecycle = item.lifecycle || {};
+                  const closed = Boolean(lifecycle.closed_at);
+                  return (
+                    <tr key={item.case_key} style={rowStyle}>
+                      <td style={td}>
+                        <StatusChip closed={closed} kind={lifecycle.closure_kind} />
+                      </td>
+                      <td style={{ ...td, maxWidth: 520 }}>
+                        <a href={`/detections/cases/${item.case_key}`} style={caseLink}>
+                          {item.case_number ? `#${item.case_number}` : "—"}
+                          <span style={{ color: "var(--text-muted)" }}>{" · "}</span>
+                          {item.label || item.entity_host}
+                        </a>
+                        {item.continues?.case_number ? (
+                          <div style={subtle}>
+                            continues{" "}
+                            <a
+                              href={`/detections/cases/${item.continues.case_key}`}
+                              style={{ color: "var(--accent)" }}
+                            >
+                              #{item.continues.case_number}
+                            </a>
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={td}><SeverityPill score={item.score} /></td>
+                      <td style={{ ...td, ...MONO, fontSize: 11, color: "var(--text-muted)" }}>
+                        {item.source}
+                        {item.client && item.client !== "unknown" ? ` / ${item.client}` : ""}
+                      </td>
+                      <td style={td}>
+                        {lifecycle.resolution ? (
+                          <span style={subtle}>
+                            {String(lifecycle.resolution).replace(/_/g, " ")}
+                          </span>
+                        ) : (
+                          <span style={{ ...subtle, opacity: 0.6 }}>—</span>
+                        )}
+                      </td>
+                      <td style={{ ...td, ...MONO, whiteSpace: "nowrap" }}>
+                        {item.alert_count}
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" · "}{item.distinct_rules} rule{item.distinct_rules === 1 ? "" : "s"}
+                        </span>
+                      </td>
+                      <td style={{ ...td, ...MONO, fontSize: 11, whiteSpace: "nowrap" }}>
+                        {shortDate(item.first_seen)}
+                      </td>
+                      <td style={{ ...td, ...MONO, fontSize: 11, whiteSpace: "nowrap" }}>
+                        {shortDate(item.last_seen)}
+                      </td>
+                      <td style={{ ...td, ...MONO, fontSize: 11, whiteSpace: "nowrap" }}>
+                        {lifecycle.closed_at ? shortDate(lifecycle.closed_at) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </Section>
       )}
     </div>
+  );
+}
+
+// ── one shape for every row ──────────────────────────────────────────────────
+//
+// Colour carries severity and nothing else. The previous list tinted each
+// case by its AI verdict, so the page read as a wall of green, red and grey
+// blocks of different heights and no two cases were comparable at a glance.
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  padding: "7px 12px 7px 0",
+  borderBottom: "1px solid var(--panel-divider-strong, var(--border))",
+  fontSize: 10.5,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
+  color: "var(--text-dim)",
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
+
+const td: React.CSSProperties = {
+  padding: "9px 12px 9px 0",
+  borderBottom: "1px solid var(--panel-divider, var(--border))",
+  verticalAlign: "top",
+  color: "var(--text-secondary)",
+};
+
+const rowStyle: React.CSSProperties = { background: "transparent" };
+
+const subtle: React.CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-muted)",
+  textTransform: "capitalize",
+};
+
+const caseLink: React.CSSProperties = {
+  color: "var(--text)",
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: "none",
+};
+
+/** Open or Closed, and — only when it is not the ordinary case — how. */
+function StatusChip({ closed, kind }: { closed: boolean; kind?: string | null }) {
+  const label = closed ? "Closed" : "Open";
+  return (
+    <span
+      title={
+        closed
+          ? kind === "analyst"
+            ? "Closed by an analyst, without waiting for the quiet period"
+            : kind === "aged_out"
+            ? "Closed without an answer: its alerts left the correlation window"
+            : kind === "inherited"
+            ? "Closed with the resolution its parent case was already given"
+            : "Answered automatically after its alerts stopped arriving"
+          : "Still receiving alerts, or waiting for its quiet period"
+      }
+      style={{
+        display: "inline-block",
+        minWidth: 62,
+        textAlign: "center",
+        padding: "2px 9px",
+        borderRadius: 6,
+        fontSize: 11,
+        fontWeight: 600,
+        border: `1px solid ${closed ? "var(--panel-divider-strong)" : "var(--status-warning)"}`,
+        color: closed ? "var(--text-muted)" : "var(--status-warning)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Severity, as the one thing colour is allowed to mean on this page. */
+function SeverityPill({ score }: { score?: number | null }) {
+  const n = Number(score ?? 0);
+  const [letter, tone, title] =
+    n >= 75
+      ? ["H", "var(--status-critical)", "High"]
+      : n >= 40
+      ? ["M", "var(--status-warning)", "Medium"]
+      : ["L", "var(--status-info, #388bfd)", "Low"];
+  return (
+    <span
+      title={`${title} — ${n}/100`}
+      style={{
+        display: "inline-block", width: 22, textAlign: "center",
+        padding: "1px 0", borderRadius: 5, fontSize: 11, fontWeight: 700,
+        border: `1px solid ${tone}`, color: tone,
+      }}
+    >
+      {letter}
+    </span>
   );
 }

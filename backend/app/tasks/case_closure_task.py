@@ -20,7 +20,7 @@ and open a continuation case when they bring a detection the case never saw.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 # One pass answers at most this many cases. A backlog is worked through over
 # successive minutes rather than in one task that outlives its time limit.
 MAX_PER_PASS = 25
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
 
 
 @celery_app.task(name="app.tasks.case_closure_task.close_quiet_cases", time_limit=240,
@@ -69,7 +73,7 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         answered: list[dict[str, Any]] = []
         skipped = 0
-        aged = 0
+        unreadable = 0
 
         async with factory() as db:
             open_cases = await store.cases_awaiting_closure(db, limit=batch * 4)
@@ -90,24 +94,23 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     break
                 case = by_key.get(row.case_key)
                 if case is None:
-                    # Outside the correlation window, so its membership cannot
-                    # be read and it cannot be answered on what it holds. It is
-                    # still closed, because a case that stays open for ever is
-                    # an unbounded MTTR and an SLA that can only get worse —
-                    # but it is closed as what it is, with no model call and no
-                    # resolution invented from nothing.
-                    if await store.claim_for_closure(db, case_key=row.case_key, now=now):
-                        await store.close_case(
-                            db,
-                            case_key=row.case_key,
-                            resolution="aged_out",
-                            title=row.title,
-                            alerts_at_close=row.alerts_at_close or 0,
-                            closed_at=now,
-                            closure_kind="aged_out",
-                        )
-                        aged += 1
-                    skipped += 1
+                    # Absence from the listing is never evidence about a case.
+                    #
+                    # The listing filters on wall-clock time, on score and on a
+                    # row limit; membership is computed relative to each
+                    # entity's own newest event, which is why a replayed chain
+                    # forms a case at all. So a case created seconds ago, whose
+                    # membership was read in this very call, can be missing
+                    # from the listing because its alerts are old. Reading that
+                    # as "unreadable" and closing it `aged_out` destroyed 575
+                    # cases, 504 within two minutes of being created, every one
+                    # with zero alerts and no resolution anybody computed.
+                    #
+                    # Nothing is closed on absence now. The case stays open and
+                    # the count is reported, so a listing that has drifted from
+                    # the membership is a number somebody can see rather than a
+                    # silent cull.
+                    unreadable += 1
                     continue
 
                 members = case.get("alerts") or []
@@ -187,8 +190,11 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             "ran": True,
             "open": len(open_cases),
             "closed": len(answered),
-            "outside_window": skipped,
-            "aged_out": aged,
+            "outside_window": unreadable,
+            # Open, in the window, but not in the listing. Reported rather
+            # than closed: a number that stays high means the listing and the
+            # membership have drifted apart.
+            "not_in_listing": unreadable,
             "cases": [
                 {k: v for k, v in entry.items() if k != "case"} for entry in answered[:10]
             ],
