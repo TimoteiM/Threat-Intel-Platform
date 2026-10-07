@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import func, select, update
@@ -145,6 +145,7 @@ async def upsert_spine(
     last_activity_at: datetime,
     score: int,
     score_version: str = SCORE_VERSION,
+    title: str | None = None,
 ) -> AlertCaseSpine:
     """Create or refresh the persisted spine for one session.
 
@@ -169,6 +170,10 @@ async def upsert_spine(
             peak_score=score,
             peak_score_version=score_version,
             peak_at=now,
+            # The handle a person uses, taken once from the sequence. The key
+            # stays a sha256 because it has to be derivable from the events.
+            case_number=await next_case_number(db),
+            title=title,
             created_at=now,
             updated_at=now,
         )
@@ -178,6 +183,13 @@ async def upsert_spine(
     row.session_seq = session_seq
     row.last_activity_at = max(row.last_activity_at, last_activity_at)
     row.updated_at = now
+    if row.case_number is None:
+        row.case_number = await next_case_number(db)
+    # Kept current while the case is open; frozen once it closes, so a
+    # continuation that names the case it follows names it the same way the
+    # case does.
+    if title and row.closed_at is None:
+        row.title = title
 
     # A peak is only a peak of the formula that produced it. Carrying one across
     # a scoring change compares two different questions: the Stealth fix moved a
@@ -395,3 +407,144 @@ async def live_case_key(db: AsyncSession, case_key: str) -> str:
         seen.add(current)
         current = row.superseded_by_case_key
     return current
+
+
+# ── the case lifecycle ───────────────────────────────────────────────────────
+
+
+async def next_case_number(db: AsyncSession) -> int:
+    """The next human-facing case number, from the database sequence.
+
+    A sequence rather than `max(case_number) + 1`: two correlation passes can
+    open a case in the same instant, and the second would reuse the first's
+    number. Gaps from a rolled-back transaction are fine — a case number has
+    to be unique and ordered, not contiguous.
+    """
+    return int((await db.execute(select(func.nextval("alert_case_number_seq")))).scalar_one())
+
+
+async def claim_for_closure(
+    db: AsyncSession, *, case_key: str, now: datetime | None = None,
+    stale_after_seconds: int = 600,
+) -> bool:
+    """Take exclusive responsibility for closing this case.
+
+    The closing job runs every minute and a model call takes longer than that,
+    so two runs would otherwise answer the same case twice. The claim is
+    conditional in SQL — `WHERE status='open' AND (claim IS NULL OR claim is
+    stale)` — so the database decides the winner, not a read followed by a
+    write. A claim older than `stale_after_seconds` is reclaimable: a worker
+    killed mid-answer must not leave a case unanswerable for ever.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    result = await db.execute(
+        update(AlertCaseSpine)
+        .where(
+            AlertCaseSpine.case_key == case_key,
+            AlertCaseSpine.status == "open",
+            AlertCaseSpine.closed_at.is_(None),
+            (AlertCaseSpine.closure_claimed_at.is_(None))
+            | (AlertCaseSpine.closure_claimed_at < cutoff),
+        )
+        .values(closure_claimed_at=now)
+    )
+    return bool(result.rowcount)
+
+
+async def close_case(
+    db: AsyncSession, *, case_key: str, resolution: str, title: str | None,
+    alerts_at_close: int, closed_at: datetime | None = None,
+    closure_kind: str = "auto",
+) -> AlertCaseSpine | None:
+    """Record the answer. A closed case is never reopened — see the service."""
+    row = await db.get(AlertCaseSpine, case_key)
+    if row is None:
+        return None
+    now = datetime.now(timezone.utc)
+    row.closed_at = closed_at or now
+    row.closure_kind = closure_kind
+    row.resolution = resolution
+    row.alerts_at_close = int(alerts_at_close)
+    row.status = "closed"
+    if title and not row.title:
+        row.title = title
+    row.updated_at = now
+    return row
+
+
+async def open_continuation(
+    db: AsyncSession, *, case_key: str, continues: str, source: str, client: str,
+    host: str, session_started_at: datetime, last_activity_at: datetime, score: int,
+    title: str | None = None,
+) -> AlertCaseSpine:
+    """A case that carries on from one already answered.
+
+    Not a reopening. Closing stops the SLA clock, and a case that could reopen
+    hours later would make MTTR meaningless — one straggler at hour sixteen
+    turning a four-minute resolution into a sixteen-hour one. This is a case
+    of its own, measured on its own, that names the one it follows.
+    """
+    row = await db.get(AlertCaseSpine, case_key)
+    now = datetime.now(timezone.utc)
+    if row is not None:
+        if not row.continues_case_key:
+            row.continues_case_key = continues
+            row.updated_at = now
+        return row
+    row = AlertCaseSpine(
+        case_key=case_key,
+        alert_source=source,
+        alert_client=client,
+        entity_host=host,
+        session_started_at=session_started_at,
+        session_seq=0,
+        opened_at=session_started_at,
+        last_activity_at=last_activity_at,
+        status="open",
+        peak_score=score,
+        peak_score_version=SCORE_VERSION,
+        peak_at=now,
+        continues_case_key=continues,
+        case_number=await next_case_number(db),
+        title=title,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    return row
+
+
+async def cases_awaiting_closure(
+    db: AsyncSession, *, limit: int = 200,
+) -> list[AlertCaseSpine]:
+    """Open cases, oldest activity first — the closing job's work queue.
+
+    Ordered by `last_activity_at` because that is what the quiet period runs
+    on, so the ones most overdue are answered first when the batch is capped.
+    Scans the (status, last_activity_at) index that already exists.
+    """
+    rows = await db.execute(
+        select(AlertCaseSpine)
+        .where(AlertCaseSpine.status == "open", AlertCaseSpine.closed_at.is_(None))
+        .order_by(AlertCaseSpine.last_activity_at.asc())
+        .limit(limit)
+    )
+    return list(rows.scalars().all())
+
+
+async def case_reference(db: AsyncSession, case_key: str | None) -> dict[str, Any] | None:
+    """`#12 — EXP-01 / jdoe — Repeated injection-capable access`, for a link."""
+    if not case_key:
+        return None
+    row = await db.get(AlertCaseSpine, case_key)
+    if row is None:
+        return None
+    return {
+        "case_key": row.case_key,
+        "case_number": row.case_number,
+        "title": row.title,
+        "status": row.status,
+        "resolution": row.resolution,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+    }

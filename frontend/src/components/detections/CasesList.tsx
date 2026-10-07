@@ -167,6 +167,8 @@ export default function CasesList({
       if (!needle) return true;
       const haystack = [
         item.label,
+        item.case_number ? `#${item.case_number}` : "",
+        String(item.case_number ?? ""),
         item.entity_host,
         ...(item.entity_users || []),
         ...(item.tactics || []),
@@ -323,8 +325,42 @@ export default function CasesList({
                       borderBottom: "1px solid var(--panel-divider-strong)",
                     }}
                   >
+                    {item.case_number ? `#${item.case_number} — ` : ""}
                     {item.label || item.entity_host}
                   </a>
+                  {/* Answered, and what it was answered as. A closed case is
+                      the normal state now: cases close themselves ten minutes
+                      after their last alert. */}
+                  {item.lifecycle?.resolution && (
+                    <span
+                      title={
+                        item.lifecycle.resolve_seconds != null
+                          ? `Resolved in ${Math.round(item.lifecycle.resolve_seconds / 60)} min`
+                          : undefined
+                      }
+                      style={{
+                        ...MONO, fontSize: 10, letterSpacing: 0.3, textTransform: "uppercase",
+                        padding: "1px 6px", borderRadius: 999,
+                        border: "1px solid var(--panel-divider-strong)",
+                        color:
+                          item.lifecycle.resolution === "true_positive"
+                            ? "var(--status-critical)"
+                            : item.lifecycle.resolution === "false_positive"
+                            ? "var(--text-muted)"
+                            : "var(--status-warning)",
+                      }}
+                    >
+                      {String(item.lifecycle.resolution).replace(/_/g, " ")}
+                    </span>
+                  )}
+                  {item.continues?.case_number && (
+                    <span
+                      title="A detection the earlier case had not seen arrived after it closed"
+                      style={{ fontSize: 10.5, color: "var(--text-muted)" }}
+                    >
+                      continues #{item.continues.case_number}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => setOpenHost(item.entity_host)}

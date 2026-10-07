@@ -28,7 +28,7 @@ from typing import Any, Sequence
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import AlertBodyInvestigationRun
+from app.models.database import AlertBodyInvestigationRun, AlertCaseSpine
 from app.services.alert_baseline_service import (
     baseline_window_days,
     build_pair_baseline,
@@ -41,6 +41,7 @@ from app.services.alert_case_narrative_service import (
     narrative_lead,
 )
 from app.services.alert_case_store import (
+    case_reference,
     absorb_superseded,
     supersession_state,
     snapshot_if_changed,
@@ -50,6 +51,7 @@ from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
 from app.services import tenant_scope
 from app.tasks.case_event_task import dispatch
 from app.tasks.case_narrative_task import dispatch as dispatch_narratives
+from app.services import alert_case_closure_service as closure_rules
 from app.services.alert_case_linkage_service import (
     cluster_linked,
     ubiquitous_values,
@@ -727,6 +729,9 @@ async def correlate_alerts(
     # the same reason: whether an indicator describes the estate or an incident
     # is not a property of any one case.
     ubiquitous = ubiquitous_values(rows, _iocs_of)
+    # case_key -> the answered case it carries on from, filled while clusters
+    # are assembled and read when the spine rows are written.
+    continuations: dict[str, str] = {}
 
     settings = get_settings()
     emissions: list[dict[str, Any]] = []
@@ -781,6 +786,33 @@ async def correlate_alerts(
                 )
                 linked_sessions[cluster_key] = cluster
                 session_anchor[cluster_key] = session_of[base_key]
+
+        # A case that has already been answered does not quietly grow. Alerts
+        # that arrived after it closed are appended when they add nothing —
+        # 99% of them, measured — and split into a continuation case when one
+        # brings a detection the case never saw. Reopening is deliberately not
+        # an option: closing stops the SLA clock, and a straggler at hour
+        # sixteen would turn a four-minute resolution into a sixteen-hour one.
+        for closed_key in list(linked_sessions):
+            spine_row = await db.get(AlertCaseSpine, closed_key)
+            if spine_row is None or spine_row.closed_at is None:
+                continue
+            answered, late = closure_rules.split_after_closure(
+                linked_sessions[closed_key], closed_at=spine_row.closed_at, now=cutoff,
+            )
+            if not late.needs_continuation:
+                continue
+            linked_sessions[closed_key] = answered + late.appended
+            follow_on = late.continuation
+            first = min(follow_on, key=lambda m: (_event_time(m, cutoff), str(m.id)))
+            follow_key = case_key_for(
+                source, client, entity, _event_time(first, cutoff),
+                discriminator=f"continues:{closed_key[:16]}",
+            )
+            linked_sessions[follow_key] = follow_on
+            session_anchor[follow_key] = session_anchor[closed_key]
+            continuations[follow_key] = closed_key
+
         sessions = linked_sessions
         session_of = session_anchor
 
@@ -983,7 +1015,16 @@ async def correlate_alerts(
                 last_activity_at=last_event,
                 score=score,
                 score_version=SCORE_VERSION,
+                # Stored so a closed case keeps the name it was closed under,
+                # and a continuation can name the case it follows exactly as
+                # that case names itself.
+                title=case_payload.get("label"),
             )
+            # Said on the case itself, so an analyst reading a continuation can
+            # see which answered case it carries on from without re-deriving
+            # the chain from timestamps.
+            if case_key in continuations and not spine.continues_case_key:
+                spine.continues_case_key = continuations[case_key]
             # Score history and escalation are the scheduled job's business,
             # not a page load's.
             #
@@ -1024,6 +1065,24 @@ async def correlate_alerts(
             # fetched when someone opens it — shipping every word to every row
             # made this response 63% text nobody had asked to read, on a list
             # that refreshes every 30 seconds.
+            # The lifecycle an analyst reads: the number they say out loud,
+            # whether it has been answered, how long that took, and the case it
+            # carries on from.
+            case_payload["case_number"] = spine.case_number
+            case_payload["lifecycle"] = {
+                "status": spine.status,
+                "closed_at": _iso(spine.closed_at),
+                "closure_kind": spine.closure_kind,
+                "resolution": spine.resolution,
+                "alerts_at_close": spine.alerts_at_close,
+                **closure_rules.metrics(
+                    opened_at=spine.opened_at,
+                    created_at=spine.created_at,
+                    closed_at=spine.closed_at,
+                ),
+            }
+            case_payload["continues"] = await case_reference(db, spine.continues_case_key)
+
             case_payload["narrative"] = {
                 **narrative_lead(spine.narrative_markdown),
                 "has_full": bool(spine.narrative_markdown),

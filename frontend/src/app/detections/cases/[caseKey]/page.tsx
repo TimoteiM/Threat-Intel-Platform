@@ -41,6 +41,18 @@ function caseVerdict(markdown: string | null): string | null {
   return match ? match[1].trim().replace(/\.$/, "") : null;
 }
 
+/** Seconds as an analyst would say them: "7 min", "3 h 12 m", "2 d". */
+function humanDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} h${m % 60 ? ` ${m % 60} m` : ""}`;
+  const d = Math.floor(h / 24);
+  return `${d} d${h % 24 ? ` ${h % 24} h` : ""}`;
+}
+
 export default function CasePage({ params }: { params: { caseKey: string } }) {
   const caseKey = params.caseKey;
   const [data, setData] = useState<CaseDetail | null>(null);
@@ -79,17 +91,45 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   // bare host for a case that no longer forms in the current window and so has
   // no freshly computed label.
   const label = item?.label || host;
+  // The handle an analyst says out loud. The key is a sha256 and always will
+  // be, because it has to be derivable from the events.
+  const number = item?.case_number ?? (data.spine as any)?.case_number;
+  const lifecycle = item?.lifecycle;
+  const continues = item?.continues;
 
   return (
     <Page>
       <PageHeader
-        title={label}
+        title={number ? `#${number} — ${label}` : label}
         subtitle={
           item
             ? `${item.alert_count} alert(s) · ${item.distinct_rules} independent detections · ${shortDate(item.first_seen)} → ${shortDate(item.last_seen)}`
             : "This case no longer forms in the current window — its history is kept below."
         }
       />
+
+      {continues?.case_key && (
+        <div
+          style={{
+            marginBottom: 12, padding: "9px 12px",
+            borderLeft: "3px solid var(--status-info, #388bfd)",
+            borderRadius: "0 8px 8px 0", background: "var(--panel-card-bg, transparent)",
+            fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6,
+          }}
+        >
+          Continues{" "}
+          <Link
+            href={`/detections/cases/${continues.case_key}`}
+            style={{ color: "var(--accent)", fontWeight: 600 }}
+          >
+            {continues.case_number ? `#${continues.case_number}` : "an earlier case"}
+            {continues.title ? ` — ${continues.title}` : ""}
+          </Link>
+          {continues.resolution ? `, closed as ${String(continues.resolution).replace(/_/g, " ")}` : ""}
+          . A detection that case had not seen arrived after it was answered, so this is counted
+          on its own rather than reopening it.
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
         <Link href="/detections" style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}>
@@ -110,6 +150,25 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
             {data.spine.status}
             {data.spine.assignee ? ` · ${data.spine.assignee}` : ""}
             {" · peak "}{data.spine.peak_score}/100
+          </span>
+        )}
+        {lifecycle?.resolution && (
+          <strong
+            style={{
+              ...MONO, fontSize: 11, textTransform: "uppercase",
+              color: lifecycle.resolution === "true_positive"
+                ? "var(--status-critical)"
+                : lifecycle.resolution === "false_positive"
+                ? "var(--text-muted)"
+                : "var(--status-warning)",
+            }}
+          >
+            {String(lifecycle.resolution).replace(/_/g, " ")}
+          </strong>
+        )}
+        {lifecycle?.resolve_seconds != null && (
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            resolved in {humanDuration(lifecycle.resolve_seconds)}
           </span>
         )}
         {data.narrative.assistant_session_id && (

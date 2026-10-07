@@ -2173,6 +2173,34 @@ export interface CorrelatedCase {
   /** Stable identity of this session, derived from its first event time.
    *  Survives a change of query window; session_seq deliberately does not. */
   case_key: string;
+  /** The handle a person says out loud: #12. Assigned once from a sequence;
+   *  `case_key` stays a sha256 because it must be derivable from the events. */
+  case_number?: number | null;
+  /** Opened, answered, how long it took. Derived from stored timestamps. */
+  lifecycle?: {
+    status?: string | null;
+    closed_at?: string | null;
+    closure_kind?: string | null;
+    resolution?: string | null;
+    alerts_at_close?: number | null;
+    /** First alert happened -> a case existed about it. Null for a case
+     *  recorded long after the fact, which is a backfill, not a detection. */
+    detect_seconds?: number | null;
+    detect_excluded?: string | null;
+    /** First alert happened -> the case was answered. */
+    resolve_seconds?: number | null;
+    open?: boolean;
+  } | null;
+  /** The answered case this one carries on from, when a new detection arrived
+   *  after that one had closed. Never a reopening — see the closure service. */
+  continues?: {
+    case_key: string;
+    case_number?: number | null;
+    title?: string | null;
+    status?: string | null;
+    resolution?: string | null;
+    closed_at?: string | null;
+  } | null;
   /** Which session this is on the host, counted within the window. A label for
    *  the reader only — never an input to case_key. */
   session_seq: number;

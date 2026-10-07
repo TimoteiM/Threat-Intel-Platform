@@ -31,6 +31,7 @@ class _FakeDB:
     def __init__(self):
         self.spine: dict[str, AlertCaseSpine] = {}
         self.snapshots: list[AlertCaseSnapshot] = []
+        self.sequence = 0
 
     async def get(self, _model, pk):
         return self.spine.get(pk)
@@ -46,6 +47,14 @@ class _FakeDB:
         db = self
 
         class _R:
+            # The case-number sequence. A spine row now takes its number from
+            # `nextval`, so a stub without this models a schema that no longer
+            # exists — and every test here would fail on a method, not on what
+            # it is about.
+            def scalar_one(self):
+                db.sequence += 1
+                return db.sequence
+
             def scalar_one_or_none(self):
                 if name != "snapshot_previous":
                     return None

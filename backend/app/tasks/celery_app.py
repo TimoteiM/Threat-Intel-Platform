@@ -77,6 +77,13 @@ celery_app.conf.update(
             "task": "app.tasks.case_correlation_task.correlate_and_notify",
             "schedule": crontab(minute=5),
         },
+        # Every minute, because the quiet period is ten and an hourly job
+        # would add up to an hour of dead time to every case's MTTR. A pass
+        # with nothing due is one indexed read.
+        "case-closure-sweep": {
+            "task": "app.tasks.case_closure_task.close_quiet_cases",
+            "schedule": crontab(minute="*"),
+        },
         "alert-log-context-sweep": {
             "task": "app.tasks.alert_log_followup_task.sweep_alert_log_context",
             "schedule": crontab(minute="*"),
@@ -144,6 +151,10 @@ celery_app.autodiscover_tasks([
     # that acts instead, and unregistered it would simply never run while the
     # reads that used to do the work no longer do it.
     "app.tasks.case_correlation_task",
+    # Sixth time this list has been the bug. Cases close themselves now; a
+    # closure job the worker never registered would leave every case open for
+    # ever and MTTR undefined, with nothing in any log to say why.
+    "app.tasks.case_closure_task",
     # Third time this list has been the bug. The API queued the CAPE workflow
     # happily and the worker answered "Received unregistered task", so every
     # submission sat in `queued` for ever.

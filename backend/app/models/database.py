@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Computed,
     DateTime,
@@ -1121,6 +1122,23 @@ class AlertCaseSpine(Base):
     peak_score_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     peak_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_by_case_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The handle a person uses. `case_key` is a sha256 and has to be, because it
+    # is derived from the events; nobody says "case 9f3c…" out loud. Assigned
+    # once from a sequence, never recomputed.
+    case_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
+    # Frozen when the case closes. Recomputing it from members would let a
+    # closed case's title drift as the estate changes around it.
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    alerts_at_close: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The earlier case this one carries on from. The opposite direction from
+    # `superseded_by_case_key`, which means "this one was absorbed".
+    continues_case_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    closure_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # The overall reading of the case, as distinct from the per-alert ones.
     narrative_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     narrative_generated_at: Mapped[datetime | None] = mapped_column(

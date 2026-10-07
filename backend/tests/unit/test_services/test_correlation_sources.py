@@ -54,8 +54,17 @@ class _Run:
 
 
 class _Result:
+    # A shared counter standing in for the `alert_case_number_seq` sequence:
+    # a spine row now takes its case number from `nextval`, and a stub without
+    # it models a schema that no longer exists.
+    _sequence = 0
+
     def __init__(self, rows):
         self._rows = rows
+
+    def scalar_one(self):
+        _Result._sequence += 1
+        return _Result._sequence
 
     def all(self):
         return self._rows

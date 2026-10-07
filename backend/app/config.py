@@ -135,6 +135,14 @@ class Settings(BaseSettings):
     # a submitted zip saw the archive unpacked and then nothing at all until
     # the recording ended. The run had finished.
     anyrun_file_sandbox_analysis_timeout: int = 240
+    # ─── Case lifecycle ───
+    # How long a case must go without a new alert before it is answered and
+    # closed. Ten minutes covers 90% of within-case alert gaps (p90 = 8.8 min,
+    # measured over 7,285 gaps in real cases); the tail past it is what the
+    # escalation hold in alert_case_closure_service is for.
+    case_quiet_period_minutes: int = 10
+    # The resolution target a case is measured against, for SLA reporting.
+    case_sla_target_minutes: int = 60
     anyrun_url_sandbox_mitm: bool = True            # HTTPS MITM proxy — captures form POSTs on phishing pages
     anyrun_max_upload_mb: int = 100
     # How many sandbox tasks this plan may run at once. Submissions are queued
