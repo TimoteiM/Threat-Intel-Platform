@@ -1144,6 +1144,18 @@ class AlertCaseSpine(Base):
     closure_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # How often the closing job has tried and failed to read this case back.
+    #
+    # A case whose membership no longer re-derives stayed open and kept its
+    # place at the head of an oldest-activity-first queue, so every pass
+    # selected it again, in the same position, and paid a full re-correlation
+    # to fail in the same way. Six were enough to take throughput to zero.
+    closure_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    closure_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # The overall reading of the case, as distinct from the per-alert ones.
     narrative_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     narrative_generated_at: Mapped[datetime | None] = mapped_column(

@@ -36,6 +36,8 @@ and is counted on its own.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
@@ -232,25 +234,109 @@ def split_after_closure(
     return answered, result
 
 
-def resolution_for(*, verdict: str | None, risk_score: int | None) -> str:
+# The resolution a case carries between being closed and being analysed.
+#
+# Closing stops the SLA clock, and it has to happen the moment a case goes
+# quiet or MTTR measures queue depth instead of response. The analysis takes
+# longer than that. So the case closes first and says honestly that it has no
+# answer yet, and the answer is written over this when the model returns.
+#
+# Not "inconclusive": that is a real finding, reached by looking. This is the
+# absence of one.
+AWAITING_ANALYSIS = "awaiting_analysis"
+
+
+# What the model is asked to end its verdict line with, mapped to the word an
+# analyst closes a case with. Matched on the leading token, because the model
+# qualifies its verdict in prose — "Benign operational denial", "Suspicious
+# authentication activity" — and the qualifier is for the analyst to read, not
+# for this to parse.
+#
+# Ordered longest-first so "false positive" is tested before "positive" and
+# "not malicious" before "malicious".
+_VERDICT_WORDS: tuple[tuple[str, str], ...] = (
+    ("true positive", "true_positive"),
+    ("true_positive", "true_positive"),
+    ("false positive", "false_positive"),
+    ("false_positive", "false_positive"),
+    ("not malicious", "false_positive"),
+    ("not_malicious", "false_positive"),
+    ("inconclusive", "inconclusive"),
+    ("indeterminate", "inconclusive"),
+    ("unknown", "inconclusive"),
+    ("malicious", "true_positive"),
+    ("confirmed", "true_positive"),
+    ("compromised", "true_positive"),
+    ("suspicious", "needs_review"),
+    ("needs review", "needs_review"),
+    ("benign", "false_positive"),
+    ("clean", "false_positive"),
+)
+
+
+def resolution_for(*, verdict: str | None) -> str:
     """The closing resolution, in the words an analyst closes a case with.
 
-    Deliberately not a copy of the verdict: a case is closed as a true or
-    false positive, and "unknown" is a real outcome that must not be recorded
-    as either.
+    Reads the verdict the analysis reached. Nothing else — and in particular
+    not the correlation score, which this used to fall back on and which is
+    the reason case #61 was filed as a confirmed detection while its own
+    report opened with "Verdict: Inconclusive".
+
+    The score is not a severity. It measures how much independent agreement
+    there is between rules and how far the behaviour travelled; the narrative
+    prompt says so in those words. A host running PowerShell as SYSTEM under
+    six rules it has not fired together before scores 100 and is routine
+    administration. Reading that as "malicious" filed 24 cases as true
+    positives of which the analysis called exactly one malicious.
+
+    Measured over 831 closed cases, the resolution was a pure function of the
+    score: true_positive was exactly the 76-100 band, inconclusive 30-73,
+    false_positive 0-35. The verdict argument was always None, because the
+    correlated case dict has no `verdict` key at all — so the branch these
+    tests exercised had never once run in production.
+
+    An unreadable or missing verdict is `inconclusive`. It is never a
+    positive: a case nobody could answer must not arrive in the queue as a
+    confirmed intrusion, and must not be quietly counted as clean either.
     """
-    text = str(verdict or "").strip().casefold()
-    if text in {"malicious", "true_positive", "confirmed"}:
-        return "true_positive"
-    if text in {"benign", "false_positive", "clean", "not_malicious"}:
-        return "false_positive"
-    if text == "suspicious":
-        return "needs_review"
-    if risk_score is not None and risk_score >= 75:
-        return "true_positive"
-    if risk_score is not None and risk_score <= 20:
-        return "false_positive"
+    text = str(verdict or "").strip().casefold().lstrip("*#: ").strip()
+    if not text:
+        return "inconclusive"
+
+    # A hedge in front of the verdict is still that verdict: "likely benign"
+    # is benign. Stripped rather than listed, so the table stays one row per
+    # outcome.
+    for _ in range(3):
+        stripped = re.sub(
+            r"^(likely|probably|possibly|assessed(?:\s+as)?|appears(?:\s+to\s+be)?"
+            r"|most\s+likely|highly\s+likely|verdict)\b[\s:,-]*",
+            "", text,
+        )
+        if stripped == text:
+            break
+        text = stripped.strip()
+
+    for word, resolution in _VERDICT_WORDS:
+        if text.startswith(word):
+            return resolution
+
+    # Nothing further. The verdict is a field, not prose to be mined for
+    # frightening words: scanning the whole line read "No malicious activity
+    # confirmed" as a confirmed intrusion, which is the same mistake as
+    # reading the score — a conclusion drawn from something that was never a
+    # conclusion. An unrecognised verdict is one nobody answered.
     return "inconclusive"
+
+
+def resolution_from_analysis(markdown: str | None) -> str:
+    """The resolution the written analysis supports.
+
+    One place, so the closing job, the analyst's "send to AI" button and the
+    backfill of history all read the same report the same way.
+    """
+    from app.services.alert_case_narrative_service import narrative_lead
+
+    return resolution_for(verdict=narrative_lead(markdown).get("verdict"))
 
 
 def metrics(

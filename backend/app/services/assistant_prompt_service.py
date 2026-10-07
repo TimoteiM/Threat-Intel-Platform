@@ -105,7 +105,11 @@ Rules:
   the encoding. Always show what it decodes to.
 
 Return a markdown report with these sections:
-- Executive Summary
+- Executive Summary — its FIRST line must be exactly "**Verdict: X**" where X is
+  one of Benign, Suspicious, Malicious or Inconclusive, optionally followed by a
+  comma and a short qualifier. The case is closed under that word, so it is a
+  field and not a figure of speech. Inconclusive is a legitimate verdict and the
+  correct one when the evidence does not decide.
 - Timeline
 - Attack Chain
 - Indicators of Compromise

@@ -180,16 +180,81 @@ def test_nothing_arriving_after_closure_means_nothing_to_do():
 # --- resolutions and metrics -------------------------------------------------
 
 def test_a_resolution_is_how_an_analyst_closes_a_case():
-    assert closure.resolution_for(verdict="malicious", risk_score=90) == "true_positive"
-    assert closure.resolution_for(verdict="benign", risk_score=5) == "false_positive"
-    assert closure.resolution_for(verdict="suspicious", risk_score=50) == "needs_review"
+    assert closure.resolution_for(verdict="malicious") == "true_positive"
+    assert closure.resolution_for(verdict="benign") == "false_positive"
+    assert closure.resolution_for(verdict="suspicious") == "needs_review"
 
 
 def test_unknown_is_not_quietly_recorded_as_either():
     """"Inconclusive" is a real outcome. Filing it as a false positive is how
     a metric starts to look good by losing the cases it could not answer."""
-    assert closure.resolution_for(verdict=None, risk_score=None) == "inconclusive"
-    assert closure.resolution_for(verdict="unknown", risk_score=40) == "inconclusive"
+    assert closure.resolution_for(verdict=None) == "inconclusive"
+    assert closure.resolution_for(verdict="unknown") == "inconclusive"
+
+
+def test_the_score_is_not_an_input_to_the_resolution():
+    """The defect this function was rewritten for.
+
+    The resolution was a band of the correlation score — true_positive was
+    exactly 76-100 across 831 closed cases — and that score measures how much
+    independent agreement there is between rules, not severity: four distinct
+    rules and nothing else scores 90. Case #61 was filed as a confirmed
+    detection while its own report opened "Verdict: Inconclusive".
+
+    Pinned on the signature, because the old code reached the score branch
+    only when `verdict` was None, which was *always* — the correlated case
+    dict has no `verdict` key at all, so every verdict branch above was dead
+    code that had never run in production.
+    """
+    import inspect
+
+    parameters = inspect.signature(closure.resolution_for).parameters
+    assert "risk_score" not in parameters
+    assert "score" not in parameters
+
+
+def test_the_verdicts_the_model_actually_writes_all_map():
+    """Taken verbatim from stored narratives. The model qualifies its verdict
+    in prose and the qualifier is for the analyst, not for the parser."""
+    assert closure.resolution_for(verdict="Benign operational denial") == "false_positive"
+    assert closure.resolution_for(verdict="Benign managed detection-validation") == "false_positive"
+    assert closure.resolution_for(verdict="Suspicious authentication activity") == "needs_review"
+    assert closure.resolution_for(
+        verdict="Inconclusive, with a benign operational explanation more strongly supported"
+    ) == "inconclusive"
+    assert closure.resolution_for(verdict="Likely benign") == "false_positive"
+
+
+def test_a_verdict_nobody_can_read_is_never_a_positive():
+    """Scanning the line for a frightening word read "No malicious activity
+    confirmed" as a confirmed intrusion — the same error as reading the score:
+    a conclusion drawn from something that was never a conclusion."""
+    for unreadable in (
+        "No malicious activity confirmed",
+        "nothing suspicious was found",
+        "The host was fine",
+        "",
+        None,
+    ):
+        assert closure.resolution_for(verdict=unreadable) == "inconclusive"
+
+
+def test_a_case_closed_before_its_analysis_says_so_rather_than_guessing():
+    """490 of 794 cases were closed before their analysis existed. Closing has
+    to happen when the case goes quiet or MTTR measures queue depth, so the
+    resolution is deferred — and the placeholder is not a finding."""
+    assert closure.AWAITING_ANALYSIS == "awaiting_analysis"
+    assert closure.AWAITING_ANALYSIS not in {
+        "true_positive", "false_positive", "needs_review", "inconclusive",
+    }
+
+
+def test_a_failed_analysis_reads_as_unanswered():
+    assert closure.resolution_from_analysis(None) == "inconclusive"
+    assert closure.resolution_from_analysis("") == "inconclusive"
+    assert closure.resolution_from_analysis(
+        "# Executive Summary\n\n**Verdict: Benign, routine update traffic**\n\nNothing."
+    ) == "false_positive"
 
 
 def test_mttr_runs_from_the_first_alert_not_from_when_we_noticed():

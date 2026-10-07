@@ -129,7 +129,11 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   // `{host}/{user} — {what happened}`, composed server-side. Falls back to the
   // bare host for a case that no longer forms in the current window and so has
   // no freshly computed label.
-  const label = item?.label || host;
+  // Falls back to the stored title, which the endpoint already returns:
+  // a case whose alerts have aged out of the window no longer re-forms, so
+  // `item.label` is empty and the page showed a bare hostname for a case
+  // whose real name was sitting in the spine row.
+  const label = item?.label || (data.spine as any)?.title || host;
   // The handle an analyst says out loud. The key is a sha256 and always will
   // be, because it has to be derivable from the events.
   const number = item?.case_number ?? (data.spine as any)?.case_number;

@@ -16,7 +16,6 @@ import type { TenantOption } from "@/lib/api";
 import { EmptyState, MetricStrip, Section } from "@/components/ui/Primitives";
 import Spinner from "@/components/shared/Spinner";
 import EntityWindow from "@/components/detections/EntityWindow";
-import CaseNarrative from "@/components/detections/CaseNarrative";
 import { shortDate } from "@/components/detections/panels";
 import Pager from "@/components/shared/Pager";
 import { toInstant } from "@/components/shared/TimeWindow";
@@ -24,16 +23,86 @@ import ClientFilter from "@/components/detections/ClientFilter";
 
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
 
+const caption: React.CSSProperties = {
+  fontSize: "var(--font-micro, 10px)", fontWeight: 700,
+  letterSpacing: "0.06em", textTransform: "uppercase",
+  color: "var(--text-muted)",
+};
+
+const control: React.CSSProperties = {
+  borderRadius: 10,
+  border: "1px solid var(--panel-divider-strong, var(--border))",
+  background: "var(--panel-card-bg, transparent)",
+  color: "var(--text-strong, var(--text))",
+  padding: "6px 10px", fontSize: 13,
+};
+
 type Order = "score" | "newest" | "oldest" | "alerts";
 
 const ORDERS: Array<{ id: Order; label: string }> = [
-  { id: "score", label: "Score" },
+  // Newest first, and listed first, because that is now the default. Score
+  // used to lead the list, and score is agreement between detection rules
+  // rather than severity — so row one read as "the worst case" when it meant
+  // "the case whose rules most unusually fired together".
   { id: "newest", label: "Newest" },
+  { id: "score", label: "Score" },
   { id: "oldest", label: "Oldest" },
   { id: "alerts", label: "Most alerts" },
 ];
 
 const VERDICTS = ["malicious", "suspicious", "benign"] as const;
+
+/** The severity bands, in one place.
+ *
+ *  Lifted out of `SeverityPill` so the filter and the pill beside it read the
+ *  same thresholds. Inlining `>= 75` a second time is how a filter ends up
+ *  disagreeing with the letter in the row it just hid.
+ *
+ *  Ordered high to low: `severityOf` takes the first band the score reaches. */
+const SEVERITIES = [
+  { id: "high", letter: "H", label: "High", min: 75, tone: "var(--status-critical)" },
+  { id: "medium", letter: "M", label: "Medium", min: 40, tone: "var(--status-warning)" },
+  { id: "low", letter: "L", label: "Low", min: 0, tone: "var(--status-info, #388bfd)" },
+] as const;
+
+function severityOf(score?: number | null) {
+  const n = Number(score ?? 0);
+  return SEVERITIES.find((band) => n >= band.min) ?? SEVERITIES[SEVERITIES.length - 1];
+}
+
+/** Resolutions offered in the filter.
+ *
+ *  The list is for the dropdown only — a stored value that is not here stays
+ *  visible with no filter applied, the way `verdictOf` leaves an unrecognised
+ *  verdict unbucketed. This repository's recurring failure is the
+ *  hand-maintained list that silently swallows a new value, and a resolution
+ *  nobody can filter to is a case nobody finds.
+ *
+ *  `awaiting_analysis` is a real state, not a finding: the case is closed and
+ *  the model has not answered yet. `expired` and `aged_out` are not findings
+ *  either — nobody looked — so they are grouped under one heading that says
+ *  so rather than sitting beside true/false positive as though they were
+ *  conclusions. */
+const RESOLUTION_GROUPS: Array<{ label: string; options: Array<{ id: string; label: string }> }> = [
+  {
+    label: "Answered",
+    options: [
+      { id: "true_positive", label: "True positive" },
+      { id: "false_positive", label: "False positive" },
+      { id: "needs_review", label: "Needs review" },
+      { id: "inconclusive", label: "Inconclusive" },
+    ],
+  },
+  {
+    label: "Not answered",
+    options: [
+      { id: "awaiting_analysis", label: "Awaiting analysis" },
+      { id: "expired", label: "Expired — alerts left the window" },
+      { id: "aged_out", label: "Aged out" },
+      { id: "__none__", label: "No resolution recorded" },
+    ],
+  },
+];
 
 const VERDICT_TONE: Record<string, string> = {
   malicious: "var(--status-critical)",
@@ -96,7 +165,13 @@ export default function CasesList({
   const [tenant, setTenant] = useState("");
   const [search, setSearch] = useState("");
   const [verdict, setVerdict] = useState("");
-  const [order, setOrder] = useState<Order>("score");
+  // Grouped with the other filter state deliberately. Every hook in this
+  // component sits above the two early returns below; one declared after them
+  // is what raised React error #310 on this page before.
+  const [severity, setSeverity] = useState("");
+  const [resolution, setResolution] = useState("");
+  const [status, setStatus] = useState("");
+  const [order, setOrder] = useState<Order>("newest");
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [data, setData] = useState<CorrelatedCasesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -167,6 +242,16 @@ export default function CasesList({
     const needle = search.trim().toLowerCase();
     let list = (data?.cases || []).filter((item) => {
       if (verdict && verdictOf(item) !== verdict) return false;
+      if (severity && severityOf(item.score).id !== severity) return false;
+      if (resolution) {
+        const stored = String(item.lifecycle?.resolution || "");
+        if (resolution === "__none__" ? Boolean(stored) : stored !== resolution) return false;
+      }
+      // Read from `closed_at`, exactly as StatusChip does, rather than from
+      // `lifecycle.status`. Two cases carry status='open' with a closed_at and
+      // a resolution set, so the two fields disagree; a filter built on the
+      // other one would hide a row whose own chip says Closed.
+      if (status && (item.lifecycle?.closed_at ? "closed" : "open") !== status) return false;
       if (!needle) return true;
       const haystack = [
         item.label,
@@ -188,7 +273,7 @@ export default function CasesList({
     else if (order === "alerts") list.sort((a, b) => (b.alert_count || 0) - (a.alert_count || 0));
     else list.sort((a, b) => (b.score || 0) - (a.score || 0) || (b.distinct_rules || 0) - (a.distinct_rules || 0));
     return list;
-  }, [data, search, verdict, order]);
+  }, [data, search, verdict, severity, resolution, status, order]);
 
   // 25 a page. The list ran to 946 rows in one scroll, which is not a list
   // anybody reads — it is a list somebody gives up on.
@@ -200,7 +285,7 @@ export default function CasesList({
   // as "no cases" rather than "you are past the end".
   useEffect(() => {
     setPage(0);
-  }, [search, verdict, order, tenant, hours, since, until, pageSize]);
+  }, [search, verdict, severity, resolution, status, order, tenant, hours, since, until, pageSize]);
 
   // Clamped the same way the pager clamps it. A background refresh can return
   // fewer cases without any filter changing — a case closing out of the
@@ -266,6 +351,59 @@ export default function CasesList({
           ))}
         </div>
 
+        <div role="group" aria-label="Filter by severity" style={{ display: "flex", gap: 6 }}>
+          {SEVERITIES.map((band) => (
+            <button
+              key={band.id}
+              type="button"
+              aria-pressed={severity === band.id}
+              onClick={() => setSeverity(severity === band.id ? "" : band.id)}
+              title={`${band.label} — score ${band.min} and above`}
+              style={{
+                border: `1px solid ${severity === band.id ? band.tone : "var(--border)"}`,
+                background: severity === band.id ? "var(--accent-glow, transparent)" : "transparent",
+                color: severity === band.id ? band.tone : "var(--text-dim)",
+                borderRadius: 999, padding: "5px 12px", fontSize: 12, cursor: "pointer",
+              }}
+            >
+              {band.label}
+            </button>
+          ))}
+        </div>
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={caption}>Status</span>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            aria-label="Filter by status"
+            style={control}
+          >
+            <option value="">Any status</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+          </select>
+        </label>
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={caption}>Resolution</span>
+          <select
+            value={resolution}
+            onChange={(e) => setResolution(e.target.value)}
+            aria-label="Filter by resolution"
+            style={control}
+          >
+            <option value="">Any resolution</option>
+            {RESOLUTION_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{
             fontSize: "var(--font-micro, 10px)", fontWeight: 700,
@@ -314,7 +452,7 @@ export default function CasesList({
         data.cases.length > 0 ? (
           <EmptyState
             title="No case matches these filters"
-            hint={`${data.cases.length} case(s) in this window. Clear the search or the verdict filter to see them.`}
+            hint={`${data.cases.length} case(s) in this window. Clear the search, verdict, severity, status or resolution filter to see them.`}
           />
         ) : (
           <EmptyState
@@ -361,10 +499,25 @@ export default function CasesList({
                         <StatusChip closed={closed} kind={lifecycle.closure_kind} />
                       </td>
                       <td style={{ ...td, maxWidth: 520 }}>
-                        <a href={`/detections/cases/${item.case_key}`} style={caseLink}>
+                        <a
+                          href={`/detections/cases/${item.case_key}`}
+                          style={caseLink}
+                          // The title is now the first alert's own title, and
+                          // alert titles are sender-supplied free text — 744
+                          // of them are already at the 255-character limit.
+                          // The old composed label was a host and a tactic,
+                          // so this column never had to cope with a long one.
+                          title={item.label || item.entity_host || undefined}
+                        >
                           {item.case_number ? `#${item.case_number}` : "—"}
                           <span style={{ color: "var(--text-muted)" }}>{" · "}</span>
-                          {item.label || item.entity_host}
+                          <span style={{
+                            display: "inline-block", maxWidth: 440,
+                            overflow: "hidden", textOverflow: "ellipsis",
+                            whiteSpace: "nowrap", verticalAlign: "bottom",
+                          }}>
+                            {item.label || item.entity_host}
+                          </span>
                         </a>
                         {item.continues?.case_number ? (
                           <div style={subtle}>
@@ -384,7 +537,18 @@ export default function CasesList({
                         {item.client && item.client !== "unknown" ? ` / ${item.client}` : ""}
                       </td>
                       <td style={td}>
-                        {lifecycle.resolution ? (
+                        {lifecycle.resolution === "awaiting_analysis" ? (
+                          // Closed, and the model has not answered yet.
+                          // Closing is what stops the SLA clock, so it cannot
+                          // wait for the analysis — but a placeholder must
+                          // not read as a verdict either.
+                          <span
+                            style={{ ...subtle, color: "var(--text-dim)", fontStyle: "italic" }}
+                            title="The case is closed; its resolution is written when the analysis lands."
+                          >
+                            awaiting analysis
+                          </span>
+                        ) : lifecycle.resolution ? (
                           <span style={subtle}>
                             {String(lifecycle.resolution).replace(/_/g, " ")}
                           </span>
@@ -504,12 +668,7 @@ function StatusChip({ closed, kind }: { closed: boolean; kind?: string | null })
 /** Severity, as the one thing colour is allowed to mean on this page. */
 function SeverityPill({ score }: { score?: number | null }) {
   const n = Number(score ?? 0);
-  const [letter, tone, title] =
-    n >= 75
-      ? ["H", "var(--status-critical)", "High"]
-      : n >= 40
-      ? ["M", "var(--status-warning)", "Medium"]
-      : ["L", "var(--status-info, #388bfd)", "Low"];
+  const { letter, tone, label: title } = severityOf(n);
   return (
     <span
       title={`${title} — ${n}/100`}

@@ -169,6 +169,18 @@ def build_case_evidence(case: dict[str, Any], resolutions: dict[str, str]) -> st
         "",
         "## What to produce",
         "",
+        "Begin the Executive Summary with a line of exactly this form, and",
+        "nothing before it:",
+        "",
+        "    **Verdict: <Benign|Suspicious|Malicious|Inconclusive>**",
+        "",
+        "You may follow the word with a comma and a short qualifier — "
+        '"**Verdict: Benign, routine update traffic**" — but the first word '
+        "after the colon must be one of those four, because the case is closed",
+        "under it. Inconclusive is a real answer and the right one when the",
+        "evidence does not decide; it is not a failure to analyse. Do not",
+        "invent a fifth word, and do not open with a hedge before the verdict.",
+        "",
         "Explain this case as one event. The individual alerts have each been",
         "analysed already and the analyst can read those; what is missing is the",
         "single account of what happened across them. Say what the intrusion did",

@@ -169,19 +169,58 @@ def _event_time(row: Any, fallback: datetime) -> datetime:
     return getattr(row, "event_time", None) or row.created_at or fallback
 
 
+# A first-alert title has to be recognisable to the analyst who saw that alert
+# arrive. These are the shapes that are not.
+_TITLE_MIN_CHARS = 12
+_TITLE_MAX_CHARS = 200
+# Senders that put a whole payload in the title field. 760 stored runs carry a
+# raw JSON object or a syslog line rather than a sentence.
+_TITLE_REJECTED_PREFIXES = ("{", "[", "<")
+
+
+def usable_alert_title(value: Any) -> str:
+    """The alert's own title, when it is fit to name a case.
+
+    Run titles are sender-supplied free text and the sender wins
+    unconditionally, so some of them are a JSON body, a syslog line or a
+    fragment ending in a colon. A case called "{" tells an analyst less than
+    the host it happened on.
+    """
+    text = str(value or "").strip()
+    if not text or text.startswith(_TITLE_REJECTED_PREFIXES):
+        return ""
+    # A pipe means a field-joined machine line, not a sentence.
+    if "|" in text or text.endswith(":"):
+        return ""
+    if len(text) < _TITLE_MIN_CHARS:
+        return ""
+    text = text.rstrip(". ").rstrip("…").strip()
+    return text[:_TITLE_MAX_CHARS].strip()
+
+
 def case_label(
     *,
     host: str | None,
     users: Sequence[str],
     tactics: Sequence[str],
     members: Sequence[Any],
+    ordered: Sequence[Any] | None = None,
 ) -> str:
-    """What to call this case: `{host}/{user} — {what happened}`.
+    """What to call this case: the title of the alert that opened it.
 
-    The identity half names whoever the case is about. A host is the usual
-    answer, but 167 stored alerts carry an account and no device at all, so
-    "host" cannot be assumed to exist — the user is the fallback rather than
-    an extra.
+    An analyst finds a case by recognising the alert that started it. The case
+    used to be named `{host} — {earliest evidenced tactic}`, which is a
+    summary of the whole case and bears no resemblance to anything they saw
+    arrive: case #61 read "Windows-Test-Device — Execution" while the alert
+    that opened it was "Windows-Test-Device - Credential Dumping".
+
+    The composed form survives as the fallback, for the 760 runs whose title
+    is a raw JSON body or a syslog line — see `usable_alert_title`.
+
+    The identity half of that fallback names whoever the case is about. A host
+    is the usual answer, but 167 stored alerts carry an account and no device
+    at all, so "host" cannot be assumed to exist — the user is the fallback
+    rather than an extra.
 
     More than one account on one device is reported as a count, not as the
     first one sorted. Naming one of three accounts is worse than naming none:
@@ -195,6 +234,19 @@ def case_label(
     """
     named = [str(u).strip() for u in users if str(u or "").strip()]
     host_name = str(host or "").strip()
+
+    # The first linked alert, which the caller has already sorted by event
+    # time. Run titles already begin with the hostname — "Windows-Test-Device
+    # - Credential Dumping" — so nothing is prepended to it, and the
+    # duplicated host that produced "EXP-6FSKJR3 — EXP-6FSKJR3 - A .NET
+    # application crashed" cannot arise.
+    for member in (ordered if ordered is not None else members) or ():
+        first = usable_alert_title(getattr(member, "title", None))
+        if first:
+            return first
+        # Only the first member is consulted. Walking on to the second would
+        # name the case after an alert that did not open it.
+        break
 
     if host_name and len(named) == 1:
         identity = f"{host_name}/{named[0]}"
@@ -228,6 +280,17 @@ def case_label(
                 counts[name] += 1
         if counts:
             what = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+    # 7,448 runs on hyphenated hosts still carry the host inside
+    # `detection_name`: migration 037 stripped the "<agent> - " prefix with
+    # `^[^-]{1,80}? - `, a negated class that excludes the hyphen, so every
+    # host with a hyphen in its name — EXP-6FSKJR3, Windows-Test-Device — was
+    # skipped. Prepending the identity again produced the duplication.
+    # Repairing the stored column changes detection identity and therefore
+    # case membership, so that is its own measured change; this just stops the
+    # label repeating itself.
+    if host_name and what.casefold().startswith(f"{host_name.casefold()} - "):
+        what = what[len(host_name) + 3:].strip()
 
     return f"{identity} — {what}" if what else identity
 
@@ -921,7 +984,12 @@ async def correlate_alerts(
 
             # Ordered by when things happened on the host, not by when this
             # platform heard about them. Everything below reads this order.
-            ordered = sorted(members, key=lambda m: _event_time(m, cutoff))
+            #
+            # The id breaks ties, as it already does for continuations: the
+            # case is now named after `ordered[0]`, and two alerts sharing an
+            # event time would otherwise let the title flip between recomputes
+            # depending on what the database happened to return first.
+            ordered = sorted(members, key=lambda m: (_event_time(m, cutoff), str(m.id)))
             progression = progression_of(ordered, cutoff)
             tempo = tempo_of(ordered, cutoff)
             shape = shape_factor(progression, tempo)
@@ -996,10 +1064,17 @@ async def correlate_alerts(
                     # Computed once, server-side, so the list and the detail
                     # page cannot render the same case under two names.
                     "label": case_label(
-                        host=entity,
+                        # Split, because a pre-correlated incident's entity is
+                        # the composite key `{host}\x1fincident:{id}`. 18
+                        # stored titles carry a literal U+001F — the payload's
+                        # own `entity_host` below already splits it, and these
+                        # two had drifted apart.
+                        host=str(entity).split("\x1f", 1)[0],
                         users=sorted({str(m.entity_user) for m in members if m.entity_user}),
                         tactics=sorted(tactics, key=lambda t: _TACTIC_RANK.get(t.casefold(), 99)),
                         members=members,
+                        # The alert that opened the case, in event-time order.
+                        ordered=ordered,
                     ),
                     "window_hours": hours,
                     # The span the behaviour occupied on the host. Reported from

@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 # successive minutes rather than in one task that outlives its time limit.
 MAX_PER_PASS = 25
 
+# How long a closed case may wait for its analysis before it is recorded as
+# unanswered. Generous on purpose: the narrative is a model call behind a
+# queue, and a case that is merely slow must not be written off as
+# inconclusive while the answer is still on its way.
+_ANALYSIS_GRACE = timedelta(hours=2)
+
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -75,9 +81,30 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
         skipped = 0
         unreadable = 0
         expired = 0
+        backed_off = 0
 
         async with factory() as db:
-            open_cases = await store.cases_awaiting_closure(db, limit=batch * 4)
+            # Before anything else: cases closed but still waiting on an
+            # answer that is never coming.
+            #
+            # A closed case carries `awaiting_analysis` until the narrative
+            # task writes the verdict over it. If that task died, was dropped
+            # by the broker, or failed every retry, the placeholder is
+            # permanent — and a case with no resolution is invisible to every
+            # report that counts them. After the grace period it becomes
+            # `inconclusive`, which is what it is: nobody answered it.
+            #
+            # Never a positive, and never a false positive either. An
+            # unanswered case must not improve a metric.
+            stranded = await store.resolve_stranded(
+                db, older_than=now - _ANALYSIS_GRACE, resolution="inconclusive",
+            )
+
+            # The quiet period goes into the query, so a case that cannot
+            # possibly be due does not consume one of the limited slots.
+            open_cases = await store.cases_awaiting_closure(
+                db, limit=batch * 4, due_before=now - _quiet_period(settings),
+            )
             if not open_cases:
                 return {"ran": True, "open": 0, "closed": 0}
 
@@ -95,6 +122,15 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             for row in open_cases:
                 if len(answered) >= batch:
                     break
+
+                # A case that failed to read a moment ago will fail again:
+                # membership is re-derived from the same alerts by the same
+                # code. Backing off geometrically, capped, keeps it in the
+                # queue — it is never written off on absence — while freeing
+                # the slot for a case that can actually be answered.
+                if _still_backing_off(row, now):
+                    backed_off += 1
+                    continue
                 # Reach back far enough to cover the case's own activity: an
                 # old case is still readable, it is simply not in the last
                 # 48 hours.
@@ -125,6 +161,12 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                             )
                             expired += 1
                         continue
+
+                    # Not readable this pass. Recorded, so the next pass can
+                    # skip it for a while rather than paying another full
+                    # re-correlation to fail in the same way — and so a
+                    # blocker is a number somebody can see.
+                    await store.record_closure_attempt(db, case_key=row.case_key, now=now)
 
                     # Absence from the listing is never evidence about a case.
                     #
@@ -164,11 +206,20 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                 # already answered arrives with the answer on it. Asking a
                 # model the same question again would cost a call to produce
                 # the same sentence — 47% of continuations, measured.
-                inherited = bool(row.resolution) and row.continues_case_key
-                resolution = row.resolution if inherited else closure.resolution_for(
-                    verdict=case.get("verdict") or case.get("overall_verdict"),
-                    risk_score=case.get("score"),
+                #
+                # Anything else closes with no answer yet. The resolution is
+                # whatever the analysis concludes, and the narrative task
+                # writes it when the model returns; closing cannot wait for
+                # that without making MTTR measure queue depth.
+                #
+                # A parent whose own answer is still pending is not an answer
+                # to inherit, so the continuation waits for its own.
+                inherited = bool(
+                    row.resolution
+                    and row.resolution != closure.AWAITING_ANALYSIS
+                    and row.continues_case_key
                 )
+                resolution = row.resolution if inherited else closure.AWAITING_ANALYSIS
                 await store.close_case(
                     db,
                     case_key=row.case_key,
@@ -224,6 +275,10 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             "closed": len(answered),
             # Closed because no alert can ever join them again.
             "expired": expired,
+            # Skipped this pass because reading them failed recently.
+            "backed_off": backed_off,
+            # Closed, never analysed, past the grace period.
+            "stranded_resolved": stranded,
             # Open, in the window, but not in the listing. Reported rather
             # than closed: a number that stays high means the listing and the
             # membership have drifted apart.
@@ -239,6 +294,23 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
         logger.exception("Case closure pass failed: %s", exc)
         return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
     return outcome
+
+
+# A case that could not be read waits this long before the next attempt,
+# doubling each time to a ceiling. Never permanent: the alerts it is built
+# from can come back into the window, and closing a case on absence from a
+# listing is what destroyed 575 of them.
+_BACKOFF_BASE = timedelta(minutes=2)
+_BACKOFF_CEILING = timedelta(hours=1)
+
+
+def _still_backing_off(row: Any, now: datetime) -> bool:
+    attempts = int(getattr(row, "closure_attempts", 0) or 0)
+    last = getattr(row, "closure_attempted_at", None)
+    if not attempts or last is None:
+        return False
+    wait = min(_BACKOFF_BASE * (2 ** min(attempts - 1, 6)), _BACKOFF_CEILING)
+    return _as_utc(last) + wait > now
 
 
 def _quiet_period(settings: Any):

@@ -26,6 +26,7 @@ from sqlalchemy.pool import NullPool
 from app.config import get_settings
 from app.db.session import sync_engine
 from app.models.database import AlertBodyInvestigationRun, AlertCaseSpine
+from app.services import alert_case_closure_service as closure
 from app.services.alert_case_narrative_service import (
     MAX_MEMBERS_IN_PROMPT,
     build_case_evidence,
@@ -52,6 +53,16 @@ def write_case_narrative(self, case_key: str, case: dict[str, Any], fingerprint:
         # Another worker may have finished the same fingerprint while this task
         # waited in the queue. Recomputing it would buy an identical paragraph.
         if spine.narrative_fingerprint == fingerprint and spine.narrative_markdown:
+            # The paragraph is current; the resolution read from it may not be.
+            # A case closed while this narrative already existed would return
+            # here and keep its placeholder for ever, because the write-back
+            # below is the only thing that ever clears one.
+            if spine.closed_at is not None and spine.resolution in (
+                None, closure.AWAITING_ANALYSIS,
+            ):
+                spine.resolution = closure.resolution_from_analysis(spine.narrative_markdown)
+                db.commit()
+                return "already current, resolution written"
             return "already current"
         spine.narrative_status = "running"
         db.commit()
@@ -87,6 +98,31 @@ def write_case_narrative(self, case_key: str, case: dict[str, Any], fingerprint:
             # Stamped only on success, so a failure leaves the case eligible for
             # another attempt rather than looking as though it had been written.
             spine.narrative_fingerprint = fingerprint
+
+        # The resolution comes from here, because this is the only place that
+        # knows what the analysis concluded.
+        #
+        # It used to be decided at closing time from the correlation score,
+        # which is agreement between rules rather than severity — and 490 of
+        # 794 cases were closed before their analysis existed at all. So a
+        # case scoring 100 on six rules it had not fired together before was
+        # filed as a confirmed detection while its own report opened
+        # "Verdict: Inconclusive". 24 cases were true positives; the analysis
+        # called one of them malicious.
+        #
+        # Only a case that is closed and still waiting is written: an analyst
+        # who has since judged it themselves outranks the model, and a case
+        # still open will be answered when it closes.
+        if spine.closed_at is not None and spine.resolution in (
+            None, closure.AWAITING_ANALYSIS,
+        ):
+            spine.resolution = (
+                closure.resolution_from_analysis(markdown)
+                if status == "completed"
+                # Nothing read the alerts, so nothing concluded anything. Not
+                # a false positive, which is a finding.
+                else "inconclusive"
+            )
         db.commit()
 
     logger.info("case narrative %s for %s", status, case_key[:12])

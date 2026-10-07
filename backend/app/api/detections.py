@@ -899,10 +899,14 @@ async def analyse_case_now(
         )
 
     members = case.get("alerts") or []
-    resolution = closure.resolution_for(
-        verdict=case.get("verdict") or case.get("overall_verdict"),
-        risk_score=case.get("score"),
-    )
+    # No resolution yet, and none invented. The analyst asked for the case to
+    # be answered now; the answer is what the model concludes about these
+    # alerts, and it is written over this the moment the narrative lands.
+    #
+    # This used to be `resolution_for(verdict=case.get("verdict"), ...)`, and a
+    # correlated case has no `verdict` key, so it always fell through to the
+    # correlation score — which is agreement between rules, not severity.
+    resolution = closure.AWAITING_ANALYSIS
     await store.close_case(
         db,
         case_key=case_key,
