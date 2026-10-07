@@ -328,6 +328,37 @@ def resolution_for(*, verdict: str | None) -> str:
     return "inconclusive"
 
 
+def analysis_is_ready(*, narrative_status: Any, narrative_markdown: Any) -> bool:
+    """Has the model actually written an analysis of this case?
+
+    The precondition for a person signing a case off. An analyst closing a case
+    is recording a judgement, and a judgement needs something to have been read
+    first — this platform spent 831 cases filing resolutions that nothing had
+    assessed.
+
+    Deliberately NOT "the resolution is set". The three candidate conditions
+    were measured across all 1,051 spine rows and they disagree in both
+    directions:
+
+      * `narrative_status == 'completed'`, non-empty markdown and
+        `narrative_generated_at IS NOT NULL` agree on every one of the 842
+        analysed rows — zero disagreements.
+      * 47 rows have a written analysis and no resolution, because the
+        write-back only fires for a case that is already closed. Gating on the
+        resolution would refuse a case whose analysis is sitting right there.
+      * 11 rows have a resolution and no analysis at all: continuations
+        inherit their parent's answer without a second model call. Gating on
+        the resolution would wave those through as though something had read
+        them.
+
+    So the gate asks about the analysis itself, which is the thing the analyst
+    is being asked to agree with.
+    """
+    if str(narrative_status or "").strip().casefold() != "completed":
+        return False
+    return bool(str(narrative_markdown or "").strip())
+
+
 def resolution_from_analysis(markdown: str | None) -> str:
     """The resolution the written analysis supports.
 

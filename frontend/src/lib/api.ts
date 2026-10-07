@@ -1811,9 +1811,37 @@ export function getCaseObservables(caseKey: string) {
  * The automatic close waits ten minutes for alerts to stop arriving. An
  * analyst who has already read the case should not have to.
  */
+/** Commission the case analysis now. Does not close the case. */
 export function analyseCaseNow(caseKey: string) {
   return request<{
     case_key: string; case_number: number | null; status: string;
-    resolution: string; alerts: number; closed_by: string; note: string;
+    narrative_status: string; alerts: number; note: string;
   }>(`/detections/case/${encodeURIComponent(caseKey)}/analyse`, { method: "POST" });
+}
+
+/** The resolutions a person may close a case under.
+ *
+ *  Mirrors `CaseResolution.analyst_choices()` in backend/app/models/enums.py,
+ *  which is the source of truth; the server validates against it and refuses
+ *  anything else, so a drift here is a 400 rather than a bad write. The
+ *  non-answers — expired, aged_out, awaiting_analysis — are deliberately
+ *  absent: they describe what happened to a case, not what anyone concluded. */
+export const ANALYST_RESOLUTIONS = [
+  { id: "true_positive", label: "True positive", hint: "Confirmed. Real activity that warranted the alert." },
+  { id: "false_positive", label: "False positive", hint: "Explained. Legitimate activity that fired a rule." },
+  { id: "needs_review", label: "Needs review", hint: "Unresolved. Worth keeping, not confirmed either way." },
+  { id: "inconclusive", label: "Inconclusive", hint: "Looked at; the evidence does not decide." },
+] as const;
+
+/** Sign a case off. Refused with 409 unless its analysis has been written. */
+export function closeCaseManually(
+  caseKey: string, body: { resolution: string; note?: string },
+) {
+  return request<{
+    case_key: string; case_number: number | null; status: string;
+    resolution: string; closed_by: string; closed_at: string; note: string;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/close`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }

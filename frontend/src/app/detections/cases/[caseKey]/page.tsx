@@ -200,6 +200,22 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
             {data.spine.status}
             {data.spine.assignee ? ` · ${data.spine.assignee}` : ""}
             {" · peak "}{data.spine.peak_score}/100
+            {/* Who signed it off. A resolution with no name beside it reads as
+                the platform's conclusion even when a person reached it. */}
+            {(data.spine as any).closed_by ? ` · closed by ${(data.spine as any).closed_by}` : ""}
+          </span>
+        )}
+        {(data.spine as any)?.closure_note && (
+          <span style={{ fontSize: 11, color: "var(--text-dim)", fontStyle: "italic" }}>
+            “{(data.spine as any).closure_note}”
+          </span>
+        )}
+        {(data.spine as any)?.analysis_changed_since_close && (
+          // The analysis is rewritten whenever the case's shape moves, closed
+          // cases included, so a sign-off can end up displayed beside an
+          // analysis nobody signed.
+          <span style={{ fontSize: 11, color: "var(--status-warning)" }}>
+            the analysis below was rewritten after this case was closed
           </span>
         )}
         {lifecycle?.resolution && (
@@ -279,6 +295,18 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
           <AnalyseNowButton
             caseKey={caseKey}
             closed={Boolean(lifecycle?.closed_at)}
+            onDone={reload}
+          />
+          <CloseCaseControl
+            caseKey={caseKey}
+            closed={Boolean(lifecycle?.closed_at)}
+            // The same two fields the server gates on, read from the payload
+            // the page already has — no extra request to find out.
+            analysisReady={
+              data.narrative?.status === "completed" &&
+              Boolean((data.narrative?.markdown || "").trim())
+            }
+            analysisState={data.narrative?.status ?? null}
             onDone={reload}
           />
         </div>
@@ -569,6 +597,135 @@ function AnalyseNowButton({
       >
         {busy ? "Sending…" : "Send to AI now"}
       </button>
+    </span>
+  );
+}
+
+/** Sign the case off, once there is an analysis to sign off on.
+ *
+ *  The gate is shown, not sprung. An analyst who clicks a live button and
+ *  receives a 409 learns the rule the hard way and learns nothing about when
+ *  it will pass; a button that says what it is waiting for answers both at
+ *  once. The server enforces it regardless — this only makes the refusal
+ *  legible before it happens. */
+function CloseCaseControl({
+  caseKey,
+  closed,
+  analysisReady,
+  analysisState,
+  onDone,
+}: {
+  caseKey: string;
+  closed: boolean;
+  analysisReady: boolean;
+  analysisState: string | null;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [resolution, setResolution] = useState<string>("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (closed) return null;
+
+  if (!analysisReady) {
+    return (
+      <span style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+        {analysisState === "running"
+          ? "Close available once the analysis finishes"
+          : analysisState === "failed"
+          ? "The analysis failed — send it again before closing"
+          : "Close available once the case has been analysed"}
+      </span>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          padding: "5px 14px", borderRadius: 8, fontSize: 12.5, cursor: "pointer",
+          border: "1px solid var(--panel-divider-strong, var(--border))",
+          background: "transparent", color: "var(--text)",
+        }}
+      >
+        Close case…
+      </button>
+    );
+  }
+
+  return (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <select
+        value={resolution}
+        onChange={(e) => setResolution(e.target.value)}
+        aria-label="Resolution"
+        style={{
+          borderRadius: 8, border: "1px solid var(--panel-divider-strong, var(--border))",
+          background: "var(--panel-card-bg, transparent)", color: "var(--text-strong, var(--text))",
+          padding: "5px 9px", fontSize: 12.5,
+        }}
+      >
+        <option value="">Choose a resolution…</option>
+        {api.ANALYST_RESOLUTIONS.map((r) => (
+          <option key={r.id} value={r.id} title={r.hint}>{r.label}</option>
+        ))}
+      </select>
+      <input
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Why (optional)"
+        aria-label="Closing note"
+        style={{
+          borderRadius: 8, border: "1px solid var(--panel-divider-strong, var(--border))",
+          background: "var(--panel-card-bg, transparent)", color: "var(--text-strong, var(--text))",
+          padding: "5px 9px", fontSize: 12.5, minWidth: 190,
+        }}
+      />
+      <button
+        type="button"
+        disabled={busy || !resolution}
+        onClick={async () => {
+          setBusy(true);
+          setError(null);
+          try {
+            await api.closeCaseManually(caseKey, { resolution, note: note.trim() || undefined });
+            setOpen(false);
+            onDone();
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Could not close this case.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        style={{
+          padding: "5px 14px", borderRadius: 8, fontSize: 12.5,
+          cursor: busy || !resolution ? "default" : "pointer",
+          opacity: busy || !resolution ? 0.5 : 1,
+          border: "1px solid var(--accent)",
+          background: "var(--accent-subtle, rgba(56,139,253,0.16))",
+          color: "var(--text)",
+        }}
+      >
+        {busy ? "Closing…" : "Confirm close"}
+      </button>
+      <button
+        type="button"
+        onClick={() => { setOpen(false); setError(null); }}
+        style={{
+          padding: "5px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+          border: "1px solid var(--panel-divider-strong, var(--border))",
+          background: "transparent", color: "var(--text-muted)",
+        }}
+      >
+        Cancel
+      </button>
+      {error && (
+        <span style={{ fontSize: 11.5, color: "var(--status-critical)" }}>{error}</span>
+      )}
     </span>
   );
 }

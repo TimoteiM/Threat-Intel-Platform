@@ -1144,6 +1144,18 @@ class AlertCaseSpine(Base):
     closure_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Who signed this case off, what they said, and which analysis was in
+    # front of them when they did.
+    #
+    # The fingerprint is not redundant with `narrative_fingerprint`: that one
+    # is rewritten whenever a fresh narrative is dispatched, which correlation
+    # does for closed cases too, so without a frozen copy an analyst's
+    # decision silently re-attaches to an analysis they never read.
+    closed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    closure_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_narrative_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     # How often the closing job has tried and failed to read this case back.
     #
     # A case whose membership no longer re-derives stayed open and kept its

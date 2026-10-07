@@ -20,6 +20,8 @@ from __future__ import annotations
 import uuid
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
+
+from pydantic import BaseModel
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -485,6 +487,17 @@ async def get_case(
             "first_recorded_at": spine.created_at.isoformat() if spine.created_at else None,
             "last_activity_at": spine.last_activity_at.isoformat() if spine.last_activity_at else None,
             "superseded_by": spine.superseded_by_case_key,
+            # Who signed it off and why, when a person did.
+            "closed_by": spine.closed_by,
+            "closure_note": spine.closure_note,
+            # True when the analysis on screen is no longer the one the
+            # analyst closed on: correlation rewrites the narrative whenever
+            # the case's shape moves, closed cases included.
+            "analysis_changed_since_close": bool(
+                spine.closed_narrative_fingerprint
+                and spine.narrative_fingerprint
+                and spine.closed_narrative_fingerprint != spine.narrative_fingerprint
+            ),
         } if spine else None,
         "narrative": {
             "markdown": spine.narrative_markdown if spine else None,
@@ -500,10 +513,22 @@ async def get_case(
 
 
 @router.get("/case/{case_key}/narrative")
-async def get_case_narrative(case_key: str, db: DBSession) -> dict[str, Any]:
-    """The full case analysis. Kept out of the list response, which carries the lead."""
+async def get_case_narrative(
+    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """The full case analysis. Kept out of the list response, which carries the lead.
+
+    Scoped, which it was not. This fetched the spine by primary key and
+    returned the whole write-up to any authenticated caller for any case key —
+    so a client-restricted account could read another client's incident
+    analysis in full, naming their hosts, accounts and what was done to them.
+    It is the most sensitive single field on the row, and it was the only case
+    endpoint with no tenant check at all.
+    """
+    scope = _scope(request)
+    case = await case_by_key(db, case_key, scope=scope)
     row = await db.get(AlertCaseSpine, case_key)
-    if row is None:
+    if row is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")
     return {
         "case_key": row.case_key,
@@ -863,34 +888,191 @@ async def get_case_observables(
     }
 
 
-@router.post("/case/{case_key}/analyse")
-async def analyse_case_now(
-    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+class CaseCloseRequest(BaseModel):
+    """An analyst's sign-off on a case."""
+
+    resolution: str
+    note: str | None = None
+
+
+@router.post("/case/{case_key}/close")
+async def close_case_manually(
+    case_key: str, body: CaseCloseRequest, db: DBSession,
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Answer this case now, without waiting for its quiet period.
+    """Close a case by hand, once the analysis exists to close it on.
 
-    The automatic close waits ten minutes for the case to stop receiving
-    alerts. An analyst who has already read it should not have to: this runs
-    the same closing path immediately, on whatever the case holds right now.
+    An analyst signing a case off is recording a judgement, and a judgement
+    needs something to have been read first. This platform spent 831 cases
+    filing resolutions that nothing had assessed — derived from a correlation
+    score that measures agreement between rules, not severity — so the
+    precondition here is the point of the endpoint, not a formality.
 
-    Closing early is a real decision, so it is recorded as one — `closure_kind`
-    is 'analyst', not 'auto', and the resolution says who asked.
+    The gate is the written analysis, not the derived resolution. Measured
+    across every spine row, those two disagree in both directions: 47 cases
+    have an analysis and no resolution, and 11 have a resolution and no
+    analysis at all. See `analysis_is_ready`.
+
+    One case is let through without an analysis, and it is stated rather than
+    silent: a case whose alerts no longer re-derive can never be analysed,
+    because there is nothing left to send. Refusing those would leave them
+    open for ever, and the analyse endpoint already tells the analyst they
+    "can still be closed by hand". They close as `expired`, which is what they
+    are — the analyst is acknowledging a dead case, not reaching a verdict on
+    one, so their chosen resolution is not accepted for it.
     """
-    from app.config import get_settings as _settings
+    from app.api.auth import ADMIN_ROLES, ROLE_ANALYST
+    from app.models.enums import CaseClosureKind, CaseResolution
     from app.services import alert_case_closure_service as closure
     from app.services import alert_case_store as store
-    from app.services.alert_case_narrative_service import narrative_fingerprint
-    from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 
-    identity = _identity(request)
+    # A person, not an ingest key. The Wazuh and TraceCat credentials reach
+    # this API by design, and closing a case is a named human act — the same
+    # reasoning, and the same shape, as sandbox submission in `cape.py`.
+    identity = _identity(request) or {}
+    if not identity:
+        raise HTTPException(401, "Sign in first.")
+    if identity.get("kind") != "user":
+        raise HTTPException(403, "Closing a case requires a signed-in user account.")
+    if str(identity.get("role") or "") not in ADMIN_ROLES + (ROLE_ANALYST,):
+        raise HTTPException(403, "Your role may not close cases.")
+
     scope = _scope(request)
+    case = await case_by_key(db, case_key, scope=scope)
     spine = await db.get(AlertCaseSpine, case_key)
-    if spine is None:
+    if spine is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")
     if spine.closed_at is not None:
         raise HTTPException(409, "This case has already been answered.")
 
+    # Merged into another case, and not closeable on its own.
+    #
+    # A superseded case keeps `closed_at` NULL, so a precondition that only
+    # asks whether a case is closed lets all 243 of them through. They then
+    # failed on the closure claim — which requires status='open' — and the
+    # analyst was told the case was "being answered right now", which is not
+    # what happened and gives them nothing to do. Its alerts live in the case
+    # that absorbed it, and that is the one to sign off.
+    if spine.status == "superseded" or spine.superseded_by_case_key:
+        successor = None
+        if spine.superseded_by_case_key:
+            successor = await db.get(AlertCaseSpine, spine.superseded_by_case_key)
+        raise HTTPException(
+            409,
+            "This case was merged into "
+            + (f"case #{successor.case_number}" if successor and successor.case_number
+               else "another case")
+            + ". Close that one instead — its alerts include these.",
+        )
+
+    unanalysable = case is None
+    if not unanalysable and not closure.analysis_is_ready(
+        narrative_status=spine.narrative_status,
+        narrative_markdown=spine.narrative_markdown,
+    ):
+        raise HTTPException(
+            409,
+            "This case has no analysis yet, so there is nothing to close it on. "
+            "Send it to the AI first; you can close it once the analysis lands.",
+        )
+
+    if unanalysable:
+        resolution = CaseResolution.EXPIRED.value
+    else:
+        try:
+            resolution = CaseResolution(str(body.resolution or "").strip()).value
+        except ValueError:
+            raise HTTPException(
+                400,
+                "Unknown resolution. Choose one of: "
+                + ", ".join(c.value for c in CaseResolution.analyst_choices()),
+            )
+        if resolution not in {c.value for c in CaseResolution.analyst_choices()}:
+            # `expired`, `aged_out` and `awaiting_analysis` describe what
+            # happened *to* a case rather than what anybody concluded about
+            # it. Letting a person sign a case off as "expired" would put a
+            # non-answer into the same column the answers live in.
+            raise HTTPException(
+                400,
+                f"'{resolution}' is not a resolution a person can close a case under. "
+                "Choose one of: "
+                + ", ".join(c.value for c in CaseResolution.analyst_choices()),
+            )
+
+    # The closing job runs every minute and takes this claim before it writes.
+    # Without it a manual close and an automatic one interleave on the same
+    # row, and `close_case` is a blind overwrite with no history.
+    now = datetime.now(timezone.utc)
+    if not await store.claim_for_closure(db, case_key=case_key, now=now):
+        raise HTTPException(409, "This case is being answered right now. Try again in a moment.")
+
+    await store.close_case(
+        db,
+        case_key=case_key,
+        resolution=resolution,
+        title=(case or {}).get("label") or spine.title,
+        alerts_at_close=len((case or {}).get("alerts") or []) or (spine.alerts_at_close or 0),
+        closed_at=now,
+        closure_kind=CaseClosureKind.ANALYST.value,
+        closed_by=str(identity.get("username") or identity.get("email") or "analyst"),
+        closure_note=(body.note or "").strip() or None,
+        # Which analysis was in front of them. `narrative_fingerprint` is
+        # rewritten whenever correlation commissions a fresh narrative — for
+        # closed cases too — so without this frozen copy the sign-off silently
+        # re-attaches to an analysis they never read.
+        narrative_fingerprint=spine.narrative_fingerprint,
+    )
+    await db.commit()
+
+    return {
+        "case_key": case_key,
+        "case_number": spine.case_number,
+        "status": "closed",
+        "resolution": resolution,
+        "closed_by": str(identity.get("username") or identity.get("email") or "analyst"),
+        "closed_at": now.isoformat(),
+        "note": (
+            "This case could no longer be re-derived, so it was closed as expired "
+            "rather than under a verdict."
+            if unanalysable
+            else "Closed on the analysis shown."
+        ),
+    }
+
+
+@router.post("/case/{case_key}/analyse")
+async def analyse_case_now(
+    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Analyse this case now, without waiting for its quiet period.
+
+    The analysis is normally commissioned when a case goes quiet. An analyst
+    who is reading the case now should not have to wait ten minutes for it, so
+    this commissions it immediately on whatever the case holds.
+
+    It does not close the case. Closing is a separate act — either the quiet
+    period, or a person, who may only sign a case off once this has produced
+    something for them to agree with.
+    """
+    from app.services.alert_case_narrative_service import narrative_fingerprint
+    from app.tasks.case_narrative_task import dispatch as dispatch_narratives
+
+    scope = _scope(request)
+    # Scoped first, and only then asked about.
+    #
+    # This used to answer from the spine — fetched by primary key, with no
+    # tenant filter — before scoping: 404 for a key that does not exist and
+    # 409 "already answered" for another client's closed case. That difference
+    # is an existence oracle, and on an MSSP the thing it discloses is which
+    # of your competitors' clients had an incident. `get_case` already states
+    # the rule: a case that does not form for this caller is not theirs.
     case = await case_by_key(db, case_key, scope=scope)
+    spine = await db.get(AlertCaseSpine, case_key)
+    if spine is None or (case is None and not scope.all_tenants):
+        raise HTTPException(404, "No such case")
+    if spine.closed_at is not None:
+        raise HTTPException(409, "This case has already been answered.")
+
     if case is None:
         raise HTTPException(
             409,
@@ -899,24 +1081,14 @@ async def analyse_case_now(
         )
 
     members = case.get("alerts") or []
-    # No resolution yet, and none invented. The analyst asked for the case to
-    # be answered now; the answer is what the model concludes about these
-    # alerts, and it is written over this the moment the narrative lands.
-    #
-    # This used to be `resolution_for(verdict=case.get("verdict"), ...)`, and a
-    # correlated case has no `verdict` key, so it always fell through to the
-    # correlation score — which is agreement between rules, not severity.
-    resolution = closure.AWAITING_ANALYSIS
-    await store.close_case(
-        db,
-        case_key=case_key,
-        resolution=resolution,
-        title=case.get("label") or spine.title,
-        alerts_at_close=len(members),
-        closure_kind="analyst",
-    )
-    await db.commit()
 
+    # Asking for the analysis does not close the case.
+    #
+    # It used to. That made the gated manual close below unreachable: the only
+    # way to obtain an analysis was a button that closed the case for you, so
+    # every case an analyst sent to the model came back "already answered" and
+    # there was nothing left to sign off. Asking a question and recording a
+    # decision are two acts, and this endpoint is the first one.
     dispatch_narratives([(
         case_key,
         case,
@@ -930,9 +1102,10 @@ async def analyse_case_now(
     return {
         "case_key": case_key,
         "case_number": spine.case_number,
-        "status": "closed",
-        "resolution": resolution,
+        # Still open. The quiet period will close it with the model's verdict,
+        # or a person can close it themselves once the analysis has landed.
+        "status": spine.status,
+        "narrative_status": "queued",
         "alerts": len(members),
-        "closed_by": str((identity or {}).get("username") or "analyst"),
-        "note": "Analysing now. The written resolution appears here when it lands.",
+        "note": "Analysing now. The case stays open; close it once the analysis lands.",
     }

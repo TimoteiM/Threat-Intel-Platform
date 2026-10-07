@@ -57,8 +57,10 @@ def write_case_narrative(self, case_key: str, case: dict[str, Any], fingerprint:
             # A case closed while this narrative already existed would return
             # here and keep its placeholder for ever, because the write-back
             # below is the only thing that ever clears one.
-            if spine.closed_at is not None and spine.resolution in (
-                None, closure.AWAITING_ANALYSIS,
+            if (
+                spine.closed_at is not None
+                and spine.closure_kind != "analyst"
+                and spine.resolution in (None, closure.AWAITING_ANALYSIS)
             ):
                 spine.resolution = closure.resolution_from_analysis(spine.narrative_markdown)
                 db.commit()
@@ -113,8 +115,14 @@ def write_case_narrative(self, case_key: str, case: dict[str, Any], fingerprint:
         # Only a case that is closed and still waiting is written: an analyst
         # who has since judged it themselves outranks the model, and a case
         # still open will be answered when it closes.
-        if spine.closed_at is not None and spine.resolution in (
-            None, closure.AWAITING_ANALYSIS,
+        # Never over a person. The resolution check alone would already stop
+        # it, because an analyst always sets a real verdict — but the case
+        # this guards is somebody's signed decision, so it says so explicitly
+        # rather than relying on a value happening not to collide.
+        if (
+            spine.closed_at is not None
+            and spine.closure_kind != "analyst"
+            and spine.resolution in (None, closure.AWAITING_ANALYSIS)
         ):
             spine.resolution = (
                 closure.resolution_from_analysis(markdown)

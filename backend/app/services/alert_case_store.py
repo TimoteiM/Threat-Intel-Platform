@@ -528,8 +528,17 @@ async def close_case(
     db: AsyncSession, *, case_key: str, resolution: str, title: str | None,
     alerts_at_close: int, closed_at: datetime | None = None,
     closure_kind: str = "auto",
+    closed_by: str | None = None,
+    closure_note: str | None = None,
+    narrative_fingerprint: str | None = None,
 ) -> AlertCaseSpine | None:
-    """Record the answer. A closed case is never reopened — see the service."""
+    """Record the answer. A closed case is never reopened — see the service.
+
+    The single writer of closure state for every path — automatic, expired,
+    inherited and analyst — so the invariant lives in one place. The three
+    optional arguments are only ever supplied by a person closing a case; the
+    scheduled paths leave them None and are unchanged.
+    """
     row = await db.get(AlertCaseSpine, case_key)
     if row is None:
         return None
@@ -537,6 +546,12 @@ async def close_case(
     row.closed_at = closed_at or now
     row.closure_kind = closure_kind
     row.resolution = resolution
+    if closed_by:
+        row.closed_by = closed_by
+    if closure_note:
+        row.closure_note = closure_note
+    if narrative_fingerprint:
+        row.closed_narrative_fingerprint = narrative_fingerprint
     row.alerts_at_close = int(alerts_at_close)
     row.status = "closed"
     if title and not row.title:

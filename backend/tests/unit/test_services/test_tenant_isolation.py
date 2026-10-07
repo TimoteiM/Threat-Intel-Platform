@@ -622,6 +622,39 @@ def test_every_detections_route_that_reads_alerts_takes_a_request():
         assert "request" in inspect.signature(fn).parameters, f"{name} cannot scope"
 
 
+def test_every_case_endpoint_can_scope():
+    """Derived from the router, not from a list somebody remembers to update.
+
+    The list above is hand-maintained and had already fallen behind by three
+    endpoints — `analyse_case_now`, `get_case_observables` and
+    `get_case_narrative` — each added without it, each passing this file
+    anyway. `get_case_narrative` was the expensive one: it fetched the spine
+    by primary key with no tenant filter and returned the entire written
+    analysis of any case to any authenticated caller.
+
+    A handler that cannot take a `Request` cannot scope, whatever its body
+    does. Asking the router removes the step a person has to remember.
+    """
+    import inspect
+
+    from app.api import detections as mod
+
+    unscoped = []
+    for route in mod.router.routes:
+        path = getattr(route, "path", "")
+        endpoint = getattr(route, "endpoint", None)
+        if "/case/" not in path and not path.endswith("/case"):
+            continue
+        if endpoint is None:
+            continue
+        if "request" not in inspect.signature(endpoint).parameters:
+            unscoped.append(f"{path} -> {endpoint.__name__}")
+
+    assert not unscoped, (
+        "these case endpoints cannot tenant-scope: " + "; ".join(unscoped)
+    )
+
+
 def test_the_entity_profile_is_tenant_scoped():
     """A profile is every alert a host ever produced.
 

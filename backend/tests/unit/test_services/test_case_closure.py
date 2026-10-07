@@ -301,3 +301,60 @@ def test_an_open_case_can_already_be_breaching():
     assert closure.sla_state(None, target_seconds=3600, now_open_seconds=3000) == "at_risk"
     assert closure.sla_state(None, target_seconds=3600, now_open_seconds=100) == "open"
     assert closure.sla_state(60, target_seconds=3600) == "met"
+
+
+# --- the gate on a manual close ---------------------------------------------
+
+def test_the_gate_is_the_written_analysis_not_the_derived_resolution():
+    """Measured across all 1,051 spine rows, the candidate conditions disagree
+    in both directions: 47 cases have an analysis and no resolution (the
+    write-back only fires once a case is closed), and 11 have a resolution and
+    no analysis at all (continuations inherit their parent's answer). Gating on
+    the resolution would refuse the first set and wave through the second."""
+    assert closure.analysis_is_ready(
+        narrative_status="completed", narrative_markdown="# Executive Summary\n\nreal text"
+    )
+    # An analysis that is still being written is not one to sign off on.
+    assert not closure.analysis_is_ready(
+        narrative_status="running", narrative_markdown="partial"
+    )
+    assert not closure.analysis_is_ready(
+        narrative_status="failed", narrative_markdown="whatever was left"
+    )
+    assert not closure.analysis_is_ready(narrative_status=None, narrative_markdown="text")
+
+
+def test_a_completed_analysis_with_no_text_is_not_an_analysis():
+    """Both halves are required. A row marked completed whose markdown is empty
+    is a write that half-happened, and it must not read as something a person
+    can agree with."""
+    for empty in ("", "   ", "\n\n", None):
+        assert not closure.analysis_is_ready(
+            narrative_status="completed", narrative_markdown=empty
+        )
+
+
+def test_a_person_may_not_close_a_case_under_a_non_answer():
+    """`expired`, `aged_out` and `awaiting_analysis` say what happened *to* a
+    case, not what anyone concluded about it. Offering them as a choice would
+    put a non-answer in the same column the answers live in."""
+    from app.models.enums import CaseResolution
+
+    choices = {c.value for c in CaseResolution.analyst_choices()}
+    assert choices == {"true_positive", "false_positive", "needs_review", "inconclusive"}
+    for not_a_verdict in ("expired", "aged_out", "awaiting_analysis"):
+        assert CaseResolution(not_a_verdict).value not in choices
+
+
+def test_the_resolution_vocabulary_has_one_home():
+    """It lived as bare strings across the closing job, the API, two migrations
+    and the Cases table, which is how `needs_review` came to be reachable in
+    the backend with no label anywhere in the UI."""
+    from app.models.enums import CaseResolution
+
+    assert CaseResolution.AWAITING_ANALYSIS.value == closure.AWAITING_ANALYSIS
+    # The str/value trap: these inherit `str, enum.Enum`, so `str(member)` is
+    # the member name. Equality is by value, and `.value` is what reaches a
+    # column.
+    assert CaseResolution.TRUE_POSITIVE == "true_positive"
+    assert str(CaseResolution.TRUE_POSITIVE) != "true_positive"
