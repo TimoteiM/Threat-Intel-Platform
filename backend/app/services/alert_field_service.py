@@ -39,9 +39,23 @@ _HEADER = r"^[ \t]*{label}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
 # boundary allows a quote or backslash because this deployment forwards CEF
 # inside escaped JSON — \"destinationServiceName=Office 365 dproc=... — where
 # the key is preceded by \" and a whitespace-only boundary never matches.
-_KV = r"(?:^|[\s|\"\\]){key}=(?P<value>[^=\n]{{1,200}}?)(?=[\s\\\"]+[A-Za-z_][\w.]*=|[\\\"]|\s*$)"
+# `DOMAIN\user` is one name, so a lone backslash is inside the value; only
+# the `\"` that closes an escaped-JSON string ends it. Terminating on any
+# backslash truncated every Windows account to its domain half:
+# `suser=CORP\jdoe` yielded `CORP`, and the stored column still holds 6 rows
+# reading `CORP`, 5 reading `INT` and 6 reading a single backslash.
+_KV = r"(?:^|[\s|\"\\]){key}=(?P<value>[^=\n]{{1,200}}?)(?=[\s\\\"]+[A-Za-z_][\w.]*=|\\\"|\"|\s*$)"
 # JSON form, including bodies where JSON is embedded mid-line.
 _JSON = r'"{key}"\s*:\s*"?(?P<value>[^",}}{{\[\]\n]{{1,200}})"?'
+
+# Wazuh's flattened form: a dotted path, unquoted, colon-separated —
+# `data.win.eventdata.user: INT\echelarasu`. Neither _KV (which needs an `=`)
+# nor _JSON (which needs the key quoted) can see it, so every field a Sysmon
+# alert carries only this way was invisible to the extractor.
+#
+# The dot before the key is required, so `.user` cannot match `.parentUser`:
+# the parent process's account is not the account that ran the command.
+_DOTTED = r"(?:^|\n)[ \t]*[\w.]*\.{key}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
 
 
 def _first(patterns: list[str], text: str) -> str | None:
@@ -58,13 +72,31 @@ def _first(patterns: list[str], text: str) -> str | None:
     return None
 
 
-def _field(label: str | None, keys: list[str], text: str) -> str | None:
+def _field(
+    label: str | None, keys: list[str], text: str, *, dotted: bool = False,
+) -> str | None:
+    """The first form of this field the body actually uses.
+
+    `dotted` is opt-in per field, not on by default, because the flattened
+    path form is a different namespace from the other two and matches by
+    suffix. Switched on for every key at once it was measured over all 14,906
+    stored bodies: it gave 3,511 alerts the account that ran the command, and
+    it also gave 11,374 of them an `event_name` of "Account Manipulation,
+    Valid Accounts" — a MITRE technique list, read as an event name because
+    some dotted path happens to end in `.name`. `event_name` is offered as a
+    suppression criterion, so analysts would have built exclusions on it.
+
+    So each field earns the dotted form by being checked against real bodies,
+    rather than inheriting it.
+    """
     patterns: list[str] = []
     if label:
         patterns.append(_HEADER.format(label=re.escape(label)))
     for key in keys:
         patterns.append(_KV.format(key=re.escape(key)))
         patterns.append(_JSON.format(key=re.escape(key)))
+        if dotted:
+            patterns.append(_DOTTED.format(key=re.escape(key)))
     return _first(patterns, text)
 
 
@@ -169,7 +201,24 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         "event_priority": _field(None, ["eventPriority", "event_priority", "priority"], text),
         "event_severity": _field(None, ["eventSeverity", "event_severity", "severity"], text),
         "event_log_level": _field(None, ["eventLogLevel", "event_log_level", "log_level", "level"], text),
-        "user": _field(None, ["suser", "duser", "user", "userName", "srcuser"], text),
+        # The header form is listed, which it was not.
+        #
+        # Every other identity field here passes a label — "Agent IP",
+        # "Manager", "Rule" — and this one passed None, so only `user=` and
+        # `"user":` were ever tried. A Sysmon process-creation alert writes
+        # neither: it says `User: INT\echelarasu` on its own line and
+        # `data.win.eventdata.user:` in the flattened block. Measured over
+        # 14,906 stored runs, 3,511 carry an account in the body that was
+        # never extracted, against 344 that have one — so the platform could
+        # not say who ran a command on 24% of its alerts while the alert said
+        # so twice.
+        #
+        # "User", not "ParentUser": the header is anchored at line start, so
+        # the process's own account wins and the parent's cannot be mistaken
+        # for it.
+        "user": _field(
+            "User", ["suser", "duser", "user", "userName", "srcuser"], text, dotted=True,
+        ),
         # Both feeds carry alerts on behalf of other organisations. TraceCat
         # incidents name theirs outright ("client: LIN"); Wazuh alerts name none
         # at all, which is why the sender can declare it.
@@ -327,8 +376,43 @@ def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     )
     if str(fields.get("agent_id") or "").strip() == MANAGER_AGENT_ID:
         host = fields.get("agent_ip") if looks_like_host(fields.get("agent_ip")) else None
-    user = fields.get("user")
+    user = _clean_user(fields.get("user"))
     return (str(host)[:255] if host else None, str(user)[:255] if user else None)
+
+
+# Values that name no account. `-` and `null` are already dropped upstream;
+# these are what survives a parse: a bare domain with nothing after the
+# separator, a lone separator, and the machine pseudo-accounts that belong to
+# every host and so cannot distinguish one.
+_NOT_AN_ACCOUNT = frozenset({"", "\\", "-", "n/a", "unknown", "null", "none"})
+
+
+def _clean_user(value: Any) -> str | None:
+    """One spelling per account.
+
+    The same person arrives spelled several ways in one estate. The header
+    form writes `INT\\echelarasu`; the flattened block, being JSON that was
+    printed rather than parsed, writes the separator doubled; and a CEF field
+    may carry a trailing comma from the line it sat on. Stored as-is, those
+    are three different accounts — and correlation links on this value, so a
+    case that should group one person's activity splits three ways instead.
+
+    The domain half is kept rather than stripped. It is part of the name, two
+    domains can hold the same username, and the linkage service already looks
+    at both halves when deciding whether two alerts share an account.
+    """
+    text = str(value or "").strip().strip('"').strip()
+    # The printed-JSON doubling, and any deeper escaping behind it.
+    while "\\\\" in text:
+        text = text.replace("\\\\", "\\")
+    text = text.strip().rstrip(",;:").strip()
+    if text.casefold() in _NOT_AN_ACCOUNT:
+        return None
+    # `CORP\` names a domain and no account; so does a lone separator. Either
+    # would group every alert on that domain under one subject.
+    if text.endswith("\\") or not text.replace("\\", "").strip():
+        return None
+    return text
 
 # ── Event time ────────────────────────────────────────────────────────────────
 #

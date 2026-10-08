@@ -8,6 +8,7 @@ rather than over examples written to match the parser.
 
 from __future__ import annotations
 
+from app.services import alert_field_service as afs
 from app.services.alert_field_service import entity_of, extract_alert_fields
 
 WAZUH_HEADER = """Groups: {0=syslog, 1=errors}
@@ -194,3 +195,95 @@ def test_the_user_is_unaffected_by_the_host_rule():
     """A person's name legitimately contains a space; a machine's does not."""
     fields = extract_alert_fields(OKTA_CEF)
     assert entity_of(fields)[1] == "tonny@corp.test"
+
+
+# --- the account that ran the command ----------------------------------------
+#
+# Reported as "case #1058 did not mention which user executed the cmd but the
+# alert says that". It said so twice, in two forms the extractor never tried.
+# Three separate defects, each pinned below.
+
+def test_the_account_is_read_from_the_header_form():
+    """A Sysmon process-creation alert writes `User:` on its own line.
+
+    Every other identity field in `extract_alert_fields` passes a header label
+    — "Agent IP", "Manager", "Rule" — and the account passed None, so only
+    `user=` and `"user":` were ever tried. Measured over 14,906 stored runs,
+    3,511 carried an account the extractor could not see, against 344 that
+    had one.
+    """
+    fields = afs.extract_alert_fields("Agent: EXP-BSFX014\nUser: INT\\echelarasu\n")
+    assert afs.entity_of(fields)[1] == "INT\\echelarasu"
+
+
+def test_the_account_is_read_from_the_flattened_form():
+    """Wazuh's flattened block: a dotted path, unquoted, colon-separated.
+
+    `_KV` needs an `=` and `_JSON` needs the key quoted, so neither can see
+    `data.win.eventdata.user: ...`.
+    """
+    fields = afs.extract_alert_fields("data.win.eventdata.user: INT\\\\echelarasu\n")
+    assert afs.entity_of(fields)[1] == "INT\\echelarasu"
+
+
+def test_a_lone_backslash_does_not_end_the_account():
+    """The defect that fabricated links between different people.
+
+    `suser=CORP\\jdoe` yielded `CORP` — the domain — because the value's
+    terminator treated any backslash as the end. On one host that collapsed
+    30 distinct people into a single account called `povgrp`, and correlation
+    links on this value, so a case there asserted that one person did all of
+    it.
+
+    The `\\"` that closes CEF embedded in escaped JSON must still terminate,
+    which is what the terminator was there for.
+    """
+    assert afs.entity_of(afs.extract_alert_fields('suser=CORP\\jdoe dproc=x'))[1] == "CORP\\jdoe"
+    assert afs.entity_of(afs.extract_alert_fields('duser=INT\\echelarasu act=block'))[1] == "INT\\echelarasu"
+    # The escaped-quote terminator still works: CEF inside escaped JSON.
+    assert afs.entity_of(
+        afs.extract_alert_fields('\\"suser=CORP\\jdoe\\" next=1')
+    )[1] == "CORP\\jdoe"
+
+
+def test_the_parent_process_account_is_not_mistaken_for_the_account():
+    """A Sysmon alert carries both. The parent's account is not who ran the
+    command, and the header is anchored at line start so `ParentUser:` cannot
+    satisfy it."""
+    fields = afs.extract_alert_fields("ParentUser: INT\\someone_else\n")
+    assert afs.entity_of(fields)[1] is None
+
+
+def test_one_account_has_one_spelling():
+    """The flattened block is JSON printed rather than parsed, so it doubles
+    the separator. Stored as-is, one person is several accounts — and
+    correlation links on this value, so their activity splits."""
+    assert afs._clean_user("INT\\\\echelarasu") == "INT\\echelarasu"
+    assert afs._clean_user("INT\\echelarasu") == "INT\\echelarasu"
+    assert afs._clean_user('  "jdoe"  ') == "jdoe"
+    assert afs._clean_user("USER,") == "USER"
+
+
+def test_a_domain_with_no_account_names_nobody():
+    """`CORP\\` and a lone separator would group every alert in the domain
+    under one subject. So would the literal strings senders use for absence."""
+    for nobody in ("CORP\\", "\\", "", "   ", "-", "N/A", "unknown", None):
+        assert afs._clean_user(nobody) is None, nobody
+
+
+def test_the_dotted_form_is_opt_in_per_field():
+    """Measured blast radius, pinned.
+
+    Switched on for every key at once, the flattened form gave 3,511 alerts
+    their account and also gave 11,374 of them an `event_name` of "Account
+    Manipulation, Valid Accounts" — a MITRE technique list, read as an event
+    name because some dotted path ends in `.name`. `event_name` is offered as
+    a suppression criterion, so analysts would have built exclusions on it.
+    """
+    import inspect
+
+    assert "dotted" in inspect.signature(afs._field).parameters
+    assert inspect.signature(afs._field).parameters["dotted"].default is False
+    # The account asks for it; nothing else does yet.
+    source = inspect.getsource(afs.extract_alert_fields)
+    assert source.count("dotted=True") == 1

@@ -69,6 +69,17 @@ def _member_line(member: dict[str, Any]) -> str:
         f"rule {member.get('detection_rule_id') or '?'}",
         str(member.get("detection_rule_name") or member.get("title") or "").strip(),
     ]
+    # Who ran it, named per alert.
+    #
+    # This line is the whole account of each member that the model gets, and
+    # it carried the time, the rule, the verdict and the risk — not the
+    # account. So a report on a process-creation alert could not say who ran
+    # the command however plainly the alert said it, and the system prompt
+    # asks for a section called "Affected Assets and Accounts" while the
+    # evidence named no account anywhere.
+    account = str(member.get("entity_user") or "").strip()
+    if account:
+        parts.append(f"as {account}")
     verdict = str(member.get("overall_verdict") or "").strip()
     if verdict:
         parts.append(f"concluded {verdict}")
@@ -76,6 +87,25 @@ def _member_line(member: dict[str, Any]) -> str:
     if risk:
         parts.append(f"risk {risk}/100")
     return " · ".join(part for part in parts if part)
+
+
+def _accounts_line(case: dict[str, Any]) -> str:
+    """The accounts this case touched, named at the top.
+
+    Stated as a set as well as per alert, because "one account throughout" and
+    "nine accounts on one device" are different incidents and the difference
+    is the first thing an analyst wants from the summary.
+    """
+    accounts = [str(u).strip() for u in (case.get("entity_users") or []) if str(u or "").strip()]
+    if not accounts:
+        return "Accounts: none named in these alerts"
+    if len(accounts) <= 8:
+        return "Accounts involved: " + ", ".join(accounts)
+    return (
+        f"Accounts involved: {len(accounts)} distinct — "
+        + ", ".join(accounts[:8])
+        + f", and {len(accounts) - 8} more"
+    )
 
 
 def build_case_evidence(case: dict[str, Any], resolutions: dict[str, str]) -> str:
@@ -108,6 +138,7 @@ def build_case_evidence(case: dict[str, Any], resolutions: dict[str, str]) -> st
         f"Client: {case.get('client')}",
         f"Window: {case.get('first_seen')} to {case.get('last_seen')} (event time, not ingest time)",
         f"Members: {case.get('alert_count')} alerts, {case.get('distinct_rules')} distinct detection rules",
+        _accounts_line(case),
         f"Correlation score: {case.get('score')}/100",
         "",
         "## Why these alerts were grouped",

@@ -190,6 +190,16 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
             {item.score}/100
           </span>
         )}
+        {/* Who ran it. The case is per-device, so the account is the one thing
+            that separates one person's activity on it from another's — and it
+            was searchable but never shown. */}
+        {item?.entity_users?.length ? (
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+            <span style={{ color: "var(--text-dim)" }}>as </span>
+            <span style={MONO}>{item.entity_users.slice(0, 3).join(", ")}</span>
+            {item.entity_users.length > 3 ? ` +${item.entity_users.length - 3} more` : ""}
+          </span>
+        ) : null}
         {verdict && (
           <strong style={{ ...MONO, fontSize: 12, color: verdictTone(verdict), textTransform: "uppercase" }}>
             {verdict}

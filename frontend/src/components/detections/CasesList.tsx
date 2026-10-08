@@ -519,6 +519,16 @@ export default function CasesList({
                             {item.label || item.entity_host}
                           </span>
                         </a>
+                        {/* The account, under the title. A case is per-device,
+                            so this is what says whose activity it was. */}
+                        {item.entity_users?.length ? (
+                          <div style={{ ...subtle, ...MONO }}>
+                            {item.entity_users.slice(0, 2).join(", ")}
+                            {item.entity_users.length > 2
+                              ? ` +${item.entity_users.length - 2}`
+                              : ""}
+                          </div>
+                        ) : null}
                         {item.continues?.case_number ? (
                           <div style={subtle}>
                             continues{" "}

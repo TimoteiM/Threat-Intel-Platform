@@ -1126,6 +1126,13 @@ async def correlate_alerts(
                             "created_at": _iso(m.created_at),
                             "detection_rule_id": m.detection_rule_id,
                             "detection_rule_name": m.detection_rule_name,
+                            # Who ran it. The case is per-device, so the
+                            # account is the one thing that distinguishes one
+                            # person's activity on it from another's — and it
+                            # has to be carried per alert, because a case can
+                            # span several accounts and naming only the set
+                            # loses which alert belonged to whom.
+                            "entity_user": m.entity_user,
                             "overall_verdict": m.overall_verdict,
                             "highest_risk_score": m.highest_risk_score,
                         }

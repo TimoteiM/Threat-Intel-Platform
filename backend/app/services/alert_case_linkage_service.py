@@ -71,6 +71,49 @@ _NEVER_LINKS = frozenset({
 })
 
 
+# Accounts that every host runs almost everything as. Correctly parsed, real,
+# and useless for linking: a case is already per-device, and inside one device
+# SYSTEM is the account behind the update service, the agent, the scheduled
+# task and the intrusion alike.
+#
+# This matters now that the account is actually extracted. Fixing the
+# extractor gave 3,511 alerts an account, of which 1,266 are
+# `NT AUTHORITY\SYSTEM` — so without this, every unrelated SYSTEM alert on a
+# host would merge into one case on the strength of "the same account ran
+# them", which is the same mistake as linking on the device itself.
+#
+# They are still STORED. "This ran as SYSTEM" is worth an analyst's attention
+# and belongs on the alert; it is only barred from deciding what belongs with
+# what. Matched on the account half, so `NT AUTHORITY\SYSTEM` and a bare
+# `system` are the same answer.
+_MACHINE_ACCOUNTS = frozenset({
+    "system",
+    "local system",
+    "localsystem",
+    "local service",
+    "localservice",
+    "network service",
+    "networkservice",
+    "anonymous",
+    "anonymous logon",
+    "nt authority",
+    "iusr",
+    "iwam",
+})
+
+
+def _is_machine_account(user: str) -> bool:
+    text = str(user or "").strip().casefold()
+    if not text:
+        return True
+    # The account half of DOMAIN\user, which is where the name sits.
+    account = text.rsplit("\\", 1)[-1].strip()
+    if account in _MACHINE_ACCOUNTS or text in _MACHINE_ACCOUNTS:
+        return True
+    # A computer account: Windows writes the machine itself as `HOST$`.
+    return account.endswith("$")
+
+
 def _host_of(row: Any) -> str:
     return str(getattr(row, "entity_host", "") or "").casefold()
 
@@ -115,7 +158,7 @@ def linking_signals(
         signals.add(f"detection:{str(detection).strip().casefold()}")
 
     user = str(getattr(row, "entity_user", "") or "").strip().casefold()
-    if user:
+    if user and not _is_machine_account(user):
         # Both halves of DOMAIN\user: one alert may carry either spelling, and
         # treating them as different accounts splits a case that is one person.
         signals.add(f"user:{user}")
