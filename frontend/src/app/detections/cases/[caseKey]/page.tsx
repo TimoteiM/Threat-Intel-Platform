@@ -17,6 +17,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import * as api from "@/lib/api";
 import type { CaseDetail } from "@/lib/types";
 import { EmptyState, LoadingState, Page, PageHeader } from "@/components/ui/Primitives";
@@ -26,6 +27,7 @@ import {
   riskColor,
   shortDate,
 } from "@/components/detections/panels";
+import CaseGraph from "@/components/detections/CaseGraph";
 
 function verdictTone(verdict: string | null | undefined): string {
   const value = (verdict || "").toLowerCase();
@@ -55,6 +57,13 @@ function humanDuration(seconds: number): string {
 
 export default function CasePage({ params }: { params: { caseKey: string } }) {
   const caseKey = params.caseKey;
+  // The window the case was found in, carried on the link from the list. A
+  // case is derived from its alerts rather than stored, so a cluster listed
+  // over "All" need not re-form over this page's default — and the page then
+  // holds a key that resolves to nothing. Every call below uses the same one,
+  // or the header describes one case and the tabs another.
+  const search = useSearchParams();
+  const hours = Number(search.get("hours")) || undefined;
   const [data, setData] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +74,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
   // that bailed out at `if (loading)` ran fewer hooks than the one after it
   // and React threw #310 — the case page crashed to "a client-side exception
   // has occurred" the moment its data arrived.
-  const [tab, setTab] = useState<"analysis" | "observables" | "alerts">("analysis");
+  const [tab, setTab] = useState<"analysis" | "graph" | "observables" | "alerts">("analysis");
   // Fetched once, here, rather than inside the tab. The panel used to own
   // this: switching away unmounted it and switching back re-ran the request,
   // so every visit to Observables paid for it again.
@@ -80,7 +89,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
     if (tab !== "observables" || observables || observablesError) return;
     let cancelled = false;
     api
-      .getCaseObservables(caseKey)
+      .getCaseObservables(caseKey, hours)
       .then((d) => !cancelled && setObservables(d))
       .catch(
         (e) =>
@@ -90,19 +99,19 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
     return () => {
       cancelled = true;
     };
-  }, [tab, caseKey, observables, observablesError]);
+  }, [tab, caseKey, hours, observables, observablesError]);
 
   // Re-read the case. Also called after "Send to AI now", so the header
   // flips to Closed without the analyst reloading the page.
   const reload = React.useCallback(() => {
-    api.getCase(caseKey).then(setData).catch(() => undefined);
-  }, [caseKey]);
+    api.getCase(caseKey, hours).then(setData).catch(() => undefined);
+  }, [caseKey, hours]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     api
-      .getCase(caseKey)
+      .getCase(caseKey, hours)
       .then((result) => !cancelled && setData(result))
       .catch((err) =>
         !cancelled && setError(err instanceof Error ? err.message : "Could not load this case"),
@@ -111,7 +120,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
     return () => {
       cancelled = true;
     };
-  }, [caseKey]);
+  }, [caseKey, hours]);
 
   if (loading) return <Page><LoadingState label="Assembling the case…" /></Page>;
   if (error || !data) {
@@ -298,7 +307,7 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
           colour varied with whatever the AI had written, so no two cases
           looked alike and the analyst had to re-find each section. */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-        {(["analysis", "observables", "alerts"] as const).map((name) => (
+        {(["analysis", "graph", "observables", "alerts"] as const).map((name) => (
           <button
             key={name}
             type="button"
@@ -336,7 +345,16 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
         </div>
       </div>
 
-      {tab === "observables" ? (
+      {tab === "graph" ? (
+        // The case as a shape rather than a list: which account, on which
+        // device, spawning what, reaching which indicator.
+        <Panel
+          title="ATTACK GRAPH"
+          hint="What this case is made of, and what it touched. Techniques the detection asserted but the investigation could not corroborate are drawn dashed."
+        >
+          <CaseGraph caseKey={caseKey} hours={hours} />
+        </Panel>
+      ) : tab === "observables" ? (
         <ObservablesPanel data={observables} error={observablesError} />
       ) : tab === "alerts" ? null : (
       <>

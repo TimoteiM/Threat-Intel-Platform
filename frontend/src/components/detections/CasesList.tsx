@@ -161,6 +161,17 @@ export default function CasesList({
   since?: string;
   until?: string;
 }) {
+  // A case is derived from its alerts, so the window is part of its identity:
+  // a cluster found over "All" may not re-form over the case page's own
+  // default, and the page then has a key that resolves to nothing. Carry the
+  // window the case was found in, so the page re-derives the same case.
+  const caseHref = (key: string) => {
+    const q = new URLSearchParams({ hours: String(hours) });
+    if (since) q.set("since", since);
+    if (until) q.set("until", until);
+    return `/detections/cases/${key}?${q.toString()}`;
+  };
+
   const [openHost, setOpenHost] = useState<string | null>(null);
   const [tenant, setTenant] = useState("");
   const [search, setSearch] = useState("");
@@ -500,7 +511,7 @@ export default function CasesList({
                       </td>
                       <td style={{ ...td, maxWidth: 520 }}>
                         <a
-                          href={`/detections/cases/${item.case_key}`}
+                          href={caseHref(item.case_key)}
                           style={caseLink}
                           // The title is now the first alert's own title, and
                           // alert titles are sender-supplied free text — 744
@@ -533,7 +544,7 @@ export default function CasesList({
                           <div style={subtle}>
                             continues{" "}
                             <a
-                              href={`/detections/cases/${item.continues.case_key}`}
+                              href={caseHref(item.continues.case_key)}
                               style={{ color: "var(--accent)" }}
                             >
                               #{item.continues.case_number}

@@ -45,6 +45,23 @@ from app.api.alert_investigations import _selectable_tenants
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
 
+# How far back every single-case endpoint looks to re-derive its case.
+#
+# A case is derived from its alerts, not stored as a row, so the window is part
+# of its identity: a case that forms over 720 hours does not form over 48. The
+# detail call used 720 and the graph, observables, narrative, close and analyse
+# calls used the service default of 48, so on any case older than two days the
+# page rendered a full header and then four endpoints that answered "No such
+# case" — an empty graph and no observables on a real incident, and a manual
+# close that could not find the case the analyst was looking at. One constant,
+# so the six cannot drift apart again.
+CASE_LOOKUP_HOURS = 720
+# The widest window a single-case endpoint accepts. The cases list offers "All"
+# — 17,520 hours — so a case found there links to a page that must be able to
+# ask for the same window; at the previous ceiling of 8,760 every call from
+# such a link was refused with a 422.
+CASE_LOOKUP_MAX_HOURS = 17520
+
 # Identity, read exactly as the alert-run routes read it. A second way to
 # decide who is calling is a second way to get it wrong, and this module is
 # about to start scoping reads with it.
@@ -439,7 +456,7 @@ async def get_tuning_recommendations(
 async def get_case(
     case_key: str,
     db: DBSession,
-    hours: int = Query(default=720, ge=1, le=8760),
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Everything one case page needs, in a single call.
@@ -516,7 +533,10 @@ async def get_case(
 
 @router.get("/case/{case_key}/narrative")
 async def get_case_narrative(
-    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+    case_key: str,
+    db: DBSession,
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """The full case analysis. Kept out of the list response, which carries the lead.
 
@@ -528,7 +548,7 @@ async def get_case_narrative(
     endpoint with no tenant check at all.
     """
     scope = _scope(request)
-    case = await case_by_key(db, case_key, scope=scope)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
     row = await db.get(AlertCaseSpine, case_key)
     if row is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")
@@ -1190,9 +1210,147 @@ async def case_sla_summary(
     return summary
 
 
+@router.get("/case/{case_key}/graph")
+async def get_case_graph(
+    case_key: str,
+    db: DBSession,
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """The case drawn as what happened: entities, alerts, techniques, processes.
+
+    Assembled here rather than in the service so the service stays testable
+    without a database, and so this decides what it can afford to load: the
+    ATT&CK assessment and indicator list come off the alert rows, and the
+    process ancestry off the log context already stored around them.
+
+    Scoped like every other case endpoint — a case that does not form for this
+    caller is not theirs to read.
+    """
+    from app.models.database import AlertBodyInvestigationRun, AlertCaseSpine, AlertLogContext
+    from app.services.alert_case_graph_service import build_case_graph
+
+    scope = _scope(request)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
+    spine = await db.get(AlertCaseSpine, case_key)
+    if case is None and spine is None:
+        raise HTTPException(404, "No such case")
+
+    # A case that does not form for this caller is not theirs to read — the
+    # spine alone would otherwise still name another client's host.
+    if case is None and not scope.all_tenants:
+        raise HTTPException(404, "No such case")
+
+    if case is None:
+        # The key no longer re-derives over this window: its alerts have aged
+        # out, or a late arrival re-anchored the cluster under a different key.
+        # The detail endpoint answers this with `case: null` and renders the
+        # spine header, so the graph says the same thing rather than failing —
+        # an error toast on the tab reads as a broken feature, and a blank
+        # canvas reads as "no attack here", which is worse.
+        return {
+            "case_key": case_key,
+            "case_number": spine.case_number,
+            "nodes": [], "edges": [], "counts": {},
+            "attack": {"corroborated": 0, "claimed": 0},
+            "dropped": None, "continues": None,
+            "note": (
+                "This case cannot be re-derived over the last "
+                f"{hours} hours, so there is nothing to draw. Its alerts have "
+                "either aged out of the window or been re-grouped under a "
+                "different case."
+            ),
+        }
+
+    run_ids = [str(a.get("run_id")) for a in (case.get("alerts") or []) if a.get("run_id")]
+    assessments: dict[str, Any] = {}
+    indicators: dict[str, Any] = {}
+    processes: list[dict[str, Any]] = []
+
+    if run_ids:
+        rows = (
+            await db.execute(
+                select(
+                    AlertBodyInvestigationRun.id,
+                    AlertBodyInvestigationRun.result_attack_assessment,
+                    AlertBodyInvestigationRun.ioc_values,
+                ).where(AlertBodyInvestigationRun.id.in_(run_ids))
+            )
+        ).all()
+        for run_id, assessment, iocs in rows:
+            key = str(run_id)
+            techniques = (assessment or {}).get("techniques")
+            assessments[key] = techniques if isinstance(techniques, list) else []
+            indicators[key] = list(iocs or [])
+
+        # Process ancestry, from the logs already retrieved around these
+        # alerts. Sysmon gives each process its own GUID and names its parent,
+        # so the tree is observed rather than reconstructed from timing.
+        contexts = (
+            await db.execute(
+                select(AlertLogContext.logs).where(AlertLogContext.run_id.in_(run_ids))
+            )
+        ).scalars().all()
+        processes = _processes_from_logs(contexts)
+
+    graph = build_case_graph(
+        case, assessments=assessments, indicators=indicators, processes=processes,
+    )
+    graph["continues"] = case.get("continues")
+    return graph
+
+
+def _processes_from_logs(contexts: Any) -> list[dict[str, Any]]:
+    """Process creation and process access, out of the stored log events.
+
+    Only events that name a process are used; everything else in the window is
+    a log line, not a step in an attack. Deduplicated on the process GUID,
+    which is what makes a tree rather than a list of repeated images.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for logs in contexts or []:
+        for event in (logs or []):
+            fields = {
+                str(f.get("name") or ""): str(f.get("value") or "")
+                for f in (event.get("fields") or [])
+                if isinstance(f, dict)
+            }
+            if not fields:
+                continue
+
+            def pick(*names: str) -> str:
+                for name in names:
+                    value = fields.get(f"data.win.eventdata.{name}")
+                    if value:
+                        return value
+                return ""
+
+            guid = pick("processGuid", "sourceProcessGUID")
+            image = pick("image", "sourceImage")
+            if not guid and not image:
+                continue
+            key = guid or image.casefold()
+            entry = seen.setdefault(key, {})
+            entry.update({
+                "guid": guid or entry.get("guid"),
+                "image": image or entry.get("image"),
+                "command_line": pick("commandLine") or entry.get("command_line"),
+                "parent_guid": pick("parentProcessGuid") or entry.get("parent_guid"),
+                "parent_image": pick("parentImage") or entry.get("parent_image"),
+                "accessed_guid": pick("targetProcessGUID") or entry.get("accessed_guid"),
+                "accessed_image": pick("targetImage") or entry.get("accessed_image"),
+                "account": pick("user") or entry.get("account"),
+                "at": event.get("timestamp") or entry.get("at"),
+            })
+    return list(seen.values())
+
+
 @router.get("/case/{case_key}/observables")
 async def get_case_observables(
-    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+    case_key: str,
+    db: DBSession,
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Every indicator the case's alerts carry, split by what is known of it.
 
@@ -1214,7 +1372,7 @@ async def get_case_observables(
     from app.models.database import AlertBodyInvestigationRun
 
     scope = _scope(request)
-    case = await case_by_key(db, case_key, scope=scope)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
     if case is None:
         raise HTTPException(404, "No such case")
 
@@ -1282,7 +1440,10 @@ class CaseCloseRequest(BaseModel):
 
 @router.post("/case/{case_key}/close")
 async def close_case_manually(
-    case_key: str, body: CaseCloseRequest, db: DBSession,
+    case_key: str,
+    body: CaseCloseRequest,
+    db: DBSession,
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Close a case by hand, once the analysis exists to close it on.
@@ -1323,7 +1484,7 @@ async def close_case_manually(
         raise HTTPException(403, "Your role may not close cases.")
 
     scope = _scope(request)
-    case = await case_by_key(db, case_key, scope=scope)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
     spine = await db.get(AlertCaseSpine, case_key)
     if spine is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")
@@ -1443,7 +1604,10 @@ async def close_case_manually(
 
 @router.post("/case/{case_key}/analyse")
 async def analyse_case_now(
-    case_key: str, db: DBSession, request: Request = None,  # type: ignore[assignment]
+    case_key: str,
+    db: DBSession,
+    hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Analyse this case now, without waiting for its quiet period.
 
@@ -1467,7 +1631,7 @@ async def analyse_case_now(
     # is an existence oracle, and on an MSSP the thing it discloses is which
     # of your competitors' clients had an incident. `get_case` already states
     # the rule: a case that does not form for this caller is not theirs.
-    case = await case_by_key(db, case_key, scope=scope)
+    case = await case_by_key(db, case_key, scope=scope, hours=hours)
     spine = await db.get(AlertCaseSpine, case_key)
     if spine is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")

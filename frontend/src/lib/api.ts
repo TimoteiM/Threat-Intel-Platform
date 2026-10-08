@@ -598,6 +598,53 @@ export interface CaseReportOptions {
   scope: { all_tenants: boolean };
 }
 
+export interface CaseGraphNode {
+  id: string;
+  kind: "case" | "host" | "account" | "alert" | "process" | "technique" | "indicator";
+  label: string;
+  /** Techniques only: whether the evidence corroborated the detection's
+   *  mapping, or whether the detection merely asserted it. 30,763 of 30,803
+   *  mappings in this estate are claims. */
+  status?: "corroborated" | "claimed";
+  explanation?: string | null;
+  evidence_count?: number;
+  tactic?: string | null;
+  url?: string | null;
+  href?: string | null;
+  at?: string | null;
+  verdict?: string | null;
+  risk?: number | null;
+  rule_id?: string | null;
+  account?: string | null;
+  image?: string | null;
+  command_line?: string | null;
+  alert_count?: number | null;
+  case_number?: number | null;
+  score?: number | null;
+}
+
+export interface CaseGraph {
+  case_key: string;
+  case_number: number | null;
+  nodes: CaseGraphNode[];
+  edges: Array<{ source: string; target: string; kind: string }>;
+  counts: Record<string, number>;
+  attack: { corroborated: number; claimed: number };
+  dropped: Record<string, number> | null;
+  note: string;
+  continues?: { case_key: string; case_number: number | null } | null;
+}
+
+/** One case drawn as what happened: entities, alerts, ATT&CK and process
+ *  ancestry. Not an Active Directory graph — this platform ingests no
+ *  directory objects. */
+export function getCaseGraph(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
+  return request<CaseGraph>(
+    `/detections/case/${encodeURIComponent(caseKey)}/graph${query}`,
+  );
+}
+
 export interface CaseReportTiming {
   median: number | null;
   mean: number | null;
@@ -1869,7 +1916,8 @@ export function subscribeToProgress(
 }
 
 /** Every indicator a case's alerts carry, split by what is known of each. */
-export function getCaseObservables(caseKey: string) {
+export function getCaseObservables(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
   return request<{
     case_key: string;
     alerts: number;
@@ -1882,7 +1930,7 @@ export function getCaseObservables(caseKey: string) {
     identified: Array<{
       value: string; type: string; alerts: number; reason: string | null;
     }>;
-  }>(`/detections/case/${encodeURIComponent(caseKey)}/observables`);
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/observables${query}`);
 }
 
 /**
