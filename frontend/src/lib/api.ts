@@ -598,35 +598,33 @@ export interface CaseReportOptions {
   scope: { all_tenants: boolean };
 }
 
-export interface CaseReportStats {
-  cases: number;
-  closed: number;
-  mttd_seconds: number | null;
-  mttr_seconds: number | null;
-  sla_met: number;
-  sla_breached: number;
-}
-
 export interface CaseReport {
   month: string;
   client: string;
-  cases_total: number;
-  cases_open: number;
-  alerts_in_closed_cases: number;
-  sla: {
-    target_seconds: number;
-    single_alert: CaseReportStats;
-    multi_alert: CaseReportStats;
-    all: CaseReportStats;
-  };
-  severity: { high: number; medium: number; low: number };
+  alerts_triggered: number;
+  cases_created: number;
+  cases_closed: number;
+  cases_active: number;
+  severity: { critical: number; high: number; medium: number; low: number };
+  /** Mean minutes per severity. `null` means nothing in that band was
+   *  measured — which is not the same as zero, and is not drawn as a bar. */
+  response_minutes: Record<string, number | null>;
+  resolution_minutes: Record<string, number | null>;
   resolutions: Record<string, number>;
-  excluded: {
-    never_answered: number;
-    backfilled_detection: number;
-    closed_by_later_sweep: number;
-    note: string;
-  };
+  by_day: Array<{
+    date: string;
+    alerts: number;
+    cases: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  }>;
+  top_detections: Array<{ detection: string; cases: number }>;
+  /** Cases closed by a later sweep rather than answered, and so left out of
+   *  the resolution means. Counted rather than hidden: including them
+   *  reported one month as a mean of 21.8 days. */
+  resolution_excludes_swept: number;
   scope: { all_tenants: boolean; applied: string };
 }
 
@@ -636,11 +634,10 @@ export function getCaseReportOptions() {
   return request<CaseReportOptions>("/detections/reports/options");
 }
 
-export function getCaseReport(params: { month?: string; client?: string; targetMinutes?: number }) {
+export function getCaseReport(params: { month?: string; client?: string }) {
   const qs = new URLSearchParams();
   if (params.month && params.month !== "all") qs.set("month", params.month);
   if (params.client && params.client !== "all") qs.set("tenant", params.client);
-  if (params.targetMinutes) qs.set("target_minutes", String(params.targetMinutes));
   const query = qs.toString();
   return request<CaseReport>(`/detections/reports${query ? `?${query}` : ""}`);
 }

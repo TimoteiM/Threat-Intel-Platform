@@ -759,6 +759,56 @@ def _case_tenant_clause(scope: "tenant_scope.TenantScope") -> tuple[Any, ...]:
     return (permitted,)
 
 
+def _severity_band(peak_score: int | None) -> str:
+    """A case's severity, from the score it reached.
+
+    The 75 and 40 boundaries are the ones the Cases table's own severity pill
+    already uses, so a case does not change severity between two pages. The
+    critical band is new and was chosen from the distribution rather than
+    picked: of 1,098 cases, 924 score under 40, about 70 land in 40-74, 36 in
+    75-89 and 79 at 90 or above — so 90 separates a real population instead of
+    slicing one in half.
+    """
+    score = int(peak_score or 0)
+    if score >= 90:
+        return "critical"
+    if score >= 75:
+        return "high"
+    if score >= 40:
+        return "medium"
+    return "low"
+
+
+def _as_utc_day(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _case_detection(row: Any) -> str:
+    """What the case was about, without the device it happened on.
+
+    A case's title is the first linked alert's title, and those begin with the
+    host — "EXP-BSFX014 - Multi-Stage Execution by Host". Grouping on the
+    whole string would count the same detection once per machine and the top
+    ten would be a list of hosts.
+
+    Stripped by matching the row's own `entity_host` exactly, not by splitting
+    on the first " - ". This repository has produced six delimiter-boundary
+    bugs; the host is right there on the row, so there is no boundary to
+    guess.
+    """
+    title = str(getattr(row, "title", "") or "").strip()
+    host = str(getattr(row, "entity_host", "") or "").strip()
+    if host and title.casefold().startswith(f"{host.casefold()} - "):
+        title = title[len(host) + 3:].strip()
+    # The composed form, for a case whose alerts carried no usable title.
+    if host and title.casefold().startswith(f"{host.casefold()} \u2014 "):
+        title = title[len(host) + 3:].strip()
+    return title[:120]
+
+
 def _month_bounds(month: str | None) -> tuple[datetime | None, datetime | None]:
     """`YYYY-MM` to a half-open UTC range, or no bound at all.
 
@@ -838,39 +888,31 @@ async def case_report(
     db: DBSession,
     month: str | None = None,
     tenant: str | None = None,
-    target_minutes: int | None = None,
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """One month of one client's case work: MTTD, MTTR, SLA, severity, outcomes.
+    """One month of one client's work, in the shape a service review is read in.
 
-    The figures a service report is written from, computed from stored
-    timestamps rather than kept as running totals — so a definition that turns
-    out to be wrong is a query away from being right instead of a backfill.
+    How many alerts arrived, how many cases they became, how many were closed
+    and how many are still open; the same split by severity and by day; how
+    long detection and response took for each severity; what the cases were
+    resolved as; and which detections produced most of them.
+
+    Computed from stored timestamps on request rather than kept as running
+    totals, so a definition that turns out to be wrong is a query away from
+    being right instead of a backfill.
 
     Scoped on `tenant_id`, which the case carries because the alerts carry it.
     Not on `alert_client`, the sender's own label, which reads "unknown" for
-    1,079 of 1,098 cases and would have made the client filter a control with
-    one option.
-
-    Reported in two populations throughout. 497 of 884 cases in this estate
-    hold a single alert, and a mean that mixes them with multi-alert cases is
-    mostly a measure of how many single alerts arrived — it would make the
-    service look fastest in exactly the months it did least.
-
-    Exclusions are stated in the response, never applied silently: a case
-    recorded long after its first alert is a backfill and has no honest
-    detection time, and a case that was never answered — aged out, expired, or
-    merged into another — is not a resolution and must not be counted as one.
+    1,079 of 1,098 cases and would make the client filter a control with one
+    option.
     """
     from app.config import get_settings
-    from app.models.database import AlertCaseSpine
+    from app.models.database import AlertBodyInvestigationRun, AlertCaseSpine
     from app.services import alert_case_closure_service as closure
 
     scope = _scope(request)
     settings = get_settings()
-    target = float(
-        (target_minutes or int(getattr(settings, "case_sla_target_minutes", 60) or 60)) * 60
-    )
+    now = datetime.now(timezone.utc)
 
     clauses = list(_case_tenant_clause(scope))
     start, end = _month_bounds(month)
@@ -890,60 +932,135 @@ async def case_report(
 
     rows = (await db.execute(select(AlertCaseSpine).where(*clauses))).scalars().all()
 
-    # Outcomes, severity and the SLA population, in one pass over the month.
-    cases: list[dict[str, Any]] = []
-    resolutions: dict[str, int] = {}
-    severities = {"high": 0, "medium": 0, "low": 0}
-    never_answered = 0
-    open_now = 0
-    alerts_total = 0
-    for row in rows:
-        resolution = str(row.resolution or "unresolved")
-        resolutions[resolution] = resolutions.get(resolution, 0) + 1
-        band = "high" if (row.peak_score or 0) >= 75 else "medium" if (row.peak_score or 0) >= 40 else "low"
-        severities[band] += 1
-        alerts_total += int(row.alerts_at_close or 0)
-        if row.closed_at is None:
-            open_now += 1
-        # Never answered by anybody: counting these as resolutions would reward
-        # losing track of a case.
-        if str(row.closure_kind or "") in {"aged_out", "expired", "merged"}:
-            never_answered += 1
-            continue
-        cases.append({
-            "alert_count": row.alerts_at_close or 1,
-            **closure.metrics(
-                opened_at=row.opened_at, created_at=row.created_at, closed_at=row.closed_at,
-                # Separates "answered in response time" from "closed by a
-                # later sweep", which otherwise both land in MTTR.
-                last_activity_at=row.last_activity_at,
-            ),
-        })
+    # How many alerts arrived, which is a different question from how many
+    # ended up inside a closed case — most alerts never form a multi-alert
+    # case at all, and reporting only the ones that did understates the volume
+    # the service actually handled.
+    alert_clauses: list[Any] = []
+    occurred = func.coalesce(
+        AlertBodyInvestigationRun.event_time, AlertBodyInvestigationRun.created_at
+    )
+    if start is not None:
+        alert_clauses += [occurred >= start, occurred < end]
+    if chosen_tenant and chosen_tenant != "all":
+        if chosen_tenant == "__unassigned__":
+            alert_clauses.append(AlertBodyInvestigationRun.tenant_id.is_(None))
+        else:
+            alert_clauses.append(AlertBodyInvestigationRun.tenant_id == chosen_tenant)
+    elif not getattr(scope, "all_tenants", False):
+        allowed = list(getattr(scope, "tenant_ids", None) or [])
+        permitted = (
+            AlertBodyInvestigationRun.tenant_id.in_(allowed) if allowed else sa_false()
+        )
+        if getattr(scope, "include_unassigned", False):
+            permitted = permitted | AlertBodyInvestigationRun.tenant_id.is_(None)
+        alert_clauses.append(permitted)
 
-    summary = closure.summarise(cases, target_seconds=target)
+    alerts_triggered = int(
+        (
+            await db.execute(
+                select(func.count()).select_from(AlertBodyInvestigationRun).where(*alert_clauses)
+            )
+        ).scalar()
+        or 0
+    )
+    # Grouped by the label, not by the expression: the format string is a
+    # bound parameter, so Postgres cannot match two copies of the call to each
+    # other and rejects the GROUP BY.
+    day_label = func.to_char(occurred, "YYYY-MM-DD").label("day")
+    alerts_by_day = {
+        str(day): int(count)
+        for day, count in (
+            await db.execute(
+                select(day_label, func.count()).where(*alert_clauses).group_by("day")
+            )
+        ).all()
+        if day
+    }
+
+    severities = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    resolutions: dict[str, int] = {}
+    by_day: dict[str, dict[str, Any]] = {}
+    per_severity: dict[str, list[dict[str, Any]]] = {k: [] for k in severities}
+    detections: dict[str, int] = {}
+    cases_closed = 0
+    cases_active = 0
+    swept = 0
+
+    for row in rows:
+        band = _severity_band(row.peak_score)
+        severities[band] += 1
+        resolutions[str(row.resolution or "unresolved")] = (
+            resolutions.get(str(row.resolution or "unresolved"), 0) + 1
+        )
+        if row.closed_at is None:
+            cases_active += 1
+        else:
+            cases_closed += 1
+
+        day = _as_utc_day(row.opened_at)
+        bucket = by_day.setdefault(
+            day, {"date": day, "cases": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}
+        )
+        bucket["cases"] += 1
+        bucket[band] += 1
+
+        detection = _case_detection(row)
+        if detection:
+            detections[detection] = detections.get(detection, 0) + 1
+
+        # Never answered by anybody, so not a response time. Counted in the
+        # totals and in the resolution breakdown — the month did produce them
+        # — but kept out of the means, because counting a case that aged out
+        # or was merged as a resolution rewards losing track of one.
+        if str(row.closure_kind or "") in {"aged_out", "expired", "merged"}:
+            continue
+
+        measured = closure.metrics(
+            opened_at=row.opened_at, created_at=row.created_at, closed_at=row.closed_at,
+            last_activity_at=row.last_activity_at,
+        )
+        if measured.get("resolve_excluded"):
+            swept += 1
+        per_severity[band].append(measured)
+
+    def _mean_minutes(entries: list[dict[str, Any]], key: str) -> float | None:
+        values = [e[key] for e in entries if e.get(key) is not None]
+        return round(sum(values) / len(values) / 60, 1) if values else None
+
     return {
         "month": month or "all",
         "client": chosen_tenant or "all",
-        "cases_total": len(rows),
-        "cases_open": open_now,
-        "alerts_in_closed_cases": alerts_total,
-        "sla": summary,
+        "alerts_triggered": alerts_triggered,
+        "cases_created": len(rows),
+        "cases_closed": cases_closed,
+        "cases_active": cases_active,
         "severity": severities,
-        "resolutions": dict(sorted(resolutions.items(), key=lambda kv: -kv[1])),
-        "excluded": {
-            "never_answered": never_answered,
-            "backfilled_detection": sum(1 for c in cases if c.get("detect_excluded")),
-            "closed_by_later_sweep": sum(1 for c in cases if c.get("resolve_excluded")),
-            "note": (
-                "Cases that aged out, expired, or were merged into another case are "
-                "counted in the totals but excluded from MTTR and SLA: nobody "
-                "answered them, so they are not resolutions. A case recorded long "
-                "after its first alert has no honest detection time and is excluded "
-                "from MTTD only. A case closed more than six hours after its own last "
-                "alert was closed by a later sweep rather than answered in response "
-                "time, so it is excluded from MTTR and counted separately."
-            ),
+        # Minutes, by severity, the way a service review reads them.
+        "response_minutes": {
+            band: _mean_minutes(entries, "detect_seconds")
+            for band, entries in per_severity.items()
         },
+        "resolution_minutes": {
+            band: _mean_minutes(entries, "resolve_seconds")
+            for band, entries in per_severity.items()
+        },
+        "resolutions": dict(sorted(resolutions.items(), key=lambda kv: -kv[1])),
+        "by_day": [
+            {**by_day.get(day, {"date": day, "cases": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}),
+             "alerts": alerts_by_day.get(day, 0)}
+            for day in sorted(set(by_day) | set(alerts_by_day))
+        ],
+        "top_detections": [
+            {"detection": name, "cases": count}
+            for name, count in sorted(detections.items(), key=lambda kv: -kv[1])[:10]
+        ],
+        # One line rather than a panel, because a mean over a filtered
+        # population still has to say it was filtered. A case closed more than
+        # six hours after its own last alert was swept up by a catch-up pass
+        # rather than answered, and including it reported September as a mean
+        # resolution of 21.8 days.
+        "resolution_excludes_swept": swept,
         "scope": {
             "all_tenants": bool(getattr(scope, "all_tenants", False)),
             "applied": "tenant_id",

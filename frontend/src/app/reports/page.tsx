@@ -1,39 +1,64 @@
 "use client";
 
 /**
- * Reports — what the service actually did, for one client, in one month.
+ * Reports — what the service did for one client in one month.
  *
- * The figures a monthly service review is written from: how many cases, how
- * severe, how they were resolved, and how long detection and response took
- * against the target.
+ * Alerts in, cases out, how severe, how fast, and what they turned out to be.
  *
- * Everything here is derived from stored timestamps on request rather than
- * kept as a running total, so a definition that turns out to be wrong is a
- * query away from being right instead of a backfill.
+ * Every figure is derived from stored timestamps on request rather than kept
+ * as a running total, so a definition that turns out to be wrong is a query
+ * away from being right instead of a backfill.
  *
- * Two things this page refuses to do, because both are how a service report
- * comes to flatter:
+ * **Alerts and cases are two charts, not one with two axes.** The dashboard
+ * this is modelled on plots 22,004 alerts and 1,163 cases against a left and a
+ * right scale, and where those two lines cross is decided by the scales rather
+ * than by anything that happened — slide one axis and the "crossover" moves.
+ * Two panels over a shared month read the same way and cannot mislead.
  *
- *   * It never prints a mean over a population that cannot support one. A
- *     month whose cases were all closed by a later catch-up has no measurable
- *     response time, and it says so rather than reporting the arithmetic.
- *   * It never hides what it left out. Every exclusion is counted on the page,
- *     next to the number it was excluded from.
+ * The severity palette is validated, not chosen by eye: four hues checked for
+ * colour-vision separation, chroma and contrast against both surfaces. Red and
+ * amber sit at ΔE 11.7 under deuteranopia, which is the one pair a severity
+ * ramp always gets wrong. Amber runs brighter than the dark-mode lightness
+ * band on purpose — pulling it into band collapsed that separation to ΔE 1.8,
+ * and a band is a consistency preference where separation is whether somebody
+ * can read the chart at all. Every severity mark carries its number, which is
+ * also what the amber's light-mode contrast requires.
  */
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-
 import {
-  getCaseReport,
-  getCaseReportOptions,
-  type CaseReport,
-  type CaseReportOptions,
-  type CaseReportStats,
-} from "@/lib/api";
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  LabelList,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+import { getCaseReport, getCaseReportOptions, type CaseReport, type CaseReportOptions } from "@/lib/api";
 import { EmptyState, Page, PageHeader, Section } from "@/components/ui/Primitives";
 
-const MONTH_NAMES = [
+/** Severity, in the fixed order it is always drawn in. Colour follows the
+ *  band, never its rank in the current month — a filter that empties the
+ *  critical band must not repaint the others. */
+const SEVERITY = [
+  { id: "critical", label: "Critical", color: "#e04a33" },
+  { id: "high", label: "High", color: "#caa63b" },
+  { id: "medium", label: "Medium", color: "#4387d6" },
+  { id: "low", label: "Low", color: "#2e9e6b" },
+] as const;
+
+const ALERT_COLOR = "#e04a33";
+const CASE_COLOR = "#4387d6";
+
+const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
@@ -41,18 +66,11 @@ const MONTH_NAMES = [
 function monthLabel(value: string) {
   const [year, month] = String(value || "").split("-");
   const index = Number(month) - 1;
-  return MONTH_NAMES[index] ? `${MONTH_NAMES[index]} ${year}` : value;
+  return MONTHS[index] ? `${MONTHS[index]} ${year}` : value;
 }
 
-/** Seconds as the largest unit that still reads as a duration. */
-function duration(seconds: number | null | undefined) {
-  if (seconds === null || seconds === undefined) return null;
-  if (seconds < 90) return `${Math.round(seconds)}s`;
-  const minutes = seconds / 60;
-  if (minutes < 90) return `${minutes.toFixed(1)} min`;
-  const hours = minutes / 60;
-  if (hours < 48) return `${hours.toFixed(1)} h`;
-  return `${(hours / 24).toFixed(1)} days`;
+function dayLabel(value: string) {
+  return String(value || "").slice(8) || value;
 }
 
 export default function ReportsPage() {
@@ -64,8 +82,8 @@ export default function ReportsPage() {
 }
 
 function ReportsPageInner() {
-  // The selection lives in the URL, so a particular month for a particular
-  // client is a link somebody can send to a colleague or put in a review pack.
+  // The selection lives in the URL, so one month for one client is a link
+  // somebody can put in a review pack.
   const router = useRouter();
   const params = useSearchParams();
   const month = params.get("month") || "";
@@ -95,20 +113,14 @@ function ReportsPageInner() {
         const opts = await getCaseReportOptions();
         if (cancelled) return;
         setOptions(opts);
-        // Default to the most recent month that has cases, rather than to the
-        // calendar's current month, which may be empty.
+        // The most recent month that has cases, rather than the calendar's
+        // current month, which may be empty.
         if (!month && opts.months.length) write({ month: opts.months[0].month });
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not read the reporting options.");
-        }
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not read the options.");
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-    // Intentionally once: the options are the estate's history, not a function
-    // of the current selection.
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -121,31 +133,65 @@ function ReportsPageInner() {
         const data = await getCaseReport({ month: month || undefined, client });
         if (!cancelled) setReport(data);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not build the report.");
-        }
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not build the report.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [month, client]);
 
-  const targetLabel = useMemo(
-    () => (report ? duration(report.sla.target_seconds) : null),
+  const severityRows = useMemo(
+    () =>
+      report
+        ? SEVERITY.map((s) => ({
+            name: s.label,
+            value: report.severity[s.id as keyof typeof report.severity] ?? 0,
+            color: s.color,
+          }))
+        : [],
     [report],
   );
+
+  const timingRows = useCallback(
+    (source: Record<string, number | null>) =>
+      SEVERITY.map((s) => ({
+        name: s.label,
+        value: source[s.id] ?? 0,
+        measured: source[s.id] !== null && source[s.id] !== undefined,
+        color: s.color,
+      })),
+    [],
+  );
+
+  const resolutionRows = useMemo(() => {
+    if (!report) return [];
+    // True positive always shown, even at zero: a month with no confirmed
+    // detection is a finding, and a row that disappears when it is zero reads
+    // as though the question was never asked.
+    const order = ["true_positive", "needs_review", "inconclusive", "false_positive"];
+    const known = new Set(order);
+    const rest = Object.keys(report.resolutions).filter((k) => !known.has(k));
+    return [...order, ...rest].map((key) => ({
+      name: key.replace(/_/g, " "),
+      value: report.resolutions[key] ?? 0,
+      color:
+        key === "true_positive" ? "#e04a33"
+        : key === "needs_review" ? "#caa63b"
+        : key === "inconclusive" ? "#4387d6"
+        : key === "false_positive" ? "#2e9e6b"
+        : "var(--text-dim)",
+    }));
+  }, [report]);
 
   return (
     <Page>
       <PageHeader
         title="Reports"
-        subtitle="Case volume, severity, outcomes and response times for one client in one month — the figures a service review is written from."
+        subtitle="Alerts, cases, severity and response times for one client in one month."
         actions={
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <label style={label}>
+            <label style={labelStyle}>
               <span style={caption}>Client</span>
               <select value={client} onChange={(e) => write({ client: e.target.value })} style={control}>
                 <option value="all">All clients</option>
@@ -156,13 +202,10 @@ function ReportsPageInner() {
                 ))}
               </select>
             </label>
-            <label style={label}>
+            <label style={labelStyle}>
               <span style={caption}>Month</span>
               <select value={month} onChange={(e) => write({ month: e.target.value })} style={control}>
                 <option value="all">All months</option>
-                {/* Only months the estate actually has. A month with no cases
-                    is not offered, so an empty report always means the filter
-                    found nothing rather than that the month never existed. */}
                 {(options?.months || []).map((m) => (
                   <option key={m.month} value={m.month}>
                     {monthLabel(m.month)} ({m.cases.toLocaleString()})
@@ -175,111 +218,66 @@ function ReportsPageInner() {
       />
 
       {error && <EmptyState title="The report could not be built" hint={error} />}
-
       {!error && loading && !report && (
         <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Building…</div>
       )}
 
       {!error && report && (
         <>
-          <Section
-            title="The month"
-            hint={
-              report.scope.all_tenants
-                ? "Every client you may read."
-                : "Your client's cases only."
-            }
-          >
-            <div style={grid}>
-              <Tile label="Cases" value={report.cases_total.toLocaleString()} />
-              <Tile label="Still open" value={report.cases_open.toLocaleString()} />
-              <Tile
-                label="Alerts in closed cases"
-                value={report.alerts_in_closed_cases.toLocaleString()}
-              />
-              <Tile label="SLA target" value={targetLabel || "—"} />
-            </div>
-          </Section>
-
-          <Section
-            title="Detection and response"
-            hint={
-              "Single-alert and multi-alert cases are reported apart: they are not the " +
-              "same work, and a mean that mixes them is mostly a measure of how many " +
-              "single alerts arrived."
-            }
-          >
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={th}>Population</th>
-                  <th style={th}>Cases</th>
-                  <th style={th}>Measurable</th>
-                  <th style={th}>MTTD</th>
-                  <th style={th}>MTTR</th>
-                  <th style={th}>Within target</th>
-                  <th style={th}>Breached</th>
-                </tr>
-              </thead>
-              <tbody>
-                <StatRow name="All cases" stats={report.sla.all} strong />
-                <StatRow name="Single alert" stats={report.sla.single_alert} />
-                <StatRow name="More than one alert" stats={report.sla.multi_alert} />
-              </tbody>
-            </table>
-          </Section>
-
-          <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
-            <Section title="Severity" hint="By the case's peak correlation score.">
-              <Bars
-                rows={[
-                  { key: "High (75+)", value: report.severity.high, tone: "var(--status-critical)" },
-                  { key: "Medium (40–74)", value: report.severity.medium, tone: "var(--status-warning)" },
-                  { key: "Low (under 40)", value: report.severity.low, tone: "var(--status-info, #388bfd)" },
-                ]}
-              />
-            </Section>
-
-            <Section title="How they were resolved" hint="As the case was closed.">
-              <Bars
-                rows={Object.entries(report.resolutions).map(([key, value]) => ({
-                  key: key.replace(/_/g, " "),
-                  value,
-                  tone:
-                    key === "true_positive"
-                      ? "var(--status-critical)"
-                      : key === "needs_review"
-                      ? "var(--status-warning)"
-                      : "var(--text-dim)",
-                }))}
-              />
-            </Section>
+          <div style={kpiGrid}>
+            <Kpi label="Alerts triggered" value={report.alerts_triggered} tone={ALERT_COLOR} />
+            <Kpi label="Cases created" value={report.cases_created} tone={CASE_COLOR} />
+            <Kpi label="Cases closed" value={report.cases_closed} tone="#2e9e6b" />
+            <Kpi label="Cases active" value={report.cases_active} tone="#caa63b" />
           </div>
 
           <Section
-            title="What these figures leave out"
-            hint="Stated rather than applied quietly — an average is only as honest as the population behind it."
+            title="Alerts and cases through the month"
+            hint="Two panels over the same days rather than one chart with two scales — where two lines of very different size cross is decided by the scales, not by anything that happened."
           >
-            <div style={grid}>
-              <Tile
-                label="Closed by a later sweep"
-                value={report.excluded.closed_by_later_sweep.toLocaleString()}
-                hint="Not answered within the response window, so not in MTTR."
-              />
-              <Tile
-                label="Never answered"
-                value={report.excluded.never_answered.toLocaleString()}
-                hint="Aged out, expired, or merged into another case."
-              />
-              <Tile
-                label="No honest detection time"
-                value={report.excluded.backfilled_detection.toLocaleString()}
-                hint="Recorded long after the alert — a backfill, not a detection."
-              />
-            </div>
-            <p style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 10, lineHeight: 1.6 }}>
-              {report.excluded.note}
-            </p>
+            <DayArea data={report.by_day} dataKey="alerts" name="Alerts triggered" color={ALERT_COLOR} />
+            <div style={{ height: 10 }} />
+            <DayArea data={report.by_day} dataKey="cases" name="Cases created" color={CASE_COLOR} />
+          </Section>
+
+          <div style={twoUp}>
+            <Section title="Cases by severity">
+              <CountBars rows={severityRows} />
+            </Section>
+            <Section title="Case resolution status" hint="What each case was closed as.">
+              <CountBars rows={resolutionRows} />
+            </Section>
+          </div>
+
+          <div style={twoUp}>
+            <Section
+              title="Mean response time"
+              hint="Minutes from the first alert until the platform had a case about it."
+            >
+              <TimingBars rows={timingRows(report.response_minutes)} />
+            </Section>
+            <Section
+              title="Mean resolution time"
+              hint="Minutes from the first alert until the case was answered."
+            >
+              <TimingBars rows={timingRows(report.resolution_minutes)} />
+              {report.resolution_excludes_swept > 0 && (
+                <p style={footnote}>
+                  {report.resolution_excludes_swept.toLocaleString()} case
+                  {report.resolution_excludes_swept === 1 ? "" : "s"} closed more than six hours
+                  after their last alert are left out: they were closed by a later sweep rather
+                  than answered, and counting them reported one month as a mean of 21.8 days.
+                </p>
+              )}
+            </Section>
+          </div>
+
+          <Section title="Cases by severity, day by day">
+            <SeverityByDay data={report.by_day} />
+          </Section>
+
+          <Section title="What produced the most cases" hint="The ten detections behind the month.">
+            <TopDetections rows={report.top_detections} />
           </Section>
         </>
       )}
@@ -287,83 +285,271 @@ function ReportsPageInner() {
   );
 }
 
-function StatRow({ name, stats, strong }: { name: string; stats: CaseReportStats; strong?: boolean }) {
-  const mttd = duration(stats.mttd_seconds);
-  const mttr = duration(stats.mttr_seconds);
-  return (
-    <tr>
-      <td style={{ ...td, fontWeight: strong ? 600 : 400 }}>{name}</td>
-      <td style={td}>{stats.cases.toLocaleString()}</td>
-      <td style={td}>{stats.closed.toLocaleString()}</td>
-      {/* "Not measurable" rather than a dash or a zero: a month whose cases
-          were all swept up has no response time, and either of the other two
-          would read as one. */}
-      <td style={td}>{mttd ?? <NotMeasurable />}</td>
-      <td style={td}>{mttr ?? <NotMeasurable />}</td>
-      <td style={td}>{stats.closed ? stats.sla_met.toLocaleString() : "—"}</td>
-      <td style={{ ...td, color: stats.sla_breached ? "var(--status-critical)" : undefined }}>
-        {stats.closed ? stats.sla_breached.toLocaleString() : "—"}
-      </td>
-    </tr>
-  );
-}
+/* ── charts ──────────────────────────────────────────────────────────────── */
 
-function NotMeasurable() {
+function DayArea({
+  data, dataKey, name, color,
+}: {
+  data: CaseReport["by_day"]; dataKey: "alerts" | "cases"; name: string; color: string;
+}) {
+  if (!data.length) return <Nothing />;
   return (
-    <span
-      style={{ color: "var(--text-dim)", fontStyle: "italic" }}
-      title="No case in this population was answered within the response window, so there is no mean to report."
-    >
-      not measurable
-    </span>
-  );
-}
-
-function Bars({ rows }: { rows: Array<{ key: string; value: number; tone: string }> }) {
-  const total = rows.reduce((sum, r) => sum + r.value, 0);
-  if (!total) return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Nothing in this month.</div>;
-  return (
-    <div style={{ display: "grid", gap: 8 }}>
-      {rows.map((row) => (
-        <div key={row.key} style={{ display: "grid", gap: 4 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-            <span style={{ textTransform: "capitalize" }}>{row.key}</span>
-            <span style={{ color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
-              {row.value.toLocaleString()} · {((row.value / total) * 100).toFixed(0)}%
-            </span>
-          </div>
-          <div style={{ height: 6, borderRadius: 999, background: "var(--panel-divider, var(--border))" }}>
-            <div
-              style={{
-                width: `${(row.value / total) * 100}%`,
-                height: "100%", borderRadius: 999, background: row.tone,
-              }}
-            />
-          </div>
-        </div>
-      ))}
+    <div style={{ width: "100%", height: 150 }}>
+      <ResponsiveContainer>
+        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id={`fill-${dataKey}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="var(--panel-divider)" vertical={false} />
+          <XAxis dataKey="date" tickFormatter={dayLabel} tick={axisTick} tickLine={false} axisLine={false} minTickGap={14} />
+          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} allowDecimals={false} />
+          <Tooltip content={<DayTip label={name} />} cursor={{ stroke: "var(--text-dim)", strokeWidth: 1 }} />
+          {/* One series, so the panel title names it and no legend box is needed. */}
+          <Area
+            type="monotone" dataKey={dataKey} name={name}
+            stroke={color} strokeWidth={2} fill={`url(#fill-${dataKey})`}
+            dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--panel-card-bg, #0d0f18)" }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
 
-function Tile({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
+function SeverityByDay({ data }: { data: CaseReport["by_day"] }) {
+  if (!data.length) return <Nothing />;
+  return (
+    <div style={{ width: "100%", height: 240 }}>
+      <ResponsiveContainer>
+        <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid stroke="var(--panel-divider)" vertical={false} />
+          <XAxis dataKey="date" tickFormatter={dayLabel} tick={axisTick} tickLine={false} axisLine={false} minTickGap={10} />
+          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} allowDecimals={false} />
+          <Tooltip content={<StackTip />} cursor={{ fill: "var(--panel-divider)", fillOpacity: 0.35 }} />
+          <Legend wrapperStyle={legendStyle} iconType="circle" iconSize={8} />
+          {SEVERITY.map((s, index) => (
+            <Bar
+              key={s.id} dataKey={s.id} name={s.label} stackId="severity" fill={s.color}
+              // A 2px surface gap between stacked segments, so adjacent
+              // severities read as separate marks and not one block.
+              stroke="var(--panel-card-bg, #0d0f18)" strokeWidth={2}
+              radius={index === 0 ? [3, 3, 0, 0] : undefined}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Horizontal bars with the number printed on every mark. The number is not
+ *  decoration: the amber step falls below 3:1 on the light surface, and a
+ *  visible label is what that is allowed with. */
+function CountBars({ rows }: { rows: Array<{ name: string; value: number; color: string }> }) {
+  const total = rows.reduce((sum, r) => sum + r.value, 0);
+  if (!total) return <Nothing />;
+  return (
+    <div style={{ width: "100%", height: Math.max(130, rows.length * 34) }}>
+      <ResponsiveContainer>
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 44, bottom: 4, left: 4 }}>
+          <CartesianGrid stroke="var(--panel-divider)" horizontal={false} />
+          <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} allowDecimals={false} />
+          <YAxis type="category" dataKey="name" tick={axisTick} tickLine={false} axisLine={false} width={104} />
+          <Tooltip content={<CountTip total={total} />} cursor={{ fill: "var(--panel-divider)", fillOpacity: 0.35 }} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={14}>
+            {rows.map((row) => (
+              <Cell key={row.name} fill={row.color} />
+            ))}
+            <LabelList
+              dataKey="value" position="right" style={labelText}
+              formatter={(v: any) => Number(v ?? 0).toLocaleString()}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function TimingBars({
+  rows,
+}: {
+  rows: Array<{ name: string; value: number; measured: boolean; color: string }>;
+}) {
+  if (!rows.some((r) => r.measured)) {
+    return (
+      <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "18px 0" }}>
+        Nothing in this month was answered within the response window, so there is no mean to
+        report. Not zero — unmeasured.
+      </div>
+    );
+  }
+  return (
+    <div style={{ width: "100%", height: 150 }}>
+      <ResponsiveContainer>
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 56, bottom: 4, left: 4 }}>
+          <CartesianGrid stroke="var(--panel-divider)" horizontal={false} />
+          <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} unit=" min" />
+          <YAxis type="category" dataKey="name" tick={axisTick} tickLine={false} axisLine={false} width={74} />
+          <Tooltip content={<MinutesTip />} cursor={{ fill: "var(--panel-divider)", fillOpacity: 0.35 }} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={14}>
+            {rows.map((row) => (
+              <Cell key={row.name} fill={row.measured ? row.color : "var(--panel-divider)"} />
+            ))}
+            <LabelList
+              dataKey="value" position="right" style={labelText}
+              // "not measured" rather than 0: a severity nothing was answered
+              // in has no mean, and a zero would read as instant.
+              formatter={((v: any, entry: any) =>
+                entry?.payload?.measured ? Number(v ?? 0).toFixed(1) : "not measured") as any}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function TopDetections({ rows }: { rows: CaseReport["top_detections"] }) {
+  if (!rows.length) return <Nothing />;
+  return (
+    <div style={{ width: "100%", height: Math.max(180, rows.length * 30) }}>
+      <ResponsiveContainer>
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 48, bottom: 4, left: 4 }}>
+          <CartesianGrid stroke="var(--panel-divider)" horizontal={false} />
+          <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} allowDecimals={false} />
+          {/* Horizontal, because detection names are sentences and a vertical
+              axis would turn them on their side or truncate them. */}
+          <YAxis
+            type="category" dataKey="detection" tick={axisTick} tickLine={false} axisLine={false}
+            width={250}
+            tickFormatter={(v: string) => (v.length > 38 ? `${v.slice(0, 37)}…` : v)}
+          />
+          <Tooltip content={<DetectionTip />} cursor={{ fill: "var(--panel-divider)", fillOpacity: 0.35 }} />
+          <Bar dataKey="cases" fill={CASE_COLOR} radius={[0, 4, 4, 0]} barSize={13}>
+            <LabelList dataKey="cases" position="right" style={labelText} />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/* ── tooltips ────────────────────────────────────────────────────────────── */
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: "var(--panel-card-bg, #0d0f18)",
+        border: "1px solid var(--panel-divider-strong, var(--border))",
+        borderRadius: 8, padding: "7px 10px", fontSize: 12,
+        boxShadow: "0 6px 20px rgba(0,0,0,0.35)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DayTip({ active, payload, label, label: _l }: any & { label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <Shell>
+      <div style={{ color: "var(--text-muted)" }}>{payload[0]?.payload?.date}</div>
+      <div style={{ fontVariantNumeric: "tabular-nums" }}>
+        {Number(payload[0].value).toLocaleString()} {payload[0].name}
+      </div>
+    </Shell>
+  );
+}
+
+function StackTip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const total = payload.reduce((sum: number, p: any) => sum + Number(p.value || 0), 0);
+  return (
+    <Shell>
+      <div style={{ color: "var(--text-muted)" }}>{payload[0]?.payload?.date}</div>
+      {payload
+        .filter((p: any) => Number(p.value) > 0)
+        .map((p: any) => (
+          <div key={p.name} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: p.color }} />
+            <span>{p.name}</span>
+            <strong style={{ marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>{p.value}</strong>
+          </div>
+        ))}
+      <div style={{ marginTop: 3, color: "var(--text-muted)" }}>{total} in total</div>
+    </Shell>
+  );
+}
+
+function CountTip({ active, payload, total }: any & { total: number }) {
+  if (!active || !payload?.length) return null;
+  const value = Number(payload[0].value || 0);
+  return (
+    <Shell>
+      <div style={{ textTransform: "capitalize" }}>{payload[0]?.payload?.name}</div>
+      <div style={{ fontVariantNumeric: "tabular-nums" }}>
+        {value.toLocaleString()} · {total ? ((value / total) * 100).toFixed(0) : 0}%
+      </div>
+    </Shell>
+  );
+}
+
+function MinutesTip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  return (
+    <Shell>
+      <div>{row?.name}</div>
+      <div style={{ fontVariantNumeric: "tabular-nums" }}>
+        {row?.measured ? `${Number(row.value).toFixed(1)} minutes on average` : "nothing measured"}
+      </div>
+    </Shell>
+  );
+}
+
+function DetectionTip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  return (
+    <Shell>
+      <div style={{ maxWidth: 320 }}>{row?.detection}</div>
+      <div style={{ fontVariantNumeric: "tabular-nums" }}>{row?.cases} cases</div>
+    </Shell>
+  );
+}
+
+/* ── pieces ──────────────────────────────────────────────────────────────── */
+
+function Kpi({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
     <div
       style={{
         border: "1px solid var(--panel-divider, var(--border))",
-        borderRadius: 10, padding: "10px 12px", minWidth: 0,
+        borderLeft: `3px solid ${tone}`,
+        borderRadius: 10, padding: "12px 14px",
       }}
     >
-      <div style={caption}>{label}</div>
-      <div style={{ fontSize: 22, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>{value}</div>
-      {hint && (
-        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5 }}>
-          {hint}
-        </div>
-      )}
+      <div style={{ fontSize: 30, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>
+        {value.toLocaleString()}
+      </div>
+      <div style={{ ...caption, marginTop: 4 }}>{label}</div>
     </div>
   );
 }
+
+function Nothing() {
+  return <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "18px 0" }}>Nothing in this month.</div>;
+}
+
+const axisTick = { fill: "var(--text-muted)", fontSize: 11 };
+const labelText = { fill: "var(--text)", fontSize: 11, fontVariantNumeric: "tabular-nums" } as const;
+const legendStyle: React.CSSProperties = { fontSize: 11.5, paddingTop: 6 };
 
 const caption: React.CSSProperties = {
   fontSize: "var(--font-micro, 10px)", fontWeight: 700,
@@ -378,26 +564,18 @@ const control: React.CSSProperties = {
   padding: "6px 10px", fontSize: 13,
 };
 
-const label: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6 };
+const labelStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6 };
 
-const grid: React.CSSProperties = {
+const kpiGrid: React.CSSProperties = {
   display: "grid", gap: 12,
-  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
 };
 
-const table: React.CSSProperties = {
-  width: "100%", borderCollapse: "collapse", fontSize: 13,
-  fontVariantNumeric: "tabular-nums",
+const twoUp: React.CSSProperties = {
+  display: "grid", gap: 14,
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
 };
 
-const th: React.CSSProperties = {
-  textAlign: "left", padding: "6px 10px 8px 0",
-  borderBottom: "1px solid var(--panel-divider-strong, var(--border))",
-  fontSize: "var(--font-micro, 10px)", fontWeight: 700,
-  letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)",
-};
-
-const td: React.CSSProperties = {
-  padding: "8px 10px 8px 0",
-  borderBottom: "1px solid var(--panel-divider, var(--border))",
+const footnote: React.CSSProperties = {
+  fontSize: 11, color: "var(--text-muted)", marginTop: 8, lineHeight: 1.6,
 };

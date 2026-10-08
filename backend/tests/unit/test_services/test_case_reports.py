@@ -155,11 +155,77 @@ def test_a_population_with_nothing_measurable_reports_no_mean():
     assert summary["all"]["sla_breached"] == 0, "nothing measured is not a breach"
 
 
-def test_never_answered_cases_are_excluded_from_the_response_figures():
+def test_never_answered_cases_are_kept_out_of_the_means():
     """Aged out, expired, or merged into another case: nobody answered them,
-    so counting them as resolutions would reward losing track of one."""
+    so counting them as response times would reward losing track of one.
+
+    They stay in the totals and in the resolution breakdown — the month did
+    produce them, and that is where an analyst sees them — but they are not a
+    mean of anything.
+    """
     source = inspect.getsource(api.case_report)
     assert '{"aged_out", "expired", "merged"}' in source
-    assert "never_answered" in source
-    # And the response says so rather than applying it quietly.
-    assert '"note"' in source
+    # Counted in the resolution breakdown, which is where they are visible.
+    assert '"resolutions": dict(sorted(' in source
+
+
+def test_the_swept_exclusion_is_still_reported_as_a_number():
+    """The panel naming every exclusion was removed on request, which is not a
+    licence to filter a mean silently: the count of cases left out of the
+    resolution figures still travels with them."""
+    source = inspect.getsource(api.case_report)
+    assert '"resolution_excludes_swept": swept' in source
+
+
+def test_the_report_counts_alerts_and_not_only_the_ones_inside_closed_cases():
+    """"How many alerts arrived" is the question asked, and most alerts never
+    form a multi-alert case at all — reporting only the ones that did would
+    understate the volume the service handled."""
+    source = inspect.getsource(api.case_report)
+    assert '"alerts_triggered": alerts_triggered' in source
+    assert "AlertBodyInvestigationRun" in source
+
+
+def test_severity_bands_match_the_cases_table():
+    """A case must not change severity between two pages. 75 and 40 are the
+    boundaries the Cases table's own pill already uses; 90 is new and was
+    taken from the distribution — 924 of 1,098 cases score under 40, 36 land
+    in 75-89 and 79 at 90 or above."""
+    assert api._severity_band(100) == "critical"
+    assert api._severity_band(90) == "critical"
+    assert api._severity_band(89) == "high"
+    assert api._severity_band(75) == "high"
+    assert api._severity_band(74) == "medium"
+    assert api._severity_band(40) == "medium"
+    assert api._severity_band(39) == "low"
+    assert api._severity_band(None) == "low"
+
+
+def test_the_top_detections_strip_the_host_by_matching_it_exactly():
+    """A case title is the first alert's title and begins with the host, so
+    grouping the whole string would count one detection once per machine and
+    the top ten would be a list of hosts.
+
+    Stripped by matching the row's own `entity_host`, not by splitting on the
+    first " - ": this repository has produced six delimiter-boundary bugs, and
+    the host is right there on the row.
+    """
+    class Row:
+        title = "EXP-BSFX014 - Multi-Stage Execution by Host"
+        entity_host = "EXP-BSFX014"
+
+    assert api._case_detection(Row()) == "Multi-Stage Execution by Host"
+
+    class Hyphenated:
+        # The host itself contains the delimiter, which is what broke the
+        # regex-based strip in migration 037.
+        title = "Windows-Test-Device - Credential Dumping"
+        entity_host = "Windows-Test-Device"
+
+    assert api._case_detection(Hyphenated()) == "Credential Dumping"
+
+    class NoHost:
+        title = "Something that never named a device"
+        entity_host = ""
+
+    assert api._case_detection(NoHost()) == "Something that never named a device"
