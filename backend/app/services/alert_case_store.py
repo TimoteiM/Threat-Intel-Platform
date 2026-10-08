@@ -806,7 +806,7 @@ async def record_closure_attempt(
 
 
 async def cases_awaiting_closure(
-    db: AsyncSession, *, limit: int = 200, due_before: datetime | None = None,
+    db: AsyncSession, *, limit: int = 200, opened_before: datetime | None = None,
 ) -> list[AlertCaseSpine]:
     """The closing job's work queue: the most overdue cases, and the newest due ones.
 
@@ -827,24 +827,34 @@ async def cases_awaiting_closure(
     stuck. A fresh case now waits one pass instead of waiting for the blockers
     to be cleared by hand.
 
-    `due_before` pushes the quiet period into SQL so a case that cannot
-    possibly be due does not consume a slot. Omitted, the behaviour is as
-    before and the caller filters.
+    `opened_before` pushes the window into SQL so a case that cannot possibly
+    be due does not consume a slot.
+
+    On `opened_at` and not on `last_activity_at`, which is what this filtered
+    on while the rule was an idle timer. Under a fixed window that predicate
+    hides exactly the cases the window exists to answer: a case open for an
+    hour with an alert a minute ago is due, and filtering on its last activity
+    excluded it from the query before `decide` could see it.
     """
     half = max(1, limit // 2)
     open_rows = (
         AlertCaseSpine.status == "open",
         AlertCaseSpine.closed_at.is_(None),
     )
-    due = open_rows + (
-        (AlertCaseSpine.last_activity_at <= due_before,) if due_before else ()
-    )
+    # `least(opened_at, created_at)`, the same fallback `decide` applies.
+    #
+    # Filtering on `opened_at` alone excluded a case whose first alert is
+    # timestamped in the future — case #1127 opened 213 minutes ahead — before
+    # the decision could be reached at all, so the service-level fix in
+    # `decide` was unreachable for exactly the case it was written for.
+    window_start = func.least(AlertCaseSpine.opened_at, AlertCaseSpine.created_at)
+    due = open_rows + ((window_start <= opened_before,) if opened_before else ())
 
-    # The most overdue. Drains a real backlog, oldest first, as before.
+    # The most overdue — the ones that have been open longest.
     oldest = (
         await db.execute(
             select(AlertCaseSpine).where(*due)
-            .order_by(AlertCaseSpine.last_activity_at.asc())
+            .order_by(window_start.asc())
             .limit(half)
         )
     ).scalars().all()
@@ -854,7 +864,7 @@ async def cases_awaiting_closure(
     newest = (
         await db.execute(
             select(AlertCaseSpine).where(*due)
-            .order_by(AlertCaseSpine.last_activity_at.desc())
+            .order_by(window_start.desc())
             .limit(half)
         )
     ).scalars().all()

@@ -42,10 +42,38 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
 
-# How long a case must be quiet before it is answered.
-DEFAULT_QUIET_PERIOD = timedelta(minutes=10)
+# How long a case stays open before it is answered, measured from the moment
+# it opened and not from its last alert.
+#
+# This was an idle timer: ten minutes of *silence*. It is now a fixed window,
+# which is a different promise and the one this service makes — a case is
+# answered within ten minutes of existing, whatever arrives in the meantime.
+#
+# The cost was measured before the change, over the 100 cases opened after the
+# pipeline recovered: 59 finish inside ten minutes and are unaffected; 41 kept
+# receiving alerts afterwards and now become chains, with a p90 span of 280
+# minutes and one case running twelve hours.
+#
+# What makes that acceptable is the continuation: an alert arriving after the
+# answer opens a new case anchored at its own time, that case gets its own ten
+# minutes, and anything linked arriving inside them joins it. The activity is
+# not lost, it is reported as a sequence of answered cases instead of one that
+# stays open while an analyst waits.
+CASE_WINDOW = timedelta(minutes=10)
 
-# The longer quiet period a case earns while it is still producing detections
+# The old name, kept so nothing that imports it breaks. It is the same number
+# measured from a different instant, which is exactly the thing to be careful
+# about.
+DEFAULT_QUIET_PERIOD = CASE_WINDOW
+
+# Retained but no longer consulted by `decide`, which answers every case on
+# the same fixed window. They described the old idle-timer behaviour: a case
+# still producing new kinds of detection earned a longer silence before it was
+# answered. Kept because `is_escalating` is a useful question about a case in
+# its own right, and deleting a measured rule is harder to undo than leaving
+# it unused.
+#
+# The longer quiet period a case earned while it was still producing detections
 # it has not produced before. A case repeating one rule has settled; a case
 # still adding new kinds of activity is mid-something, and answering it on the
 # base timer is how a multi-stage attack gets reported in halves.
@@ -145,34 +173,56 @@ def decide(
     last_activity_at: datetime,
     opened_at: datetime,
     now: datetime,
-    quiet_period: timedelta = DEFAULT_QUIET_PERIOD,
+    created_at: datetime | None = None,
+    quiet_period: timedelta = CASE_WINDOW,
 ) -> ClosureDecision:
-    """Whether this open case should be answered now."""
+    """Whether this open case should be answered now.
+
+    One rule: a case is answered ten minutes after it opened. Not ten minutes
+    after its last alert, and not held longer for escalating, which are the
+    two things this used to do.
+
+    The difference matters most in the case it was built for. An idle timer
+    keeps a busy case open exactly as long as it stays busy — a host producing
+    an alert every nine minutes was never answered at all, and the analyst
+    waiting for the answer could not see why. A fixed window answers it on
+    what it has, and the alerts that arrive next open a case of their own with
+    its own ten minutes.
+
+    `members` is no longer read. It is kept in the signature because the
+    callers pass it and because a decision about a case ought to be able to
+    see the case; removing it would make re-introducing it a bigger change
+    than it should be.
+    """
     last_activity_at = _as_utc(last_activity_at)
     opened_at = _as_utc(opened_at)
     now = _as_utc(now)
+
+    # A case opens at its first alert's own event time, and some senders are
+    # wrong about what time it is. Six alerts in this estate are timestamped
+    # after the moment we received them, the worst ten hours ahead, and case
+    # #1127 opened 213 minutes in the future — under a fixed window that case
+    # can never become due, because the window has not started yet.
+    #
+    # So the window runs from the earlier of when the alert says it happened
+    # and when we recorded the case. In the normal case that is the alert's
+    # own time, which is what every other figure here uses; when a sender's
+    # clock is ahead it is the moment we knew, which is bounded and true.
+    window_start = opened_at
+    if created_at is not None:
+        recorded = _as_utc(created_at)
+        if recorded < window_start:
+            window_start = recorded
+
+    open_for = now - window_start
+    # Still reported, because it is what an analyst asks next — "has anything
+    # happened lately" — even though it no longer decides anything.
     quiet_for = now - last_activity_at
 
-    if quiet_for < quiet_period:
-        return ClosureDecision(False, "still active", quiet_period, quiet_for)
+    if open_for < quiet_period:
+        return ClosureDecision(False, "inside its window", quiet_period, quiet_for)
 
-    if is_escalating(members, now=now):
-        if (now - opened_at) >= MAX_HOLD:
-            # Held as long as it is reasonable to hold anything. Answer it on
-            # what it has; what comes next continues it.
-            return ClosureDecision(
-                True, "held to the maximum while still escalating",
-                ESCALATING_QUIET_PERIOD, quiet_for,
-            )
-        if quiet_for < ESCALATING_QUIET_PERIOD:
-            return ClosureDecision(
-                False, "still producing new detections", ESCALATING_QUIET_PERIOD, quiet_for,
-            )
-        return ClosureDecision(
-            True, "quiet for the escalation period", ESCALATING_QUIET_PERIOD, quiet_for,
-        )
-
-    return ClosureDecision(True, "quiet for the standard period", quiet_period, quiet_for)
+    return ClosureDecision(True, "its window has elapsed", quiet_period, quiet_for)
 
 
 @dataclass

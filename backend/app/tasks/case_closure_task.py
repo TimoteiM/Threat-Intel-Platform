@@ -102,8 +102,13 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
 
             # The quiet period goes into the query, so a case that cannot
             # possibly be due does not consume one of the limited slots.
+            # Due by when it OPENED, not by when it last moved. Filtering on
+            # last activity would hide exactly the cases the fixed window
+            # exists to answer: a case open an hour with an alert a minute ago
+            # is due, and the old predicate excluded it from the query before
+            # `decide` ever saw it.
             open_cases = await store.cases_awaiting_closure(
-                db, limit=batch * 4, due_before=now - _quiet_period(settings),
+                db, limit=batch * 4, opened_before=now - _quiet_period(settings),
             )
             if not open_cases:
                 return {"ran": True, "open": 0, "closed": 0}
@@ -192,6 +197,10 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     members,
                     last_activity_at=row.last_activity_at,
                     opened_at=row.opened_at,
+                    # So a sender whose clock runs ahead cannot open a case
+                    # that is never due: the window falls back to when we
+                    # recorded it.
+                    created_at=row.created_at,
                     now=now,
                     quiet_period=_quiet_period(settings),
                 )
@@ -314,6 +323,12 @@ def _still_backing_off(row: Any, now: datetime) -> bool:
 
 
 def _quiet_period(settings: Any):
+    """How long a case stays open, measured from when it opened.
+
+    The setting is still named `case_quiet_period_minutes` because it is in
+    deployed configuration, but it is no longer a quiet period: it is the
+    window a case gets before it is answered, whatever arrives inside it.
+    """
     from datetime import timedelta
 
     minutes = int(getattr(settings, "case_quiet_period_minutes", 10) or 10)

@@ -46,72 +46,80 @@ def _decide(members, *, last_minutes, now_minutes, opened_minutes=0):
     )
 
 
-# --- the timer ---------------------------------------------------------------
+# --- the window --------------------------------------------------------------
+#
+# A case is answered ten minutes after it OPENED. Not ten minutes after its
+# last alert, which is what this used to do, and not held longer while it is
+# still escalating.
+#
+# The old rule kept a busy case open exactly as long as it stayed busy: a host
+# producing an alert every nine minutes was never answered at all. The new one
+# answers it on what it has, and the alerts that arrive next open a case of
+# their own with its own ten minutes — so the activity is reported as a
+# sequence of answered cases rather than one that never closes.
 
-def test_a_case_still_receiving_alerts_is_not_answered():
+def test_a_case_inside_its_window_is_not_answered():
     members = [alert("A"), alert("A", minutes=3)]
     assert not _decide(members, last_minutes=3, now_minutes=8).due
 
 
-def test_a_case_quiet_for_the_period_is_answered():
+def test_a_case_is_answered_once_its_window_has_elapsed():
     members = [alert("A"), alert("A", minutes=3)]
     decision = _decide(members, last_minutes=3, now_minutes=14)
     assert decision.due
-    assert decision.reason == "quiet for the standard period"
+    assert decision.reason == "its window has elapsed"
 
 
-def test_the_clock_runs_on_the_last_alert_not_the_first():
-    """The 11x finding. A case open for an hour but active two minutes ago is
-    not finished; one open for twelve minutes and quiet for eleven is."""
+def test_the_clock_runs_from_opening_not_from_the_last_alert():
+    """The change. A case open for an hour is answered even if an alert landed
+    a minute ago — under the idle timer it was not, and a host alerting every
+    nine minutes was never answered at all."""
     busy = [alert("A", minutes=m) for m in range(0, 60, 5)]
-    assert not _decide(busy, last_minutes=55, now_minutes=57, opened_minutes=0).due
-
-    brief = [alert("A")]
-    assert _decide(brief, last_minutes=0, now_minutes=11).due
-
-
-# --- the escalation hold -----------------------------------------------------
-
-def test_a_case_still_producing_new_detections_is_held():
-    """The protection for multi-stage attacks: p95 of within-case gaps is 29
-    minutes, so ten minutes of quiet is not evidence that an attack is over
-    while it is still producing kinds of activity it had not produced."""
-    members = [alert("recon"), alert("credential access", minutes=8)]
-    decision = _decide(members, last_minutes=8, now_minutes=20)
-    assert not decision.due
-    assert decision.reason == "still producing new detections"
-    assert decision.quiet_period == closure.ESCALATING_QUIET_PERIOD
-
-
-def test_the_hold_ends_once_it_has_been_quiet_for_the_longer_period():
-    members = [alert("recon"), alert("credential access", minutes=8)]
-    assert _decide(members, last_minutes=8, now_minutes=45).due
-
-
-def test_repeating_one_detection_is_noise_and_earns_no_hold():
-    """A host firing the same rule three hundred times is noisy, not
-    escalating. Holding its case open would hold it open for ever."""
-    members = [alert("A", minutes=m) for m in range(0, 30, 2)]
-    decision = _decide(members, last_minutes=28, now_minutes=40)
+    decision = _decide(busy, last_minutes=59, now_minutes=60, opened_minutes=0)
     assert decision.due
-    assert decision.reason == "quiet for the standard period"
+    # Still reported, because "has anything happened lately" is the next
+    # question an analyst asks — it just no longer decides anything.
+    assert decision.quiet_for == timedelta(minutes=1)
 
 
-def test_a_case_cannot_be_held_open_for_ever_by_escalation():
-    """Still escalating — a new detection fifteen minutes ago — and quiet for
-    longer than the base period, but open past the maximum hold. It is
-    answered on what it has, and whatever comes next continues it."""
+def test_a_case_open_for_nine_minutes_is_not_answered_however_quiet():
+    """The window is a floor as well as a ceiling: a case that arrived and went
+    silent immediately still gets its ten minutes to collect what follows."""
+    assert not _decide([alert("A")], last_minutes=0, now_minutes=9).due
+    assert _decide([alert("A")], last_minutes=0, now_minutes=10).due
+
+
+# --- escalation no longer extends the window ---------------------------------
+
+def test_a_case_still_producing_new_detections_is_answered_anyway():
+    """It used to earn a thirty-minute silence before being answered, which is
+    the protection a fixed window gives up. What replaces it is the
+    continuation: the next alert opens its own case with its own window, so a
+    multi-stage attack is a chain of answered cases rather than one held open
+    while an analyst waits for it."""
+    members = [alert("recon"), alert("credential access", minutes=8)]
+    decision = _decide(members, last_minutes=8, now_minutes=12)
+    assert decision.due
+    assert decision.reason == "its window has elapsed"
+    # The escalation itself is still detectable; it simply no longer holds.
+    assert closure.is_escalating(members, now=T0 + timedelta(minutes=12))
+
+
+def test_the_window_is_the_same_for_a_noisy_case_and_an_escalating_one():
+    """One rule for every case, which is the point of a fixed window: the
+    answer does not depend on a judgement about what the case is doing."""
+    noisy = [alert("A", minutes=m) for m in range(0, 30, 2)]
+    escalating = [alert("stage-1"), alert("stage-2", minutes=8)]
+    for members in (noisy, escalating):
+        assert _decide(members, last_minutes=0, now_minutes=11).due
+
+
+def test_nothing_can_hold_a_case_open_past_its_window():
+    """There is no longer a maximum hold, because there is no hold."""
     members = [alert("stage-1"), alert("stage-2", minutes=370)]
     decision = _decide(members, last_minutes=370, now_minutes=385, opened_minutes=0)
-
-    assert closure.is_escalating(members, now=T0 + timedelta(minutes=385))
-    assert decision.quiet_for < closure.ESCALATING_QUIET_PERIOD
     assert decision.due
-    assert "maximum" in decision.reason
-
-
-def test_a_single_alert_case_is_never_escalating():
-    assert not closure.is_escalating([alert("A")], now=T0)
+    assert decision.reason == "its window has elapsed"
 
 
 # --- what happens to late alerts ---------------------------------------------
@@ -358,3 +366,42 @@ def test_the_resolution_vocabulary_has_one_home():
     # column.
     assert CaseResolution.TRUE_POSITIVE == "true_positive"
     assert str(CaseResolution.TRUE_POSITIVE) != "true_positive"
+
+
+def test_a_sender_whose_clock_runs_ahead_cannot_open_a_case_that_never_closes():
+    """A case opens at its first alert's own event time, and some senders are
+    wrong about what time it is.
+
+    Six alerts in this estate are timestamped after the moment we received
+    them, the worst ten hours ahead, and case #1127 opened 213 minutes in the
+    future. Under a fixed window that case can never become due, because its
+    window has not started — the idle timer hid the same fault behind a
+    different arithmetic.
+
+    The window runs from the earlier of when the alert says it happened and
+    when we recorded the case.
+    """
+    ahead = T0 + timedelta(hours=3, minutes=30)
+    decision = closure.decide(
+        [], last_activity_at=ahead, opened_at=ahead,
+        created_at=T0 - timedelta(minutes=20), now=T0,
+    )
+    assert decision.due, "a future-dated case must still be answerable"
+
+    # And it is not answered early either: the fallback is a real window, not
+    # an escape hatch.
+    assert not closure.decide(
+        [], last_activity_at=ahead, opened_at=ahead,
+        created_at=T0 - timedelta(minutes=2), now=T0,
+    ).due
+
+
+def test_without_a_recorded_time_the_alerts_own_time_is_used():
+    """`created_at` is optional, so a caller that does not have it keeps the
+    behaviour it had."""
+    assert closure.decide(
+        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=11),
+    ).due
+    assert not closure.decide(
+        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=9),
+    ).due
