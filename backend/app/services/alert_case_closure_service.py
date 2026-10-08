@@ -370,8 +370,19 @@ def resolution_from_analysis(markdown: str | None) -> str:
     return resolution_for(verdict=narrative_lead(markdown).get("verdict"))
 
 
+# A case closed later than this after its own last alert was not answered in
+# response time — it was swept up by a catch-up pass. MAX_HOLD is the longest
+# the closing job will ever hold an active case open, so anything beyond it is
+# not the service responding.
+MAX_PLAUSIBLE_RESOLVE_LAG = MAX_HOLD
+
+
 def metrics(
-    *, opened_at: datetime, created_at: datetime, closed_at: datetime | None,
+    *,
+    opened_at: datetime,
+    created_at: datetime,
+    closed_at: datetime | None,
+    last_activity_at: datetime | None = None,
 ) -> dict[str, Any]:
     """MTTD and MTTR for one case, from the timestamps already stored.
 
@@ -403,6 +414,27 @@ def metrics(
         out["detect_excluded"] = "case recorded long after the alert; backfilled, not detected"
     if closed_at is not None:
         out["resolve_seconds"] = max(0.0, round((_as_utc(closed_at) - opened_at).total_seconds(), 1))
+
+        # The same exclusion as above, for the other half of the pair.
+        #
+        # It was missing, and only the detection side had it. A case whose
+        # alerts stopped in September and which a catch-up pass closed in
+        # October contributes three weeks to MTTR — so one month of real work
+        # reported a mean resolution of 21.8 days and 620 of 620 cases
+        # breached, which describes when the backlog was drained and not how
+        # the service responded.
+        #
+        # Counted and named rather than dropped: a case nobody answered for
+        # three weeks is a real failure of a different kind, and hiding it
+        # inside an average is how a metric comes to flatter.
+        if last_activity_at is not None:
+            lag = (_as_utc(closed_at) - _as_utc(last_activity_at)).total_seconds()
+            if lag > MAX_PLAUSIBLE_RESOLVE_LAG.total_seconds():
+                out["resolve_seconds"] = None
+                out["resolve_lag_seconds"] = round(lag, 1)
+                out["resolve_excluded"] = (
+                    "closed by a later sweep, not answered within the response window"
+                )
     return out
 
 

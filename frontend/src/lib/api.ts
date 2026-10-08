@@ -592,6 +592,59 @@ export function refreshAlertLogs(runId: string) {
   }>(`/alert-investigations/${runId}/logs/refresh`, { method: "POST" });
 }
 
+export interface CaseReportOptions {
+  months: Array<{ month: string; cases: number }>;
+  clients: Array<{ tenant_id: string; label: string; cases: number }>;
+  scope: { all_tenants: boolean };
+}
+
+export interface CaseReportStats {
+  cases: number;
+  closed: number;
+  mttd_seconds: number | null;
+  mttr_seconds: number | null;
+  sla_met: number;
+  sla_breached: number;
+}
+
+export interface CaseReport {
+  month: string;
+  client: string;
+  cases_total: number;
+  cases_open: number;
+  alerts_in_closed_cases: number;
+  sla: {
+    target_seconds: number;
+    single_alert: CaseReportStats;
+    multi_alert: CaseReportStats;
+    all: CaseReportStats;
+  };
+  severity: { high: number; medium: number; low: number };
+  resolutions: Record<string, number>;
+  excluded: {
+    never_answered: number;
+    backfilled_detection: number;
+    closed_by_later_sweep: number;
+    note: string;
+  };
+  scope: { all_tenants: boolean; applied: string };
+}
+
+/** The clients and months the report can be run for, built from the data so a
+ *  month with no cases is never offered as though it were merely empty. */
+export function getCaseReportOptions() {
+  return request<CaseReportOptions>("/detections/reports/options");
+}
+
+export function getCaseReport(params: { month?: string; client?: string; targetMinutes?: number }) {
+  const qs = new URLSearchParams();
+  if (params.month && params.month !== "all") qs.set("month", params.month);
+  if (params.client && params.client !== "all") qs.set("tenant", params.client);
+  if (params.targetMinutes) qs.set("target_minutes", String(params.targetMinutes));
+  const query = qs.toString();
+  return request<CaseReport>(`/detections/reports${query ? `?${query}` : ""}`);
+}
+
 export interface AnalysisStatus {
   run_id: string;
   status: string;

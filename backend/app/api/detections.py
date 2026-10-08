@@ -26,6 +26,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import case as sql_case
+from sqlalchemy import desc as sa_desc
+from sqlalchemy import false as sa_false
 from sqlalchemy import func, select
 
 from app.dependencies import DBSession
@@ -734,6 +736,218 @@ def _serialize(row: AnalystFeedback) -> dict[str, Any]:
         "analyst": row.analyst,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _case_tenant_clause(scope: "tenant_scope.TenantScope") -> tuple[Any, ...]:
+    """Restrict cases to the clients this caller may read.
+
+    A real filter, not a label. `/detections/sla` computed `scope` and then
+    used it only to stamp the response `"scoped"` while the query selected
+    every tenant's cases — so a client-restricted account was shown the whole
+    estate's MTTR under a word asserting it was theirs, which is worse than
+    not saying anything.
+    """
+    from app.models.database import AlertCaseSpine
+
+    if getattr(scope, "all_tenants", False):
+        return ()
+    allowed = [t for t in (getattr(scope, "tenant_ids", None) or [])]
+    permitted = AlertCaseSpine.tenant_id.in_(allowed) if allowed else sa_false()
+    if getattr(scope, "include_unassigned", False):
+        permitted = permitted | AlertCaseSpine.tenant_id.is_(None)
+    return (permitted,)
+
+
+def _month_bounds(month: str | None) -> tuple[datetime | None, datetime | None]:
+    """`YYYY-MM` to a half-open UTC range, or no bound at all.
+
+    Half-open so a case opened at the last microsecond of the month lands in
+    that month and not in both. An unparseable or absent month means the whole
+    history rather than an error: the page offers only months that exist, so a
+    bad value is a stale bookmark, and showing everything is the harmless
+    answer.
+    """
+    text = str(month or "").strip()
+    if not text or text.lower() == "all":
+        return None, None
+    try:
+        year_s, month_s = text.split("-", 1)
+        year, mon = int(year_s), int(month_s)
+        start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None, None
+    end = datetime(year + (mon == 12), (mon % 12) + 1, 1, tzinfo=timezone.utc)
+    return start, end
+
+
+@router.get("/reports/options")
+async def report_options(
+    db: DBSession, request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """The clients and months the report can actually be run for.
+
+    Built from the data rather than from a date picker, so a month with no
+    cases is not offered as though it were empty when it is simply outside the
+    estate's history. The client list is the same: only tenants this caller may
+    read, and `__unassigned__` only when unassigned cases exist.
+    """
+    from app.models.database import AlertCaseSpine
+
+    scope = _scope(request)
+    months = (
+        await db.execute(
+            select(
+                func.to_char(func.date_trunc("month", AlertCaseSpine.opened_at), "YYYY-MM").label("month"),
+                func.count().label("cases"),
+            )
+            .where(*_case_tenant_clause(scope))
+            .group_by("month")
+            .order_by(sa_desc("month"))
+        )
+    ).all()
+
+    tenants = (
+        await db.execute(
+            select(
+                AlertCaseSpine.tenant_id,
+                func.count().label("cases"),
+            )
+            .where(*_case_tenant_clause(scope))
+            .group_by(AlertCaseSpine.tenant_id)
+            .order_by(sa_desc("cases"))
+        )
+    ).all()
+
+    return {
+        "months": [{"month": m, "cases": int(c)} for m, c in months if m],
+        "clients": [
+            {
+                "tenant_id": t or "__unassigned__",
+                "label": t or "Unassigned",
+                "cases": int(c),
+            }
+            for t, c in tenants
+        ],
+        "scope": {"all_tenants": bool(getattr(scope, "all_tenants", False))},
+    }
+
+
+@router.get("/reports")
+async def case_report(
+    db: DBSession,
+    month: str | None = None,
+    tenant: str | None = None,
+    target_minutes: int | None = None,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """One month of one client's case work: MTTD, MTTR, SLA, severity, outcomes.
+
+    The figures a service report is written from, computed from stored
+    timestamps rather than kept as running totals — so a definition that turns
+    out to be wrong is a query away from being right instead of a backfill.
+
+    Scoped on `tenant_id`, which the case carries because the alerts carry it.
+    Not on `alert_client`, the sender's own label, which reads "unknown" for
+    1,079 of 1,098 cases and would have made the client filter a control with
+    one option.
+
+    Reported in two populations throughout. 497 of 884 cases in this estate
+    hold a single alert, and a mean that mixes them with multi-alert cases is
+    mostly a measure of how many single alerts arrived — it would make the
+    service look fastest in exactly the months it did least.
+
+    Exclusions are stated in the response, never applied silently: a case
+    recorded long after its first alert is a backfill and has no honest
+    detection time, and a case that was never answered — aged out, expired, or
+    merged into another — is not a resolution and must not be counted as one.
+    """
+    from app.config import get_settings
+    from app.models.database import AlertCaseSpine
+    from app.services import alert_case_closure_service as closure
+
+    scope = _scope(request)
+    settings = get_settings()
+    target = float(
+        (target_minutes or int(getattr(settings, "case_sla_target_minutes", 60) or 60)) * 60
+    )
+
+    clauses = list(_case_tenant_clause(scope))
+    start, end = _month_bounds(month)
+    if start is not None:
+        clauses.append(AlertCaseSpine.opened_at >= start)
+        clauses.append(AlertCaseSpine.opened_at < end)
+    chosen_tenant = str(tenant or "").strip()
+    if chosen_tenant and chosen_tenant != "all":
+        if chosen_tenant == "__unassigned__":
+            clauses.append(AlertCaseSpine.tenant_id.is_(None))
+        else:
+            # Asked for, and permitted. A caller may name only a client the
+            # scope already lets them read.
+            if not scope.may_read(chosen_tenant):
+                raise HTTPException(404, "No such client")
+            clauses.append(AlertCaseSpine.tenant_id == chosen_tenant)
+
+    rows = (await db.execute(select(AlertCaseSpine).where(*clauses))).scalars().all()
+
+    # Outcomes, severity and the SLA population, in one pass over the month.
+    cases: list[dict[str, Any]] = []
+    resolutions: dict[str, int] = {}
+    severities = {"high": 0, "medium": 0, "low": 0}
+    never_answered = 0
+    open_now = 0
+    alerts_total = 0
+    for row in rows:
+        resolution = str(row.resolution or "unresolved")
+        resolutions[resolution] = resolutions.get(resolution, 0) + 1
+        band = "high" if (row.peak_score or 0) >= 75 else "medium" if (row.peak_score or 0) >= 40 else "low"
+        severities[band] += 1
+        alerts_total += int(row.alerts_at_close or 0)
+        if row.closed_at is None:
+            open_now += 1
+        # Never answered by anybody: counting these as resolutions would reward
+        # losing track of a case.
+        if str(row.closure_kind or "") in {"aged_out", "expired", "merged"}:
+            never_answered += 1
+            continue
+        cases.append({
+            "alert_count": row.alerts_at_close or 1,
+            **closure.metrics(
+                opened_at=row.opened_at, created_at=row.created_at, closed_at=row.closed_at,
+                # Separates "answered in response time" from "closed by a
+                # later sweep", which otherwise both land in MTTR.
+                last_activity_at=row.last_activity_at,
+            ),
+        })
+
+    summary = closure.summarise(cases, target_seconds=target)
+    return {
+        "month": month or "all",
+        "client": chosen_tenant or "all",
+        "cases_total": len(rows),
+        "cases_open": open_now,
+        "alerts_in_closed_cases": alerts_total,
+        "sla": summary,
+        "severity": severities,
+        "resolutions": dict(sorted(resolutions.items(), key=lambda kv: -kv[1])),
+        "excluded": {
+            "never_answered": never_answered,
+            "backfilled_detection": sum(1 for c in cases if c.get("detect_excluded")),
+            "closed_by_later_sweep": sum(1 for c in cases if c.get("resolve_excluded")),
+            "note": (
+                "Cases that aged out, expired, or were merged into another case are "
+                "counted in the totals but excluded from MTTR and SLA: nobody "
+                "answered them, so they are not resolutions. A case recorded long "
+                "after its first alert has no honest detection time and is excluded "
+                "from MTTD only. A case closed more than six hours after its own last "
+                "alert was closed by a later sweep rather than answered in response "
+                "time, so it is excluded from MTTR and counted separately."
+            ),
+        },
+        "scope": {
+            "all_tenants": bool(getattr(scope, "all_tenants", False)),
+            "applied": "tenant_id",
+        },
     }
 
 

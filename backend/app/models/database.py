@@ -1144,6 +1144,12 @@ class AlertCaseSpine(Base):
     closure_claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The client this case belongs to, taken from the alerts it groups.
+    #
+    # Not `alert_client`, which is the sender's own label and reads "unknown"
+    # for 1,079 of 1,098 cases — a filter built on it offers one option for
+    # almost the whole estate.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Who signed this case off, what they said, and which analysis was in
     # front of them when they did.
     #

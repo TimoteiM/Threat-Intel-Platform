@@ -151,6 +151,7 @@ async def upsert_spine(
     client: str,
     host: str,
     session_started_at: datetime,
+    tenant_id: str | None = None,
     session_seq: int,
     last_activity_at: datetime,
     score: int,
@@ -178,6 +179,7 @@ async def upsert_spine(
             alert_client=client,
             entity_host=host,
             session_started_at=session_started_at,
+            tenant_id=tenant_id,
             session_seq=session_seq,
             opened_at=session_started_at,
             last_activity_at=last_activity_at,
@@ -212,6 +214,12 @@ async def upsert_spine(
         changed = True
     if row.case_number is None:
         row.case_number = await next_case_number(db)
+        changed = True
+    # Filled in when correlation knows it and the row does not. Never
+    # overwritten: a case does not change client, and a pass that happened to
+    # run unscoped must not blank one that a scoped pass established.
+    if tenant_id and not row.tenant_id:
+        row.tenant_id = tenant_id
         changed = True
     # Kept current while the case is open; frozen once it closes, so a
     # continuation that names the case it follows names it the same way the

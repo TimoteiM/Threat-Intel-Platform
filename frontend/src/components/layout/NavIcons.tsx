@@ -97,6 +97,15 @@ const PATHS: Record<NavIcon, React.ReactNode> = {
       <path d="M16.2 5.6a3.4 3.4 0 0 1 0 5.8M17.6 20a5.9 5.9 0 0 0-1.4-3.8" />
     </>
   ),
+  // A bar chart on an axis: the page reports measured quantities over a month.
+  reports: (
+    <>
+      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+      <rect x="7" y="12" width="3" height="6" rx="0.5" />
+      <rect x="12" y="8" width="3" height="10" rx="0.5" />
+      <rect x="17" y="4" width="3" height="14" rx="0.5" />
+    </>
+  ),
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />

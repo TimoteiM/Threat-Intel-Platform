@@ -1173,6 +1173,14 @@ async def correlate_alerts(
                 source=source,
                 client=client,
                 host=entity,
+                # The client this case is for, from the alerts themselves
+                # rather than from the label the sender attached. Taken from
+                # the members, which the scope already selected, so it is the
+                # same answer the query was asked under.
+                tenant_id=next(
+                    (str(m.tenant_id) for m in members if getattr(m, "tenant_id", None)),
+                    None,
+                ),
                 session_started_at=session.session_started_at,
                 session_seq=session.session_seq,
                 last_activity_at=last_event,

@@ -15,7 +15,8 @@ export const APP_VERSION = "v2.0";
 export type NavIcon =
   | "grid" | "cases" | "bulk" | "watch"
   | "detections" | "alerts" | "exclusions" | "devices"
-  | "email" | "alertBody" | "ip" | "assistant" | "clients" | "settings";
+  | "email" | "alertBody" | "ip" | "assistant" | "clients" | "settings"
+  | "reports";
 
 export type AppNavLink = {
   href: string;
@@ -57,6 +58,10 @@ export const APP_NAV_LINKS = [
   { href: "/investigations", label: "All Investigations", group: "workspace", icon: "cases" },
   { href: "/batches", label: "Bulk Analysis", group: "workspace", icon: "bulk" },
   { href: "/watchlist", label: "Watchlist", group: "workspace", icon: "watch" },
+  // What the service did, for one client, in one month — the figures a service
+  // review is written from. Filed under Workspace rather than Detection
+  // because it reports on the work, not on whether the rules are any good.
+  { href: "/reports", label: "Reports", group: "workspace", icon: "reports" },
   // What is threatening a client right now: the alerts that arrived, and the
   // cases they formed. Both filter by client and by verdict.
   //
