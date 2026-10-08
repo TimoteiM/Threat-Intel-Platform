@@ -108,6 +108,132 @@ def complete_one(row_id: uuid.UUID) -> dict[str, object]:
     return result
 
 
+def refresh_now(run_id: uuid.UUID) -> dict[str, object]:
+    """Read this alert's logs again, up to the present, because an analyst asked.
+
+    Distinct from `complete_one` in two ways, both of which are the point.
+
+    It reads past the window's end. The alert's window is ten minutes either
+    side of its event time, so once that has passed the scheduled follow-up has
+    nothing left to read and declines — `complete_one` returns "already
+    finished" for every terminal row. What the analyst is looking at is exactly
+    that case: the window closed, and since then either the host did more
+    things or the cluster indexed documents whose event time fell inside the
+    window after the window was read.
+
+    And it runs on a terminal row. Reaching past the window is a decision about
+    what a case is, so it is never made on a schedule — it happens when
+    somebody asks, and it is recorded as having been asked for.
+
+    Everything underneath is the existing follow-up path: the read starts
+    before the stored high-water mark and documents merge on their own
+    `index:id`, so calling this twice adds nothing and calling it during a
+    scheduled follow-up cannot double-count.
+    """
+    with Session(sync_engine) as db:
+        row = (
+            db.execute(
+                select(AlertLogContext).where(AlertLogContext.run_id == run_id)
+            ).scalars().first()
+        )
+        if row is None:
+            return {"run": str(run_id), "status": "missing", "new_logs": 0}
+
+        run = db.get(AlertBodyInvestigationRun, row.run_id)
+        if run is None:
+            return {"run": str(run_id), "status": "orphaned", "new_logs": 0}
+
+        settings = get_settings()
+        now = datetime.now(timezone.utc)
+        read_from = follow_up_start(
+            window_start=_aware(row.window_start),
+            covered_until=_aware(row.covered_until),
+            overlap_seconds=int(getattr(settings, "alert_log_overlap_seconds", 300)),
+        )
+        context = collect_for_alert(
+            tenant_id=run.tenant_id,
+            event_time=_aware(run.event_time),
+            entity_host=run.entity_host,
+            entity_user=run.entity_user,
+            alert_body=run.alert_body,
+            alert_fields=(run.result_json or {}).get("alert_fields") or {},
+            start_override=read_from,
+            end_override=now,
+        )
+        before = len(row.logs or [])
+        # The scheduled lifecycle, preserved across a manual read.
+        #
+        # `record_attempt` owns the automatic follow-up's state machine: it
+        # counts the attempt, and after `alert_log_followup_max_attempts`
+        # failures it marks the row `failed`, which is terminal. That is right
+        # for a timer and wrong for a person — an analyst pressing this while
+        # the cluster is unreachable would spend the retry budget and leave a
+        # row holding 175 good logs permanently failed, with the scheduled
+        # follow-up switched off.
+        #
+        # It also sets `status = "unavailable"` on a failed read, which would
+        # relabel a row that has logs as having none.
+        #
+        # So a manual refresh may improve the row and never degrade it.
+        prior = {
+            "status": row.status,
+            "reason": row.reason,
+            "attempts": int(row.attempts or 0),
+            "next_attempt_at": row.next_attempt_at,
+            "last_error": row.last_error,
+            # `record_attempt` advances this from the window's wall-clock
+            # coverage rather than from what was read, so a failed read would
+            # still move the mark and the next follow-up would begin past a
+            # slice nobody has looked at.
+            "covered_until": row.covered_until,
+        }
+        row = store.record_attempt(db, row, context)
+        gained = len(row.logs or []) - before
+        if context.status in {"unavailable", "failed", "skipped"} and gained <= 0:
+            row.status = prior["status"]
+            row.reason = prior["reason"]
+            row.attempts = prior["attempts"]
+            row.next_attempt_at = prior["next_attempt_at"]
+            row.last_error = prior["last_error"]
+            row.covered_until = prior["covered_until"]
+
+        # After `record_attempt`, which rewrites `sources` from the read.
+        reached = context.read_until or now
+        # Only advanced when the cluster actually answered. Moving the mark
+        # after a failed read would make the next follow-up start past a slice
+        # nobody has read.
+        if context.status not in {"unavailable", "failed", "skipped"} and (
+            _aware(row.covered_until) is None or _aware(row.covered_until) < reached
+        ):
+            row.covered_until = reached
+        sources = dict(row.sources or {})
+        sources["manual_refresh"] = {
+            "at": now.isoformat(),
+            "read_from": read_from.isoformat(),
+            # Said plainly, because it is past the alert's own window and the
+            # window figures elsewhere on the page still describe the alert.
+            "read_until": reached.isoformat(),
+            "new_logs": len(row.logs or []) - before,
+        }
+        row.sources = sources
+        db.commit()
+
+        result = {
+            "run": str(row.run_id),
+            "status": row.status,
+            "logs": len(row.logs or []),
+            "new_logs": len(row.logs or []) - before,
+            "read_until": reached.isoformat(),
+            "reason": context.reason,
+        }
+
+    logger.info(
+        "Alert log manual refresh %s: %s log(s), +%s new, read to %s",
+        run_id, result["logs"], result["new_logs"], result["read_until"],
+    )
+    return result
+
+
 @celery_app.task(name="app.tasks.alert_log_followup_task.complete_alert_log_context", max_retries=0)
 def complete_alert_log_context(row_id: str) -> dict[str, object]:
     """The per-alert follow-up, dispatched with a countdown when the alert is live."""

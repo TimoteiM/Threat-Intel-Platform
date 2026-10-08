@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import {
   getAlertLogContext,
+  refreshAlertLogs,
   getAnalysisStatus,
   reanalyseWithLogContext,
   type AlertLogContextPage,
@@ -115,6 +116,11 @@ export function AlertLogContext({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Pulling the cluster again, on request. The stored set was read once around
+  // the alert and is deliberately not re-read on every page load, so this is
+  // how an analyst asks for what has happened since.
+  const [pulling, setPulling] = useState(false);
+  const [pullNote, setPullNote] = useState<string | null>(null);
   // The re-analysis, watched to completion in place. An analyst who sends
   // events to the model should not have to guess whether it worked, reload, or
   // go somewhere else to read the answer.
@@ -145,6 +151,24 @@ export function AlertLogContext({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const pullNewLogs = useCallback(async () => {
+    setPulling(true);
+    setPullNote(null);
+    try {
+      const result = await refreshAlertLogs(runId);
+      setPullNote(result.note || null);
+      // Reloaded whatever the count, because the window metadata and the
+      // staleness banner move even when no event does.
+      await load();
+    } catch (err) {
+      setPullNote(
+        err instanceof Error ? err.message : "Could not read the log cluster again.",
+      );
+    } finally {
+      setPulling(false);
+    }
+  }, [runId, load]);
 
   // What survives the field filters. Computed before `displayed`, because
   // "select all" has to mean the rows on screen — selecting filtered-out
@@ -335,6 +359,30 @@ export function AlertLogContext({
           value={`${page.before.length} before · alert · ${page.after.length} after`}
         />
         {page.truncated && <Fact label="Retrieval limit" value="reached" />}
+
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10, alignItems: "center" }}>
+          {pullNote && (
+            <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{pullNote}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void pullNewLogs()}
+            disabled={pulling}
+            title={
+              "Read the log cluster again, up to now. The alert's own window is ten " +
+              "minutes either side of it, so anything the host did after that — and " +
+              "anything indexed late — is only visible if you ask."
+            }
+            style={{
+              padding: "5px 12px", borderRadius: 8, fontSize: 12,
+              cursor: pulling ? "wait" : "pointer",
+              border: "1px solid var(--panel-divider-strong, var(--border))",
+              background: "transparent", color: "var(--text)",
+            }}
+          >
+            {pulling ? "Reading…" : "Pull new logs"}
+          </button>
+        </span>
       </div>
 
       {(stale || page.analysis_basis === "partial") && (

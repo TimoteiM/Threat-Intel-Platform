@@ -355,3 +355,76 @@ def test_a_still_untenanted_run_is_not_retried():
     assert outcome["skipped_not_recoverable"] == 1
     assert row.status == "failed"
 
+
+
+# ── the analyst's "pull new logs" button ─────────────────────────────────────
+#
+# The stored set is read once around the alert and is deliberately not re-read
+# on every page load. So an analyst needs a way to ask — and asking must not
+# cost the scheduled follow-up anything.
+
+def test_a_failed_manual_read_does_not_spend_the_scheduled_retry_budget():
+    """`record_attempt` owns the automatic state machine: it counts the
+    attempt, and after `alert_log_followup_max_attempts` failures it marks the
+    row `failed`, which is terminal.
+
+    That is right for a timer and wrong for a person. An analyst pressing the
+    button five times while the cluster is unreachable would spend the budget
+    and leave a row holding every log it had collected permanently failed, with
+    the scheduled follow-up switched off — so a manual read may improve the row
+    and never degrade it.
+    """
+    row = Row(logs=[{"key": "i:1"}], status="partial", attempts=0)
+    before = (row.status, row.attempts, len(row.logs), row.covered_until)
+
+    failed = LogContext()
+    failed.status = "unavailable"
+    failed.reason = "The CA bundle does not exist, so the certificate cannot be verified."
+
+    # What refresh_now does around record_attempt, as the task performs it.
+    prior = {
+        "status": row.status, "reason": row.reason, "attempts": int(row.attempts or 0),
+        "next_attempt_at": row.next_attempt_at, "last_error": row.last_error,
+        "covered_until": row.covered_until,
+    }
+    gained_before = len(row.logs or [])
+    row = store.record_attempt(FakeDB(), row, failed)
+    gained = len(row.logs or []) - gained_before
+    assert gained == 0
+    for key, value in prior.items():
+        setattr(row, key, value)
+
+    assert (row.status, row.attempts, len(row.logs), row.covered_until) == before
+
+
+def test_record_attempt_alone_would_have_degraded_the_row():
+    """The behaviour the guard above exists to contain, asserted so the guard
+    is not mistaken for belt and braces.
+
+    Left to itself, a failed read relabels a row that holds logs as
+    `unavailable`, counts the attempt, and advances the high-water mark from
+    wall-clock coverage rather than from anything it read.
+    """
+    row = Row(logs=[{"key": "i:1"}], status="partial", attempts=0)
+    failed = LogContext()
+    failed.status = "unavailable"
+    failed.reason = "cluster unreachable"
+    failed.window = {"covered_until": (EVENT + timedelta(minutes=8)).isoformat()}
+
+    out = store.record_attempt(FakeDB(), row, failed)
+
+    assert out.status == "unavailable", "a row with logs gets relabelled"
+    assert out.attempts == 1, "the scheduled budget is spent"
+    assert out.covered_until == EVENT + timedelta(minutes=8), "the mark moves on a failed read"
+    assert out.logs, "the logs themselves survive, which is why relabelling misleads"
+
+
+def test_repeated_failures_reach_the_terminal_state():
+    """Five of them, which is what a person could do in a few seconds."""
+    row = Row(logs=[{"key": "i:1"}], status="partial", attempts=4)
+    failed = LogContext()
+    failed.status = "unavailable"
+    failed.reason = "cluster unreachable"
+    out = store.record_attempt(FakeDB(), row, failed)
+    assert out.status == "failed"
+    assert out.next_attempt_at is None, "and the scheduled follow-up stops"

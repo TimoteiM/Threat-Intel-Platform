@@ -501,6 +501,11 @@ class LogContext:
     sources: dict[str, Any] = field(default_factory=dict)
     selectors: dict[str, Any] = field(default_factory=dict)
     truncated: bool = False
+    # How far this particular read actually reached. Normally the window's
+    # covered_until; later than that when an analyst asked for logs past the
+    # window's end, which is the only way to see activity that happened after
+    # the alert's own ten minutes.
+    read_until: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -527,6 +532,7 @@ def collect_for_alert(
     window_minutes: int | None = None,
     max_hits: int | None = None,
     start_override: datetime | None = None,
+    end_override: datetime | None = None,
     now: datetime | None = None,
     client: Any = None,
     settings: Any = None,
@@ -535,6 +541,14 @@ def collect_for_alert(
 
     `start_override` exists for the follow-up: it re-reads only the slice that
     had not happened yet, so a completed run is never re-fetched.
+
+    `end_override` exists for an analyst asking again. The window is the
+    alert's own — ten minutes either side — so once it has passed, the
+    automatic follow-up has nothing left to read. But the host went on doing
+    things, and a document whose event time fell inside the window can still
+    be indexed after it closed. Neither is reachable without reading past the
+    window's end, which is a deliberate act and so is never done on a
+    schedule.
 
     Never raises. Every failure mode — no cluster, no entity, no time, a node
     down — comes back as a `LogContext` with a status and a reason, because an
@@ -585,6 +599,10 @@ def collect_for_alert(
 
     window = window_for(event_time, minutes=window_minutes, now=now)
     effective_start = start_override or window.start
+    # Never shorter than the window's own coverage: an override asking for
+    # less than the alert's window would silently narrow it.
+    read_until = max(window.covered_until, end_override) if end_override else window.covered_until
+    context.read_until = read_until
     context.window = {
         "event_time": event_time.astimezone(timezone.utc).isoformat(),
         "start": window.start.astimezone(timezone.utc).isoformat(),
@@ -606,7 +624,7 @@ def collect_for_alert(
         )
         return context
 
-    if effective_start >= window.covered_until:
+    if effective_start >= read_until:
         context.status = "partial" if not window.complete else "empty"
         context.reason = "The window has not happened yet; a follow-up will read it."
         context.sources = {"pending_seconds": round(window.pending_seconds)}
@@ -617,7 +635,7 @@ def collect_for_alert(
     tenant_values = list(getattr(settings, "opensearch_tenant_value_list", []) or [])
     query = build_query(
         device=device, principal=principal,
-        start=effective_start, end=window.covered_until,
+        start=effective_start, end=read_until,
         timestamp_field=timestamp_field,
         tenant_field=tenant_field, tenant_values=tenant_values,
     )

@@ -574,6 +574,24 @@ export function getAlertLogContext(runId: string, before = 5, after = 5, onlyRel
   return request<AlertLogContextPage>(`/alert-investigations/${runId}/logs/context?${qs}`);
 }
 
+/** Read the log cluster again, up to now, and fold what is new into the
+ *  stored set.
+ *
+ *  Idempotent on the server: the read starts before the stored high-water mark
+ *  and documents merge on their own `index:id`, so pressing the button twice
+ *  adds nothing. */
+export function refreshAlertLogs(runId: string) {
+  return request<{
+    run: string;
+    status: string;
+    logs: number;
+    new_logs: number;
+    read_until: string;
+    reason: string | null;
+    note: string;
+  }>(`/alert-investigations/${runId}/logs/refresh`, { method: "POST" });
+}
+
 export interface AnalysisStatus {
   run_id: string;
   status: string;

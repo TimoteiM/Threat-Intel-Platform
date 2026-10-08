@@ -1143,6 +1143,58 @@ async def get_run_logs(
 _RELEVANT_PAGE_CAP = 500
 
 
+@router.post("/{run_id}/logs/refresh")
+async def refresh_run_logs(
+    run_id: uuid.UUID,
+    db: DBSession,
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Read this alert's logs again, up to now, because the analyst asked.
+
+    The stored set was retrieved once, around the alert, and is deliberately
+    not re-read on every page load: the cluster would answer differently each
+    time and the page would be slower for it. But the alert's window is ten
+    minutes either side of its event time, and by the time somebody opens the
+    page that window has usually closed — so the scheduled follow-up has
+    nothing left to fetch, while two things may well have happened since.
+
+    The host went on doing things. And a document whose event time fell inside
+    the window can be indexed after the window was read — measured on this
+    cluster at up to 15.8 seconds, and longer for a source that replays.
+
+    Idempotent. The read starts before the stored high-water mark and
+    documents merge on their own `index:id`, so pressing this twice adds
+    nothing, and pressing it while the scheduled follow-up is running cannot
+    double-count.
+    """
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
+
+    from app.tasks.alert_log_followup_task import refresh_now
+
+    outcome = await asyncio.to_thread(refresh_now, run_id)
+    if outcome.get("status") == "missing":
+        raise HTTPException(
+            409,
+            "This alert has no stored log context to refresh. It was analysed "
+            "without logs — the log cluster was unreachable or the alert named "
+            "no entity to filter on.",
+        )
+    new_logs = int(outcome.get("new_logs") or 0)
+    return {
+        **outcome,
+        # Said in words, because "0" and "we could not look" are different
+        # answers and the second one must not read as the first.
+        "note": (
+            f"{new_logs} new event{'s' if new_logs != 1 else ''} since the last read."
+            if new_logs
+            else (outcome.get("reason") or "No new events since the last read.")
+        ),
+    }
+
+
 @router.get("/{run_id}/logs/context")
 async def get_run_log_context(
     run_id: uuid.UUID,

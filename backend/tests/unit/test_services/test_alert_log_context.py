@@ -533,3 +533,76 @@ def test_the_field_order_survives_a_jsonb_round_trip():
     assert names[0].startswith("data.win.eventdata.")
     assert names.index("data.win.eventdata.newProcessName") < names.index("data.win.system.task")
 
+
+
+# ── pulling new logs on request ──────────────────────────────────────────────
+#
+# The stored set is read once, around the alert, and deliberately not re-read
+# on every page load. But the alert's window is only ten minutes either side,
+# so by the time an analyst opens the page it has usually closed — and two
+# things may have happened since: the host went on doing things, and documents
+# whose event time fell inside the window can be indexed after it was read.
+# Neither is reachable without reading past the window's end.
+
+def test_an_analyst_can_read_past_the_window_end():
+    """The whole point of the control. Without `end_override`, every read is
+    clipped to `min(window_end, now)` — so once the window has passed there is
+    nothing a re-read can add, however long ago the alert was."""
+    client = FakeClient(FakeResult([_hit("a")]))
+    now = EVENT + timedelta(hours=3)
+    lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=now,
+        end_override=now, client=client, settings=Settings(),
+    )
+    sent = client.queries[-1]
+    query = str(sent)
+    # The read reached the present, not the window's end two hours and fifty
+    # minutes earlier.
+    assert "2026-09-23T15:00" in query or "2026-09-23T14:5" in query, query
+
+
+def test_the_window_itself_is_still_reported_as_the_alerts_own():
+    """Reading further must not restate what the alert's window was. The
+    analysis was formed on the window; the extra events are additional
+    context, and relabelling the window would make the analysis look as though
+    it had covered them."""
+    client = FakeClient(FakeResult([_hit("a")]))
+    now = EVENT + timedelta(hours=3)
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=now,
+        end_override=now, client=client, settings=Settings(),
+    )
+    assert ctx.window["end"].startswith("2026-09-23T12:10")
+    # And the read says separately how far it actually got.
+    assert ctx.read_until == now
+
+
+def test_an_override_can_never_shorten_the_window():
+    """An `end_override` earlier than the window's own coverage would silently
+    narrow the alert's context, which is the opposite of what the control is
+    for."""
+    client = FakeClient(FakeResult([_hit("a")]))
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=2),
+        end_override=EVENT - timedelta(hours=1),
+        client=client, settings=Settings(),
+    )
+    # Still the full window, not the past moment asked for.
+    assert ctx.read_until >= datetime(2026, 9, 23, 12, 10, tzinfo=timezone.utc)
+    assert ctx.status == "collected"
+
+
+def test_no_override_behaves_exactly_as_before():
+    """The scheduled follow-up must not change behaviour: it is still clipped
+    to the window, so it can never reach past it on a timer."""
+    client = FakeClient(FakeResult([_hit("a")]))
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=3),
+        client=client, settings=Settings(),
+    )
+    assert ctx.read_until == datetime(2026, 9, 23, 12, 10, tzinfo=timezone.utc)
+    assert ctx.window["complete"] is True
