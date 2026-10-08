@@ -716,6 +716,14 @@ async def correlate_alerts(
     since: datetime | None = None,
     until: datetime | None = None,
     min_rules: int = MIN_DISTINCT_RULES,
+    # Whether this pass may write. A *lookup* must not: correlation persists
+    # the keys it computes, and the key depends on the window asked for, so
+    # every read with a different `hours` minted fresh rows. The closing job
+    # checks a hundred candidates a pass with a per-case window and was
+    # creating up to a hundred orphans while retiring thirty-nine — the open
+    # count went 281 -> 511 -> 570 in half an hour, which is the loop and not
+    # the backlog.
+    persist: bool = True,
     # (source, client, host) — restricts the pass to one entity, for a caller
     # that wants one case rather than the estate.
     only_entity: tuple[str, str, str] | None = None,
@@ -1175,6 +1183,31 @@ async def correlate_alerts(
             # and how the score moved.
             last_event = _event_time(ordered[-1], cutoff)
             case_payload = cases[-1]
+            if not persist:
+                # Read-only: attach whatever the stored row already says and
+                # write nothing. A lookup that created a case was the loop
+                # this exists to break.
+                existing_row = await db.get(AlertCaseSpine, case_key)
+                if existing_row is not None:
+                    case_payload["case_number"] = existing_row.case_number
+                    case_payload["lifecycle"] = {
+                        "status": existing_row.status,
+                        "closed_at": _iso(existing_row.closed_at),
+                        "closure_kind": existing_row.closure_kind,
+                        "resolution": existing_row.resolution,
+                        "alerts_at_close": existing_row.alerts_at_close,
+                        **closure_rules.metrics(
+                            opened_at=existing_row.opened_at,
+                            created_at=existing_row.created_at,
+                            closed_at=existing_row.closed_at,
+                        ),
+                    }
+                    case_payload["narrative"] = {
+                        **narrative_lead(existing_row.narrative_markdown),
+                        "status": existing_row.narrative_status,
+                        "generated_at": _iso(existing_row.narrative_generated_at),
+                    }
+                continue
             await absorb_superseded(
                 db,
                 live_case_key=case_key,
@@ -1453,6 +1486,10 @@ async def case_by_key(
     )
     result = await correlate_alerts(
         db, scope=scope, hours=hours, limit=500, only_entity=only_entity,
+        # A lookup never writes. This is called a hundred times a pass by the
+        # closing job, each with its own window, and correlation persists the
+        # keys it computes — so looking for a case was minting new ones.
+        persist=False,
     )
     for case in result["cases"]:
         if case.get("case_key") == case_key:
