@@ -42,7 +42,13 @@ import {
   YAxis,
 } from "recharts";
 
-import { getCaseReport, getCaseReportOptions, type CaseReport, type CaseReportOptions } from "@/lib/api";
+import {
+  getCaseReport,
+  getCaseReportOptions,
+  type CaseReport,
+  type CaseReportOptions,
+  type CaseReportTiming,
+} from "@/lib/api";
 import { EmptyState, Page, PageHeader, Section } from "@/components/ui/Primitives";
 
 /** Severity, in the fixed order it is always drawn in. Colour follows the
@@ -154,13 +160,25 @@ function ReportsPageInner() {
   );
 
   const timingRows = useCallback(
-    (source: Record<string, number | null>) =>
-      SEVERITY.map((s) => ({
-        name: s.label,
-        value: source[s.id] ?? 0,
-        measured: source[s.id] !== null && source[s.id] !== undefined,
-        color: s.color,
-      })),
+    (source: Record<string, CaseReportTiming>) =>
+      SEVERITY.map((s) => {
+        const cell = source[s.id];
+        const measured = cell?.median !== null && cell?.median !== undefined;
+        const value = cell?.median ?? 0;
+        return {
+          name: s.label,
+          value,
+          measured,
+          mean: cell?.mean ?? null,
+          count: cell?.count ?? 0,
+          // Computed here, not in a LabelList formatter: Recharts does not
+          // hand the row to one, so reading `measured` off its second
+          // argument was always undefined and every bar printed "not
+          // measured" while the tooltip showed the real figure.
+          label: measured ? `${value.toFixed(1)} (n=${cell?.count ?? 0})` : "not measured",
+          color: s.color,
+        };
+      }),
     [],
   );
 
@@ -251,14 +269,14 @@ function ReportsPageInner() {
 
           <div style={twoUp}>
             <Section
-              title="Mean response time"
-              hint="Minutes from the first alert until the platform had a case about it."
+              title="Response time"
+              hint="Minutes from the first alert until the platform had a case about it. The bar is the typical case (median); the tooltip carries the average and how many cases are behind it."
             >
               <TimingBars rows={timingRows(report.response_minutes)} />
             </Section>
             <Section
-              title="Mean resolution time"
-              hint="Minutes from the first alert until the case was answered."
+              title="Resolution time"
+              hint="Minutes from the first alert until the case was answered. Median, with the average in the tooltip."
             >
               <TimingBars rows={timingRows(report.resolution_minutes)} />
               {report.resolution_excludes_swept > 0 && (
@@ -271,6 +289,17 @@ function ReportsPageInner() {
               )}
             </Section>
           </div>
+
+          {report.alerts_timestamped_ahead > 0 && (
+            <p style={footnote}>
+              {report.alerts_timestamped_ahead.toLocaleString()} alert
+              {report.alerts_timestamped_ahead === 1 ? " is" : "s are"} timestamped later than
+              the moment we received {report.alerts_timestamped_ahead === 1 ? "it" : "them"} — a
+              clock or timezone fault at the source. A negative detection time is clamped to
+              zero, so {report.alerts_timestamped_ahead === 1 ? "it reports" : "they report"} as
+              detected instantly and pull these figures down.
+            </p>
+          )}
 
           <Section title="Cases by severity, day by day">
             <SeverityByDay data={report.by_day} />
@@ -399,13 +428,16 @@ function TimingBars({
             {rows.map((row) => (
               <Cell key={row.name} fill={row.measured ? row.color : "var(--panel-divider)"} />
             ))}
-            <LabelList
-              dataKey="value" position="right" style={labelText}
-              // "not measured" rather than 0: a severity nothing was answered
-              // in has no mean, and a zero would read as instant.
-              formatter={((v: any, entry: any) =>
-                entry?.payload?.measured ? Number(v ?? 0).toFixed(1) : "not measured") as any}
-            />
+            {/* "not measured" rather than 0: a severity nothing was answered
+                in has no mean, and a zero would read as instant.
+
+                The text is computed in the data, not in a formatter.
+                Recharts does not hand the row to a LabelList formatter — the
+                second argument is not the datum — so reading `measured` off
+                it was always undefined and every bar printed "not measured"
+                while its tooltip, which does get the row, showed the real
+                figure. */}
+            <LabelList dataKey="label" position="right" style={labelText} />
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -503,12 +535,32 @@ function CountTip({ active, payload, total }: any & { total: number }) {
 function MinutesTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
+  if (!row?.measured) {
+    return (
+      <Shell>
+        <div>{row?.name}</div>
+        <div>nothing in this band was answered — not zero, unmeasured</div>
+      </Shell>
+    );
+  }
   return (
     <Shell>
-      <div>{row?.name}</div>
+      <div>{row.name}</div>
       <div style={{ fontVariantNumeric: "tabular-nums" }}>
-        {row?.measured ? `${Number(row.value).toFixed(1)} minutes on average` : "nothing measured"}
+        median {Number(row.value).toFixed(1)} min
       </div>
+      {/* The mean is kept beside the median rather than instead of it: on
+          this distribution they differ by hours, and one case that waited a
+          day moves the mean and not the median. */}
+      <div style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-muted)" }}>
+        mean {row.mean === null ? "—" : `${Number(row.mean).toFixed(1)} min`} · {row.count} case
+        {row.count === 1 ? "" : "s"}
+      </div>
+      {row.count < 5 && (
+        <div style={{ color: "var(--status-warning)", marginTop: 3 }}>
+          too few cases to read as a rate
+        </div>
+      )}
     </Shell>
   );
 }

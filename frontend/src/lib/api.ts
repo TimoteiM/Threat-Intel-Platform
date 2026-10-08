@@ -598,6 +598,12 @@ export interface CaseReportOptions {
   scope: { all_tenants: boolean };
 }
 
+export interface CaseReportTiming {
+  median: number | null;
+  mean: number | null;
+  count: number;
+}
+
 export interface CaseReport {
   month: string;
   client: string;
@@ -606,10 +612,12 @@ export interface CaseReport {
   cases_closed: number;
   cases_active: number;
   severity: { critical: number; high: number; medium: number; low: number };
-  /** Mean minutes per severity. `null` means nothing in that band was
-   *  measured — which is not the same as zero, and is not drawn as a bar. */
-  response_minutes: Record<string, number | null>;
-  resolution_minutes: Record<string, number | null>;
+  /** Minutes per severity. `median` is the typical case and `mean` the
+   *  average — on this distribution they differ by hours, so both travel and
+   *  `count` says how many cases are behind them. A `null` median means
+   *  nothing in that band was measured, which is not the same as zero. */
+  response_minutes: Record<string, CaseReportTiming>;
+  resolution_minutes: Record<string, CaseReportTiming>;
   resolutions: Record<string, number>;
   by_day: Array<{
     date: string;
@@ -625,6 +633,10 @@ export interface CaseReport {
    *  the resolution means. Counted rather than hidden: including them
    *  reported one month as a mean of 21.8 days. */
   resolution_excludes_swept: number;
+  /** Alerts whose own timestamp is later than the moment we received them — a
+   *  clock or timezone fault at the source. A negative detection time is
+   *  clamped to zero, so each one reports as "detected instantly". */
+  alerts_timestamped_ahead: number;
   scope: { all_tenants: boolean; applied: string };
 }
 

@@ -28,7 +28,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import case as sql_case
 from sqlalchemy import desc as sa_desc
 from sqlalchemy import false as sa_false
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.dependencies import DBSession
 from app.models.database import AlertBodyInvestigationRun, AnalystFeedback, Investigation
@@ -956,6 +956,22 @@ async def case_report(
             permitted = permitted | AlertBodyInvestigationRun.tenant_id.is_(None)
         alert_clauses.append(permitted)
 
+    alerts_ahead = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(AlertBodyInvestigationRun)
+                .where(
+                    *alert_clauses,
+                    AlertBodyInvestigationRun.event_time.is_not(None),
+                    AlertBodyInvestigationRun.event_time
+                    > AlertBodyInvestigationRun.created_at + text("interval '2 minutes'"),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+
     alerts_triggered = int(
         (
             await db.execute(
@@ -1024,9 +1040,32 @@ async def case_report(
             swept += 1
         per_severity[band].append(measured)
 
-    def _mean_minutes(entries: list[dict[str, Any]], key: str) -> float | None:
-        values = [e[key] for e in entries if e.get(key) is not None]
-        return round(sum(values) / len(values) / 60, 1) if values else None
+    def _timing(entries: list[dict[str, Any]], key: str) -> dict[str, Any]:
+        """The typical case and the average, which are not the same number.
+
+        Measured over October: median 173.9 minutes against a mean of 393.5,
+        a p95 of 1,428 and a maximum of 1,488. One case that waited a day
+        moves the mean by hours and the median not at all, so the mean of a
+        tail like this reports the worst week rather than the usual one.
+
+        Both travel. The median is what the chart draws; the mean is in the
+        tooltip, because a service review is asked about both and dropping
+        one invites the question being answered from the other.
+        """
+        values = sorted(e[key] for e in entries if e.get(key) is not None)
+        if not values:
+            return {"median": None, "mean": None, "count": 0}
+        middle = len(values) // 2
+        median = (
+            values[middle]
+            if len(values) % 2
+            else (values[middle - 1] + values[middle]) / 2
+        )
+        return {
+            "median": round(median / 60, 1),
+            "mean": round(sum(values) / len(values) / 60, 1),
+            "count": len(values),
+        }
 
     return {
         "month": month or "all",
@@ -1038,11 +1077,11 @@ async def case_report(
         "severity": severities,
         # Minutes, by severity, the way a service review reads them.
         "response_minutes": {
-            band: _mean_minutes(entries, "detect_seconds")
+            band: _timing(entries, "detect_seconds")
             for band, entries in per_severity.items()
         },
         "resolution_minutes": {
-            band: _mean_minutes(entries, "resolve_seconds")
+            band: _timing(entries, "resolve_seconds")
             for band, entries in per_severity.items()
         },
         "resolutions": dict(sorted(resolutions.items(), key=lambda kv: -kv[1])),
@@ -1061,6 +1100,12 @@ async def case_report(
         # rather than answered, and including it reported September as a mean
         # resolution of 21.8 days.
         "resolution_excludes_swept": swept,
+        # Alerts whose own timestamp is later than the moment we received
+        # them, which is a clock or timezone fault at the source. `metrics()`
+        # clamps a negative detection time to zero, so each one silently
+        # reports as "detected instantly" and pulls the figures down. Six
+        # exist estate-wide, the worst ten hours ahead.
+        "alerts_timestamped_ahead": alerts_ahead,
         "scope": {
             "all_tenants": bool(getattr(scope, "all_tenants", False)),
             "applied": "tenant_id",
