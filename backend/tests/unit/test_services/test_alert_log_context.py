@@ -606,3 +606,100 @@ def test_no_override_behaves_exactly_as_before():
     )
     assert ctx.read_until == datetime(2026, 9, 23, 12, 10, tzinfo=timezone.utc)
     assert ctx.window["complete"] is True
+
+
+# ── which events survive the retrieval cap ───────────────────────────────────
+#
+# Reported as: every event offered "before" the alert sits 9 minutes away from
+# it, and pressing Load older only goes further. On a real alert — a
+# ten-minute window either side, 1,000 hits retrieved, "retrieval limit
+# reached" — the cap was reached 39 seconds into the window and the alert was
+# 9m21s later, so nothing near it had ever been fetched.
+
+class RecordingClient:
+    """Answers each sub-query with the slice of a corpus it asks for."""
+
+    def __init__(self, corpus):
+        self.corpus = corpus
+        self.calls = []
+
+    def concrete_indices(self, pattern):
+        return ["wazuh-alerts-4.x-2026.09.23"]
+
+    def search_all(self, **kwargs):
+        rng = kwargs["query"]["bool"]["filter"][0]["range"]["timestamp"]
+        order = kwargs["sort"][0]["timestamp"]["order"]
+        limit = kwargs["max_hits"]
+        self.calls.append((rng["gte"], rng["lte"], order, limit))
+        inside = [
+            hit for hit in self.corpus
+            if rng["gte"] <= hit["_source"]["timestamp"] <= rng["lte"]
+        ]
+        inside.sort(key=lambda h: h["_source"]["timestamp"], reverse=(order == "desc"))
+        taken = inside[:limit]
+        return FakeResult(taken, truncated=len(inside) > limit)
+
+    def close(self):
+        pass
+
+
+def _busy_window():
+    """A thousand events crowded at the start of the window, the alert ten
+    minutes later — the shape that produced the report."""
+    corpus = []
+    for i in range(1000):
+        stamp = (EVENT - timedelta(minutes=10) + timedelta(milliseconds=i * 40))
+        corpus.append(_hit(f"early-{i}", ts=stamp.strftime("%Y-%m-%dT%H:%M:%S.%f%z") or stamp.isoformat()))
+    # And a handful immediately around the alert.
+    for i in range(1, 6):
+        near = EVENT - timedelta(seconds=i)
+        corpus.append(_hit(f"near-before-{i}", ts=near.isoformat()))
+        after = EVENT + timedelta(seconds=i)
+        corpus.append(_hit(f"near-after-{i}", ts=after.isoformat()))
+    return corpus
+
+
+def test_the_cap_keeps_the_events_nearest_the_alert():
+    """The fix. An ascending query capped at max_hits keeps the *earliest*
+    events in the window, so a busy window is read from its far edge and the
+    retrieval runs out before reaching the alert."""
+    client = RecordingClient(_busy_window())
+    ctx = lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=1),
+        client=client, settings=Settings(), max_hits=20,
+    )
+    keys = {log["key"].split(":", 1)[1] for log in ctx.logs}
+    assert any(k.startswith("near-before") for k in keys), "the events just before the alert"
+    assert any(k.startswith("near-after") for k in keys), "the events just after it"
+
+
+def test_the_window_is_read_outward_from_the_alert():
+    """Before descending and after ascending, so each side takes the events
+    adjacent to the alert first and the cap discards the far edges."""
+    client = RecordingClient(_busy_window())
+    lc.collect_for_alert(
+        event_time=EVENT, entity_host="expsccm01", entity_user=None,
+        alert_fields={"agent_id": "1173"}, now=EVENT + timedelta(hours=1),
+        client=client, settings=Settings(), max_hits=20,
+    )
+    orders = [order for _, _, order, _ in client.calls]
+    assert orders == ["desc", "asc"], orders
+    # And the two halves do not overlap, so a document on the boundary is
+    # read once.
+    (_, before_end, _, _), (after_start, _, _, _) = client.calls
+    assert after_start > before_end
+
+
+def test_a_side_that_cannot_spend_its_half_gives_it_to_the_other():
+    """An alert near the start of its window still reads a full window's
+    worth of what followed, rather than half of one."""
+    client = RecordingClient(_busy_window())
+    lc.collect_for_alert(
+        # The alert sits at the very beginning, so nothing precedes it.
+        event_time=EVENT - timedelta(minutes=10), entity_host="expsccm01",
+        entity_user=None, alert_fields={"agent_id": "1173"},
+        now=EVENT + timedelta(hours=1), client=client, settings=Settings(), max_hits=20,
+    )
+    budgets = {order: limit for _, _, order, limit in client.calls}
+    assert budgets["asc"] > 10, budgets

@@ -521,6 +521,121 @@ class LogContext:
         }
 
 
+def _search_around(
+    *,
+    client: Any,
+    indices: Any,
+    device: Any,
+    principal: Any,
+    timestamp_field: str,
+    tenant_field: str,
+    tenant_values: list[str],
+    start: datetime,
+    end: datetime,
+    pivot: datetime,
+    page_size: int,
+    budget: int,
+    use_pit: bool,
+) -> Any:
+    """The events nearest the alert, when the window holds more than the cap.
+
+    One ascending query capped at `max_hits` keeps the *earliest* events in the
+    window — on a busy host it runs out long before the alert and the analyst
+    is shown the first seconds of the window and nothing around the thing they
+    opened. Measured on a real alert: a ten-minute window either side, 1,000
+    hits retrieved, the cap reached 39 seconds in, and every event offered
+    "before" the alert sat 9m21s away from it because that is where the
+    retrieval stopped. Each press of Load older went further away, and nothing
+    nearer ever existed to load.
+
+    So the window is read outward from the alert: the half before it descending
+    and the half after it ascending, each taking the events adjacent to the
+    alert first. What the cap discards is then the far edges of the window,
+    which is the right thing to lose.
+
+    The budget is not split blindly — a side that cannot spend its half gives
+    the remainder to the other, so an alert near the start of its window still
+    reads a full window's worth of what followed.
+    """
+    def _utc(value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    pivot = min(max(_utc(pivot), _utc(start)), _utc(end))
+    start, end = _utc(start), _utc(end)
+    before_budget = budget // 2
+    after_budget = budget - before_budget
+
+    def _run(lo: datetime, hi: datetime, limit: int, order: str) -> Any:
+        if limit <= 0 or lo > hi:
+            return None
+        query = build_query(
+            device=device, principal=principal, start=lo, end=hi,
+            timestamp_field=timestamp_field,
+            tenant_field=tenant_field, tenant_values=tenant_values,
+        )
+        if query is None:
+            return None
+        return client.search_all(
+            indices=indices,
+            query=query,
+            # `_id` last so paging is stable: two documents sharing a
+            # millisecond would otherwise make search_after loop or skip.
+            sort=[{timestamp_field: {"order": order}}, {"_id": {"order": order}}],
+            source_fields=SOURCE_FIELDS,
+            page_size=page_size,
+            max_hits=limit,
+            use_pit=use_pit,
+        )
+
+    # Before, nearest first. Inclusive of the pivot instant; the after side
+    # starts a millisecond later so a document on the boundary is read once.
+    before = _run(start, pivot, before_budget, "desc")
+    spent = len(before.hits) if before else 0
+    # Whatever the earlier side could not spend.
+    after = _run(
+        pivot + timedelta(milliseconds=1), end,
+        after_budget + (before_budget - spent), "asc",
+    )
+
+    hits: list[Any] = []
+    seen: set[str] = set()
+    for part in (before, after):
+        for hit in (part.hits if part else []):
+            key = f"{hit.get('_index')}:{hit.get('_id')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append(hit)
+    hits.sort(key=lambda h: str((h.get("_source") or {}).get(timestamp_field) or ""))
+
+    carrier = before or after
+    if carrier is None:
+        return _EmptyResult()
+    carrier.hits = hits
+    carrier.truncated = bool(
+        (before.truncated if before else False) or (after.truncated if after else False)
+    )
+    if before and after:
+        carrier.indices_searched = sorted(
+            set(before.indices_searched or []) | set(after.indices_searched or [])
+        )
+        carrier.node_failures = list(before.node_failures or []) + list(after.node_failures or [])
+    return carrier
+
+
+class _EmptyResult:
+    """When neither side could be queried at all."""
+
+    hits: list[Any] = []
+    truncated = False
+    indices_searched: list[str] = []
+    nodes_used: list[str] = []
+    node_failures: list[Any] = []
+    took_ms = 0
+    pages = 0
+    total_available = None
+
+
 def collect_for_alert(
     *,
     event_time: datetime | None,
@@ -662,15 +777,19 @@ def collect_for_alert(
             pattern=str(settings.opensearch_index_pattern),
             start=effective_start, end=window.covered_until, client=client,
         )
-        result = client.search_all(
+        result = _search_around(
+            client=client,
             indices=indices,
-            query=query,
-            # `_id` last so paging is stable: two documents sharing a millisecond
-            # would otherwise make search_after loop or skip.
-            sort=[{timestamp_field: {"order": "asc"}}, {"_id": {"order": "asc"}}],
-            source_fields=SOURCE_FIELDS,
+            device=device,
+            principal=principal,
+            timestamp_field=timestamp_field,
+            tenant_field=tenant_field,
+            tenant_values=tenant_values,
+            start=effective_start,
+            end=read_until,
+            pivot=event_time,
             page_size=int(settings.alert_log_page_size),
-            max_hits=int(max_hits if max_hits is not None else settings.alert_log_max_hits),
+            budget=int(max_hits if max_hits is not None else settings.alert_log_max_hits),
             use_pit=bool(getattr(settings, "opensearch_use_point_in_time", True)),
         )
     except osc.OpenSearchUnavailable as exc:
