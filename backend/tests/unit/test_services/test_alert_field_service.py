@@ -8,6 +8,8 @@ rather than over examples written to match the parser.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.services import alert_field_service as afs
 from app.services.alert_field_service import entity_of, extract_alert_fields
 
@@ -287,3 +289,72 @@ def test_the_dotted_form_is_opt_in_per_field():
     # The account asks for it; nothing else does yet.
     source = inspect.getsource(afs.extract_alert_fields)
     assert source.count("dotted=True") == 1
+
+
+# --- a host whose clock is ahead of the manager that reports it --------------
+
+def test_a_host_clock_ahead_of_the_alert_is_refused():
+    """Reported as "how is the displayed activity in the future?".
+
+    The far-future guard is two days, so a host ten hours fast sailed through
+    it — and the alert says plainly that it is fast:
+
+        Time: 2026-10-08T09:15:26.531+0000
+        data.win.system.systemTime: 2026-10-08T13:07:39.294706900Z
+
+    Both explicitly UTC, so nothing is mis-parsed. The Windows host is simply
+    3h52m ahead of the Wazuh manager. Taken at face value that put a case in
+    the future, where a window measured from it could never elapse.
+    """
+    body = (
+        "Time: 2026-10-08T09:15:26.531+0000\n"
+        "Agent: SERVER01\n"
+        "data.win.system.systemTime: 2026-10-08T13:07:39.294706900Z\n"
+    )
+    chosen = afs.event_time_of(body)
+    assert chosen is not None
+    # The manager's own stamp, not the host's.
+    assert chosen.hour == 9
+    assert chosen < datetime(2026, 10, 8, 9, 16, tzinfo=timezone.utc)
+
+
+def test_a_host_clock_behind_the_manager_is_believed():
+    """Which is the normal case: an event happens, and some time later an
+    alert about it is written. Only the other direction is impossible."""
+    body = (
+        "Time: 2026-10-08T09:15:26.531+0000\n"
+        "data.win.system.systemTime: 2026-10-08T09:10:00.000Z\n"
+    )
+    chosen = afs.event_time_of(body)
+    assert chosen == datetime(2026, 10, 8, 9, 10, tzinfo=timezone.utc)
+
+
+def test_a_few_seconds_of_skew_is_tolerated():
+    """Propagation and rounding are seconds. The guard must not fire on them,
+    or every alert would be restamped and the host's own clock — which is the
+    more precise source — would never be used."""
+    body = (
+        "Time: 2026-10-08T09:15:00.000+0000\n"
+        "data.win.system.systemTime: 2026-10-08T09:15:30.000Z\n"
+    )
+    assert afs.event_time_of(body) == datetime(2026, 10, 8, 9, 15, 30, tzinfo=timezone.utc)
+
+
+def test_the_substitution_is_counted():
+    """So a fleet-wide clock problem announces itself rather than being
+    absorbed. Three hosts do this today over eight alerts, two of them exactly
+    ten hours out."""
+    afs.reset_stamp_heuristic_stats()
+    afs.event_time_of(
+        "Time: 2026-10-08T09:15:26.531+0000\n"
+        "data.win.system.systemTime: 2026-10-08T19:15:00.000Z\n"
+    )
+    assert afs.stamp_heuristic_stats()["host_clock_ahead"] == 1
+
+
+def test_an_alert_with_no_stamp_of_its_own_still_falls_back():
+    """Without a manager stamp there is no ceiling to apply, so the host is
+    believed — there is nothing better — and the caller's fallback still
+    covers a body with no time at all."""
+    fallback = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+    assert afs.event_time_of("nothing parseable here", fallback=fallback) == fallback

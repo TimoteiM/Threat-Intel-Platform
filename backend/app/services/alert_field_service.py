@@ -469,6 +469,8 @@ _STAMP_STATS: dict[str, float] = {
     "disagreed_implausibly": 0,
     "max_delta_seconds": 0.0,
     "naive_stamps_chosen": 0,
+    # A host whose clock is ahead of the manager that reported it.
+    "host_clock_ahead": 0,
 }
 
 
@@ -556,6 +558,38 @@ def _parse_header_times(raw: str) -> datetime | None:
     return chosen
 
 
+# How far a host's own stamp may sit after the alert that reports it before the
+# host is the one that is wrong. Propagation and rounding are seconds; this is
+# generous enough to never fire on them.
+HOST_CLOCK_TOLERANCE = timedelta(minutes=2)
+
+
+def _reported_at(text: str) -> datetime | None:
+    """When the manager produced this alert, as the alert itself states.
+
+    The ceiling on any event time in it. A host cannot observe something after
+    the alert about it was written.
+
+    Parsed without the telemetry `_parse_header_times` carries. That counter
+    measures how often the two stamps on a header disagree and by how much,
+    which is a property of the *choice* the extractor makes — reading the same
+    line a second time to establish a ceiling counted every alert twice and
+    made the statistic mean something else.
+
+    The rule is the same one: the earliest stamp on the line, because an event
+    cannot postdate its own processing whichever position the two occupy.
+    """
+    match = re.search(r"(?:^|\n)[ \t]*Time:[ \t]*([^\n]{19,90})", text, re.IGNORECASE)
+    if not match:
+        return None
+    found = [
+        parsed
+        for stamp in _TIMESTAMP_IN_TEXT.findall(match.group(1))
+        if (parsed := _parse_timestamp(stamp)) is not None
+    ]
+    return min(found) if found else None
+
+
 def event_time_of(alert_body: str, *, fallback: datetime | None = None) -> datetime | None:
     """
     When this happened on the host, falling back to when we were told.
@@ -564,8 +598,29 @@ def event_time_of(alert_body: str, *, fallback: datetime | None = None) -> datet
     parseable, so a caller can always order by the result. A value in the far
     future is refused: a clock-skewed endpoint stamping 2031 would otherwise
     sort itself to the end of every case it appears in, permanently.
+
+    **A host whose clock is merely ahead is refused too, by the alert's own
+    stamp rather than by the wall clock.** The far-future guard is two days,
+    so a host ten hours fast sailed through it — and the alert says plainly
+    that it did:
+
+        Time: 2026-10-08T09:15:26.531+0000
+        data.win.system.systemTime: 2026-10-08T13:07:39.294706900Z
+
+    Both explicitly UTC, so nothing is mis-parsed; the Windows host is simply
+    3h52m ahead of the Wazuh manager that reported it. Taken at face value
+    that put case #1127 in the future, where a window measured from it could
+    never elapse and the Cases table showed activity that had not happened.
+
+    Three hosts do this — two of them exactly ten hours out, which looks like
+    a lab VM — over eight alerts. Small, and the kind of thing that is only
+    small until a figure is computed from it.
+
+    The manager's stamp is used instead, and the substitution is counted so a
+    fleet-wide clock problem announces itself rather than being absorbed.
     """
     text = str(alert_body or "")[:200_000]
+    reported_at = _reported_at(text)
 
     for pattern in _EVENT_TIME_PATTERNS:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -577,6 +632,14 @@ def event_time_of(alert_body: str, *, fallback: datetime | None = None) -> datet
         if found > datetime.now(timezone.utc) + timedelta(days=2):
             logger.debug("Ignoring implausible event time %s", found)
             continue
+        if reported_at is not None and found > reported_at + HOST_CLOCK_TOLERANCE:
+            _STAMP_STATS["host_clock_ahead"] += 1
+            logger.warning(
+                "Host clock ahead of the manager by %.0fs; using the alert's own "
+                "stamp instead of %s",
+                (found - reported_at).total_seconds(), found.isoformat(),
+            )
+            return reported_at
         return found
 
-    return fallback
+    return reported_at or fallback
