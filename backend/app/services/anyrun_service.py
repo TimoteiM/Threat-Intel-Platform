@@ -1208,6 +1208,33 @@ def _run_sandbox(
                 return _error(
                     indicator_type,
                     "ANY.RUN sandbox task is still running and the report is not ready yet.",
+                    mode="sandbox",
+                    analysis_id=analysis_id,
+                    execution=_anyrun_execution_report(
+                        report_data,
+                        requested_interactivity=_ANYRUN_AUTOMATED_INTERACTIVITY,
+                        final_status=final_status,
+                    ),
+                )
+            # A task that ended FAILED is not a task that found nothing.
+            #
+            # `final_status` was computed here and never read — assigned on one
+            # line and referenced nowhere — so a failed detonation fell through
+            # to the verdict call, which answers "No threats detected" for a
+            # run that never executed, and that normalises to `clean`. A
+            # sandbox that crashed became evidence of safety.
+            if str(final_status or "").strip().upper() == "FAILED":
+                return _error(
+                    indicator_type,
+                    "ANY.RUN sandbox task reported FAILED, so its result is not "
+                    "evidence about this indicator.",
+                    mode="sandbox",
+                    analysis_id=analysis_id,
+                    execution=_anyrun_execution_report(
+                        report_data,
+                        requested_interactivity=_ANYRUN_AUTOMATED_INTERACTIVITY,
+                        final_status=final_status,
+                    ),
                 )
             verdict_raw = connector.get_analysis_verdict(analysis_id)
             verdict = _normalize_anyrun_verdict(verdict_raw)
@@ -1324,6 +1351,14 @@ def _run_sandbox(
             "raw_summary": {
                 "source": "anyrun",
                 "mode": "sandbox",
+                # What we asked for AND what the task applied. The old shape
+                # recorded only the module constant, so it agreed with itself
+                # however the task actually ran.
+                "sandbox_execution": _anyrun_execution_report(
+                    report_data,
+                    requested_interactivity=_ANYRUN_AUTOMATED_INTERACTIVITY,
+                    final_status=final_status,
+                ),
                 "sandbox_options": {
                     "automated_interactivity": _ANYRUN_AUTOMATED_INTERACTIVITY,
                 },
@@ -1461,8 +1496,14 @@ def _submit_anyrun_task_with_fallback(
     base_parallel_backoff_seconds = int(getattr(settings, "anyrun_parallel_backoff_seconds", 10) or 10)
     max_transient_retries = int(getattr(settings, "anyrun_transient_retries", 3) or 3)
     base_transient_backoff_seconds = int(getattr(settings, "anyrun_transient_backoff_seconds", 6) or 6)
-    url_analysis_timeout = int(getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120) or 120)
-    file_analysis_timeout = int(getattr(settings, "anyrun_file_sandbox_analysis_timeout", 240) or 240)
+    # Clamped to ANY.RUN's documented 10-660s. Out of range is a 400 from the
+    # API, not a clamp, so a mistyped setting would fail every submission.
+    url_analysis_timeout = _clamp_anyrun_timeout(
+        getattr(settings, "anyrun_url_sandbox_analysis_timeout", 120), 120
+    )
+    file_analysis_timeout = _clamp_anyrun_timeout(
+        getattr(settings, "anyrun_file_sandbox_analysis_timeout", 240), 240
+    )
     url_mitm = bool(getattr(settings, "anyrun_url_sandbox_mitm", True))
     anyrun_proxy_country = _normalize_anyrun_proxy_country(proxy_country)
     use_residential_proxy = bool(use_residential_proxy or anyrun_proxy_country)
@@ -1670,14 +1711,43 @@ def _is_transient_provider_error(exc: Exception) -> bool:
 
 
 def _normalize_submission_url(indicator: str) -> str:
+    """The URL to detonate, with everything that selects the payload intact.
+
+    A phishing URL's query and fragment usually *are* the payload selector —
+    the victim id, the redirect target, the stage. Dropping them submits a
+    different page from the one in the alert, and the sandbox then has nothing
+    to interact with, which looks exactly like automation failing.
+
+    Two things were losing them:
+
+      * A defanged indicator went to the API verbatim. `hxxps://` is not a
+        scheme anything can fetch, so the task could only fail. Refanged
+        through the extractor's own `refang`, so there is one implementation
+        of what defanging looks like rather than a second copy here.
+      * The malformed single-slash form was rebuilt from the scheme and the
+        path alone: `https:/host/p?q=1` became `https:///host/p`, which both
+        drops the query and is not a resolvable URL.
+    """
     value = str(indicator or "").strip()
     if not value:
         return value
+
+    # One definition of defanging, in the module that already owns it.
+    try:
+        from app.services.alert_ioc_extraction_service import refang
+
+        value = str(refang(value) or value).strip()
+    except Exception:  # noqa: BLE001 — never block a submission on this
+        pass
+
     parsed = urlparse(value)
     if parsed.scheme and parsed.netloc:
         return value
     if parsed.scheme and not parsed.netloc and parsed.path:
-        return f"{parsed.scheme}://{parsed.path}"
+        # `https:/host/p` — one slash. Rebuilt from the whole remainder, not
+        # from the path, so the query and fragment survive.
+        remainder = value[len(parsed.scheme) + 1:].lstrip("/")
+        return f"{parsed.scheme}://{remainder}" if remainder else value
     return f"https://{value}"
 
 
@@ -1693,6 +1763,88 @@ def _create_sandbox_connector(sandbox_connector_cls: Any, *, api_key: str, sandb
     return None
 
 
+# ANY.RUN's documented bounds for the analysis duration. The SDK declares
+# "Size range: 10-660" on `opt_timeout`; a value outside it is a 400 from the
+# API rather than a clamp, so it is clamped here where the setting is read.
+_ANYRUN_TIMEOUT_MIN = 10
+_ANYRUN_TIMEOUT_MAX = 660
+
+
+def _clamp_anyrun_timeout(value: Any, default: int) -> int:
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(_ANYRUN_TIMEOUT_MIN, min(_ANYRUN_TIMEOUT_MAX, seconds))
+
+
+def _anyrun_execution_report(
+    report_data: dict[str, Any],
+    *,
+    requested_interactivity: bool,
+    final_status: str | None,
+) -> dict[str, Any]:
+    """What the sandbox actually did, from documented response fields only.
+
+    `data.analysis.options` is the task's *applied* settings, which is a
+    different thing from the settings we asked for and the only one that can
+    answer whether the run did what we wanted. It was not read: the diagnostic
+    recorded `_ANYRUN_AUTOMATED_INTERACTIVITY`, a module constant that is
+    always True, so it agreed with itself whatever the sandbox did and could
+    never have shown a downgrade.
+
+    Verified against this account's own task history: nine tasks submitted
+    through this integration all report
+    `options.automatization.interactivity = true`, and sixteen submitted
+    elsewhere all report false — so the field does reflect the submission and
+    is worth asserting on.
+
+    Completeness is reported as `unknown` whenever the telemetry does not
+    settle it. A run that failed, or that we could not confirm finished, is
+    not evidence of safety, and saying "unknown" is the only honest answer
+    available from these fields.
+    """
+    options = (report_data.get("analysis") or {}).get("options") or {}
+    automatization = options.get("automatization") or {}
+    applied = automatization.get("interactivity")
+    status = str(final_status or "").strip().upper() or None
+    report_status = str(report_data.get("status") or "").strip().upper() or None
+
+    if status == "FAILED" or report_status == "FAILED":
+        completeness = "failed"
+    elif status == "COMPLETED" or report_status in {"DONE", "COMPLETED"}:
+        completeness = "complete"
+    else:
+        # Never "complete" by omission. The stream ends for reasons that are
+        # not completion — a dropped connection, our own deadline — and the
+        # difference between "it finished" and "we stopped looking" is the
+        # whole question.
+        completeness = "unknown"
+
+    return {
+        "requested": {"automated_interactivity": bool(requested_interactivity)},
+        "applied": {
+            # None when the field is absent, which is not the same as False.
+            "automated_interactivity": None if applied is None else bool(applied),
+            "timeout_seconds": options.get("timeout"),
+            "additional_time_seconds": options.get("additionalTime"),
+            "network": options.get("network"),
+            "fakenet": options.get("fakeNet"),
+            "mitm": options.get("mitm"),
+            "tor": (options.get("tor") or {}).get("used"),
+            "privacy": options.get("privacy"),
+        },
+        # True only when we asked for interactivity and the task says it ran
+        # without it. None means the task did not say.
+        "automated_interactivity_downgraded": (
+            None if applied is None else bool(requested_interactivity) and not bool(applied)
+        ),
+        "task_status": status,
+        "report_status": report_status,
+        "execution_completeness": completeness,
+    }
+
+
 def _wait_status_stream(connector: Any, task_id: str, timeout_seconds: int) -> str | None:
     deadline = time.time() + max(10, timeout_seconds)
     last_status: str | None = None
@@ -1705,8 +1857,14 @@ def _wait_status_stream(connector: Any, task_id: str, timeout_seconds: int) -> s
             last_status = status or last_status
             if status in {"COMPLETED", "FAILED"}:
                 break
-    except Exception:
-        pass
+    except Exception as exc:
+        # Logged, not silently discarded. A dropped stream and a task that
+        # never finished produced the same answer here — None — and the caller
+        # cannot tell "we stopped looking" from "it is still going".
+        logger.warning(
+            "ANY.RUN status stream for task %s ended early: %s: %s",
+            str(task_id)[:12], type(exc).__name__, str(exc)[:200],
+        )
     return last_status
 
 
@@ -3049,14 +3207,48 @@ def _is_sparse_lookup_result(result: dict[str, Any]) -> bool:
     )
 
 
-def _error(indicator_type: str, message: str, mode: str = "lookup") -> dict[str, Any]:
-    return {
+def _error(
+    indicator_type: str,
+    message: str,
+    mode: str = "lookup",
+    analysis_id: str | None = None,
+    execution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A refusal to conclude, and the task to look at by hand.
+
+    `verdict` is "unknown", never "clean". A submission that failed, was
+    blocked, or could not be confirmed finished says nothing about the
+    indicator, and the one thing it must not do is answer the question it
+    failed to ask.
+
+    When the task exists, its id and permanent link travel with the error, so
+    an analyst can open the session ANY.RUN did run rather than being told
+    only that automation gave up. That is the fallback for a sample automation
+    cannot handle.
+    """
+    raw: dict[str, Any] = {"source": "anyrun", "mode": mode}
+    if analysis_id:
+        raw["analysis_id"] = analysis_id
+        # Documented, stable task URL. Built rather than fetched because the
+        # report call is what failed in most of the paths that land here.
+        raw["permanentUrl"] = f"https://app.any.run/tasks/{analysis_id}"
+        raw["analyst_fallback"] = (
+            "Automation could not establish a result. Open the task above to "
+            "review the session by hand."
+        )
+    if execution:
+        raw["sandbox_execution"] = execution
+    out: dict[str, Any] = {
         "checked": False,
         "indicator_type": indicator_type,
         "verdict": "unknown",
         "error": message,
-        "raw_summary": {"source": "anyrun", "mode": mode},
+        "raw_summary": raw,
     }
+    if analysis_id:
+        out["analysis_id"] = analysis_id
+        out["analysis_link"] = raw["permanentUrl"]
+    return out
 
 
 def _safe_close(conn: Any) -> None:
