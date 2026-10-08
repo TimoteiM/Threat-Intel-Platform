@@ -169,13 +169,12 @@ function ReportsPageInner() {
           name: s.label,
           value,
           measured,
-          mean: cell?.mean ?? null,
           count: cell?.count ?? 0,
           // Computed here, not in a LabelList formatter: Recharts does not
           // hand the row to one, so reading `measured` off its second
           // argument was always undefined and every bar printed "not
           // measured" while the tooltip showed the real figure.
-          label: measured ? `${value.toFixed(1)} (n=${cell?.count ?? 0})` : "not measured",
+          label: measured ? `${value.toFixed(1)} min` : "not measured",
           color: s.color,
         };
       }),
@@ -269,14 +268,14 @@ function ReportsPageInner() {
 
           <div style={twoUp}>
             <Section
-              title="Median response time"
-              hint="Minutes from the first alert until the platform had a case about it. The 50th percentile, which is what the SIEMBIOT monthly report uses, so the two are comparable; the tooltip carries the arithmetic mean and how many cases are behind the figure."
+              title="Response time"
+              hint="Minutes from the first alert until the platform had a case about it."
             >
               <TimingBars rows={timingRows(report.response_minutes)} />
             </Section>
             <Section
-              title="Median resolution time"
-              hint="Minutes from the first alert until the case was answered. The 50th percentile, with the arithmetic mean in the tooltip."
+              title="Resolution time"
+              hint="Minutes from the first alert until the case was answered."
             >
               <TimingBars rows={timingRows(report.resolution_minutes)} />
               {report.resolution_excludes_swept > 0 && (
@@ -284,7 +283,7 @@ function ReportsPageInner() {
                   {report.resolution_excludes_swept.toLocaleString()} case
                   {report.resolution_excludes_swept === 1 ? "" : "s"} closed more than six hours
                   after their last alert are left out: they were closed by a later sweep rather
-                  than answered, and counting them reported one month as a mean of 21.8 days.
+                  than answered, and counting them reported one month as 21.8 days.
                 </p>
               )}
             </Section>
@@ -411,7 +410,7 @@ function TimingBars({
   if (!rows.some((r) => r.measured)) {
     return (
       <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "18px 0" }}>
-        Nothing in this month was answered within the response window, so there is no mean to
+        Nothing in this month was answered within the response window, so there is no figure to
         report. Not zero — unmeasured.
       </div>
     );
@@ -429,7 +428,7 @@ function TimingBars({
               <Cell key={row.name} fill={row.measured ? row.color : "var(--panel-divider)"} />
             ))}
             {/* "not measured" rather than 0: a severity nothing was answered
-                in has no mean, and a zero would read as instant.
+                in has no figure, and a zero would read as instant.
 
                 The text is computed in the data, not in a formatter.
                 Recharts does not hand the row to a LabelList formatter — the
@@ -546,19 +545,21 @@ function MinutesTip({ active, payload }: any) {
   return (
     <Shell>
       <div>{row.name}</div>
+      {/* The figure and its unit. The statistic behind it is the 50th
+          percentile — the same one the SIEMBIOT monthly report uses, so the
+          two documents are comparable — but naming it on screen tells an
+          analyst nothing they can act on. */}
       <div style={{ fontVariantNumeric: "tabular-nums" }}>
-        median (p50) {Number(row.value).toFixed(1)} min
+        {Number(row.value).toFixed(1)} minutes
       </div>
-      {/* The mean is kept beside the median rather than instead of it: on
-          this distribution they differ by hours, and one case that waited a
-          day moves the mean and not the median. */}
-      <div style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-muted)" }}>
-        mean {row.mean === null ? "—" : `${Number(row.mean).toFixed(1)} min`} · {row.count} case
-        {row.count === 1 ? "" : "s"}
+      <div style={{ color: "var(--text-muted)" }}>
+        across {row.count} case{row.count === 1 ? "" : "s"}
       </div>
+      {/* Kept, because it is not jargon but a caveat: a figure over three
+          cases is not a rate, and October's critical band is three. */}
       {row.count < 5 && (
         <div style={{ color: "var(--status-warning)", marginTop: 3 }}>
-          too few cases to read as a rate
+          only {row.count} case{row.count === 1 ? "" : "s"} — too few to read as a rate
         </div>
       )}
     </Shell>
