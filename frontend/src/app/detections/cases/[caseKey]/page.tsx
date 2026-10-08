@@ -451,9 +451,28 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
                   target="_blank"
                   rel="noreferrer"
                   style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none", flex: 1, minWidth: 220 }}
+                  // The alert's own title, which is what the page behind this
+                  // link is headed, so the two agree.
+                  title={alert.title || undefined}
                 >
-                  {alert.detection_rule_name || alert.title || alert.run_id}
+                  {/* The detection, not the rule that carried it.
+
+                      This read `detection_rule_name` first — the Wazuh rule's
+                      own description — so four alerts about "Denied Access To
+                      Remote Desktop" all displayed as "Windows audit failure
+                      event", which is rule 60104 and is the same string for
+                      every detection filed under it. */}
+                  {alert.detection_name || alert.title || alert.detection_rule_name || alert.run_id}
                 </a>
+                {/* The carrier rule, kept and made secondary. It is not what
+                    the alert is about, but it is what a tuning change acts
+                    on, so losing it would cost an analyst the one identifier
+                    an exclusion is written against. */}
+                {alert.detection_rule_id ? (
+                  <span style={{ ...MONO, fontSize: 10, color: "var(--text-dim)" }}>
+                    rule {alert.detection_rule_id}
+                  </span>
+                ) : null}
                 <span style={{ ...MONO, fontSize: 10.5, color: verdictTone(alert.overall_verdict) }}>
                   {alert.overall_verdict || "—"}
                 </span>

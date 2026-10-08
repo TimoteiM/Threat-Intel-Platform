@@ -1128,6 +1128,14 @@ async def correlate_alerts(
                             "event_time": _iso(_event_time(m, cutoff)),
                             "created_at": _iso(m.created_at),
                             "detection_rule_id": m.detection_rule_id,
+                            # What fired, and separately the rule that carried
+                            # it. They are routinely different: rule 60104 is
+                            # "Windows audit failure event" and the detection
+                            # under it is "Denied Access To Remote Desktop".
+                            # Both travel, because the detection is what the
+                            # alert is about and the rule is what a tuning
+                            # change acts on.
+                            "detection_name": m.detection_name,
                             "detection_rule_name": m.detection_rule_name,
                             # Who ran it. The case is per-device, so the
                             # account is the one thing that distinguishes one

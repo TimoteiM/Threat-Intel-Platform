@@ -289,3 +289,62 @@ def test_the_report_returns_median_mean_and_the_count_behind_them():
     assert '"median": round(median / 60, 1)' in source
     assert '"mean": round(sum(values) / len(values) / 60, 1)' in source
     assert '"count": len(values)' in source
+
+
+# --- an alert is named by what fired, not by what carried it -----------------
+
+def test_a_case_member_is_named_by_its_detection_not_its_carrier_rule():
+    """Reported as four alerts in case #1068 all displaying as "Windows audit
+    failure event".
+
+    That is Wazuh rule 60104's own description, and it is the same string for
+    every detection filed under it. The alerts were all
+    "exprdsh001 - Denied Access To Remote Desktop", which is what the alert
+    page behind each link is headed.
+
+    The distinction already exists in this codebase — `detection_name_of` was
+    written because a generic carrier makes three unrelated detections look
+    like one rule — and the member list was the place it had not reached.
+    """
+    from app.services.alert_case_narrative_service import _member_line
+
+    member = {
+        "event_time": "2026-10-08T04:09:00Z",
+        "detection_rule_id": "60104",
+        "detection_name": "Denied Access To Remote Desktop",
+        "detection_rule_name": "Windows audit failure event",
+        "title": "exprdsh001 - Denied Access To Remote Desktop",
+    }
+    line = _member_line(member)
+    assert "Denied Access To Remote Desktop" in line
+    assert "Windows audit failure event" not in line
+    # The rule id stays, because that is what a tuning change acts on.
+    assert "60104" in line
+
+
+def test_without_a_detection_the_alerts_own_title_is_preferred_to_the_carrier():
+    """The carrier is the last resort, not the first choice. An alert that
+    carries no parsed detection is still better described by its own title
+    than by the description of the rule that matched it."""
+    from app.services.alert_case_narrative_service import _member_line
+
+    line = _member_line({
+        "event_time": "2026-10-08T04:09:00Z",
+        "detection_rule_id": "1002",
+        "detection_rule_name": "Unknown problem somewhere in the system",
+        "title": "exprevpxy002 - Shell Execution Of Process Located In Tmp Directory",
+    })
+    assert "Shell Execution Of Process" in line
+    assert "Unknown problem" not in line
+
+
+def test_the_case_payload_carries_both_names():
+    """So the page can show what fired and still offer the rule an exclusion
+    would be written against."""
+    import inspect
+
+    from app.services import alert_correlation_service as corr
+
+    source = inspect.getsource(corr.correlate_alerts)
+    assert '"detection_name": m.detection_name' in source
+    assert '"detection_rule_name": m.detection_rule_name' in source

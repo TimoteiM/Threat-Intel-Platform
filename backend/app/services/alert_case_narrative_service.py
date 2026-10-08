@@ -67,7 +67,19 @@ def _member_line(member: dict[str, Any]) -> str:
     parts = [
         f"- {member.get('event_time') or 'unknown time'}",
         f"rule {member.get('detection_rule_id') or '?'}",
-        str(member.get("detection_rule_name") or member.get("title") or "").strip(),
+        # The detection, not the rule that carried it.
+        #
+        # This read `detection_rule_name` first, which is the Wazuh rule's own
+        # description — so four alerts about "Denied Access To Remote Desktop"
+        # reached the model as four lines saying "Windows audit failure
+        # event", and the account it was asked to write was of a case whose
+        # alerts all looked identical and said nothing.
+        str(
+            member.get("detection_name")
+            or member.get("title")
+            or member.get("detection_rule_name")
+            or ""
+        ).strip(),
     ]
     # Who ran it, named per alert.
     #

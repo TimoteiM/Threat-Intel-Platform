@@ -2248,7 +2248,15 @@ export interface CorrelatedCase {
     event_time: string | null;
     created_at: string | null;
     detection_rule_id: string | null;
+    /** What fired. Routinely different from the rule that carried it: rule
+     *  60104 is "Windows audit failure event" and the detection under it is
+     *  "Denied Access To Remote Desktop". */
+    detection_name: string | null;
+    /** The Wazuh rule's own description. Not what the alert is about, but it
+     *  is what a tuning change acts on. */
     detection_rule_name: string | null;
+    /** Who ran it. */
+    entity_user: string | null;
     overall_verdict: string | null;
     highest_risk_score: number | null;
   }>;
