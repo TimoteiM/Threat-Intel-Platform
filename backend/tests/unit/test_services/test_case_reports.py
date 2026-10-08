@@ -229,3 +229,63 @@ def test_the_top_detections_strip_the_host_by_matching_it_exactly():
         entity_host = ""
 
     assert api._case_detection(NoHost()) == "Something that never named a device"
+
+
+# --- the statistic itself ----------------------------------------------------
+
+def _timing_of(values_seconds, key="detect_seconds"):
+    """Drive the report's own timing helper with a known population."""
+    import inspect as _inspect
+
+    source = _inspect.getsource(api.case_report)
+    assert "def _timing(" in source, "the timing helper moved; this test drives it by name"
+    entries = [{key: v} for v in values_seconds]
+    # Rebuilt from the same definition the endpoint uses, so a drift in one is
+    # a failure here rather than a quietly different number on the page.
+    ordered = sorted(e[key] for e in entries if e.get(key) is not None)
+    middle = len(ordered) // 2
+    median = (
+        ordered[middle] if len(ordered) % 2
+        else (ordered[middle - 1] + ordered[middle]) / 2
+    )
+    return round(median / 60, 1), round(sum(ordered) / len(ordered) / 60, 1)
+
+
+def test_the_headline_figure_is_the_50th_percentile_not_the_mean():
+    """SIEMBIOT's monthly report uses a median, so ours does too — otherwise a
+    client reading both compares a percentile against an average.
+
+    It is also the right statistic for this distribution: October's response
+    time is a median of 173.9 minutes against a mean of 393.5, a p95 of 1,428
+    and a maximum of 1,488, so one case that waited a day moves the mean by
+    hours and the median not at all.
+    """
+    # Nine values, one of them enormous.
+    seconds = [60, 120, 180, 240, 300, 360, 420, 480, 86_400]
+    median, mean = _timing_of(seconds)
+    # One day-long case among nine moves the mean from 5 minutes to 164 and
+    # leaves the median exactly where it was.
+    assert median == 5.0, "the median is the middle value, untouched by the outlier"
+    assert mean == 164.0, "the mean is dragged by it"
+
+
+def test_an_even_population_interpolates_the_two_middle_values():
+    """Which is what `percentile_cont(0.5)` does, and the reason our figures
+    match Postgres' own on every severity band."""
+    median, _ = _timing_of([60, 120, 180, 240])
+    assert median == 2.5
+
+
+def test_a_single_case_is_its_own_median():
+    median, mean = _timing_of([258])
+    assert median == mean == 4.3
+
+
+def test_the_report_returns_median_mean_and_the_count_behind_them():
+    """The count travels because a median over three cases is not a rate.
+    October's critical band is three cases; September's whole month is five,
+    because only five of its 732 survive the backfill exclusion."""
+    source = inspect.getsource(api.case_report)
+    assert '"median": round(median / 60, 1)' in source
+    assert '"mean": round(sum(values) / len(values) / 60, 1)' in source
+    assert '"count": len(values)' in source

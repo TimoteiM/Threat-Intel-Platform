@@ -269,14 +269,14 @@ function ReportsPageInner() {
 
           <div style={twoUp}>
             <Section
-              title="Response time"
-              hint="Minutes from the first alert until the platform had a case about it. The bar is the typical case (median); the tooltip carries the average and how many cases are behind it."
+              title="Median response time"
+              hint="Minutes from the first alert until the platform had a case about it. The 50th percentile, which is what the SIEMBIOT monthly report uses, so the two are comparable; the tooltip carries the arithmetic mean and how many cases are behind the figure."
             >
               <TimingBars rows={timingRows(report.response_minutes)} />
             </Section>
             <Section
-              title="Resolution time"
-              hint="Minutes from the first alert until the case was answered. Median, with the average in the tooltip."
+              title="Median resolution time"
+              hint="Minutes from the first alert until the case was answered. The 50th percentile, with the arithmetic mean in the tooltip."
             >
               <TimingBars rows={timingRows(report.resolution_minutes)} />
               {report.resolution_excludes_swept > 0 && (
@@ -547,7 +547,7 @@ function MinutesTip({ active, payload }: any) {
     <Shell>
       <div>{row.name}</div>
       <div style={{ fontVariantNumeric: "tabular-nums" }}>
-        median {Number(row.value).toFixed(1)} min
+        median (p50) {Number(row.value).toFixed(1)} min
       </div>
       {/* The mean is kept beside the median rather than instead of it: on
           this distribution they differ by hours, and one case that waited a

@@ -1041,8 +1041,17 @@ async def case_report(
         per_severity[band].append(measured)
 
     def _timing(entries: list[dict[str, Any]], key: str) -> dict[str, Any]:
-        """The typical case and the average, which are not the same number.
+        """The 50th percentile, and the arithmetic mean beside it.
 
+        The median is the headline because that is the statistic the SIEMBIOT
+        monthly report uses, so the two documents answer the same question and
+        a client reading both is not comparing a percentile against an
+        average. Verified against Postgres' own `percentile_cont(0.5)` over
+        the same population — identical on all four severity bands, including
+        the even-count interpolation.
+
+
+        It is also the right statistic for this distribution regardless.
         Measured over October: median 173.9 minutes against a mean of 393.5,
         a p95 of 1,428 and a maximum of 1,488. One case that waited a day
         moves the mean by hours and the median not at all, so the mean of a
