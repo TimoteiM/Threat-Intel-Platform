@@ -82,6 +82,7 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
         unreadable = 0
         expired = 0
         backed_off = 0
+        unreadable_closed = 0
 
         async with factory() as db:
             # Before anything else: cases closed but still waiting on an
@@ -171,7 +172,45 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     # skip it for a while rather than paying another full
                     # re-correlation to fail in the same way — and so a
                     # blocker is a number somebody can see.
-                    await store.record_closure_attempt(db, case_key=row.case_key, now=now)
+                    # Read before the UPDATE, not after. `record_closure_attempt`
+                    # issues one against this row, which expires the ORM
+                    # object, and the next attribute access then tries to
+                    # refresh it lazily — async IO from a sync attribute
+                    # lookup, which is a MissingGreenlet and took the whole
+                    # closing job down.
+                    attempts_so_far = int(row.closure_attempts or 0)
+                    case_key = row.case_key
+                    title = row.title
+                    alerts_at_close = row.alerts_at_close or 0
+                    await store.record_closure_attempt(db, case_key=case_key, now=now)
+
+                    # And, after enough of them, given up on.
+                    #
+                    # A row whose key correlation no longer mints can never be
+                    # read again: the alerts are still there, but they now
+                    # hash to a different case, so nothing will ever answer
+                    # this one. Leaving it open means an unbounded MTTR and a
+                    # permanent inflation of "cases active" — 31 of 31 open
+                    # rows were in this state.
+                    #
+                    # Gated hard, because closing on absence is the mistake
+                    # that destroyed 575 cases: several failed attempts, not
+                    # one, and only for a case already past its window. It is
+                    # recorded as unreadable with no verdict invented — never
+                    # clean, never a positive.
+                    if attempts_so_far + 1 >= _GIVE_UP_AFTER:
+                        if await store.claim_for_closure(db, case_key=case_key, now=now):
+                            await store.close_case(
+                                db,
+                                case_key=case_key,
+                                resolution="inconclusive",
+                                title=title,
+                                alerts_at_close=alerts_at_close,
+                                closed_at=now,
+                                closure_kind="unreadable",
+                            )
+                            unreadable_closed += 1
+                        continue
 
                     # Absence from the listing is never evidence about a case.
                     #
@@ -286,6 +325,8 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             "expired": expired,
             # Skipped this pass because reading them failed recently.
             "backed_off": backed_off,
+            # Given up on: their key is no longer one correlation mints.
+            "unreadable_closed": unreadable_closed,
             # Closed, never analysed, past the grace period.
             "stranded_resolved": stranded,
             # Open, in the window, but not in the listing. Reported rather
@@ -311,6 +352,10 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
 # listing is what destroyed 575 of them.
 _BACKOFF_BASE = timedelta(minutes=2)
 _BACKOFF_CEILING = timedelta(hours=1)
+
+# How many failed reads before a case is accepted as unanswerable. Several,
+# not one: closing on a single absence is what destroyed 575 cases.
+_GIVE_UP_AFTER = 3
 
 
 def _still_backing_off(row: Any, now: datetime) -> bool:

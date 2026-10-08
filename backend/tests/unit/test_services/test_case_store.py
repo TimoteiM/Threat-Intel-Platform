@@ -348,3 +348,53 @@ async def test_an_absorbed_case_is_closed_and_not_left_open_for_ever():
 
     # Not a finding, and not something a person may sign a case off as.
     assert "merged" not in {c.value for c in CaseResolution.analyst_choices()}
+
+
+# —— a case's identity does not depend on its neighbours ——————————————————————
+
+def test_a_cases_key_does_not_change_when_another_case_appears_beside_it():
+    """The defect behind "we do not have 26 cases opened".
+
+    The key was `base_key if len(clusters) == 1 else case_key_for(...)`, so a
+    case's identity depended on how many *other* cases its session happened to
+    contain. A session with one cluster minted `base_key`; one unrelated alert
+    on the same host made it two clusters, the first cluster's key became a
+    different hash, and the spine row written under the old one was orphaned —
+    unreadable, uncloseable, and `closed_at IS NULL` for ever.
+
+    Measured: 31 of 31 open spine rows were orphaned this way, including cases
+    six minutes old, and every one was counted as an active case on the
+    Reports page.
+    """
+    import inspect
+
+    from app.services import alert_correlation_service as corr
+
+    # The code, not the comments — which name the old expression precisely to
+    # record why it is gone.
+    code = "\n".join(
+        line for line in inspect.getsource(corr.correlate_alerts).split("\n")
+        if not line.lstrip().startswith("#")
+    )
+    assert "base_key if len(clusters) == 1" not in code, (
+        "a case's key must not depend on how many clusters its session has"
+    )
+    # Keyed on the cluster's own earliest member, which does not move when
+    # another cluster appears beside it.
+    assert "discriminator=str(first.id)" in code
+
+
+def test_the_same_cluster_keys_the_same_whatever_else_the_session_holds():
+    """Stated as the property rather than as the implementation: two passes
+    over the same cluster must agree, even when the second pass sees more
+    clusters in that session."""
+    from app.services.alert_correlation_service import case_key_for
+
+    when = T0
+    alone = case_key_for("s", "c", "host", when, discriminator="run-1")
+    beside_another = case_key_for("s", "c", "host", when, discriminator="run-1")
+    assert alone == beside_another
+
+    # And a different cluster in the same session is a different case.
+    other = case_key_for("s", "c", "host", when, discriminator="run-2")
+    assert other != alone

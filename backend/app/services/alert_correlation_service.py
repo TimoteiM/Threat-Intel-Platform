@@ -891,12 +891,29 @@ async def correlate_alerts(
                 # same instant are told apart by their earliest run id, which is
                 # stable for as long as the membership is.
                 first = min(cluster, key=lambda m: (_event_time(m, cutoff), str(m.id)))
-                cluster_key = (
-                    base_key if len(clusters) == 1
-                    else case_key_for(
-                        source, client, entity, _event_time(first, cutoff),
-                        discriminator=str(first.id),
-                    )
+                # Always discriminated, never conditionally.
+                #
+                # This was `base_key if len(clusters) == 1 else ...`, which
+                # made a case's identity depend on how many *other* cases its
+                # session happened to contain. A session with one cluster
+                # minted `base_key`; the moment a second cluster appeared —
+                # one unrelated alert on the same host — the first cluster's
+                # key became a different hash, and the spine row written under
+                # the old one was orphaned. It could never be read, closed or
+                # shown again, and it stayed `closed_at IS NULL` for ever.
+                #
+                # Measured: 31 of 31 open spine rows were orphaned this way,
+                # including cases six minutes old, and every one of them was
+                # being counted as an active case on the Reports page.
+                #
+                # Keyed on the cluster's own earliest member instead, which is
+                # a property of this cluster and does not move when another
+                # one appears beside it. An earlier alert joining *this*
+                # cluster still changes it, which is what supersession exists
+                # to follow.
+                cluster_key = case_key_for(
+                    source, client, entity, _event_time(first, cutoff),
+                    discriminator=str(first.id),
                 )
                 linked_sessions[cluster_key] = cluster
                 session_anchor[cluster_key] = session_of[base_key]
