@@ -220,6 +220,20 @@ export default function CasePage({ params }: { params: { caseKey: string } }) {
             “{(data.spine as any).closure_note}”
           </span>
         )}
+        {(data.spine as any)?.superseded_by && (
+          // Its own key no longer forms a case, so its alerts are in another
+          // one. Said plainly, with a way to get there — this used to be a
+          // case that simply looked open and could not be closed.
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            alerts moved into{" "}
+            <a
+              href={`/detections/cases/${(data.spine as any).superseded_by}`}
+              style={{ color: "var(--accent)" }}
+            >
+              another case
+            </a>
+          </span>
+        )}
         {(data.spine as any)?.analysis_changed_since_close && (
           // The analysis is rewritten whenever the case's shape moves, closed
           // cases included, so a sign-off can end up displayed beside an

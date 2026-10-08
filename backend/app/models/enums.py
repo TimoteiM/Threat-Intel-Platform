@@ -106,6 +106,10 @@ class CaseResolution(str, enum.Enum):
     # Its alerts fell out of the correlation window, so no alert can ever join
     # it again and no analysis can be produced for it.
     EXPIRED = "expired"
+    # Its alerts are in another case now, so there is nothing left to judge.
+    # Only written when the case genuinely no longer forms one of its own —
+    # a case that still holds its own alerts is never absorbed.
+    MERGED = "merged"
     # Historical. Written by a closing rule that has been removed: it closed
     # cases merely for being absent from a listing, which destroyed 575 of
     # them. Kept so the stored values still have a name.
@@ -134,5 +138,8 @@ class CaseClosureKind(str, enum.Enum):
     INHERITED = "inherited"
     # Its alerts left the correlation window before it could be answered.
     EXPIRED = "expired"
+    # Its alerts moved into another case, which is named by
+    # `superseded_by_case_key`.
+    MERGED = "merged"
     # Historical; see CaseResolution.AGED_OUT.
     AGED_OUT = "aged_out"

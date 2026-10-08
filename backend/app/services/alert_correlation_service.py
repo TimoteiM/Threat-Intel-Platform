@@ -940,6 +940,9 @@ async def correlate_alerts(
 
         sessions = linked_sessions
         session_of = session_anchor
+        # Computed before the loop below writes anything, so absorption can
+        # never eat a case this very pass is about to produce.
+        live_keys = frozenset(sessions)
 
         for case_key, members in sessions.items():
             # A session is shown when the window reaches any part of it, and is
@@ -1156,6 +1159,13 @@ async def correlate_alerts(
                 session_started_at=session.session_started_at,
                 session_ended_at=last_event,
                 known=existing,
+                # Every case key this pass is producing. A key in here is a
+                # case that exists right now with its own alerts, so it is
+                # never absorbed whatever the session arithmetic says — which
+                # is the whole of the fix: a session yields several cases now,
+                # and "another key inside this session" had come to mean "a
+                # sibling about something else".
+                protected_keys=live_keys,
             )
             spine = await upsert_spine(
                 db,

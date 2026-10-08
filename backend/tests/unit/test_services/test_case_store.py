@@ -14,6 +14,7 @@ import pytest
 
 from app.models.database import AlertCaseSnapshot, AlertCaseSpine
 from app.services.alert_case_store import (
+    absorb_superseded,
     live_case_key,
     reset_supersession_stats,
     snapshot_if_changed,
@@ -54,6 +55,12 @@ class _FakeDB:
             def scalar_one(self):
                 db.sequence += 1
                 return db.sequence
+
+            # Absorption issues bulk UPDATEs for the chain collapse and for
+            # the release, and reads `rowcount` from each. A stub without it
+            # models a driver that does not exist, and the tests fail on the
+            # attribute instead of on the behaviour they are about.
+            rowcount = 0
 
             def scalar_one_or_none(self):
                 if name != "snapshot_previous":
@@ -235,3 +242,109 @@ async def test_a_dead_key_resolves_forward_in_one_hop():
 def test_the_supersession_counter_starts_clean():
     reset_supersession_stats()
     assert supersession_stats() == {"superseded": 0, "chains_collapsed": 0}
+
+
+# —— a case is never absorbed into another case ———————————————————————————
+#
+# Reported as: closing case #132 answered "This case was merged into case
+# #133. Close that one instead — its alerts include these." It did not. #132
+# held two Kerberoasting RC4 alerts, #133 four Computer-account-changed
+# alerts, and they share not one alert. Measured over all 320 pointers in the
+# database, 171 had absorbed a case that still holds its own alerts and in
+# none of them had those alerts moved.
+
+@pytest.mark.asyncio
+async def test_a_case_this_pass_is_producing_is_never_absorbed():
+    """The invariant that replaces the session arithmetic.
+
+    Supersession was written when one session meant one case. A session now
+    yields several, grouped by shared evidence, and they all carry the same
+    `session_started_at` — so "another key inside this session's span" came to
+    mean "a sibling case about something else". A key the current pass is
+    producing is a case that exists, with its own alerts, and no arithmetic
+    may override that.
+    """
+    db = _FakeDB()
+    live = "b" * 64
+    sibling = "c" * 64
+    for key in (live, sibling):
+        await upsert_spine(
+            db, case_key=key, source="s", client="c", host="h",
+            session_started_at=T0, session_seq=0, last_activity_at=T0,
+            score=10, score_version="v1",
+        )
+    # The sibling starts later, so the session rule alone would absorb it.
+    db.spine[sibling].session_started_at = T0 + timedelta(hours=1)
+
+    absorbed = await absorb_superseded(
+        db, live_case_key=live, source="s", client="c", host="h",
+        session_started_at=T0, session_ended_at=T0 + timedelta(hours=6),
+        known=dict(db.spine), protected_keys=frozenset({live, sibling}),
+    )
+    assert absorbed == []
+    assert db.spine[sibling].superseded_by_case_key is None
+    assert db.spine[sibling].status == "open"
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_dead_key_is_still_followed_forward():
+    """The thing absorption is for, kept. A late alert closes a gap, the
+    merged session starts earlier and hashes to a new key, and the old row
+    would otherwise be unreachable along with its assignee and history."""
+    db = _FakeDB()
+    live = "b" * 64
+    dead = "c" * 64
+    for key in (live, dead):
+        await upsert_spine(
+            db, case_key=key, source="s", client="c", host="h",
+            session_started_at=T0, session_seq=0, last_activity_at=T0,
+            score=10, score_version="v1",
+        )
+    db.spine[dead].session_started_at = T0 + timedelta(hours=1)
+
+    absorbed = await absorb_superseded(
+        db, live_case_key=live, source="s", client="c", host="h",
+        session_started_at=T0, session_ended_at=T0 + timedelta(hours=6),
+        known=dict(db.spine), protected_keys=frozenset({live}),
+    )
+    assert absorbed == [dead]
+    assert db.spine[dead].superseded_by_case_key == live
+
+
+@pytest.mark.asyncio
+async def test_an_absorbed_case_is_closed_and_not_left_open_for_ever():
+    """The other half of the report — "case #132 remained opened".
+
+    A superseded row kept `closed_at` NULL, and the Cases table reads
+    `closed_at`, so 242 of them showed as Open for ever: the closing job
+    skipped them because their status is not 'open', and a manual close failed
+    on the closure claim for the same reason. There was no exit from the
+    state. Its alerts are in the live case now, so there is nothing left to
+    judge — it is recorded as merged, which is what happened, and never as a
+    finding.
+    """
+    db = _FakeDB()
+    live = "b" * 64
+    dead = "c" * 64
+    for key in (live, dead):
+        await upsert_spine(
+            db, case_key=key, source="s", client="c", host="h",
+            session_started_at=T0, session_seq=0, last_activity_at=T0,
+            score=10, score_version="v1",
+        )
+    db.spine[dead].session_started_at = T0 + timedelta(hours=1)
+
+    await absorb_superseded(
+        db, live_case_key=live, source="s", client="c", host="h",
+        session_started_at=T0, session_ended_at=T0 + timedelta(hours=6),
+        known=dict(db.spine), protected_keys=frozenset({live}),
+    )
+    row = db.spine[dead]
+    assert row.closed_at is not None, "a merged case must not stay open for ever"
+    assert row.closure_kind == "merged"
+    assert row.resolution == "merged"
+
+    from app.models.enums import CaseResolution
+
+    # Not a finding, and not something a person may sign a case off as.
+    assert "merged" not in {c.value for c in CaseResolution.analyst_choices()}

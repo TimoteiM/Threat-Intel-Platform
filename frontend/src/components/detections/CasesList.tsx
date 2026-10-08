@@ -558,6 +558,13 @@ export default function CasesList({
                           >
                             awaiting analysis
                           </span>
+                        ) : lifecycle.resolution === "merged" ? (
+                          // Its own key stopped forming a case and its alerts
+                          // are in another one. Not a finding — nobody judged
+                          // anything — so it is not shown as one.
+                          <span style={{ ...subtle, color: "var(--text-dim)" }}>
+                            merged
+                          </span>
                         ) : lifecycle.resolution ? (
                           <span style={subtle}>
                             {String(lifecycle.resolution).replace(/_/g, " ")}

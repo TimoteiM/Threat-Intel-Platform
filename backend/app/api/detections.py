@@ -943,6 +943,16 @@ async def close_case_manually(
     if spine is None or (case is None and not scope.all_tenants):
         raise HTTPException(404, "No such case")
     if spine.closed_at is not None:
+        if spine.closure_kind == "merged" and spine.superseded_by_case_key:
+            successor = await db.get(AlertCaseSpine, spine.superseded_by_case_key)
+            raise HTTPException(
+                409,
+                "This case's alerts moved into "
+                + (f"case #{successor.case_number}" if successor and successor.case_number
+                   else "another case")
+                + ", because its own key no longer forms a case. Nothing is left here "
+                  "to answer.",
+            )
         raise HTTPException(409, "This case has already been answered.")
 
     # Merged into another case, and not closeable on its own.
@@ -957,12 +967,18 @@ async def close_case_manually(
         successor = None
         if spine.superseded_by_case_key:
             successor = await db.get(AlertCaseSpine, spine.superseded_by_case_key)
+        # Only reachable for a row left behind by the old absorption, which
+        # claimed the other case "includes these" alerts. Measured over 320
+        # such pointers, 171 absorbed a case that still held its own alerts
+        # and in none of them had those alerts moved — so the claim was
+        # false, and it is not made here.
         raise HTTPException(
             409,
-            "This case was merged into "
+            "This case is marked as merged into "
             + (f"case #{successor.case_number}" if successor and successor.case_number
                else "another case")
-            + ". Close that one instead — its alerts include these.",
+            + ", which is a relationship this platform no longer creates. It will "
+              "be released on the next correlation pass and can be closed then.",
         )
 
     unanalysable = case is None

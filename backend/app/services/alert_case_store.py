@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -360,8 +360,29 @@ async def absorb_superseded(
     session_started_at: datetime,
     session_ended_at: datetime,
     known: dict[str, AlertCaseSpine] | None = None,
+    protected_keys: frozenset[str] | set[str] | None = None,
 ) -> list[str]:
     """Point every dead key inside this session's span at the live one.
+
+    `protected_keys` is every case key this correlation pass is producing. A
+    key in that set is a case that exists right now, with its own alerts, and
+    it is never absorbed however the session arithmetic reads.
+
+    That test replaces the arithmetic as the thing that decides, because the
+    arithmetic was answering a different question. Supersession was written
+    when one session meant one case; a session now yields several, grouped by
+    shared evidence, so "another key inside this session's span" stopped
+    meaning "an older version of this case" and started meaning "a sibling
+    case about something else".
+
+    Measured over all 320 supersession pointers in the database: 171 had
+    absorbed a case that still holds its own alerts, and in none of them had
+    those alerts moved into the absorbing case. A Cobalt Strike Malleable C2
+    case was filed inside "Repeated injection"; two cases absorbed each other;
+    five distinct detections on one domain controller — a WMI event
+    subscription, HTML smuggling, an account lockout — were all filed inside
+    "User account changed". The remaining 149 pointed at keys that no longer
+    form a case at all, which is the only thing absorption was ever for.
 
     `known` is the entity's rows, already loaded. With it the candidates are
     selected in memory and the database is touched only when there is
@@ -381,10 +402,12 @@ async def absorb_superseded(
     like a complete one — a silent failure, which is the property this build
     keeps removing.
     """
+    guarded = frozenset(protected_keys or ())
     if known is not None:
         dead = [
             row for row in known.values()
             if row.case_key != live_case_key
+            and row.case_key not in guarded
             and row.superseded_by_case_key is None
             and _as_utc_value(row.session_started_at) > _as_utc_value(session_started_at)
             and _as_utc_value(row.session_started_at) <= _as_utc_value(session_ended_at)
@@ -414,6 +437,9 @@ async def absorb_superseded(
                     AlertCaseSpine.session_started_at <= session_ended_at,
                     AlertCaseSpine.case_key != live_case_key,
                     AlertCaseSpine.superseded_by_case_key.is_(None),
+                    *(
+                        (AlertCaseSpine.case_key.notin_(guarded),) if guarded else ()
+                    ),
                 )
                 .execution_options(query_name="spine_superseded")
             )
@@ -425,25 +451,113 @@ async def absorb_superseded(
     now = datetime.now(timezone.utc)
     for row in dead:
         row.superseded_by_case_key = live_case_key
-        row.status = "superseded"
+        # 'closed', not 'superseded'.
+        #
+        # `superseded` was a status with no exit: the Cases table reads
+        # `closed_at`, so the row showed as Open for ever; the closing job
+        # skipped it because its status was not 'open'; and a manual close
+        # failed on the closure claim for the same reason. 242 cases sat
+        # there. The relationship is carried by `superseded_by_case_key`,
+        # which is a pointer and not a state, so `status` can go on meaning
+        # exactly what `closed_at` says.
+        row.status = "closed"
+        # Closed, not left in a state of its own.
+        #
+        # A superseded row kept `closed_at` NULL, so the Cases table — which
+        # reads `closed_at` — showed it as Open for ever, the closing job
+        # skipped it (its status is not 'open') and a manual close failed on
+        # the closure claim for the same reason. 243 cases sat there as
+        # un-closeable Open rows. Its alerts are in the live case now, so
+        # there is nothing left to judge: it is recorded as merged, which is
+        # what happened, and never as a finding.
+        if row.closed_at is None:
+            row.closed_at = now
+            row.closure_kind = "merged"
+            row.resolution = "merged"
         row.updated_at = now
 
     # Collapse: rows that pointed at one of these now point at the survivor.
+    #
+    # Subject to the same rule as the absorption above, which it used to
+    # bypass. It repointed anything aimed at a dying key, checking only that
+    # it was not the survivor itself — so a case that had legitimately
+    # pointed at a later key was repointed at a *sibling* once that key died,
+    # and the strict session comparison guarding the direct path never saw it.
+    # That is how case #132, a live Kerberoasting detection with two alerts of
+    # its own, came to be marked "merged into" #133, a Computer-account-changed
+    # case it shares not one alert with.
+    collapse_where = [
+        AlertCaseSpine.superseded_by_case_key.in_(dead_keys),
+        # Never point the survivor at itself. Without this, a live case that
+        # happened to be pointing at a key dying in this pass was repointed to
+        # its own key — 92 rows in the database had
+        # superseded_by_case_key = case_key, which resolves forward for ever
+        # and makes the case unreachable.
+        AlertCaseSpine.case_key != live_case_key,
+        # And never onto a case that exists right now.
+        AlertCaseSpine.session_started_at > session_started_at,
+    ]
+    if guarded:
+        collapse_where.append(AlertCaseSpine.case_key.notin_(guarded))
     collapsed = (
+        await db.execute(
+            update(AlertCaseSpine)
+            .where(*collapse_where)
+            .values(superseded_by_case_key=live_case_key, updated_at=now)
+        )
+    ).rowcount or 0
+
+    # Anything that pointed at a dying key and is NOT eligible to follow it is
+    # released rather than repointed. Its own case is real; it simply has no
+    # survivor to defer to, and a wrong pointer is worse than none — it is
+    # what took the case out of the analyst's reach in the first place.
+    #
+    # Released in two shapes, because the row's own closure must survive this.
+    # A case closed on its own merits keeps that closure and loses only the
+    # bogus pointer; one closed *because* it was absorbed has no closure of
+    # its own to keep, so it goes back to being open and is answered normally.
+    ineligible = (AlertCaseSpine.session_started_at <= session_started_at)
+    if guarded:
+        ineligible = ineligible | AlertCaseSpine.case_key.in_(guarded)
+
+    released = (
         await db.execute(
             update(AlertCaseSpine)
             .where(
                 AlertCaseSpine.superseded_by_case_key.in_(dead_keys),
-                # Never point the survivor at itself. Without this, a live case
-                # that happened to be pointing at a key dying in this pass was
-                # repointed to its own key — 92 rows in the database had
-                # superseded_by_case_key = case_key, which resolves forward
-                # for ever and makes the case unreachable.
                 AlertCaseSpine.case_key != live_case_key,
+                ineligible,
+                AlertCaseSpine.closure_kind == "merged",
             )
-            .values(superseded_by_case_key=live_case_key, updated_at=now)
+            .values(
+                superseded_by_case_key=None, status="open", closed_at=None,
+                closure_kind=None, resolution=None, updated_at=now,
+            )
         )
     ).rowcount or 0
+
+    released += (
+        await db.execute(
+            update(AlertCaseSpine)
+            .where(
+                AlertCaseSpine.superseded_by_case_key.in_(dead_keys),
+                AlertCaseSpine.case_key != live_case_key,
+                ineligible,
+                func.coalesce(AlertCaseSpine.closure_kind, "") != "merged",
+            )
+            .values(
+                superseded_by_case_key=None,
+                # status follows closed_at, which is the invariant the Cases
+                # table reads. Never 'superseded', which is the state that had
+                # no exit.
+                status=case(
+                    (AlertCaseSpine.closed_at.is_(None), "open"), else_="closed",
+                ),
+                updated_at=now,
+            )
+        )
+    ).rowcount or 0
+    _SUPERSESSION_STATS["released"] = _SUPERSESSION_STATS.get("released", 0) + int(released)
 
     _SUPERSESSION_STATS["superseded"] += len(dead_keys)
     _SUPERSESSION_STATS["chains_collapsed"] += int(collapsed)
