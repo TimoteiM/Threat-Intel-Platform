@@ -286,9 +286,11 @@ def test_the_dotted_form_is_opt_in_per_field():
 
     assert "dotted" in inspect.signature(afs._field).parameters
     assert inspect.signature(afs._field).parameters["dotted"].default is False
-    # The account asks for it; nothing else does yet.
-    source = inspect.getsource(afs.extract_alert_fields)
-    assert source.count("dotted=True") == 1
+    # The account asks for it; nothing else does yet. It is asked for in
+    # `_account_of`, which is the only place that reads the flattened block.
+    assert "dotted=True" not in inspect.getsource(afs.extract_alert_fields)
+    account_source = inspect.getsource(afs._account_of)
+    assert account_source.count("dotted=True") == 3, "the three account fields, and nothing else"
 
 
 # --- a host whose clock is ahead of the manager that reports it --------------
@@ -358,3 +360,73 @@ def test_an_alert_with_no_stamp_of_its_own_still_falls_back():
     covers a body with no time at all."""
     fallback = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
     assert afs.event_time_of("nothing parseable here", fallback=fallback) == fallback
+
+
+# --- the account a Windows security event is about ---------------------------
+
+def test_the_locked_out_account_is_the_one_reported():
+    """Reported as: the alert names the locked account, the case shows none.
+
+    Event 4740 names two principals and we matched neither:
+
+        subjectUserName: EXPDC402$   the domain controller, which performed it
+        targetUserName:  gmaciuc     the person it happened to
+    """
+    body = (
+        "Agent: EXPDC402\n"
+        "Event ID: 4740 | UserAccountChange\n"
+        "data.win.eventdata.subjectUserName: EXPDC402$\n"
+        "data.win.eventdata.targetUserName: gmaciuc\n"
+    )
+    assert afs.entity_of(afs.extract_alert_fields(body))[1] == "gmaciuc"
+
+
+def test_whichever_field_names_a_person_is_preferred():
+    """Taking the target always would be wrong. Across the 513 affected alerts
+    the target is a machine account 204 times and the subject 300 times, so
+    neither field is reliably the person."""
+    target_is_machine = (
+        "data.win.eventdata.targetUserName: EXP-4JHPZY2$\n"
+        "data.win.eventdata.subjectUserName: jdoe\n"
+    )
+    assert afs.entity_of(afs.extract_alert_fields(target_is_machine))[1] == "jdoe"
+
+
+def test_a_machine_account_is_still_recorded_when_it_is_all_there_is():
+    """"The domain controller did this" is worth knowing. It is barred from
+    linking cases together, which is a separate decision from whether to
+    store it."""
+    body = (
+        "data.win.eventdata.targetUserName: EXPDC001$\n"
+        "data.win.eventdata.subjectUserName: EXPDC402$\n"
+    )
+    assert afs.entity_of(afs.extract_alert_fields(body))[1] == "EXPDC001$"
+
+
+def test_an_alert_that_states_its_user_outright_still_wins():
+    """A Sysmon alert names the account that ran the command, and that is a
+    better answer than either half of a security event's subject/target
+    pair."""
+    body = (
+        "User: INT\\echelarasu\n"
+        "data.win.eventdata.targetUserName: someone_else\n"
+    )
+    assert afs.entity_of(afs.extract_alert_fields(body))[1] == "INT\\echelarasu"
+
+
+def test_a_kerberos_machine_principal_is_recognised():
+    """Windows writes a computer account `HOST$`, and Kerberos writes it
+    `HOST$@REALM` — 48 alerts in this estate carry the second form."""
+    assert afs.is_machine_account("EXPDC001$@INT.EXPERTWARE.NET")
+    assert afs.is_machine_account("EXP-4JHPZY2$")
+    assert afs.is_machine_account("NT AUTHORITY\\SYSTEM")
+    assert not afs.is_machine_account("gmaciuc")
+    assert not afs.is_machine_account("INT\\echelarasu")
+
+
+def test_the_linkage_service_uses_the_same_definition():
+    """Two copies of "what is a machine account" would drift, and the answer
+    has to be the same where it is stored and where it decides linking."""
+    from app.services import alert_case_linkage_service as linkage
+
+    assert linkage._is_machine_account is afs.is_machine_account

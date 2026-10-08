@@ -216,9 +216,7 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         # "User", not "ParentUser": the header is anchored at line start, so
         # the process's own account wins and the parent's cannot be mistaken
         # for it.
-        "user": _field(
-            "User", ["suser", "duser", "user", "userName", "srcuser"], text, dotted=True,
-        ),
+        "user": _account_of(text),
         # Both feeds carry alerts on behalf of other organisations. TraceCat
         # incidents name theirs outright ("client: LIN"); Wazuh alerts name none
         # at all, which is why the sender can declare it.
@@ -355,6 +353,46 @@ def is_pre_correlated(fields: dict[str, Any]) -> bool:
     return bool(fields.get("entity_type") and fields.get("event_count"))
 
 
+def _account_of(text: str) -> str | None:
+    """The account this alert is about, out of the several it may name.
+
+    A Sysmon alert names one — `User: INT\\echelarasu` — and that is the one
+    that ran the command. A Windows security event names two, and which of
+    them matters depends on the event:
+
+        Event ID: 4740  (a user account was locked out)
+          data.win.eventdata.subjectUserName: EXPDC402$   <- the domain
+                                                             controller, which
+                                                             performed the
+                                                             lockout
+          data.win.eventdata.targetUserName:  gmaciuc     <- the person who was
+                                                             locked out
+
+    Neither field was tried at all, so 513 stored alerts name an account and
+    carry none: the lockout above reported no user, on a case titled "User
+    account locked out".
+
+    Taking the target always would be wrong too. Across those 513, the target
+    is a machine account 204 times and the subject is one 300 times — so
+    neither field is reliably the person, and the rule is to prefer whichever
+    names one. A machine account is still recorded when it is all there is,
+    because "the domain controller did this" is worth knowing; it is only
+    barred from linking cases together.
+    """
+    # In preference order. The acting user first, where the alert states one
+    # outright; then the account acted upon, which is what a lockout, a logon
+    # or a password change is about; then the account that acted.
+    candidates = [
+        _field("User", ["suser", "duser", "user", "userName", "srcuser"], text, dotted=True),
+        _field(None, ["targetUserName", "target_user", "targetusername"], text, dotted=True),
+        _field(None, ["subjectUserName", "subject_user", "subjectusername"], text, dotted=True),
+    ]
+    cleaned = [value for value in (_clean_user(c) for c in candidates) if value]
+    if not cleaned:
+        return None
+    return next((value for value in cleaned if not is_machine_account(value)), cleaned[0])
+
+
 def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
     """
     The (host, user) this alert is about — the key correlation groups on.
@@ -385,6 +423,43 @@ def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
 # separator, a lone separator, and the machine pseudo-accounts that belong to
 # every host and so cannot distinguish one.
 _NOT_AN_ACCOUNT = frozenset({"", "\\", "-", "n/a", "unknown", "null", "none"})
+
+# Accounts that are not a person. Used here to choose between the several
+# accounts a Windows security event names, and by the linkage service to keep
+# them from tying unrelated alerts together — one definition, because two
+# would drift and the answer has to be the same in both places.
+MACHINE_ACCOUNTS = frozenset({
+    "system",
+    "local system",
+    "localsystem",
+    "local service",
+    "localservice",
+    "network service",
+    "networkservice",
+    "anonymous",
+    "anonymous logon",
+    "nt authority",
+    "iusr",
+    "iwam",
+})
+
+
+def is_machine_account(user: Any) -> bool:
+    """Whether this names a machine rather than a person.
+
+    A computer account is written `HOST$` by Windows, and the service
+    pseudo-accounts are named outright. Matched on the account half of
+    `DOMAIN\\user`, so `NT AUTHORITY\\SYSTEM` and a bare `system` are the
+    same answer.
+    """
+    text = str(user or "").strip().casefold()
+    if not text:
+        return True
+    account = text.rsplit("\\", 1)[-1].strip()
+    if account in MACHINE_ACCOUNTS or text in MACHINE_ACCOUNTS:
+        return True
+    # `HOST$`, and `HOST$@REALM` as Kerberos writes it.
+    return account.endswith("$") or "$@" in account
 
 
 def _clean_user(value: Any) -> str | None:

@@ -84,34 +84,12 @@ _NEVER_LINKS = frozenset({
 #
 # They are still STORED. "This ran as SYSTEM" is worth an analyst's attention
 # and belongs on the alert; it is only barred from deciding what belongs with
-# what. Matched on the account half, so `NT AUTHORITY\SYSTEM` and a bare
-# `system` are the same answer.
-_MACHINE_ACCOUNTS = frozenset({
-    "system",
-    "local system",
-    "localsystem",
-    "local service",
-    "localservice",
-    "network service",
-    "networkservice",
-    "anonymous",
-    "anonymous logon",
-    "nt authority",
-    "iusr",
-    "iwam",
-})
-
-
-def _is_machine_account(user: str) -> bool:
-    text = str(user or "").strip().casefold()
-    if not text:
-        return True
-    # The account half of DOMAIN\user, which is where the name sits.
-    account = text.rsplit("\\", 1)[-1].strip()
-    if account in _MACHINE_ACCOUNTS or text in _MACHINE_ACCOUNTS:
-        return True
-    # A computer account: Windows writes the machine itself as `HOST$`.
-    return account.endswith("$")
+# what.
+#
+# The predicate itself lives in the field service, which is where what counts
+# as a principal is already decided — two copies would drift, and the answer
+# has to be the same in both places.
+from app.services.alert_field_service import is_machine_account as _is_machine_account
 
 
 def _host_of(row: Any) -> str:
