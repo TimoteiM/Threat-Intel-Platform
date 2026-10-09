@@ -1221,3 +1221,89 @@ class AlertCaseSnapshot(Base):
     escalated_to_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     escalated_delta_config: Mapped[int | None] = mapped_column(Integer, nullable=True)
     escalated_min_score_config: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AlertGraphEntity(Base):
+    """One entity, as one alert witnessed it.
+
+    Materialised rather than re-parsed. The case graph is then a join on
+    `run_id`, and "where else has this thing been seen" is an index hit on
+    `merge_key` instead of a scan that re-reads 15,000 alert bodies.
+
+    One row per (alert, entity): the same binary seen by four alerts is four
+    rows sharing a `merge_key`, and collapsing them into one node is the
+    assembler's job. Storing the merged node instead would throw away which
+    alert saw what, which is exactly what the side panel has to show.
+    """
+
+    __tablename__ = "alert_graph_entity"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("alert_body_investigation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The identity. Two rows with the same value are the same thing.
+    merge_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: observed | parsed | inferred — what the status is computed from.
+    basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    attrs: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    #: Copied off the alert so ordering the graph needs no join.
+    event_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rule_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "merge_key", name="uq_graph_entity_run_key"),
+        Index("ix_graph_entity_merge_key", "merge_key"),
+        Index("ix_graph_entity_run", "run_id"),
+    )
+
+
+class AlertGraphEdge(Base):
+    """One relationship, as one alert witnessed it.
+
+    Endpoints are merge keys, not row ids, so an edge survives being written
+    by an alert that never saw both ends as the same object.
+    """
+
+    __tablename__ = "alert_graph_edge"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("alert_body_investigation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    basis: Mapped[str] = mapped_column(String(16), nullable=False)
+    attrs: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    event_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "kind", "source_key", "target_key",
+            name="uq_graph_edge_run_triple",
+        ),
+        Index("ix_graph_edge_run", "run_id"),
+        Index("ix_graph_edge_source", "source_key"),
+        Index("ix_graph_edge_target", "target_key"),
+    )
