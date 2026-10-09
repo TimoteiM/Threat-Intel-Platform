@@ -1217,43 +1217,45 @@ async def get_case_graph(
     hours: int = Query(default=CASE_LOOKUP_HOURS, ge=1, le=CASE_LOOKUP_MAX_HOURS),
     request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """The case drawn as what happened: entities, alerts, techniques, processes.
+    """The case drawn as what happened: entities, not alerts.
 
-    Assembled here rather than in the service so the service stays testable
-    without a database, and so this decides what it can afford to load: the
-    ATT&CK assessment and indicator list come off the alert rows, and the
-    process ancestry off the log context already stored around them.
+    The first version of this drew the case *record* — a hub, one box per
+    alert, an account — and could not draw an attack, because the thing worth
+    seeing only exists when two observations collapse onto one node. This
+    serves the entity model instead: a join over the rows the extractor
+    materialised per alert, merged, with the claimed-versus-corroborated
+    distinction carried on every node and every edge.
 
-    Scoped like every other case endpoint — a case that does not form for this
-    caller is not theirs to read.
+    Scoped and windowed like every other single-case endpoint.
     """
-    from app.models.database import AlertBodyInvestigationRun, AlertCaseSpine, AlertLogContext
-    from app.services.alert_case_graph_service import build_case_graph
+    from app.models.database import AlertCaseSpine
+    from app.services.asset_criticality_service import criticality_for
+    from app.services.case_collision_service import shadow_payload, shadowing_keys
+    from app.services.alert_graph_store_service import graph_for_runs, pivots_for
 
     scope = _scope(request)
     case = await case_by_key(db, case_key, scope=scope, hours=hours)
     spine = await db.get(AlertCaseSpine, case_key)
     if case is None and spine is None:
         raise HTTPException(404, "No such case")
-
-    # A case that does not form for this caller is not theirs to read — the
-    # spine alone would otherwise still name another client's host.
     if case is None and not scope.all_tenants:
         raise HTTPException(404, "No such case")
 
     if case is None:
-        # The key no longer re-derives over this window: its alerts have aged
-        # out, or a late arrival re-anchored the cluster under a different key.
-        # The detail endpoint answers this with `case: null` and renders the
-        # spine header, so the graph says the same thing rather than failing —
-        # an error toast on the tab reads as a broken feature, and a blank
-        # canvas reads as "no attack here", which is worse.
+        # The key no longer re-derives over this window — 878 of this estate's
+        # 1,880 case rows are in that state. The detail endpoint answers with
+        # `case: null` and renders the spine header, so this says the same
+        # thing in words rather than failing: an error reads as a broken
+        # feature and a blank canvas reads as "no attack here".
         return {
             "case_key": case_key,
             "case_number": spine.case_number,
             "nodes": [], "edges": [], "counts": {},
             "attack": {"corroborated": 0, "claimed": 0},
-            "dropped": None, "continues": None,
+            "integrity": {},
+            "sources": {"by_source": [], "unmapped": []},
+            "over_cap": False,
+            "continues": None,
             "note": (
                 "This case cannot be re-derived over the last "
                 f"{hours} hours, so there is nothing to draw. Its alerts have "
@@ -1262,87 +1264,46 @@ async def get_case_graph(
             ),
         }
 
-    run_ids = [str(a.get("run_id")) for a in (case.get("alerts") or []) if a.get("run_id")]
-    assessments: dict[str, Any] = {}
-    indicators: dict[str, Any] = {}
-    processes: list[dict[str, Any]] = []
+    run_ids = [a.get("run_id") for a in (case.get("alerts") or []) if a.get("run_id")]
+    graph = await graph_for_runs(db, run_ids)
 
-    if run_ids:
-        rows = (
-            await db.execute(
-                select(
-                    AlertBodyInvestigationRun.id,
-                    AlertBodyInvestigationRun.result_attack_assessment,
-                    AlertBodyInvestigationRun.ioc_values,
-                ).where(AlertBodyInvestigationRun.id.in_(run_ids))
-            )
-        ).all()
-        for run_id, assessment, iocs in rows:
-            key = str(run_id)
-            techniques = (assessment or {}).get("techniques")
-            assessments[key] = techniques if isinstance(techniques, list) else []
-            indicators[key] = list(iocs or [])
+    # Which machines matter, as a person recorded it. Absent means unknown,
+    # never "not a crown jewel": this estate has no asset inventory, so an
+    # empty table is an absence of opinion rather than a verdict.
+    host_labels = [
+        n["label"] for n in graph["nodes"] if n["kind"] == "host"
+    ]
+    tiers = await criticality_for(db, host_labels)
+    for node in graph["nodes"]:
+        if node["kind"] != "host":
+            continue
+        found = tiers.get(node["label"])
+        node["criticality"] = found or {"tier": None, "state": "unknown"}
 
-        # Process ancestry, from the logs already retrieved around these
-        # alerts. Sysmon gives each process its own GUID and names its parent,
-        # so the tree is observed rather than reconstructed from timing.
-        contexts = (
-            await db.execute(
-                select(AlertLogContext.logs).where(AlertLogContext.run_id.in_(run_ids))
-            )
-        ).scalars().all()
-        processes = _processes_from_logs(contexts)
-
-    graph = build_case_graph(
-        case, assessments=assessments, indicators=indicators, processes=processes,
+    # The pivot badge: how many other alerts touched this same entity. One
+    # indexed select on merge_key over 56,321 stored entities.
+    elsewhere = await pivots_for(
+        db, [n["id"] for n in graph["nodes"]], exclude_runs=run_ids,
     )
+    for node in graph["nodes"]:
+        node["pivot_alerts"] = elsewhere.get(node["id"], 0)
+
     graph["continues"] = case.get("continues")
+    graph["case_key"] = case_key
+    graph["case_number"] = case.get("case_number")
+
+    # Earlier keys for this same incident. Matched on the weaker signal and
+    # labelled as such, because a key that no longer re-derives has no alert
+    # set to compare against.
+    if spine is not None:
+        shadows = await shadowing_keys(
+            db, case_key=case_key, entity_host=spine.entity_host,
+            opened_at=spine.opened_at, alert_count=spine.alerts_at_close,
+        )
+        graph["duplicate_keys"] = shadow_payload(shadows)
+
     return graph
 
-
-def _processes_from_logs(contexts: Any) -> list[dict[str, Any]]:
-    """Process creation and process access, out of the stored log events.
-
-    Only events that name a process are used; everything else in the window is
-    a log line, not a step in an attack. Deduplicated on the process GUID,
-    which is what makes a tree rather than a list of repeated images.
-    """
-    seen: dict[str, dict[str, Any]] = {}
-    for logs in contexts or []:
-        for event in (logs or []):
-            fields = {
-                str(f.get("name") or ""): str(f.get("value") or "")
-                for f in (event.get("fields") or [])
-                if isinstance(f, dict)
-            }
-            if not fields:
-                continue
-
-            def pick(*names: str) -> str:
-                for name in names:
-                    value = fields.get(f"data.win.eventdata.{name}")
-                    if value:
-                        return value
-                return ""
-
-            guid = pick("processGuid", "sourceProcessGUID")
-            image = pick("image", "sourceImage")
-            if not guid and not image:
-                continue
-            key = guid or image.casefold()
-            entry = seen.setdefault(key, {})
-            entry.update({
-                "guid": guid or entry.get("guid"),
-                "image": image or entry.get("image"),
-                "command_line": pick("commandLine") or entry.get("command_line"),
-                "parent_guid": pick("parentProcessGuid") or entry.get("parent_guid"),
-                "parent_image": pick("parentImage") or entry.get("parent_image"),
-                "accessed_guid": pick("targetProcessGUID") or entry.get("accessed_guid"),
-                "accessed_image": pick("targetImage") or entry.get("accessed_image"),
-                "account": pick("user") or entry.get("account"),
-                "at": event.get("timestamp") or entry.get("at"),
-            })
-    return list(seen.values())
 
 
 @router.get("/case/{case_key}/observables")

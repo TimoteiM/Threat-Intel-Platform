@@ -104,6 +104,8 @@ class AlertEvidence:
     event_time: datetime | None
     rule_level: int | None
     extracted: Extracted
+    #: Carried for the empty-state message, which has to name the source.
+    source_type: str | None = None
 
 
 def _better(basis_a: str, basis_b: str) -> str:
@@ -115,8 +117,11 @@ def _better(basis_a: str, basis_b: str) -> str:
 def assemble(evidence: Iterable[AlertEvidence]) -> dict[str, Any]:
     nodes: dict[str, AssembledNode] = {}
     edges: dict[tuple[str, str, str], AssembledEdge] = {}
+    # Materialised, because `evidence` may be a generator and the source
+    # report below has to see the same alerts the loop consumed.
+    evidence_seen = list(evidence)
 
-    for item in evidence:
+    for item in evidence_seen:
         witness = Witness(
             run_id=item.run_id, rule_id=item.rule_id, detection=item.detection,
             event_time=item.event_time, rule_level=item.rule_level,
@@ -153,8 +158,14 @@ def assemble(evidence: Iterable[AlertEvidence]) -> dict[str, Any]:
     _merge_same_binary(nodes, edges)
     _flag_reused_infrastructure(nodes, edges)
     _close_broken_chains(nodes, edges)
+    collapsed = _collapse_siblings(nodes, edges)
 
-    return _render_payload(nodes, edges)
+    payload = _render_payload(nodes, edges)
+    payload["collapsed"] = collapsed
+    payload["sources"] = _source_report(list(evidence_seen))
+    if not payload["nodes"]:
+        payload["note"] = _why_empty(payload["sources"])
+    return payload
 
 
 # --- second pass: the same binary named several ways -----------------------
@@ -360,6 +371,92 @@ def _close_broken_chains(
         )
 
 
+# --- auto-collapse -------------------------------------------------------
+
+#: How many identical siblings before they become one node. Measured on case
+#: #194: a domain controller's log context names 192 accounts, each attached
+#: to the host by one `ran_as` edge and to nothing else. Drawn individually
+#: they are 192 of the case's 261 nodes and carry no information at all — the
+#: graph is accurate and unreadable, which is the failure this exists to stop.
+COLLAPSE_AT = 5
+
+
+def _collapse_siblings(
+    nodes: dict[str, AssembledNode],
+    edges: dict[tuple[str, str, str], AssembledEdge],
+) -> list[dict[str, Any]]:
+    """Fold leaves that differ only by name into one node carrying a count.
+
+    A leaf here is a node with exactly one edge. Anything reached more than
+    once is part of the structure — the account that also ran a process, the
+    address also named by a URL — and is never folded away, because those are
+    precisely the convergences the graph exists to show.
+    """
+    degree: dict[str, int] = {}
+    for (_kind, source, target) in edges:
+        degree[source] = degree.get(source, 0) + 1
+        degree[target] = degree.get(target, 0) + 1
+
+    groups: dict[tuple[str, str, str, str], list[str]] = {}
+    for (kind, source, target), _edge in edges.items():
+        node = nodes.get(target)
+        if node is None or degree.get(target, 0) != 1:
+            continue
+        # A sibling group the extractor already named (a discovery burst) keeps
+        # its own identity rather than being pooled with unrelated leaves.
+        marker = str(node.attrs.get("sibling_group") or "")
+        groups.setdefault((source, kind, node.kind, marker), []).append(target)
+
+    collapsed: list[dict[str, Any]] = []
+    for (source, edge_kind, node_kind, _marker), members in groups.items():
+        if len(members) < COLLAPSE_AT:
+            continue
+        member_nodes = [nodes[m] for m in members if m in nodes]
+        if not member_nodes:
+            continue
+        group_key = f"group:{node_kind}:{edge_kind}:{source}"
+        witnesses: list[Witness] = []
+        for node in member_nodes:
+            witnesses.extend(node.witnesses)
+        every_corroborated = all(n.basis == OBSERVED for n in member_nodes)
+        noun = node_kind.replace("_", " ")
+        nodes[group_key] = AssembledNode(
+            kind=node_kind,
+            merge_key=group_key,
+            label=f"{len(member_nodes)} {noun}s",
+            basis=OBSERVED if every_corroborated else PARSED,
+            attrs={
+                "group": True,
+                "member_count": len(member_nodes),
+                # Enough to name them in the side panel without drawing them.
+                "members": sorted(n.label for n in member_nodes)[:200],
+                "corroborated_members": sum(
+                    1 for n in member_nodes if n.basis == OBSERVED
+                ),
+                "host": member_nodes[0].attrs.get("host"),
+            },
+            witnesses=witnesses,
+        )
+        for member in members:
+            nodes.pop(member, None)
+            edges.pop((edge_kind, source, member), None)
+        edges[(edge_kind, source, group_key)] = AssembledEdge(
+            kind=edge_kind, source=source, target=group_key,
+            basis=OBSERVED if every_corroborated else PARSED,
+            attrs={"group": True, "member_count": len(member_nodes)},
+            witnesses=witnesses,
+        )
+        collapsed.append(
+            {
+                "id": group_key,
+                "kind": node_kind,
+                "edge": edge_kind,
+                "members": len(member_nodes),
+            }
+        )
+    return collapsed
+
+
 # --- payload ---------------------------------------------------------------
 
 def _render_payload(
@@ -428,3 +525,51 @@ def _render_payload(
         },
         "over_cap": len(node_list) > MAX_NODES,
     }
+
+
+def _source_report(evidence: list[AlertEvidence]) -> dict[str, Any]:
+    """Which sources these alerts came from, and whether each can be read.
+
+    Carried on every graph, not only an empty one: a case of eight Windows
+    alerts and four Fortigate ones draws two thirds of itself, and saying so
+    is the difference between a partial graph and a wrong one.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for item in evidence:
+        name = item.source_type or item.extracted.source_type or "unknown"
+        row = seen.setdefault(
+            name, {"source": name, "alerts": 0, "mapped": item.extracted.mapped,
+                   "entities": 0}
+        )
+        row["alerts"] += 1
+        row["entities"] += len(item.extracted.entities)
+    return {
+        "by_source": sorted(seen.values(), key=lambda r: -r["alerts"]),
+        "unmapped": sorted(
+            r["source"] for r in seen.values() if not r["mapped"]
+        ),
+    }
+
+
+def _why_empty(sources: dict[str, Any]) -> str:
+    """Never a blank canvas.
+
+    An empty graph that says nothing reads as "no attack here". That is the
+    exact failure the first version of this feature had, when a case whose key
+    no longer re-derived returned a bare 404 and the tab rendered empty; it is
+    not going to be reintroduced one layer down, through the extractor.
+    """
+    unmapped = sources.get("unmapped") or []
+    if unmapped:
+        names = ", ".join(unmapped[:3])
+        return (
+            f"No entities extracted: source type {names} has no field map, so "
+            "this platform cannot yet read the fields these alerts carry. "
+            "This is not a finding that the case is harmless — nothing was "
+            "examined."
+        )
+    return (
+        "No entities extracted. The alerts in this case carry none of the "
+        "fields this graph is built from. Nothing was examined, so this is "
+        "not a finding that the case is harmless."
+    )

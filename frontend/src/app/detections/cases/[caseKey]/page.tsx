@@ -18,6 +18,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import * as api from "@/lib/api";
 import type { CaseDetail } from "@/lib/types";
 import { EmptyState, LoadingState, Page, PageHeader } from "@/components/ui/Primitives";
@@ -27,7 +28,15 @@ import {
   riskColor,
   shortDate,
 } from "@/components/detections/panels";
-import CaseGraph from "@/components/detections/CaseGraph";
+// Loaded on demand. Cytoscape and its two layout plugins are ~150 kB, and
+// most visits to a case never open the graph tab, so the case page should not
+// pay for it on first load.
+const CaseGraph = dynamic(() => import("@/components/detections/CaseGraph"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading the graph…</div>
+  ),
+});
 
 function verdictTone(verdict: string | null | undefined): string {
   const value = (verdict || "").toLowerCase();

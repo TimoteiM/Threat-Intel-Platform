@@ -598,40 +598,77 @@ export interface CaseReportOptions {
   scope: { all_tenants: boolean };
 }
 
+export type GraphStatus = "corroborated" | "claimed";
+
+/** One entity. Alerts are no longer nodes: they are witnesses on the nodes
+ *  and edges they saw, which is what lets two observations of one binary
+ *  collapse into a single node. */
 export interface CaseGraphNode {
   id: string;
-  kind: "case" | "host" | "account" | "alert" | "process" | "technique" | "indicator";
+  kind: string;
   label: string;
-  /** Techniques only: whether the evidence corroborated the detection's
-   *  mapping, or whether the detection merely asserted it. 30,763 of 30,803
-   *  mappings in this estate are claims. */
-  status?: "corroborated" | "claimed";
-  explanation?: string | null;
-  evidence_count?: number;
-  tactic?: string | null;
-  url?: string | null;
-  href?: string | null;
-  at?: string | null;
-  verdict?: string | null;
-  risk?: number | null;
-  rule_id?: string | null;
-  account?: string | null;
-  image?: string | null;
-  command_line?: string | null;
-  alert_count?: number | null;
-  case_number?: number | null;
-  score?: number | null;
+  status: GraphStatus;
+  /** observed | parsed | inferred — what the status was computed from. */
+  basis: string;
+  attrs: Record<string, unknown>;
+  /** Highest rule.level of any alert that touched it. */
+  risk: number | null;
+  witnesses: Array<{
+    run_id: string;
+    rule_id: string | null;
+    detection: string | null;
+    at: string | null;
+  }>;
+  witness_count: number;
+  absorbed: string[];
+  /** Alerts outside this case that touched the same entity. */
+  pivot_alerts?: number;
+  /** Hosts only. `state` is "unknown" when nobody has classified it, which
+   *  is not the same as "not a crown jewel". */
+  criticality?: { tier: string | null; state: string; reason?: string | null };
+}
+
+export interface CaseGraphEdge {
+  kind: string;
+  source: string;
+  target: string;
+  status: GraphStatus;
+  basis: string;
+  attrs: Record<string, unknown>;
+  /** Stroke width: how many alerts agree this relationship happened. */
+  witness_count: number;
 }
 
 export interface CaseGraph {
   case_key: string;
   case_number: number | null;
   nodes: CaseGraphNode[];
-  edges: Array<{ source: string; target: string; kind: string }>;
+  edges: CaseGraphEdge[];
   counts: Record<string, number>;
   attack: { corroborated: number; claimed: number };
-  dropped: Record<string, number> | null;
-  note: string;
+  integrity?: {
+    nodes_corroborated?: number;
+    nodes_claimed?: number;
+    edges_corroborated?: number;
+    edges_claimed?: number;
+  };
+  /** Which sources the case's alerts came from, and whether each can be read
+   *  at all. A case of eight Windows alerts and four Fortigate ones draws
+   *  two thirds of itself, and saying so is the difference between a partial
+   *  graph and a wrong one. */
+  sources?: {
+    by_source: Array<{ source: string; alerts: number; mapped: boolean; entities: number }>;
+    unmapped: string[];
+  };
+  collapsed?: Array<{ id: string; kind: string; edge: string; members: number }>;
+  coverage?: { alerts_read: number; alerts_dropped: number; note: string | null };
+  duplicate_keys?: {
+    also_known_as: Array<{ case_number: number | null; case_key: string; resolution: string | null }>;
+    matched_on: string;
+    note: string;
+  } | null;
+  over_cap?: boolean;
+  note?: string;
   continues?: { case_key: string; case_number: number | null } | null;
 }
 

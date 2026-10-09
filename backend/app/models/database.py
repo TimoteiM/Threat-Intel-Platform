@@ -711,6 +711,10 @@ class AlertBodyInvestigationRun(Base):
     # two alerts have in common; deriving it from the JSON on every page
     # load cost 2.4 seconds a time.
     ioc_values: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
+    #: Which kind of alert this is, as the graph's field map names it. Written
+    #: during extraction so an empty graph can say *which* source it could not
+    #: read, instead of rendering a blank canvas that reads as "no attack".
+    graph_source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # sha256 of the normalised alert body — lets a repeated delivery reuse the
     # run it already produced instead of investigating the same alert twice.
     alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -1306,4 +1310,54 @@ class AlertGraphEdge(Base):
         Index("ix_graph_edge_run", "run_id"),
         Index("ix_graph_edge_source", "source_key"),
         Index("ix_graph_edge_target", "target_key"),
+    )
+
+
+class AssetCriticality(Base):
+    """Which machines matter more than others, as a person recorded it.
+
+    Deliberately a table and not a name pattern. `EXP-DC-01` matches `-DC-`,
+    and so does `EXP-DCOM-02`, while a domain controller named `EXP-SRV-09`
+    matches nothing — the delimiter-boundary failure this codebase has already
+    hit six times, failing silently in both directions. A crown jewel badge is
+    the single most persuasive mark on the graph; it does not get to be a
+    guess about a hostname.
+
+    Three states, the same shape as a technique:
+
+        confirmed   a person promoted it, and `set_by` says who
+        proposed    a seeding helper suggested it from a name pattern or from
+                    observed behaviour; nobody has agreed yet
+        unknown     no row at all
+
+    `unknown` renders as unknown. It never renders as "not a crown jewel":
+    this estate has 1,878 cases and one seeded asset list, so absence of a row
+    is absence of an opinion.
+    """
+
+    __tablename__ = "asset_criticality"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    #: The short host label, lowercased — the same key the graph merges hosts
+    #: on, so a tier set against `EXP-DC-01` is found when an alert names
+    #: `exp-dc-01.corp.local`.
+    host: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    #: crown_jewel | high | normal
+    tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: confirmed | proposed
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
+    #: Why, in words. For a proposal, which signal suggested it; for a
+    #: confirmation, what the person knows that the signal did not.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    set_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    set_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("ix_asset_criticality_host", "host"),
+        Index("ix_asset_criticality_state", "state"),
     )

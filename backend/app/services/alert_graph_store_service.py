@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -55,11 +55,27 @@ async def materialise_run(
     event_time: datetime | None,
     rule_level: int | None,
     assessment: Any = None,
+    log_events: Any = None,
 ) -> tuple[int, int]:
-    """Extract one alert and replace its rows. Returns (entities, edges)."""
+    """Extract one alert and replace its rows. Returns (entities, edges).
+
+    `log_events` are the SIEM events already retrieved around this alert.
+    They carry the same dotted field names and are read through the same
+    builder, which is where most of the registry and process detail lives:
+    `targetObject` appears 5,805 times across stored log context against 25
+    times across alert bodies.
+    """
     found = extract(
         alert_body, rule_level=rule_level,
         confirmed_techniques=confirmed_ids(assessment),
+        log_events=log_events or (),
+    )
+    # Remembered on the run, so a case with no extractable alerts can name the
+    # source it could not read without re-parsing every body to find out.
+    await db.execute(
+        update(AlertBodyInvestigationRun)
+        .where(AlertBodyInvestigationRun.id == run_id)
+        .values(graph_source_type=found.source_type[:64])
     )
     await db.execute(delete(AlertGraphEntity).where(AlertGraphEntity.run_id == run_id))
     await db.execute(delete(AlertGraphEdge).where(AlertGraphEdge.run_id == run_id))
@@ -148,12 +164,20 @@ async def graph_for_runs(
                 AlertBodyInvestigationRun.id,
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_name,
+                AlertBodyInvestigationRun.graph_source_type,
+                AlertBodyInvestigationRun.event_time,
+                AlertBodyInvestigationRun.highest_risk_score,
             ).where(AlertBodyInvestigationRun.id.in_(run_ids))
         )
     ).all()
-    rules = {str(rid): (rule, name) for rid, rule, name in meta}
+    rules = {str(rid): (rule, name) for rid, rule, name, _s, _t, _l in meta}
+    sources = {str(rid): source for rid, _r, _n, source, _t, _l in meta}
 
-    from app.services.alert_graph_extraction_service import Edge, Entity
+    from app.services.alert_graph_extraction_service import (
+        MAPPED_DECODERS,
+        Edge,
+        Entity,
+    )
 
     grouped: dict[str, Extracted] = {}
     stamps: dict[str, datetime | None] = {}
@@ -178,6 +202,26 @@ async def graph_for_runs(
         )
         stamps.setdefault(key, row.event_time)
 
+    # Every alert asked for, including the ones that yielded nothing. Leaving
+    # those out is how an unreadable source becomes an unexplained blank.
+    for rid, _rule, _name, _source, when, level in meta:
+        key = str(rid)
+        if key not in grouped:
+            grouped[key] = Extracted()
+            stamps.setdefault(key, when)
+            levels.setdefault(key, level)
+
+    # The stored rows carry no source type of their own, so a graph read from
+    # the tables would report every source as unmapped — including
+    # `windows_eventchannel`, which is the one this platform does read.
+    for rid, _rule, _name, source, _when, _level in meta:
+        key = str(rid)
+        found = grouped.get(key)
+        if found is None:
+            continue
+        found.source_type = source or "unknown"
+        found.mapped = (source or "") in MAPPED_DECODERS
+
     evidence = [
         AlertEvidence(
             run_id=key,
@@ -186,6 +230,7 @@ async def graph_for_runs(
             event_time=stamps.get(key),
             rule_level=levels.get(key),
             extracted=found,
+            source_type=sources.get(key),
         )
         for key, found in grouped.items()
     ]
@@ -204,22 +249,26 @@ async def graph_for_runs(
 
 async def pivots_for(
     db: AsyncSession, merge_keys: Iterable[str], *, exclude_runs: Sequence[Any] = ()
-) -> dict[str, list[str]]:
-    """Which other alerts touched each of these entities.
+) -> dict[str, int]:
+    """How many other alerts touched each of these entities.
 
-    An index hit on `merge_key`. The caller maps run ids onto cases; this stops
-    at alerts deliberately, because case membership is derived and a join to it
-    here would drag correlation into a lookup that has to stay cheap.
+    A count, not a list of ids. Returning the ids cost 249 ms on case #71,
+    because `host:windows-test-device` appears in 3,375 rows and every one of
+    them came back over the wire to be measured with `len()`. Counting in the
+    database puts it back inside the 200 ms the pivot lookup is budgeted.
+
+    Stops at alerts deliberately: case membership is derived, so joining to it
+    here would drag correlation — 270 to 1,108 ms per case — into a lookup
+    that has to stay cheap.
     """
     keys = [k for k in dict.fromkeys(merge_keys) if k]
     if not keys:
         return {}
-    query = select(AlertGraphEntity.merge_key, AlertGraphEntity.run_id).where(
-        AlertGraphEntity.merge_key.in_(keys)
+    query = (
+        select(AlertGraphEntity.merge_key, func.count(AlertGraphEntity.run_id.distinct()))
+        .where(AlertGraphEntity.merge_key.in_(keys))
+        .group_by(AlertGraphEntity.merge_key)
     )
     if exclude_runs:
         query = query.where(AlertGraphEntity.run_id.notin_(exclude_runs))
-    out: dict[str, list[str]] = {}
-    for key, run_id in (await db.execute(query)).all():
-        out.setdefault(key, []).append(str(run_id))
-    return out
+    return {key: int(count) for key, count in (await db.execute(query)).all()}

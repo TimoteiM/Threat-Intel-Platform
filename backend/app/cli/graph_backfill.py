@@ -16,7 +16,7 @@ import time
 from sqlalchemy import select
 
 from app.db.session import AsyncSessionLocal
-from app.models.database import AlertBodyInvestigationRun
+from app.models.database import AlertBodyInvestigationRun, AlertLogContext
 from app.services.alert_graph_store_service import materialise_run
 
 
@@ -34,6 +34,11 @@ async def run(limit: int | None, batch: int) -> None:
                     AlertBodyInvestigationRun.created_at,
                     AlertBodyInvestigationRun.highest_risk_score,
                     AlertBodyInvestigationRun.result_attack_assessment,
+                    AlertLogContext.logs,
+                )
+                .outerjoin(
+                    AlertLogContext,
+                    AlertLogContext.run_id == AlertBodyInvestigationRun.id,
                 )
                 .order_by(AlertBodyInvestigationRun.created_at)
                 .offset(offset)
@@ -42,11 +47,11 @@ async def run(limit: int | None, batch: int) -> None:
             rows = (await db.execute(query)).all()
             if not rows:
                 break
-            for run_id, body, when, created, level, assessment in rows:
+            for run_id, body, when, created, level, assessment, logs in rows:
                 n_ent, n_edge = await materialise_run(
                     db, run_id=run_id, alert_body=body,
                     event_time=when or created, rule_level=level,
-                    assessment=assessment,
+                    assessment=assessment, log_events=logs,
                 )
                 entities += n_ent
                 edges += n_edge

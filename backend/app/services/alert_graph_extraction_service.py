@@ -130,10 +130,52 @@ class Edge:
         return status_for(self.basis)
 
 
+#: Decoders this extractor has a field map for. Everything else yields
+#: nothing, and says so by name rather than drawing an empty canvas — a blank
+#: graph reads as "no attack here", which is a different and much worse claim
+#: than "this platform cannot read this source yet".
+#:
+#: Measured share of the 15,212 stored alerts, by `decoder.name`:
+#:     windows_eventchannel     9,055   59.5%   mapped
+#:     appsec-agent             2,685   17.7%   not mapped
+#:     fortigate-firewall-v5    2,533   16.6%   not mapped (carries data.srcip,
+#:                                              data.dstip, data.dstport — the
+#:                                              IP and Domain node types that
+#:                                              currently measure 0.0%)
+#:     (none: PAN-OS, syslog)     865    5.7%   not mapped
+#:     syscheck_*, macOS, json     76    0.5%   not mapped
+MAPPED_DECODERS = frozenset({"windows_eventchannel"})
+
+#: How many stored SIEM events one alert contributes. Measured: 40 sampled log
+#: contexts hold 14,674 events, so roughly 370 each, and the 1,858 runs that
+#: have context would otherwise dominate the extraction entirely. Entities are
+#: deduplicated inside a run, so a higher number buys little beyond this.
+MAX_LOG_EVENTS = 400
+
+
+def source_type_of(fields: dict[str, Any]) -> str:
+    """What kind of alert this is, named as the field map would be named."""
+    decoder = fields.get("decoder.name") or fields.get("decoder")
+    if decoder:
+        return str(decoder)
+    channel = fields.get("data.win.system.channel")
+    if channel:
+        return str(channel)
+    if any(str(k).startswith("data.") for k in fields):
+        return "unrecognised structured alert"
+    return "unstructured syslog"
+
+
 @dataclass
 class Extracted:
     entities: list[Entity] = dc_field(default_factory=list)
     edges: list[Edge] = dc_field(default_factory=list)
+    #: The source this came from, so an empty result can name it.
+    source_type: str = "unknown"
+    #: Whether this platform has a field map for that source at all.
+    mapped: bool = False
+    #: Whether log events were left unread because there were too many.
+    truncated_logs: bool = False
     #: Field names present in the body that no node type claimed. Reported so a
     #: missing node type shows up as an unread field rather than as silence.
     unread: list[str] = dc_field(default_factory=list)
@@ -260,6 +302,18 @@ def read_fields(alert_body: str | None) -> dict[str, Any]:
 
 # --- normalising the things that become merge keys -------------------------
 
+#: Names Windows itself defines, which appear in UNC position but are never
+#: machines: `\\BUILTIN\Administrators` is a well-known group, not a server.
+#: This is a short list of identifiers Microsoft fixes, not a guess about how
+#: this customer names hosts — the latter is exactly what the explicit
+#: criticality table exists to avoid.
+_NOT_A_MACHINE = frozenset({
+    "builtin", "nt authority", "nt service", "local service", "network service",
+    "everyone", "creator owner", "authenticated users", "localhost", "127",
+    "iis apppool", "window manager", "font driver host",
+})
+
+
 def host_key(value: Any) -> str | None:
     """The short machine label, lowercased.
 
@@ -281,6 +335,8 @@ def host_key(value: Any) -> str | None:
     # already lost its second half to _first_value, but JSON bodies carry
     # agent.id separately and it must never become a host.
     if not label or label.isdigit():
+        return None
+    if label in _NOT_A_MACHINE:
         return None
     return label
 
@@ -318,7 +374,18 @@ _IPV4 = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
 # `\\HOST\share` or a bare `\\HOST`. Both occur: targetServer carries the
 # share, a PsExec command line usually does not.
-_UNC = re.compile(r"\\\\([A-Za-z0-9][A-Za-z0-9._-]{0,62})(?:\\([^\\\s\"]+))?")
+#
+# The leading boundary is load-bearing, and it is the seventh delimiter bug of
+# this shape in this codebase. Without it, any doubled backslash inside a
+# Windows path matches: `"C:\\Program Files\\Git\\bin\\bash.exe"` yielded a host
+# called `program`, and across the estate the host list gained `windows`,
+# `system`, `users`, `python312`, `secpol`, `sysmon`, `microsoft` and
+# `localhost` — fourteen path fragments drawn as machines, one of which the
+# criticality seeder then proposed as a crown jewel. A real UNC prefix starts
+# a token; a path separator never does.
+_UNC = re.compile(
+    r"(?:^|[\s\"\',=;(])\\\\([A-Za-z0-9][A-Za-z0-9._-]{0,62})(?:\\([^\\\s\"]+))?"
+)
 
 # `sc create updsvc binpath= C:\Windows\odsvc.exe`
 #
@@ -358,6 +425,8 @@ class _Builder:
     def __init__(self) -> None:
         self.entities: dict[str, Entity] = {}
         self.edges: dict[tuple[str, str, str], Edge] = {}
+        self.unread: set[str] = set()
+        self.truncated_logs: bool = False
 
     def node(
         self, kind: str, merge_key: str, label: str, basis: str, **attrs: Any
@@ -405,21 +474,25 @@ class _Builder:
                 existing.attrs[k] = v
 
 
-def extract(
-    alert_body: str | None,
+def _populate(
+    b: "_Builder",
+    f: dict[str, Any],
     *,
     rule_level: int | None = None,
     confirmed_techniques: Iterable[str] = (),
-) -> Extracted:
-    """The entities and relationships one alert witnesses.
+) -> None:
+    """Read one set of fields into a builder.
+
+    Separated from `extract` so a run's alert body and the SIEM log events
+    retrieved around it can share one builder. They use the same dotted
+    field names, and sharing the builder is what makes a process seen in
+    both of them one node instead of two.
 
     `confirmed_techniques` are the ATT&CK ids the investigation actually
-    corroborated for this alert. Everything a *rule* asserts is a claim: a
-    rule's `mitre.id` is its author's mapping, not a finding, and 30,794 of
-    the 30,834 mappings in this estate have never been corroborated.
+    corroborated. Everything a *rule* asserts is a claim: a rule's
+    `mitre.id` is its author's mapping, not a finding, and 30,863 of the
+    30,903 mappings in this estate have never been corroborated.
     """
-    f = read_fields(alert_body)
-    b = _Builder()
     get = f.get
 
     def val(key: str) -> str | None:
@@ -749,8 +822,85 @@ def extract(
         if k not in _CLAIMED_FIELDS
         and k.startswith(ED)
     )
+    unread = sorted(
+        k for k in f
+        if k not in _CLAIMED_FIELDS
+        and k.startswith(ED)
+    )
+    b.unread.update(unread)
+
+
+def extract(
+    alert_body: str | None,
+    *,
+    rule_level: int | None = None,
+    confirmed_techniques: Iterable[str] = (),
+    log_events: Iterable[dict[str, Any]] = (),
+    max_log_events: int = MAX_LOG_EVENTS,
+) -> Extracted:
+    """The entities and relationships one alert witnesses.
+
+    `log_events` are the SIEM events retrieved around the alert, which
+    carry the same dotted field names. Reading them through the same
+    builder matters: `targetObject` appears 5,805 times across stored log
+    context and only 25 times across alert bodies, so the registry layer
+    exists almost entirely here — and a process named by both the alert
+    and its log context has to be one node, not two.
+    """
+    b = _Builder()
+    fields = read_fields(alert_body)
+    _populate(b, fields, rule_level=rule_level,
+              confirmed_techniques=confirmed_techniques)
+    for index, event in enumerate(log_events or ()):
+        if index >= max_log_events:
+            b.truncated_logs = True
+            break
+        _populate(b, fields_of_log_event(event), rule_level=rule_level,
+                  confirmed_techniques=confirmed_techniques)
+    source_type = source_type_of(fields)
     return Extracted(
         entities=list(b.entities.values()),
         edges=list(b.edges.values()),
-        unread=unread,
+        unread=sorted(b.unread),
+        source_type=source_type,
+        mapped=source_type in MAPPED_DECODERS,
+        truncated_logs=b.truncated_logs,
     )
+
+
+def fields_of_log_event(event: dict[str, Any]) -> dict[str, Any]:
+    """One stored SIEM event, as a field dict the extractor can read.
+
+    The events keep Wazuh's flattened names verbatim, so no translation is
+    needed for `data.win.eventdata.*`. The envelope keys sit beside them
+    and have to be lifted in by hand.
+    """
+    out: dict[str, Any] = {}
+    for field in (event.get("fields") or ()):
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip()
+        value = field.get("value")
+        if name and value not in (None, "") and name not in out:
+            out[name] = value
+    agent = event.get("agent")
+    if isinstance(agent, dict):
+        if agent.get("name"):
+            out.setdefault("agent.name", agent["name"])
+        if agent.get("ip"):
+            out.setdefault("agent.ip", agent["ip"])
+    elif isinstance(agent, str) and agent:
+        out.setdefault("agent.name", agent)
+    decoder = event.get("decoder")
+    if isinstance(decoder, dict) and decoder.get("name"):
+        out.setdefault("decoder.name", decoder["name"])
+    elif isinstance(decoder, str) and decoder:
+        out.setdefault("decoder.name", decoder)
+    rule = event.get("rule")
+    if isinstance(rule, dict):
+        mitre = rule.get("mitre")
+        if isinstance(mitre, dict) and mitre.get("id"):
+            out.setdefault("rule.mitre.id", mitre["id"])
+        if rule.get("level") is not None:
+            out.setdefault("rule.level", rule["level"])
+    return out

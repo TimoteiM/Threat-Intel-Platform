@@ -403,3 +403,152 @@ def test_a_body_that_is_not_json_or_key_values_yields_nothing_rather_than_junk()
         "5007553803360726235 - CEF:0|Skyformation|Cloud Apps Security|2.0.0"
     )
     assert not [e for e in out.entities if e.kind == "host"]
+
+
+# --- auto-collapse ---------------------------------------------------------
+
+def _account_body(user: str) -> str:
+    """A Windows security event, which names a principal and no process.
+
+    This is the shape that produced case #194's 192 account nodes: 4624/4768
+    style records carry `subjectUserName` and nothing to hang it off except
+    the host.
+    """
+    return _text_body(subjectUserName=user, subjectUserSid=f"S-1-5-21-{abs(hash(user)) % 9999}")
+
+
+def test_identical_leaves_collapse_into_one_counted_node():
+    """A domain controller's log context names 192 accounts, each attached to
+    the host by one edge and to nothing else. Drawn individually they were 192
+    of case #194's 261 nodes and carried no information — accurate and
+    unreadable, which is the failure collapse exists to stop."""
+    evidence = [
+        _evidence(_account_body(f"CORP\\user{i}"), run_id=f"r{i}",
+                  at=NOW + timedelta(seconds=i))
+        for i in range(12)
+    ]
+    graph = assemble(evidence)
+    accounts = [n for n in graph["nodes"] if n["kind"] == "account"]
+    assert len(accounts) == 1
+    assert accounts[0]["attrs"]["group"] is True
+    assert accounts[0]["attrs"]["member_count"] == 12
+    assert "12 accounts" == accounts[0]["label"]
+    assert graph["collapsed"] == [
+        {"id": accounts[0]["id"], "kind": "account", "edge": "ran_as", "members": 12}
+    ]
+
+
+def test_a_node_reached_more_than_once_is_never_collapsed_away():
+    """Anything reached twice is part of the structure — the account that also
+    ran a process, the address also named by a URL. Those convergences are the
+    whole reason the graph exists."""
+    shared = r"CORP\jdoe"
+    bodies = [_account_body(f"CORP\\user{i}") for i in range(8)]
+    # This one also ran a process, so it has a second edge and must survive
+    # the fold that takes the other eight.
+    ran_something = _text_body(
+        image=r"C:\Windows\System32\cmd.exe", processId="901", user=shared,
+    )
+    evidence = [
+        _evidence(b, run_id=f"r{i}", at=NOW + timedelta(seconds=i))
+        for i, b in enumerate(bodies)
+    ] + [_evidence(ran_something, run_id="rx", at=NOW + timedelta(seconds=30))]
+    graph = assemble(evidence)
+    accounts = {n["label"]: n for n in graph["nodes"] if n["kind"] == "account"}
+    assert shared in accounts, list(accounts)
+    assert not accounts[shared]["attrs"].get("group")
+    # And the eight that only ever appeared as a name did fold.
+    assert any(n["attrs"].get("group") for n in accounts.values())
+
+
+def test_a_small_set_of_siblings_is_left_alone():
+    evidence = [
+        _evidence(_account_body(f"CORP\\user{i}"), run_id=f"r{i}",
+                  at=NOW + timedelta(seconds=i))
+        for i in range(3)
+    ]
+    graph = assemble(evidence)
+    assert len([n for n in graph["nodes"] if n["kind"] == "account"]) == 3
+    assert graph["collapsed"] == []
+
+
+def test_a_collapsed_group_is_only_corroborated_if_every_member_was():
+    observed = [
+        _evidence(_account_body(f"CORP\\user{i}"), run_id=f"r{i}",
+                  at=NOW + timedelta(seconds=i))
+        for i in range(6)
+    ]
+    graph = assemble(observed)
+    group = next(n for n in graph["nodes"] if n["kind"] == "account")
+    assert group["status"] == CORROBORATED
+    assert group["attrs"]["corroborated_members"] == 6
+
+
+# --- the empty state -------------------------------------------------------
+
+def test_an_unreadable_source_says_which_source_rather_than_drawing_nothing():
+    """Case #1106 is Palo Alto syslog. A blank canvas reads as "no attack
+    here", which is the exact bug the 404-on-a-stale-key had."""
+    body = (
+        "<12>Sep 14 08:21:27 172.16.23.1 1,2026/09/14 08:21:26,013101014199,"
+        "THREAT,spyware,2818,2026/09/14 08:21:25,10.64.0.109"
+    )
+    graph = assemble([_evidence(body, run_id="a")])
+    assert graph["nodes"] == []
+    assert "has no field map" in graph["note"]
+    assert "not a finding that the case is harmless" in graph["note"]
+    assert graph["sources"]["unmapped"]
+
+
+def test_a_graph_reports_every_source_it_drew_from_not_only_broken_ones():
+    """A case of eight Windows alerts and four Fortigate ones draws two
+    thirds of itself, and saying so is the difference between a partial graph
+    and a wrong one."""
+    windows = _text_body(image=r"C:\Windows\System32\cmd.exe", processId="4")
+    graph = assemble([_evidence(windows, run_id="a")])
+    sources = {s["source"]: s for s in graph["sources"]["by_source"]}
+    assert "windows_eventchannel" in sources or sources
+    assert graph["sources"]["by_source"][0]["alerts"] == 1
+
+
+# --- the seventh delimiter bug of this shape -------------------------------
+
+def test_a_path_separator_is_not_a_unc_host():
+    """`"C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe"` produced a host called
+    `program`, and across the estate the host list gained `windows`, `system`,
+    `users`, `python312`, `secpol`, `sysmon`, `microsoft` and `localhost` —
+    fourteen path fragments drawn as machines. The criticality seeder then
+    proposed one of them as a crown jewel, which is how a parsing slip becomes
+    a badge on a board slide."""
+    body = _text_body(
+        image=r"C:\Windows\System32\cmd.exe", processId="4",
+        commandLine=r'"C:\\Program Files\\Git\\bin\\bash.exe" -c "source /c/Users/x/.bashrc"',
+    )
+    out = extract(body)
+    hosts = {e.label for e in out.entities if e.kind == "host"}
+    assert hosts == {"exp-fin-034"}, hosts
+    assert not [e for e in out.edges if e.kind == "remote_exec_via"]
+
+
+def test_a_real_unc_target_is_still_found():
+    for command, expected in [
+        (r'ps.exe \\EXP-DC-01 -u CORP\jdoe -s cmd.exe', "exp-dc-01"),
+        (r'net use \\FILESRV01\share /user:CORP\jdoe', "filesrv01"),
+    ]:
+        body = _text_body(
+            image=r"C:\Windows\System32\cmd.exe", processId="4", commandLine=command,
+        )
+        out = extract(body)
+        hosts = {e.label for e in out.entities if e.kind == "host"}
+        assert expected in hosts, (command, hosts)
+        assert [e.kind for e in out.edges if e.kind == "remote_exec_via"]
+
+
+def test_a_windows_authority_name_is_not_a_machine():
+    """`\\\\BUILTIN\\Administrators` sits in UNC position and is a well-known
+    group, not a server. It was drawn as a host and then proposed as a
+    high-criticality asset."""
+    for name in (r"\\BUILTIN\Administrators", r"\\NT AUTHORITY\SYSTEM", "localhost"):
+        assert host_key(name) is None, name
+    # And a machine that merely starts with one of those words is unaffected.
+    assert host_key(r"\\BUILTINSRV01\c$") == "builtinsrv01"
