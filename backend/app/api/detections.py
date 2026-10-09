@@ -1291,7 +1291,19 @@ async def get_case_graph(
             ),
         }
 
-    run_ids = [a.get("run_id") for a in (case.get("alerts") or []) if a.get("run_id")]
+    # The whole case, not the first hundred alerts of it.
+    #
+    # `case["alerts"]` caps at 100 and keeps the EARLIEST, so this endpoint had
+    # been drawing the opening of a large incident and presenting it as the
+    # incident: #1849 holds 1,889 alerts and the graph saw 100 of them,
+    # spanning the first 0.68h of a 26.72h case. Worse, the 300-alert bound
+    # inside `graph_for_runs` could never engage on this path, because its
+    # input was never more than 100 — so the severity-ranked selection that
+    # bound performs was dead code here while being exercised only by the CLI.
+    full = await case_by_key(
+        db, case_key, scope=scope, hours=hours, max_members=100000
+    ) or case
+    run_ids = [a.get("run_id") for a in (full.get("alerts") or []) if a.get("run_id")]
     graph = await graph_for_runs(db, run_ids)
 
     # Which machines matter, as a person recorded it. Absent means unknown,

@@ -452,3 +452,55 @@ def test_without_a_recorded_time_the_alerts_own_time_is_used():
     assert not closure.decide(
         [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=359),
     ).due
+
+
+# --- the anchor, made enforceable --------------------------------------------
+
+def test_the_anchor_is_last_activity_and_moving_it_back_fails_here():
+    """This file's header recorded the measurement that chose the anchor —
+    "the clock runs on last activity, and that is an 11x difference, not a
+    preference" — and the code was later changed to do the opposite while the
+    header stayed. The only artefact that knew was a comment, and a comment
+    cannot fail.
+
+    So the knowledge is a test. Re-measured on 12,064 memberships against the
+    original 11,376: anchoring at the opening stranded 9,731 (80.7%) against
+    9,244 (81%); anchoring at the last alert stranded 897 against 821.
+
+    Two assertions, because either alone can be satisfied by the wrong code.
+    """
+    import inspect
+
+    # Behavioural: a case whose last alert was a minute ago is not quiet,
+    # however long it has existed. Under the opening anchor it was due.
+    busy = [alert("A", minutes=m) for m in range(0, 600, 5)]
+    assert not _decide(busy, last_minutes=599, now_minutes=600).due
+
+    # Structural: the window must be computed from the last alert. A
+    # behavioural test alone passes if someone widens the opening window
+    # instead of moving the anchor, which is the same bug with a bigger number.
+    source = inspect.getsource(closure.decide)
+    assert "quiet_for < quiet_period" in source, (
+        "the decision must compare the QUIET duration against the window. "
+        "Comparing (now - opened_at) is the anchor this test exists to stop "
+        "coming back — see the 11x measurement in this file's header."
+    )
+    assert "open_for < quiet_period" not in source, (
+        "that is the opening anchor. It stranded 80.7% of alert memberships "
+        "outside their own case and it is why 30 cases carry a disposition "
+        "formed on fewer alerts than they hold."
+    )
+
+
+def test_the_window_is_not_shorter_than_the_correlation_gap():
+    """The ordering rule, as a test rather than a comment: a case must not be
+    able to close while the correlation is still right to give it alerts.
+    Below SESSION_GAP, it can."""
+    from app.services.alert_session_service import SESSION_GAP
+
+    assert closure.CASE_WINDOW >= SESSION_GAP, (
+        f"CASE_WINDOW is {closure.CASE_WINDOW} and SESSION_GAP is "
+        f"{SESSION_GAP}. A case closing before the gap that would start a new "
+        "one means alerts arrive for a case that is already answered: at ten "
+        "minutes against six hours, 9,731 of 12,064 memberships did."
+    )

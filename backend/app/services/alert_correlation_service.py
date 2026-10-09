@@ -1514,7 +1514,8 @@ async def case_for_run(
 
 
 async def case_by_key(
-    db: AsyncSession, case_key: str, *, scope: tenant_scope.TenantScope, hours: int = 720
+    db: AsyncSession, case_key: str, *, scope: tenant_scope.TenantScope,
+    hours: int = 720, max_members: int = 100
 ) -> dict[str, Any] | None:
     """One case, found by the identity that survives a change of window.
 
@@ -1539,6 +1540,11 @@ async def case_by_key(
         # closing job, each with its own window, and correlation persists the
         # keys it computes — so looking for a case was minting new ones.
         persist=False,
+        # Threaded through, because a caller that draws the case needs all of
+        # it. The default keeps every existing caller's payload size; the graph
+        # endpoint raises it, having been handed the earliest 100 alerts of a
+        # 1,889-alert case and drawing that as the incident.
+        max_members=max_members,
     )
     for case in result["cases"]:
         if case.get("case_key") == case_key:

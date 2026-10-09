@@ -54,6 +54,26 @@ celery_app.conf.update(
 
     # Celery Beat — periodic task schedule
     beat_schedule={
+        # Is the pipeline producing verdicts at all?
+        #
+        # On 2026-10-09 it was not, for 2h38m, and the only signal was a person
+        # looking at a screen: a worker dying on every task and a worker with
+        # nothing to do produce the same queue. Every two minutes, because the
+        # measurement is two counts and the cost of missing a stall is every
+        # alert that arrives during it.
+        "pipeline-stall-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_pipeline",
+            "schedule": crontab(minute="*/2"),
+        },
+        # And the cause rather than the symptom: this container's code
+        # expecting a column the database does not have, which is what a
+        # migration without a rebuild leaves behind. Hourly is enough — the
+        # fault is created by a deploy, not by traffic — and the worker also
+        # checks once at startup.
+        "schema-drift-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_schema",
+            "schedule": crontab(minute=7),
+        },
         # A CAPE analysis outlives the worker that started it: its state is in
         # Postgres, so a worker killed mid-poll leaves a row still owed an
         # answer. This picks those up, and retires any that blew their polling
@@ -147,6 +167,13 @@ celery_app.autodiscover_tasks([
     # real-time alert would keep the logs it managed to grab in the first
     # second and silently never get the rest.
     "app.tasks.alert_log_followup_task",
+    # Sixth entry worth a note, and this one watches the failure the list
+    # itself keeps causing. An unregistered task and a worker running code
+    # that predates a migration produce the identical symptom — alerts sitting
+    # in `queued` for ever — and on 2026-10-09 the second of those ran 2h38m
+    # with no signal but a person looking at a screen. If this task is ever
+    # dropped from this list, the alarm for that is gone too.
+    "app.tasks.pipeline_watch_task",
     # Fifth time. Correlation used to act from the read path; this is the job
     # that acts instead, and unregistered it would simply never run while the
     # reads that used to do the work no longer do it.
