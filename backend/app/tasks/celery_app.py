@@ -74,6 +74,16 @@ celery_app.conf.update(
             "task": "app.tasks.pipeline_watch_task.watch_schema",
             "schedule": crontab(minute=7),
         },
+        # And the layer above both: whether each source is still sending.
+        # The queue watchdog cannot see this, because an alert that never
+        # arrives is never queued — which is how appsec-agent and Fortigate,
+        # 17.7% and 16.6% of alert volume, went silent for 17 and 22 days with
+        # nothing to show it. Twice a day: the measurement reads a few hundred
+        # bodies, and the unit of this fault is days rather than minutes.
+        "ingest-freshness-watch": {
+            "task": "app.tasks.pipeline_watch_task.watch_ingest",
+            "schedule": crontab(hour="6,18", minute=11),
+        },
         # A CAPE analysis outlives the worker that started it: its state is in
         # Postgres, so a worker killed mid-poll leaves a row still owed an
         # answer. This picks those up, and retires any that blew their polling

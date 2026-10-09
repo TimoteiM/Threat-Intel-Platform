@@ -5,12 +5,16 @@ screen. Migration 055 renamed a column, `api` was rebuilt, `worker` and `beat`
 were not, and the worker died with `UndefinedColumnError` on every analysis
 task. Alerts accumulated in `queued`, which looks identical to a quiet estate.
 
-Two tasks, because the outage had two separable faults and each deserves its
-own alarm:
+Three tasks, because each fault is separable and each deserves its own alarm:
 
   `watch_pipeline`  the symptom. Alerts waiting AND nothing completing.
   `watch_schema`    the cause. This container's code expecting columns the
                     database does not have, which is a half-finished deploy.
+  `watch_ingest`    the layer above both. Whether each source is still sending
+                    at all — the queue is downstream of ingest, so a dead feed
+                    produces the same queue as a healthy quiet one. Two of the
+                    four largest sources in the estate were silent for 17 and
+                    22 days before anyone noticed.
 
 The schema check also runs once at worker start, because that is the moment
 the fault is created and the cheapest moment to notice it.
@@ -30,6 +34,14 @@ logger = logging.getLogger(__name__)
 async def _pipeline() -> dict[str, Any]:
     from app.db.session import AsyncSessionLocal
     from app.services.pipeline_health_service import check
+
+    async with AsyncSessionLocal() as db:
+        return (await check(db)).as_json()
+
+
+async def _ingest() -> dict[str, Any]:
+    from app.db.session import AsyncSessionLocal
+    from app.services.ingest_freshness_service import check
 
     async with AsyncSessionLocal() as db:
         return (await check(db)).as_json()
@@ -66,3 +78,18 @@ def watch_schema() -> dict[str, Any]:
     except Exception as exc:
         logger.error("schema_watch_failed error=%s", type(exc).__name__)
         return {"ok": None, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@celery_app.task(name="app.tasks.pipeline_watch_task.watch_ingest")
+def watch_ingest() -> dict[str, Any]:
+    """Whether every source that has ever delivered is still delivering.
+
+    Returns the per-source measurement as well as logging it, for the same
+    reason the pipeline watchdog does: during the outage this family of bugs
+    produced, nobody was reading logs.
+    """
+    try:
+        return asyncio.run(_ingest())
+    except Exception as exc:
+        logger.error("ingest_watch_failed error=%s", type(exc).__name__)
+        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}

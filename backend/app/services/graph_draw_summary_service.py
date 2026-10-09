@@ -72,17 +72,28 @@ def summarise(
 
     # 2. Repetition. Many alerts, few distinct things — the normal shape of a
     #    noisy rule, and the analyst's cue to go tuning rather than hunting.
-    if headline is None and members >= 50 and nodes and members / max(nodes, 1) >= 8:
+    if headline is None and read >= 50 and nodes and read / max(nodes, 1) >= 8:
         rule_note = (
             f" across {distinct_rules} distinct rule"
             f"{'' if distinct_rules == 1 else 's'}"
             if distinct_rules
             else ""
         )
+        # Attributed to the alerts that were READ, not to the case's whole
+        # membership. The first version said "1,217 alerts describe 22 distinct
+        # things" for case #71, where the 22 came from the 300 alerts the graph
+        # read — a node count from one population stated against another, which
+        # is the wrong-source mistake this project keeps paying for.
+        counted = (
+            f"{read} of this case's {members} alerts{rule_note} were read, and "
+            f"they describe {nodes} distinct things"
+            if read < members
+            else f"{members} alerts{rule_note} describe {nodes} distinct things"
+        )
         headline = (
-            f"{members} alerts{rule_note} describe {nodes} distinct things. "
-            "The graph draws what happened, not how often it was reported, so "
-            "a repeated detection appears once with its sightings counted on it."
+            f"{counted}. The graph draws what happened, not how often it was "
+            "reported, so a repeated detection appears once with its sightings "
+            "counted on it."
         )
 
     # 3. The read was bounded. Stated whenever it was, because it is the one
@@ -93,9 +104,19 @@ def summarise(
             "severe first and stops at its budget"
         )
     if folded:
+        # What the folded nodes stand for, not just how many nodes were folded.
+        # On case #71 the 6 process nodes collapse folded had already absorbed
+        # 176 further merge keys between them, so "7 nodes" understated the
+        # evidence behind that one group by about 25 times.
+        stood_for = sum(int(c.get("observations") or 0) for c in collapsed)
+        extra = (
+            f", standing for {stood_for} observations"
+            if stood_for > folded
+            else ""
+        )
         reasons.append(
             f"{folded} near-identical nodes were folded into "
-            f"{len(collapsed)} group{'' if len(collapsed) == 1 else 's'}"
+            f"{len(collapsed)} group{'' if len(collapsed) == 1 else 's'}{extra}"
         )
 
     if headline is None and not reasons:

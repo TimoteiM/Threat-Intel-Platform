@@ -428,6 +428,14 @@ def _collapse_siblings(
             witnesses.extend(node.witnesses)
         every_corroborated = all(n.basis == OBSERVED for n in member_nodes)
         noun = node_kind.replace("_", " ")
+        # How many extracted observations these nodes stand for, not how many
+        # nodes were folded. By the time collapse runs, `_merge_same_binary`
+        # has already folded every execution of one binary into one node: on
+        # case #71 it took 388 distinct keys to 28, and the 6 process nodes
+        # collapse then folds had absorbed 176 keys between them. Reporting
+        # only `member_count` showed a user 7 where the evidence was 183, and
+        # the whole purpose of this group is to say how much it stands for.
+        observations = sum(1 + len(n.absorbed) for n in member_nodes)
         nodes[group_key] = AssembledNode(
             kind=node_kind,
             merge_key=group_key,
@@ -436,6 +444,10 @@ def _collapse_siblings(
             attrs={
                 "group": True,
                 "member_count": len(member_nodes),
+                # What those nodes stand for after the earlier merge passes.
+                # Equal to member_count when nothing was absorbed, so a reader
+                # can always compare the two.
+                "observations": observations,
                 # Enough to name them in the side panel without drawing them.
                 "members": sorted(n.label for n in member_nodes)[:200],
                 "corroborated_members": sum(
@@ -451,7 +463,11 @@ def _collapse_siblings(
         edges[(edge_kind, source, group_key)] = AssembledEdge(
             kind=edge_kind, source=source, target=group_key,
             basis=OBSERVED if every_corroborated else PARSED,
-            attrs={"group": True, "member_count": len(member_nodes)},
+            attrs={
+                "group": True,
+                "member_count": len(member_nodes),
+                "observations": observations,
+            },
             witnesses=witnesses,
         )
         collapsed.append(
@@ -460,6 +476,7 @@ def _collapse_siblings(
                 "kind": node_kind,
                 "edge": edge_kind,
                 "members": len(member_nodes),
+                "observations": observations,
             }
         )
     return collapsed

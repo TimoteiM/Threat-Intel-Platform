@@ -434,8 +434,16 @@ def test_identical_leaves_collapse_into_one_counted_node():
     assert accounts[0]["attrs"]["group"] is True
     assert accounts[0]["attrs"]["member_count"] == 12
     assert "12 accounts" == accounts[0]["label"]
+    # `observations` says what the folded nodes stand for after the earlier
+    # merge passes. Nothing was absorbed here, so it equals `members` — and
+    # that equality is the point: a reader can always compare the two. On case
+    # #71 the 6 folded process nodes had absorbed 176 further keys, where the
+    # two figures are 7 and 183.
     assert graph["collapsed"] == [
-        {"id": accounts[0]["id"], "kind": "account", "edge": "ran_as", "members": 12}
+        {
+            "id": accounts[0]["id"], "kind": "account", "edge": "ran_as",
+            "members": 12, "observations": 12,
+        }
     ]
 
 

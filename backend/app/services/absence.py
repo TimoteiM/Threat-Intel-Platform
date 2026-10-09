@@ -40,6 +40,14 @@ TARGET_UNKNOWN = "target_unknown"      # the thing it points at cannot be found
 UNRATED = "unrated"                    # the source states no value
 NEVER_OBSERVED = "never_observed"      # the check ran and has never once matched
 CHECK_FAILED = "check_failed"          # the check could not run at all
+#: There is not enough history to measure the thing being asked for. Distinct
+#: from `never_observed`, which says a check ran and never matched, and from
+#: `unrated`, which says a source states no value: here the check is sound and
+#: the subject simply has too short a record to be judged. Added for the ingest
+#: freshness alarm, where a source seen twice has no cadence to be late against
+#: and calling that "fresh" would be the blank-as-measurement bug the whole
+#: convention exists to stop.
+TOO_LITTLE_HISTORY = "too_little_history"
 #: An absence whose kind this code did not recognise. Its own bucket, because
 #: degrading an unrecognised kind into `unparsed` would file it under a kind
 #: that *means* something — the convention's own failure mode implemented
@@ -48,7 +56,7 @@ UNRECOGNISED = "unrecognised_absence"
 
 KINDS = frozenset({
     NO_FIELD_MAP, UNPARSED, UNCLASSIFIED, TARGET_UNKNOWN, UNRATED,
-    NEVER_OBSERVED, CHECK_FAILED, UNRECOGNISED,
+    NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, UNRECOGNISED,
 })
 
 
