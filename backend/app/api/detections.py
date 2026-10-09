@@ -1250,6 +1250,7 @@ async def get_case_graph(
     from app.models.database import AlertCaseSpine
     from app.services.asset_criticality_service import criticality_for
     from app.services.case_collision_service import shadow_payload, shadowing_keys
+    from app.services.case_disposition_review_service import review_for
     from app.services.case_supersession_service import (
         earlier_keys_for,
         where_this_key_went,
@@ -1333,6 +1334,21 @@ async def get_case_graph(
     # Analyses written under earlier keys for this same incident, attributed
     # and dated. Never merged into this case's own verdict.
     graph["earlier_keys"] = await earlier_keys_for(db, case_key)
+
+    # Whether this case's conclusion covers everything it now holds. 30 cases
+    # in this estate carry a disposition formed on fewer alerts than they hold,
+    # the worst judged on 2 of 57. Nothing is reopened and no resolution is
+    # changed; the context is made visible and the decision stays with a person.
+    if spine is not None:
+        review = review_for(
+            case_number=spine.case_number,
+            resolution=spine.resolution,
+            alerts_at_close=spine.alerts_at_close,
+            current_run_ids=run_ids,
+            closed_by=spine.closed_by,
+            closed_at=spine.closed_at,
+        )
+        graph["disposition_review"] = review.as_json() if review else None
 
     # Earlier keys for this same incident. Matched on the weaker signal and
     # labelled as such, because a key that no longer re-derives has no alert

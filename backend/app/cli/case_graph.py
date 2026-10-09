@@ -21,53 +21,119 @@ import time
 
 from sqlalchemy import text
 
+from app.api.detections import CASE_LOOKUP_HOURS
 from app.db.session import AsyncSessionLocal
+from app.services import tenant_scope
+from app.services.alert_correlation_service import case_by_key
 from app.services.alert_graph_assembly_service import AlertEvidence, assemble
 from app.services.alert_graph_extraction_service import extract
 from app.services.alert_graph_store_service import graph_for_runs
 
-# The case's alerts. Membership is derived from event time elsewhere; here the
-# spine's own window is enough and keeps the CLI independent of correlation.
-_ALERTS = """
-select r.id::text, r.detection_rule_id, r.detection_name,
+# NO SQL OF ITS OWN.
+#
+# This file used to select a case's alerts with its own query — host plus the
+# spine's window — and that is how it came to measure a path nobody was on.
+# The endpoint resolves a case through `case_by_key` and hands the result to
+# `graph_for_runs`; the CLI resolved it differently, so the CLI exercised the
+# severity-ranked bound while the endpoint could never reach it (its input was
+# capped at 100 and the bound triggers above 300). Eleven cases were re-run
+# and timed through a path no user takes.
+#
+# So this command now calls exactly what the endpoint calls, and asserts that
+# it does. A CLI that measures a parallel implementation is not a check on the
+# system; it is a second system that happens to agree sometimes.
+_SPINE = "select case_key, case_number from alert_case_spine where case_number = :number"
+
+
+async def build(number: int, *, live: bool = False,
+                hours: int = CASE_LOOKUP_HOURS) -> tuple[dict, float]:
+    """Assemble a case graph through the endpoint's own call path.
+
+    `assert_endpoint_path` below pins that this is the endpoint's path and not
+    a reimplementation of it.
+    """
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(text(_SPINE), {"number": number})).first()
+        if row is None:
+            raise SystemExit(f"No case #{number} in the spine.")
+        case_key = row[0]
+
+        # Exactly as app/api/detections.py:get_case_graph does it, including
+        # the lifted member cap — without which the bound below cannot engage
+        # and the graph draws the first 100 alerts of the case.
+        case = await case_by_key(
+            db, case_key, scope=tenant_scope.INTERNAL,
+            hours=hours, max_members=100000,
+        )
+        if case is None:
+            raise SystemExit(
+                f"Case #{number} does not re-derive over {hours}h — the same "
+                f"answer GET /api/detections/case/{{key}}/graph?hours={hours} "
+                "gives. Pass --hours to widen it, as the case page does when "
+                "the list was opened over a wider window."
+            )
+        run_ids = [a.get("run_id") for a in (case.get("alerts") or []) if a.get("run_id")]
+        if live:
+            started = time.perf_counter()
+            evidence = []
+            rows = (await db.execute(text(_RUNS), {"ids": [str(r) for r in run_ids]})).all()
+            for run_id, rule_id, detection, when, body, score, assessment in rows:
+                confirmed = [
+                    t.get("id")
+                    for t in ((assessment or {}).get("techniques") or [])
+                    if isinstance(t, dict) and t.get("status") == "confirmed"
+                ]
+                evidence.append(
+                    AlertEvidence(
+                        run_id=str(run_id), rule_id=rule_id, detection=detection,
+                        event_time=when, source_severity=None,
+                        extracted=extract(body, risk_score=score,
+                                          confirmed_techniques=confirmed),
+                    )
+                )
+            graph = assemble(evidence)
+            return graph, (time.perf_counter() - started) * 1000
+
+        started = time.perf_counter()
+        graph = await graph_for_runs(db, run_ids)
+        return graph, (time.perf_counter() - started) * 1000
+
+
+_RUNS = """
+select r.id, r.detection_rule_id, r.detection_name,
        coalesce(r.event_time, r.created_at), r.alert_body,
        r.indicator_risk_score, r.result_attack_assessment
 from alert_body_investigation_runs r
-join alert_case_spine s on s.case_number = :number
-where r.entity_host = s.entity_host
-  and coalesce(r.event_time, r.created_at) >= s.opened_at
-  and coalesce(r.event_time, r.created_at) <= coalesce(s.closed_at, s.last_activity_at)
+where r.id::text = any(:ids)
 order by coalesce(r.event_time, r.created_at)
 """
 
 
-async def build(number: int, *, live: bool = False) -> tuple[dict, float]:
-    async with AsyncSessionLocal() as db:
-        rows = (await db.execute(text(_ALERTS), {"number": number})).all()
-        if not rows:
-            raise SystemExit(f"No alerts found for case #{number}.")
-        if not live:
-            # The join: two indexed selects, no body read and no regex run.
-            started = time.perf_counter()
-            graph = await graph_for_runs(db, [r[0] for r in rows])
-            return graph, (time.perf_counter() - started) * 1000
-    started = time.perf_counter()
-    evidence = []
-    for run_id, rule_id, detection, when, body, level, assessment in rows:
-        confirmed = [
-            t.get("id")
-            for t in ((assessment or {}).get("techniques") or [])
-            if isinstance(t, dict) and t.get("status") == "confirmed"
-        ]
-        evidence.append(
-            AlertEvidence(
-                run_id=run_id, rule_id=rule_id, detection=detection,
-                event_time=when, source_severity=level,
-                extracted=extract(body, risk_score=level, confirmed_techniques=confirmed),
+def assert_endpoint_path() -> None:
+    """Fail if this command stops exercising the endpoint's own query.
+
+    The guard exists because the previous version of this file had its own
+    SQL, and the divergence was invisible: both produced a graph, both looked
+    right, and only one was the path users take.
+    """
+    import inspect
+
+    from app.api import detections
+
+    endpoint = inspect.getsource(detections.get_case_graph)
+    mine = inspect.getsource(build)
+    for call in ("case_by_key(", "graph_for_runs(", "max_members=100000"):
+        if call not in endpoint:
+            raise SystemExit(
+                f"The endpoint no longer calls {call!r}; this CLI is measuring "
+                "something else. Update both together."
             )
-        )
-    graph = assemble(evidence)
-    return graph, (time.perf_counter() - started) * 1000
+        if call not in mine:
+            raise SystemExit(
+                f"This CLI no longer calls {call!r} while the endpoint does. "
+                "A CLI that measures a parallel implementation is not a check "
+                "on the system."
+            )
 
 
 def _checks(graph: dict) -> list[tuple[bool, str]]:
@@ -131,12 +197,21 @@ def main() -> int:
     parser.add_argument("case_number", type=int)
     parser.add_argument("--json", action="store_true", help="print the graph")
     parser.add_argument(
+        "--hours", type=int, default=CASE_LOOKUP_HOURS,
+        help="the lookback the endpoint would be called with (default "
+             f"{CASE_LOOKUP_HOURS}, the endpoint's own default)",
+    )
+    parser.add_argument(
         "--live", action="store_true",
         help="re-parse the alert bodies instead of reading the graph tables",
     )
     args = parser.parse_args()
 
-    graph, millis = asyncio.run(build(args.case_number, live=args.live))
+    # Before measuring anything, prove this is the path the endpoint takes.
+    assert_endpoint_path()
+    graph, millis = asyncio.run(
+        build(args.case_number, live=args.live, hours=args.hours)
+    )
     if args.json:
         print(json.dumps(graph, indent=2, default=str))
         return 0
@@ -144,6 +219,16 @@ def main() -> int:
     source = "re-parsed" if args.live else "joined from tables"
     print(f"case #{args.case_number}: {len(graph['nodes'])} nodes, "
           f"{len(graph['edges'])} edges, {source} in {millis:.0f} ms")
+    # Which entry point produced the number above. A timing without this is
+    # not a measurement of the system — see the comment at the top of this
+    # file and the 215-3,958 ms figures that described an unreachable path.
+    coverage = graph.get("coverage") or {}
+    print(f"  path    : case_by_key(hours={args.hours}, max_members=100000) -> "
+          "graph_for_runs, as GET /api/detections/case/{key}/graph does")
+    if coverage.get("alerts_dropped"):
+        print(f"  coverage: read {coverage['alerts_read']} of "
+              f"{coverage['alerts_read'] + coverage['alerts_dropped']} alerts, "
+              f"{coverage.get('entity_rows_read')} entity rows")
     print(f"  by kind : {graph['counts']}")
     print(f"  attack  : {graph['attack']}")
     print(f"  integrity: {graph['integrity']}")
