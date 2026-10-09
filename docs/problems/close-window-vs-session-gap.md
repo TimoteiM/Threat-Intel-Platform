@@ -18,37 +18,59 @@ for six hours.
 
 ---
 
+## A correction first: the measurement had to be redone
+
+The first version of these figures read the `alerts` payload returned by
+`correlate_alerts`. That list **caps at 100 per case and keeps the earliest**,
+because `ordered` is sorted ascending by event time and the slice takes the
+front. 24 cases are over the cap and **6,533 of 12,064 memberships (54.2%)
+sit in the discarded tail** — which is precisely the late arrivals being
+counted. `#1849` showed the first 100 of 1,889 alerts; `#71` the first 100 of
+1,217.
+
+`alert_count` already differed from `len(alerts)`, so the truncation was
+detectable and nothing detected it. The cap is now a parameter and every case
+carries `alerts_truncated`. Every figure below is the full membership.
+
 ## The finding: the rule's *shape* matters more than its value
 
 Measured by simulating each candidate rule against the real alert stream over
-1,015 derived cases, with membership from the derivation so each case's alerts
-are its own. 5,523 alert memberships in total.
+1,015 derived cases and **12,064 alert memberships**, with membership from the
+derivation so each case's alerts are its own.
 
 **Today's rule — the window runs from the case's opening:**
 
 | close window | cases that accrete after it | memberships arriving late |
 |---|---|---|
-| **10 min (today)** | **236 (23.3%)** | **3,198 (57.9%)** |
-| 1 h | 174 (17.1%) | 2,317 (41.9%) |
-| 6 h (= `SESSION_GAP`) | 61 (6.0%) | 967 (17.5%) |
-| 12 h | 29 (2.9%) | 408 (7.4%) |
-| 72 h | 0 | 0 |
+| **10 min (the rule that stood)** | **236 (23.3%)** | **9,731 (80.7%)** |
+| 1 h | 178 (17.5%) | 8,381 (69.5%) |
+| 6 h (= `SESSION_GAP`) | 71 (7.0%) | 5,514 (45.7%) |
+| 12 h | 37 (3.6%) | 2,947 (24.4%) |
 
 **The same windows, but the rule lags the last alert instead of the opening:**
 
 | close window | cases that accrete after it | memberships arriving late |
 |---|---|---|
-| 10 min | 226 (22.3%) | **641 (11.6%)** |
-| 1 h | 155 (15.3%) | 274 (5.0%) |
-| **6 h (= `SESSION_GAP`)** | **27 (2.7%)** | **28 (0.5%)** |
-| 12 h | 10 (1.0%) | 11 (0.2%) |
-| 72 h | 0 | 0 |
+| 10 min | 231 (22.8%) | **897 (7.4%)** |
+| 1 h | 160 (15.8%) | 319 (2.6%) |
+| **6 h (= `SESSION_GAP`)** | **29 (2.9%)** | **31 (0.3%)** |
+| 12 h | 10 (1.0%) | 11 (0.1%) |
 
 Two things fall out:
 
 **1. At the same ten-minute value, changing the rule from "since opening" to
-"since the last alert" takes late memberships from 57.9% to 11.6%** — a
-five-fold reduction with no change to either constant. The dominant defect is
+"since the last alert" takes late memberships from 80.7% to 7.4%** — an
+eleven-fold reduction with no change to either constant.
+
+And this is not a new discovery. The closure module's own test header records
+the measurement taken before the feature was built: *"closing ten minutes
+after a case opens strands 9,244 alerts outside their own case (81% of
+everything); ten minutes after its last alert strands 821. The clock runs on
+last activity, and that is an 11x difference, not a preference."* On a
+different corpus — 11,376 alerts then, 12,064 now — I measure 9,731 against
+9,244 and 897 against 821. The rule was changed away from what that
+measurement chose, the header was left in place as the evidence against the
+change, and changing it back recovers the same factor. The dominant defect is
 not the value of the window; it is that the window runs from a moment the case
 has no further control over. A case that is still receiving alerts is not
 quiet, and the present rule closes it anyway.
@@ -63,9 +85,10 @@ label; at 0.5% it is a correctness guarantee.
 
 It should, by construction: if any gap wider than `SESSION_GAP` starts a new
 case, no alert can join a case more than `SESSION_GAP` after its predecessor.
-27 cases violate that. The reason is structural rather than a flaw in the rule:
+29 cases violate that. The reason is structural rather than a flaw in the rule:
 
-**26 of the 27 (96%) are explained by sibling cases interleaving.** A session
+**26 of the 27 measured before the cap was lifted (96%) were explained by
+sibling cases interleaving.** A session
 now yields several cases — alerts are grouped by what ties them together, not
 merely by sharing a device and an afternoon — so consecutive alerts *within one
 case* can be more than six hours apart when alerts belonging to a sibling case

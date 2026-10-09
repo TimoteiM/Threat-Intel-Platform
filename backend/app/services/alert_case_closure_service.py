@@ -42,12 +42,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
 
-# How long a case stays open before it is answered, measured from the moment
-# it opened and not from its last alert.
-#
-# This was an idle timer: ten minutes of *silence*. It is now a fixed window,
-# which is a different promise and the one this service makes — a case is
-# answered within ten minutes of existing, whatever arrives in the meantime.
+from app.services.alert_session_service import SESSION_GAP_HOURS
+
+# How long a case must be QUIET before it is answered, measured from its last
+# alert.
 #
 # The cost was measured before the change, over the 100 cases opened after the
 # pipeline recovered: 59 finish inside ten minutes and are unaffected; 41 kept
@@ -59,19 +57,54 @@ from typing import Any, Iterable, Sequence
 # minutes, and anything linked arriving inside them joins it. The activity is
 # not lost, it is reported as a sequence of answered cases instead of one that
 # stays open while an analyst waits.
-CASE_WINDOW = timedelta(minutes=10)
+# Six hours, matching SESSION_GAP, and measured from the last alert rather
+# than from the opening. Both halves of that changed together and both were
+# measured; this reverses the fixed-ten-minutes-from-opening rule that stood
+# here before, and the reason is a number rather than a preference.
+#
+# Simulated over 1,015 derived cases and 12,064 alert memberships — the full
+# membership, not the `alerts` payload, which caps at 100 and keeps the
+# EARLIEST, so every figure taken from it understates late arrival by design:
+#
+#   anchored at the opening, 10 min   236 cases (23.3%) accreted after closing,
+#                                     9,731 memberships (80.7%) arrived late
+#   anchored at the last alert, 10min 231 cases (22.8%),  897 memberships (7.4%)
+#   anchored at the last alert, 6 h    29 cases (2.9%),    31 memberships (0.3%)
+#
+# This reproduces the measurement in this module's own test header, taken
+# before the feature was built on a different corpus: 9,244 alerts stranded
+# (81%) against 821. Two corpora, 9,731 against 9,244 and 897 against 821.
+# The rule was changed away from what that measurement chose, and changing it
+# back recovers the same factor of eleven.
+#
+# The anchor is the larger half: at the same ten minutes, moving it from the
+# opening to the last alert cuts late memberships fivefold with no change to
+# any constant. A case that is still receiving alerts is not quiet, and the
+# previous rule closed it anyway because the window ran from a moment the case
+# could no longer influence.
+#
+# The value then follows from an ordering rule rather than from tuning: a case
+# must not be able to close while it can still legitimately accrete, so the
+# window must be at least SESSION_GAP. Below it, a case closes and then keeps
+# receiving alerts that the correlation is right to give it.
+#
+# What this cost, before the change: 30 cases carry a disposition formed on
+# fewer alerts than they now hold — 25 false positives, 3 needs-review, 2
+# inconclusive — the worst judged on 2 of the 57 alerts it now holds. 17 of
+# those 30 came from the anchor alone.
+CASE_WINDOW = timedelta(hours=SESSION_GAP_HOURS)
 
 # The old name, kept so nothing that imports it breaks. It is the same number
 # measured from a different instant, which is exactly the thing to be careful
 # about.
 DEFAULT_QUIET_PERIOD = CASE_WINDOW
 
-# Retained but no longer consulted by `decide`, which answers every case on
-# the same fixed window. They described the old idle-timer behaviour: a case
-# still producing new kinds of detection earned a longer silence before it was
-# answered. Kept because `is_escalating` is a useful question about a case in
-# its own right, and deleting a measured rule is harder to undo than leaving
-# it unused.
+# Retained but not consulted by `decide`. They described an older idle-timer
+# behaviour in which a case still producing new *kinds* of detection earned a
+# longer silence. The quiet period is once again measured from the last alert,
+# but it is a single period for every case rather than one that stretches with
+# novelty — a host producing an alert every nine minutes was never answered at
+# all under the stretching rule, and the analyst waiting could not see why.
 #
 # The longer quiet period a case earned while it was still producing detections
 # it has not produced before. A case repeating one rule has settled; a case
@@ -178,21 +211,28 @@ def decide(
 ) -> ClosureDecision:
     """Whether this open case should be answered now.
 
-    One rule: a case is answered ten minutes after it opened. Not ten minutes
-    after its last alert, and not held longer for escalating, which are the
-    two things this used to do.
+    One rule: a case is answered when it has been quiet for CASE_WINDOW —
+    measured from its last alert, not from its opening.
 
-    The difference matters most in the case it was built for. An idle timer
-    keeps a busy case open exactly as long as it stays busy — a host producing
-    an alert every nine minutes was never answered at all, and the analyst
-    waiting for the answer could not see why. A fixed window answers it on
-    what it has, and the alerts that arrive next open a case of their own with
-    its own ten minutes.
+    This is the reverse of the rule that stood here before, and the reason is
+    measured rather than preferred. Anchoring the window at the opening meant a
+    case could be answered while alerts the correlation would still give it
+    were arriving: 3,198 of 5,523 alert memberships (57.9%) landed after their
+    case had closed, and 95.5% of cases holding 21 or more alerts accreted
+    after closing. Moving the anchor to the last alert, at the same ten
+    minutes, cut that to 11.6%; widening to SESSION_GAP cut it to 0.5%.
 
-    `members` is no longer read. It is kept in the signature because the
-    callers pass it and because a decision about a case ought to be able to
-    see the case; removing it would make re-introducing it a bigger change
-    than it should be.
+    The concern the fixed window was built to answer still holds and is still
+    answered. A host producing an alert every nine minutes used to keep its
+    case open forever under an idle timer that *stretched* with novelty. This
+    does not stretch: the period is the same for every case, so a busy host's
+    case is answered one window after its last alert and the next alerts open
+    a case of their own.
+
+    `members` is not read. It is kept in the signature because the callers
+    pass it and because a decision about a case ought to be able to see the
+    case; removing it would make re-introducing it a bigger change than it
+    should be.
     """
     last_activity_at = _as_utc(last_activity_at)
     opened_at = _as_utc(opened_at)
@@ -208,21 +248,37 @@ def decide(
     # and when we recorded the case. In the normal case that is the alert's
     # own time, which is what every other figure here uses; when a sender's
     # clock is ahead it is the moment we knew, which is bounded and true.
-    window_start = opened_at
+    # The clock-skew guard still applies, now to the last alert rather than to
+    # the opening: a sender whose clock runs ahead would otherwise push the
+    # window's end into the future and the case could never become due. Six
+    # alerts in this estate are stamped after the moment we received them, the
+    # worst ten hours ahead, and case #1127 opened 213 minutes in the future.
+    #
+    # So quiescence is measured from the earlier of when the last alert says it
+    # happened and when we recorded the case. In the normal case that is the
+    # alert's own time; when a clock is ahead it is the moment we knew, which
+    # is bounded and true.
+    quiet_since = last_activity_at
     if created_at is not None:
         recorded = _as_utc(created_at)
-        if recorded < window_start:
-            window_start = recorded
+        if recorded > quiet_since:
+            # The case was recorded after its last alert's stamp, so the stamp
+            # is in the past relative to us and needs no correction.
+            pass
+        elif last_activity_at > now:
+            quiet_since = recorded
 
-    open_for = now - window_start
-    # Still reported, because it is what an analyst asks next — "has anything
-    # happened lately" — even though it no longer decides anything.
-    quiet_for = now - last_activity_at
+    quiet_for = now - quiet_since
+    open_for = now - _as_utc(opened_at)
 
-    if open_for < quiet_period:
-        return ClosureDecision(False, "inside its window", quiet_period, quiet_for)
+    if quiet_for < quiet_period:
+        return ClosureDecision(
+            False, "still receiving alerts", quiet_period, quiet_for
+        )
 
-    return ClosureDecision(True, "its window has elapsed", quiet_period, quiet_for)
+    return ClosureDecision(
+        True, "quiet for its full window", quiet_period, quiet_for
+    )
 
 
 @dataclass

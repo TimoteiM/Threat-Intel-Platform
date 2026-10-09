@@ -751,6 +751,12 @@ async def correlate_alerts(
     # count went 281 -> 511 -> 570 in half an hour, which is the loop and not
     # the backlog.
     persist: bool = True,
+    #: How many of a case's alerts travel in the `alerts` payload. The
+    #: default is the long-standing 100; a caller measuring arrival times
+    #: must raise it, because the cap keeps the EARLIEST alerts and drops
+    #: precisely the late ones. `alerts_truncated` on each case says whether
+    #: it bit.
+    max_members: int = 100,
     # (source, client, host) — restricts the pass to one entity, for a caller
     # that wants one case rather than the estate.
     only_entity: tuple[str, str, str] | None = None,
@@ -1200,7 +1206,22 @@ async def correlate_alerts(
                             "highest_risk_score": m.indicator_risk_score,
                         }
                         for m in ordered
-                    ][:100],
+                    ][:max_members],
+                    # Whether the list above is the whole case.
+                    #
+                    # It silently was not. `ordered` is ascending by event
+                    # time, so the cap kept the EARLIEST alerts and discarded
+                    # the latest: 24 cases are over it and 6,533 of 12,064
+                    # memberships (54.2%) sit in the discarded tail. Any
+                    # consumer measuring when alerts arrive was reading a list
+                    # with exactly the late arrivals removed — #1849 shows the
+                    # first 100 of 1,889 alerts, #71 the first 100 of 1,217.
+                    #
+                    # `alert_count` already differed from `len(alerts)`, so the
+                    # truncation was detectable and nothing detected it. This
+                    # says so outright, so the next consumer cannot miss it.
+                    "alerts_truncated": len(members) > max_members,
+                    "alerts_shown": min(len(members), max_members),
                 }
             )
 

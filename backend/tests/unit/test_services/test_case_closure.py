@@ -48,45 +48,82 @@ def _decide(members, *, last_minutes, now_minutes, opened_minutes=0):
 
 # --- the window --------------------------------------------------------------
 #
-# A case is answered ten minutes after it OPENED. Not ten minutes after its
-# last alert, which is what this used to do, and not held longer while it is
-# still escalating.
+# A case is answered once it has been QUIET for CASE_WINDOW, measured from its
+# last alert. The window is six hours, equal to SESSION_GAP.
 #
-# The old rule kept a busy case open exactly as long as it stayed busy: a host
-# producing an alert every nine minutes was never answered at all. The new one
-# answers it on what it has, and the alerts that arrive next open a case of
-# their own with its own ten minutes — so the activity is reported as a
-# sequence of answered cases rather than one that never closes.
+# This is what the module did originally, and the header above is the
+# measurement that chose it. It was changed to a fixed window from the opening
+# and then changed back, and the second measurement reproduced the first on a
+# different corpus: over 1,015 derived cases and 12,061 memberships, anchoring
+# at the opening left 9,731 of 12,064 memberships (80.7%) arriving after their
+# case had closed; anchoring at the last alert at the same ten minutes left
+# 897 (7.4%); and widening to SESSION_GAP left 31 (0.3%). Against the original
+# replay's 9,244 (81%) and 821, on 11,376 alerts rather than 12,064. Two
+# corpora, the same factor of eleven.
+#
+# The first attempt at the re-measurement read the `alerts` payload, which
+# caps at 100 per case and keeps the EARLIEST, so it hid 6,533 of the 12,064
+# memberships — all of them in the 24 largest cases, and all of them the late
+# arrivals being counted. It reported 57.9% where the answer is 80.7%.
+#
+# The concern that motivated the fixed window is real and is still answered.
+# An idle timer that STRETCHED with novelty never answered a host alerting
+# every nine minutes. This does not stretch: the period is identical for every
+# case, so a busy host is answered one window after its last alert.
+#
+# And it cannot run forever. SESSION_GAP starts a new case after six hours of
+# silence, and SESSION_MAX caps a session at three days, so a case is bounded
+# at three days plus one window rather than being open-ended.
 
 def test_a_case_inside_its_window_is_not_answered():
     members = [alert("A"), alert("A", minutes=3)]
     assert not _decide(members, last_minutes=3, now_minutes=8).due
 
 
-def test_a_case_is_answered_once_its_window_has_elapsed():
+def test_a_case_is_answered_once_it_has_been_quiet_for_its_window():
     members = [alert("A"), alert("A", minutes=3)]
-    decision = _decide(members, last_minutes=3, now_minutes=14)
+    decision = _decide(members, last_minutes=3, now_minutes=3 + 361)
     assert decision.due
-    assert decision.reason == "its window has elapsed"
+    assert decision.reason == "quiet for its full window"
 
 
-def test_the_clock_runs_from_opening_not_from_the_last_alert():
-    """The change. A case open for an hour is answered even if an alert landed
-    a minute ago — under the idle timer it was not, and a host alerting every
-    nine minutes was never answered at all."""
+def test_the_clock_runs_from_the_last_alert_not_from_the_opening():
+    """A case still receiving alerts is not quiet, and must not be answered.
+
+    Anchoring at the opening answered a case while the alerts the correlation
+    would still give it were arriving: 9,731 of 12,064 memberships (80.7%)
+    landed after their case had closed. 30 cases now carry a disposition
+    formed on fewer alerts than they hold, the worst judged on 2 of 57.
+    """
     busy = [alert("A", minutes=m) for m in range(0, 60, 5)]
     decision = _decide(busy, last_minutes=59, now_minutes=60, opened_minutes=0)
-    assert decision.due
-    # Still reported, because "has anything happened lately" is the next
-    # question an analyst asks — it just no longer decides anything.
+    assert not decision.due, "an alert a minute ago means the case is not quiet"
+    assert decision.reason == "still receiving alerts"
     assert decision.quiet_for == timedelta(minutes=1)
 
 
-def test_a_case_open_for_nine_minutes_is_not_answered_however_quiet():
-    """The window is a floor as well as a ceiling: a case that arrived and went
-    silent immediately still gets its ten minutes to collect what follows."""
-    assert not _decide([alert("A")], last_minutes=0, now_minutes=9).due
-    assert _decide([alert("A")], last_minutes=0, now_minutes=10).due
+def test_a_case_that_went_silent_immediately_still_waits_its_full_window():
+    """The window is a floor as well as a ceiling: a lone alert gets the whole
+    period to collect what follows, which is what the quiet period is for."""
+    assert not _decide([alert("A")], last_minutes=0, now_minutes=359).due
+    assert _decide([alert("A")], last_minutes=0, now_minutes=361).due
+
+
+def test_a_busy_case_cannot_stay_open_forever():
+    """The fixed window was introduced because an idle timer that stretched
+    with novelty never answered a host alerting every nine minutes. This
+    period does not stretch — but it does wait, so the bound comes from
+    elsewhere: SESSION_GAP starts a new case after six hours of silence and
+    SESSION_MAX caps a session at three days, so a case is bounded at three
+    days plus one window rather than being open-ended.
+    """
+    from app.services.alert_session_service import SESSION_GAP, SESSION_MAX
+
+    assert closure.CASE_WINDOW == SESSION_GAP, (
+        "the close window must be at least SESSION_GAP, or a case can close "
+        "while the correlation is still right to give it alerts"
+    )
+    assert SESSION_MAX <= timedelta(days=3)
 
 
 # --- escalation no longer extends the window ---------------------------------
@@ -98,10 +135,14 @@ def test_a_case_still_producing_new_detections_is_answered_anyway():
     multi-stage attack is a chain of answered cases rather than one held open
     while an analyst waits for it."""
     members = [alert("recon"), alert("credential access", minutes=8)]
-    decision = _decide(members, last_minutes=8, now_minutes=12)
+    # Quiet since minute 8, answered one window later and not one minute later
+    # for having escalated.
+    assert not _decide(members, last_minutes=8, now_minutes=12).due
+    decision = _decide(members, last_minutes=8, now_minutes=8 + 361)
     assert decision.due
-    assert decision.reason == "its window has elapsed"
-    # The escalation itself is still detectable; it simply no longer holds.
+    assert decision.reason == "quiet for its full window"
+    # The escalation itself is still detectable; it simply does not extend the
+    # period, which is what "does not stretch" means.
     assert closure.is_escalating(members, now=T0 + timedelta(minutes=12))
 
 
@@ -111,15 +152,21 @@ def test_the_window_is_the_same_for_a_noisy_case_and_an_escalating_one():
     noisy = [alert("A", minutes=m) for m in range(0, 30, 2)]
     escalating = [alert("stage-1"), alert("stage-2", minutes=8)]
     for members in (noisy, escalating):
-        assert _decide(members, last_minutes=0, now_minutes=11).due
+        # Same period, measured from the same instant, for both.
+        assert not _decide(members, last_minutes=0, now_minutes=359).due
+        assert _decide(members, last_minutes=0, now_minutes=361).due
 
 
-def test_nothing_can_hold_a_case_open_past_its_window():
-    """There is no longer a maximum hold, because there is no hold."""
+def test_a_long_case_is_answered_one_window_after_its_last_alert():
+    """Not after its opening. A case whose second alert lands six hours in is
+    answered six hours after THAT, because until then the correlation is still
+    right to give it alerts — a six-hour gap is exactly the boundary at which
+    SESSION_GAP would have started a new case instead."""
     members = [alert("stage-1"), alert("stage-2", minutes=370)]
-    decision = _decide(members, last_minutes=370, now_minutes=385, opened_minutes=0)
+    assert not _decide(members, last_minutes=370, now_minutes=385).due
+    decision = _decide(members, last_minutes=370, now_minutes=370 + 361)
     assert decision.due
-    assert decision.reason == "its window has elapsed"
+    assert decision.reason == "quiet for its full window"
 
 
 # --- what happens to late alerts ---------------------------------------------
@@ -384,7 +431,7 @@ def test_a_sender_whose_clock_runs_ahead_cannot_open_a_case_that_never_closes():
     ahead = T0 + timedelta(hours=3, minutes=30)
     decision = closure.decide(
         [], last_activity_at=ahead, opened_at=ahead,
-        created_at=T0 - timedelta(minutes=20), now=T0,
+        created_at=T0 - timedelta(hours=7), now=T0,
     )
     assert decision.due, "a future-dated case must still be answerable"
 
@@ -400,8 +447,8 @@ def test_without_a_recorded_time_the_alerts_own_time_is_used():
     """`created_at` is optional, so a caller that does not have it keeps the
     behaviour it had."""
     assert closure.decide(
-        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=11),
+        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=361),
     ).due
     assert not closure.decide(
-        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=9),
+        [], last_activity_at=T0, opened_at=T0, now=T0 + timedelta(minutes=359),
     ).due
