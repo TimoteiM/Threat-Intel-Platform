@@ -95,3 +95,38 @@ def test_a_plain_none_is_not_an_absence():
 )
 def test_the_kinds_the_platform_actually_uses_round_trip(kind, expected):
     assert value_or_absence(absent(kind, "why"))["kind"] == expected
+
+
+# --- the one absence that stands in for a whole missing audit trail --------
+
+def test_membership_unknown_says_what_was_checked():
+    """Written at length deliberately. The measurement behind it took a full
+    pass over seven tables, and a terse reason would get re-measured in six
+    months — which is the cost this string exists to prevent."""
+    from app.services.absence import (
+        MEMBERSHIP_UNRECOVERABLE,
+        UNCLASSIFIED,
+        membership_unknown,
+    )
+
+    value = membership_unknown(1440)
+    assert value.kind == UNCLASSIFIED
+    assert value.raw == "case #1440"
+    # Names the date, so the measurement is locatable.
+    assert "2026-10-09" in MEMBERSHIP_UNRECOVERABLE
+    # Says what the stored artefacts actually give, which is the crux.
+    assert "a count and never a set" in MEMBERSHIP_UNRECOVERABLE
+    # And states why re-deriving is not the answer.
+    assert "today's answer, not the set that was assessed" in MEMBERSHIP_UNRECOVERABLE
+
+
+def test_membership_unknown_is_not_a_claim_that_the_case_was_empty():
+    """The distinction the whole convention rests on: 1,884 closed cases have
+    an unknown member set, which is not the same as an empty one."""
+    from app.services.absence import membership_unknown
+
+    value = membership_unknown(None)
+    assert value.raw is None
+    assert is_absent(value)
+    assert value_or_absence(value) != []
+    assert value_or_absence(value)["absent"] is True

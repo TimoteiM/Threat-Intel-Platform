@@ -116,6 +116,63 @@ def value_or_absence(value: Any) -> Any:
     return value
 
 
+#: Why a historical case's membership cannot be recovered.
+#:
+#: Written as a constant, and at length, so that nobody repeats the
+#: measurement in six months. Every source that could have named the alerts a
+#: closed case was judged over was checked on 2026-10-09:
+#:
+#:   alert_case_spine.narrative_markdown   1,698 of 1,701 rows with a positive
+#:                                         alerts_at_close carry a narrative;
+#:                                         zero contain a run id or a Wazuh
+#:                                         alert id
+#:   assistant_entries via
+#:   spine.narrative_session_id            all 1,811 sessions resolve and all
+#:                                         1,698 candidates have stored prompt
+#:                                         text; 60 prompts contain a UUID and
+#:                                         none of those is a real run id —
+#:                                         they are processGuids and session
+#:                                         ids from log content
+#:   alert_case_snapshots (5,203)          holds member_count: a count, not a set
+#:   reports (3,153),
+#:   investigation_case_chat_messages (38),
+#:   client_alerts (26)                    keyed on investigation_id, the
+#:                                         indicator path, not on case_key
+#:   analyst_feedback                      5 rows in total
+#:   watchlist_alerts, email_investigations  empty
+#:   alert_graph_entity / alert_graph_edge link run to entity, not case to run,
+#:                                         and were written by a 2026-10-09
+#:                                         backfill, so they are today's
+#:                                         derivation and not evidence
+#:   the outbound callback payload         sent and never persisted; no
+#:                                         outbound log table exists
+#:
+#: Breakdown by closure kind, which kills the obvious hypothesis that
+#: human-judged cases recorded more: auto 1,674 rows, inherited 22, analyst 5
+#: — all three name zero. This platform has never recorded which alerts a
+#: person was looking at when they made a judgement, and that is the gap
+#: freezing membership closes going forward rather than one a backfill can
+#: close backwards.
+MEMBERSHIP_UNRECOVERABLE = (
+    "The alerts this case was judged over were never recorded. Its narrative, "
+    "the prompt that produced it, the score snapshots and every other stored "
+    "artefact give a count and never a set — checked exhaustively on "
+    "2026-10-09 across narratives, assistant prompts, case snapshots, reports, "
+    "chat messages, analyst feedback and the graph tables. Re-deriving "
+    "membership today would produce today's answer, not the set that was "
+    "assessed, so it is reported as unknown rather than reconstructed."
+)
+
+
+def membership_unknown(case_number: int | None = None) -> Absent:
+    """The absence a historical case carries in place of a frozen member set."""
+    return absent(
+        UNCLASSIFIED,
+        MEMBERSHIP_UNRECOVERABLE,
+        raw=f"case #{case_number}" if case_number is not None else None,
+    )
+
+
 def reason_of(value: Any) -> str | None:
     if isinstance(value, Absent):
         return value.reason
