@@ -27,6 +27,7 @@ from app.services.alert_correlation_service import correlate_alerts
 from app.services.case_supersession_service import (
     ALREADY_MERGED,
     AMBIGUOUS,
+    collapse_chains,
     EXPIRED,
     MAPPED,
     TARGET_UNKNOWN,
@@ -158,6 +159,17 @@ async def run(apply: bool, samples: int) -> None:
                 f"{e['candidates']}\n      {e['reason']}"
             )
 
+    async with AsyncSessionLocal() as db:
+        chains = await collapse_chains(db, apply=False)
+    if chains:
+        print(f"\npointers that land on another superseded key: {len(chains)}")
+        print("  (created by this migration: it re-pointed a middle row and did")
+        print("   not follow back to the rows pointing at it)")
+        for c in chains[:10]:
+            print(f"    #{c['case_number']} -> #{c['was_pointing_at']} "
+                  f"(superseded) -> #{c['now_points_at']}"
+                  f"{' [live]' if c['end_is_live'] else ''}")
+
     if not apply:
         print("\n(dry run — nothing written)")
         return
@@ -187,6 +199,12 @@ async def run(apply: bool, samples: int) -> None:
                     ]
                 }
         await db.commit()
+    async with AsyncSessionLocal() as db:
+        collapsed = await collapse_chains(db, apply=True)
+    if collapsed:
+        print(f"{len(collapsed)} chained pointer(s) re-aimed at the live case "
+              "they ultimately lead to; the state each was written under is kept.")
+
     print(f"\n{stats.get(MAPPED, 0)} pointers written; "
           f"{stats.get(AMBIGUOUS, 0)} left ambiguous with every candidate kept; "
           f"{stats.get(TARGET_UNKNOWN, 0)} target unknown; "

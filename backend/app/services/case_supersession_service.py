@@ -383,3 +383,76 @@ async def earlier_keys_for(db: Any, case_key: str) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+# --- collapsing chains the migration itself created ------------------------
+
+_CHAINS_SQL = """
+select a.case_key, a.case_number, a.supersession_state,
+       b.case_key as mid_key, b.case_number as mid_number,
+       b.superseded_by_case_key as end_key,
+       c.case_number as end_number, c.supersession_state as end_state
+from alert_case_spine a
+join alert_case_spine b on b.case_key = a.superseded_by_case_key
+left join alert_case_spine c on c.case_key = b.superseded_by_case_key
+where b.superseded_by_case_key is not null
+order by a.case_number
+"""
+
+
+async def collapse_chains(db: Any, *, apply: bool = False) -> list[dict[str, Any]]:
+    """Re-point a row whose target is itself superseded.
+
+    These chains were created by this migration, not by the merge logic, and
+    the shape says so: every one of the eight is `merged -> mapped -> live`.
+    The merge logic wrote the first pointer when its target was still live;
+    this migration then re-pointed the middle row at the live case and did not
+    follow back to the rows pointing at the middle row.
+
+    A reader following a pointer and landing on another dead key is the exact
+    failure the migration was built to remove, so the fix belongs here rather
+    than in a renderer that tolerates it.
+
+    The distinction between how each pointer was written is preserved: a row
+    the merge logic wrote keeps `supersession_state = 'merged'`, because that
+    is a record of what happened, and only its target moves.
+    """
+    from sqlalchemy import text as _text
+
+    rows = (await db.execute(_text(_CHAINS_SQL))).all()
+    moved: list[dict[str, Any]] = []
+    for row in rows:
+        if row.end_key is None:
+            continue
+        moved.append(
+            {
+                "case_number": row.case_number,
+                "was_pointing_at": row.mid_number,
+                "now_points_at": row.end_number,
+                "state_kept": row.supersession_state,
+                "end_is_live": row.end_state is None,
+            }
+        )
+        if apply:
+            await db.execute(
+                _text(
+                    "update alert_case_spine "
+                    "   set superseded_by_case_key = :end_key, "
+                    "       supersession_note = coalesce(supersession_note, '') || "
+                    "         :suffix "
+                    " where case_key = :key"
+                ),
+                {
+                    "end_key": row.end_key,
+                    "key": row.case_key,
+                    "suffix": (
+                        f" This pointer was re-aimed from case #{row.mid_number}, "
+                        f"which is itself superseded, to #{row.end_number}: a "
+                        "pointer that lands on another dead key is the failure "
+                        "the supersession work exists to remove."
+                    ),
+                },
+            )
+    if apply and moved:
+        await db.commit()
+    return moved

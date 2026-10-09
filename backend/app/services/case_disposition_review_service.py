@@ -35,6 +35,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from app.services.absence import UNPARSED, absent
+
+#: The old member-list cap. `alerts_at_close` was recorded from a list capped
+#: at 100, so a row reading exactly 100 is a floor and not a count: the case
+#: held at least that many and nothing recorded how many. 24 of the 56 cases
+#: flagged here are in that state, and printing "judged on 100" for them
+#: asserts a number known to be wrong.
+MEMBER_LIST_CAP = 100
+
 #: Resolutions that represent a judgement about the case. `expired` and
 #: `merged` are excluded throughout: every such row has `alerts_at_close = 0`,
 #: which means the alerts were never counted rather than counted as none, so
@@ -55,7 +64,19 @@ class DispositionReview:
     closed_at: str | None
 
     @property
-    def proportion(self) -> float:
+    def judged_on_is_known(self) -> bool:
+        """Whether the count the verdict was formed on is a count at all.
+
+        Exactly 100 means the recording hit the member-list cap, so the true
+        figure is unknown and at least 100. Treating it as 100 understates the
+        gap and, worse, states a number we know to be wrong.
+        """
+        return self.judged_on != MEMBER_LIST_CAP
+
+    @property
+    def proportion(self) -> float | None:
+        if not self.judged_on_is_known:
+            return None
         return self.judged_on / max(self.holds_now, 1)
 
     @property
@@ -66,9 +87,23 @@ class DispositionReview:
         return {
             "needs_review": True,
             "resolution": self.resolution,
-            "judged_on": self.judged_on,
+            "judged_on": (
+                self.judged_on
+                if self.judged_on_is_known
+                else absent(
+                    UNPARSED,
+                    "How many alerts this verdict was formed on was recorded "
+                    f"from a list capped at {MEMBER_LIST_CAP}, so it reads "
+                    f"exactly {MEMBER_LIST_CAP} and the true number is "
+                    "unknown — at least that many. The gap below is therefore "
+                    "a floor.",
+                    raw=str(self.judged_on),
+                ).as_json()
+            ),
             "holds_now": self.holds_now,
-            "proportion_judged": round(self.proportion, 3),
+            "proportion_judged": (
+                round(self.proportion, 3) if self.proportion is not None else None
+            ),
             "closed_at": self.closed_at,
             "closed_by": self.closed_by,
             "decided_automatically": self.automatic,
@@ -83,12 +118,21 @@ class DispositionReview:
 
     def _attribution(self) -> str:
         dated = f" on {self.closed_at[:10]}" if self.closed_at else ""
+        if not self.judged_on_is_known:
+            return (
+                f"This case was resolved {self.resolution.replace('_', ' ')}"
+                f"{dated}. How many alerts that conclusion covered was never "
+                f"recorded — the count hit a list cap of {MEMBER_LIST_CAP} and "
+                f"reads exactly that — so all that is known is: at least "
+                f"{MEMBER_LIST_CAP}, against the {self.holds_now} the case "
+                "holds now."
+            )
         return (
             f"This case was resolved {self.resolution.replace('_', ' ')}"
             f"{dated} over {self.judged_on} alert"
             f"{'' if self.judged_on == 1 else 's'}. It now holds "
             f"{self.holds_now}, so the conclusion covers "
-            f"{round(self.proportion * 100)}% of what is in the case."
+            f"{round((self.proportion or 0) * 100)}% of what is in the case."
         )
 
     def _whose(self) -> str:

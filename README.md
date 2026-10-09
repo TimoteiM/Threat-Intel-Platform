@@ -4,6 +4,29 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ---
 
+## Read these before changing anything
+
+Two rules that were learned expensively on 2026-10-09 and are not obvious from
+the code:
+
+- **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
+  `alembic upgrade head` changes the database for every container at once;
+  rebuilding changes the code for one. Between the two, any container still
+  running the old code fails every query touching the change, and nothing
+  notices because each half is internally consistent. This stopped all alert
+  analysis for 2h38m with no signal.
+- **[Name the entry point you measured](docs/deploy/measuring.md)** — a
+  timing or correctness claim states the call path it went through. A bound on
+  the case graph was built, measured and re-run across eleven cases before
+  anyone noticed its input could never reach its threshold: every number
+  described a path no user was on.
+
+Open problems with the evidence behind them live in
+[`docs/problems/`](docs/problems/); the incident notes live in
+[`docs/incidents/`](docs/incidents/).
+
+---
+
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)

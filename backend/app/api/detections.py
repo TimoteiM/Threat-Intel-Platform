@@ -1251,6 +1251,7 @@ async def get_case_graph(
     from app.services.asset_criticality_service import criticality_for
     from app.services.case_collision_service import shadow_payload, shadowing_keys
     from app.services.case_disposition_review_service import review_for
+    from app.services.graph_draw_summary_service import summarise
     from app.services.case_supersession_service import (
         earlier_keys_for,
         where_this_key_went,
@@ -1349,6 +1350,19 @@ async def get_case_graph(
             closed_at=spine.closed_at,
         )
         graph["disposition_review"] = review.as_json() if review else None
+
+    # Why the drawing is this size. A two-node graph for a 1,889-alert case
+    # reads as broken and is not: every one of its alerts comes from a source
+    # with no field map. A correct graph that reads as a broken one is a defect
+    # in the graph.
+    graph["draw_summary"] = summarise(
+        graph=graph,
+        members=int(case.get("alert_count") or len(run_ids)),
+        distinct_rules=len(
+            {a.get("detection_rule_id") for a in (case.get("alerts") or [])
+             if a.get("detection_rule_id")}
+        ) or None,
+    )
 
     # Earlier keys for this same incident. Matched on the weaker signal and
     # labelled as such, because a key that no longer re-derives has no alert

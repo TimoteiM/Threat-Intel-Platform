@@ -1513,6 +1513,12 @@ async def case_for_run(
     return None
 
 
+#: The widest window a single-case lookup will open, matching the ceiling the
+#: single-case endpoints accept. A case older than this cannot be found at all,
+#: which is a retention statement rather than a lookup one.
+CASE_LOOKUP_CEILING_HOURS = 17520
+
+
 async def case_by_key(
     db: AsyncSession, case_key: str, *, scope: tenant_scope.TenantScope,
     hours: int = 720, max_members: int = 100
@@ -1520,12 +1526,21 @@ async def case_by_key(
     """One case, found by the identity that survives a change of window.
 
     Recomputed rather than read back from the spine, because membership is not
-    stored: the spine carries who owns the case and how its score moved, and the
-    alerts in it are always derived from event time. Looking the case up by key
-    is exactly what the stable identity was built to make possible — the same
-    key resolves to the same case whether the caller asks over 48 hours or 30
-    days, so a bookmarked case page does not depend on the window it was opened
-    with.
+    stored: the spine carries who owns the case and how its score moved, and
+    the alerts in it are always derived from event time.
+
+    `hours` is a floor, not the window. The window used is whatever reaches
+    this case's own opening, because a lookback counted from now is a window
+    that moves away from the case: at the 720-hour default, 311 of 1,023 live
+    cases (30.4%) could not be found at all, every one of them simply older
+    than thirty days — including all three of the estate's true positives,
+    #1440 at 54 days, #1833 at 59 and #1106 at 45. The docstring here used to
+    claim that "a bookmarked case page does not depend on the window it was
+    opened with", and that was false for a third of the estate.
+
+    It is the same mistake as closing a case ten minutes after it opened: a
+    window anchored on the wrong instant. The case knows when it began, so the
+    window is derived from the case.
     """
     # The spine row names the entity, so the pass can be restricted to it.
     # Correlating the whole estate to find one case took seconds, and the case
@@ -1534,6 +1549,15 @@ async def case_by_key(
     only_entity = (
         (spine.alert_source, spine.alert_client, spine.entity_host) if spine else None
     )
+    if spine is not None and spine.opened_at is not None:
+        opened = spine.opened_at
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        # Plus a day, so a case opened moments before the boundary is not
+        # excluded by rounding, and because a case's first alert can predate
+        # the opening the spine recorded when a sender's clock is behind.
+        reach = (datetime.now(timezone.utc) - opened).total_seconds() / 3600.0
+        hours = max(hours, min(int(reach) + 24, CASE_LOOKUP_CEILING_HOURS))
     result = await correlate_alerts(
         db, scope=scope, hours=hours, limit=500, only_entity=only_entity,
         # A lookup never writes. This is called a hundred times a pass by the
