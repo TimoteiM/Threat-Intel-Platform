@@ -806,6 +806,11 @@ def _populate(
         reg = b.node(
             "registry_value", f"registry:{local}:{str(target_object).lower()}",
             str(target_object).rsplit("\\", 1)[-1], OBSERVED,
+            # The machine whose registry this is, which the merge key above
+            # already asserts. Without it the node had no band to sit in and
+            # was drawn beside its host rather than inside it: 71,279 stored
+            # registry values, none carrying a host.
+            host=local,
             path=target_object, event_type=val(f"{ED}eventType"),
             data=val(f"{ED}details"),
         )
@@ -825,7 +830,8 @@ def _populate(
         product = val(f"{ED}product") or "security product"
         control = b.node(
             "security_control", f"control:{local}:{str(product).lower()}:{str(feature).lower()}",
-            f"{product} · {feature}", OBSERVED, product=product, feature=feature, state=state,
+            f"{product} · {feature}", OBSERVED, host=local,
+            product=product, feature=feature, state=state,
         )
         if str(state).lower() in ("disabled", "off", "stopped"):
             b.edge("disabled", subject, control)

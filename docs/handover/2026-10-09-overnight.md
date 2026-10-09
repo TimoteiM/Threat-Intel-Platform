@@ -6,9 +6,15 @@ Branch `feature/email-investigation-upload`. Commits only, no pushes. Appended a
 
 - **Item 1 — should the cases page stop writing the spine?** I left `GET /detections/correlated-cases` materialising spine rows (now conflict-safe), because it is the de-facto case creator: of 303 live cases (`alert_case_spine`, `created_at - opened_at < 24h`, created in the 14 days to today), **224 (74%) were created outside the hourly job's :05 slot**, i.e. by page loads. Turning it off moves case creation — and so MTTD (`created_at - opened_at`) and the start of the closing job's 10-minute quiet period — onto the hourly cadence. Making the read non-writing needs `case-correlation-hourly` to run more often, and that cadence is a constant you haven't approved. Your call: a cadence (e.g. every 2–5 min, the pass skips when nothing new arrived), or accept the read as the writer.
 - **Item 2 / SLA — which closure kinds count as a resolution?** `/detections/sla` should presumably exclude `expired`, `merged` and `unreadable` the way `aged_out` was meant to be (`detections.py:1094` already excludes `{aged_out, expired, merged}` elsewhere, but not `unreadable`). Its `alerts_at_close or 1` also files never-counted cases as single-alert. Fixing either moves the SLA figures you report, so I left both.
+- **Item 4 — a frontend test runner?** The frontend has none, so tonight's graph rules are proven by a scratch Chromium harness, not by a test in the repo. Adding vitest, or committing the harness, is a new dependency you haven't approved.
 - **Item 9 ceiling value** — mechanism built with the ceiling unset (no filtering until you approve a number). Proposed value: _pending item 8 distribution_.
 
 ## Contradictions with what we concluded today
+
+0. **Item 4: the band does size to its children. The nodes outside it were never its children.** I measured the real `CaseGraph.tsx`, bundled and rendered in headless Chromium, on #1440 and 7 random cases. In every band, 0 children escaped (body or label). What was drawn beside the band rather than inside it:
+   - the host node itself, never parented to the band named after it;
+   - every registry value, because the extractor recorded no `host` on any of the 71,279 stored ones;
+   - empty bands (7 of 8 cases), each rendering as a node-sized rectangle on top of a real node.
 
 1. **The member-list cap was still live on both closing writers** (item 2). The review service treated `alerts_at_close = 100` as a historical floor. But `case_closure_task` and the analyst close both recorded `len(case["alerts"])`, and `case_by_key` caps `alerts` at 100. On `alert_case_spine`, 31 closed rows read exactly 100 and **0 rows have ever recorded more than 100**. Every case that outgrew the cap was still being stored as a floor. Fixed tonight. The 31 historical rows stay floors.
 2. **"All of them closed automatically" is false for one case** (item 2). #61 (judged on ≥100 of 561) has `closure_kind = analyst` with `closed_by` NULL. It and #892 were closed by a person before `closed_by` existed (`84a56b6`). The review read the missing name as "automatic" and told #61's reader "nobody's assessment is in question". Corrected: 59 automatic, 1 analyst whose name was never recorded.
@@ -122,3 +128,35 @@ Branch `feature/email-investigation-upload`. Commits only, no pushes. Appended a
 
 **Unresolved.**
 - #1866 was an auto-closed `false_positive` when absorption pointed it at #1867 a day later. I left its resolution alone (hard stop on verdicts). Whether absorbing an already-answered case is right is a question about absorption, not about provenance.
+
+## Item 4 — narrative band containment
+
+**Done.** Committed ("A node belongs inside its machine's band…").
+
+**How I measured.** I bundled the real `frontend/src/components/detections/CaseGraph.tsx` with esbuild, with only `getCaseGraph` stubbed to return the JSON that `app.cli.case_graph N --json` produces. That JSON is the graph endpoint's own path: `case_by_key -> graph_for_runs` over the `alert_graph_entity`/`alert_graph_edge` tables. I rendered it in headless Chromium (Playwright, installed in scratch, not in the project) and measured from the page's live Cytoscape instance. A headless Cytoscape-only reproduction showed nothing, which is why I moved to the real page.
+
+**Before/after on the same 8 cases** (#1440, 117, 532, 155, 1184, 1069, 1947, 464). "Before" is the component at HEAD on the pre-backfill JSON; "after" is the new component on the post-backfill JSON.
+- Nodes that name a host but are drawn outside its band: **11 → 0**.
+- Empty bands: **7 → 0**.
+
+The populations differ by design. "Before" can only count nodes that named a host, which is essentially the host nodes. The registry values had no host, so they couldn't even be counted as misplaced. "After" counts 413 host-attributed nodes, all inside.
+
+**What changed.**
+- Extractor: `registry_value` and `security_control` now carry `host=local`. Their merge keys already asserted it (`registry:{local}:…`). New test in `test_graph_extraction.py`.
+- Re-ran `python -m app.cli.graph_backfill` (documented as idempotent) in the worker: 15,484 alerts in 393 s.
+  - `alert_graph_entity`: registry values with `host` went from 2 of 71,279 to **74,649 of 74,649**.
+  - The backfill also grew every other kind (process 72,810 → 76,154, account 18,453 → 18,970, unparsed 4,788 → 5,045; edges 190,422 → 196,406). **The tables were stale against the current extractor before tonight**, independent of this change. Item 8 is built on the refreshed tables.
+- `CaseGraph.tsx`:
+  - Each visible node's band is decided first, and only bands with members are drawn.
+  - The host node sits in its own band.
+  - A node joins a band only on the host it names. Nothing is inferred from neighbours: domain accounts and techniques stay outside, correctly.
+  - `tsc --noEmit` is clean.
+
+**Gate.**
+- Suite: 14 failed / 2161 passed, the same 14 (diffed).
+- #1440 is 6/6 at `hours=720` after the backfill.
+- api/worker/beat rebuilt. Watchdog unchanged (pipeline and schema green, the two known silent sources).
+- Frontend container rebuilt; it serves 200.
+
+**Unresolved / found on the way.**
+- **A tenth extractor delimiter shape:** #1184 draws "hosts" named `systemroot` and `windows`, parsed from UNC-looking text in command lines (`_UNC` in the remote-execution block). 3 runs each, `basis = parsed`. I recorded it and did not fix it.

@@ -235,38 +235,56 @@ export default function CaseGraph({
       pathOnly && highlighted.size ? Array.from(highlighted) : data.nodes.map((n) => n.id),
     );
 
+    // Which band each visible node sits in, decided before any band is drawn.
+    //
+    // A band is a compound parent and Cytoscape sizes it to its children, so a
+    // node drawn beside a band rather than inside it is a node that was never
+    // made its child. Two kinds were: the host node itself, which sat outside
+    // the band named after it, and every host-local entity whose host the
+    // extractor did not record (71,279 registry values). And a band with no
+    // children is not a band: it renders as a bare node-sized rectangle on top
+    // of whatever the layout put there — seven of eight cases sampled drew one.
+    const parentOf = new Map<string, string>();
     if (mode === "narrative") {
-      // Compound parents: a band per host, plus one for attacker
-      // infrastructure, which does not belong to any machine we own.
-      const hosts = data.nodes.filter((n) => n.kind === "host");
-      hosts.forEach((host) => {
-        out.push({
-          data: { id: `band:${host.id}`, label: host.label, band: true },
-          classes: "band",
+      const hostBand = new Map(
+        data.nodes.filter((n) => n.kind === "host").map((n) => [n.label, `band:${n.id}`]),
+      );
+      data.nodes.forEach((node) => {
+        if (!visible.has(node.id)) return;
+        if (["domain", "ip", "url"].includes(node.kind)) {
+          parentOf.set(node.id, "band:external");
+        } else if (node.kind === "host") {
+          parentOf.set(node.id, `band:${node.id}`);
+        } else {
+          // Only the host the node names. Never inferred from a neighbour:
+          // a domain account or a technique belongs to no one machine.
+          const band = hostBand.get(node.attrs?.host as string);
+          if (band) parentOf.set(node.id, band);
+        }
+      });
+      const used = new Set(parentOf.values());
+      data.nodes
+        .filter((n) => n.kind === "host" && used.has(`band:${n.id}`))
+        .forEach((host) => {
+          out.push({
+            data: { id: `band:${host.id}`, label: host.label, band: true },
+            classes: "band",
+          });
         });
-      });
-      out.push({
-        data: { id: "band:external", label: "attacker infrastructure", band: true },
-        classes: "band band-external",
-      });
+      if (used.has("band:external")) {
+        // Attacker infrastructure, which does not belong to any machine we own.
+        out.push({
+          data: { id: "band:external", label: "attacker infrastructure", band: true },
+          classes: "band band-external",
+        });
+      }
     }
 
     data.nodes.forEach((node) => {
       if (!visible.has(node.id)) return;
       const kind = KIND[node.kind] || KIND.technique;
       const tactic = tacticByNode.get(node.id) || "";
-      let parent: string | undefined;
-      if (mode === "narrative") {
-        if (["domain", "ip", "url"].includes(node.kind)) parent = "band:external";
-        else if (node.kind === "host") parent = undefined;
-        else {
-          const host = node.attrs?.host as string | undefined;
-          const hostNode = data.nodes.find(
-            (n) => n.kind === "host" && n.label === host,
-          );
-          if (hostNode) parent = `band:${hostNode.id}`;
-        }
-      }
+      const parent = parentOf.get(node.id);
       out.push({
         data: {
           id: node.id,

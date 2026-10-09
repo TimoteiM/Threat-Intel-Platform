@@ -725,3 +725,24 @@ def test_a_source_stating_no_severity_gets_an_absence_with_a_reason():
     assert missing.kind == UNRATED
     assert "unstructured syslog" in missing.reason
     assert "rather than a low one" in missing.reason
+
+
+def test_a_host_local_entity_names_its_host():
+    """A registry value and a security control are on the machine that
+    reported them — their merge keys already say so. Without the host in the
+    attributes the case graph had no band to draw them in, so they sat beside
+    their machine instead of inside it: 71,279 stored registry values, none
+    carrying a host."""
+    body = _text_body(
+        image=r"C:\Windows\System32\reg.exe",
+        targetObject=r"HKU\S-1-5-21-1\Software\Microsoft\Windows\CurrentVersion\Run\OneDriveSync",
+        product="Windows Defender Antivirus",
+        feature="Real-Time Protection",
+        state="Disabled",
+    )
+    out = extract(body)
+    host = next(e for e in out.entities if e.kind == "host").label
+    for kind in ("registry_value", "security_control"):
+        node = next(e for e in out.entities if e.kind == kind)
+        assert node.attrs.get("host") == host, kind
+        assert node.merge_key.split(":")[1] == host, kind
