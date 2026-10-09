@@ -133,12 +133,27 @@ def test_naive_stamps_are_read_as_utc():
 
 
 def test_scope_separates_keys_that_share_a_start():
-    assert case_key_for("Siembiot", "a", "h", T0) != case_key_for("Siembiot", "b", "h", T0)
+    """Source and host still separate. Client no longer does, deliberately.
+
+    `alert_client` reads 'unknown' on 15,234 of 15,255 alerts, so it could not
+    distinguish one case from another; and for the 38 case rows that did carry
+    a value it produced a different key for a reason that was not about the
+    incident. See CASE_KEY_VERSION 3 and migration 053.
+    """
     assert case_key_for("Siembiot", "a", "h", T0) != case_key_for("Tracecat", "a", "h", T0)
+    assert case_key_for("Siembiot", "a", "h", T0) != case_key_for("Siembiot", "a", "g", T0)
+    assert case_key_for("Siembiot", "a", "h", T0) == case_key_for("Siembiot", "b", "h", T0)
 
 
 def test_separator_cannot_be_forged_from_scope_text():
-    assert case_key_for("a|b", "c", "h", T0) != case_key_for("a", "b|c", "h", T0)
+    """("a|b", "h") and ("a", "b|h") must not collide, which is why the parts
+    are joined on a unit separator rather than a printable character.
+
+    Forged across source and host rather than source and client: the client
+    component is pinned, so a collision could no longer be constructed through
+    it and the old form of this test proved nothing.
+    """
+    assert case_key_for("a|b", "c", "h", T0) != case_key_for("a", "c", "b|h", T0)
 
 
 def test_empty_history_assigns_nothing():

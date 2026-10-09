@@ -50,7 +50,7 @@ async def run(limit: int | None, batch: int) -> None:
             for run_id, body, when, created, level, assessment, logs in rows:
                 n_ent, n_edge = await materialise_run(
                     db, run_id=run_id, alert_body=body,
-                    event_time=when or created, rule_level=level,
+                    event_time=when or created, risk_score=level,
                     assessment=assessment, log_events=logs,
                 )
                 entities += n_ent

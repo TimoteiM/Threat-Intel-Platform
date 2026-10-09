@@ -95,7 +95,23 @@ class SessionAssignment:
 #: stored case rows stopped resolving — 811 of them carrying an AI analysis
 #: nothing could then open. `tests/unit/test_services/test_case_key_version.py`
 #: fails if the formula moves without this moving with it.
-CASE_KEY_VERSION = 2
+CASE_KEY_VERSION = 3
+
+#: What the client component of the key contributes: nothing, deliberately.
+#:
+#: `alert_client` reads 'unknown' on 15,234 of 15,255 alerts and on 1,851 of
+#: 1,889 case rows — the remainder being 'LIN' (36), 'Codex Desktop' (2) and
+#: two others. A field that is constant for 99.9% of rows cannot distinguish
+#: one case from another, so its presence in the key was tautological; and for
+#: the 38 rows that do carry a value it changed the key for a reason that has
+#: nothing to do with the incident.
+#:
+#: It is pinned rather than removed, and the difference matters. Removing the
+#: component changes the joined string for every row and re-keys all 1,889,
+#: which would renumber the whole case list. Pinning it to the value 1,851
+#: rows already carry leaves those keys byte-identical and re-keys only the 38
+#: that were being separated for the wrong reason.
+_CLIENT_IN_KEY = "unknown"
 
 
 def case_key_for(
@@ -118,7 +134,10 @@ def case_key_for(
     started = _as_utc(session_started_at)
     parts = (
         str(source or ""),
-        str(client or ""),
+        # `client` is accepted and ignored — see _CLIENT_IN_KEY. Kept in the
+        # signature because callers legitimately have it and a future revision
+        # may want a client that actually varies.
+        _CLIENT_IN_KEY,
         str(host or ""),
         started.isoformat(),
     )

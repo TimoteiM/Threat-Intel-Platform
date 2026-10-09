@@ -57,6 +57,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from app.services.alert_field_service import is_machine_account
+from app.services.source_severity_service import normalise
 
 # --- basis, and the status it earns ----------------------------------------
 
@@ -79,6 +80,8 @@ def status_for(basis: str | None) -> str:
 KINDS = (
     "host", "account", "process", "file", "registry_value",
     "service", "security_control", "domain", "ip", "url", "technique",
+    # Identifiers that failed their type's shape check. Drawn, not dropped.
+    "unparsed",
 )
 
 #: Edge verb -> the basis it is created with when nothing narrows it further.
@@ -176,6 +179,14 @@ class Extracted:
     mapped: bool = False
     #: Whether log events were left unread because there were too many.
     truncated_logs: bool = False
+    #: The alert's own severity, normalised 0-100, or None when its source
+    #: states none. Never 0 for an absent value.
+    source_severity: int | None = None
+    source_severity_raw: str | None = None
+    #: Identifiers that failed a shape check, with the reason. Counted so a
+    #: new source landing with an unanticipated encoding shows up as a rising
+    #: number rather than as silence.
+    quarantined: list[dict[str, Any]] = dc_field(default_factory=list)
     #: Field names present in the body that no node type claimed. Reported so a
     #: missing node type shows up as an unread field rather than as silence.
     unread: list[str] = dc_field(default_factory=list)
@@ -396,6 +407,65 @@ _SC_CREATE = re.compile(r"\bsc(?:\.exe)?\s+create\s+(\"[^\"]+\"|\S+)", re.IGNORE
 _BINPATH = re.compile(r"binpath\s*=\s*\"?([^\"\n]+?)\"?\s*(?:$|\")", re.IGNORECASE)
 
 
+# --- shape guards: quarantine, never drop -----------------------------------
+#
+# An identifier that fails its type's shape check becomes an `unparsed` entity
+# carrying its raw value, and is counted. Dropping it would hide the parser bug
+# that produced it, which is how this class of failure keeps recurring — six
+# delimiter bugs before the `_UNC` one, and that one was only found because a
+# seeding helper printed a host called `program`.
+#
+# The traced example: Sysmon Event ID 15 (FileCreateStreamHash) carries the
+# alternate data stream's bytes in `Contents`. Where those bytes are UTF-16,
+# Wazuh mis-decodes them — `'湁桡楥'` appears 567 times, which is UTF-16LE read
+# as CJK (U+6E41 -> bytes 41 6E -> "An") — and the adjacent `user` field
+# catches a one-character fragment. Measured: 107 of 299,087 user fields in
+# stored log context are 1-2 characters and 100% of them are EID 15, values
+# `_` (78) and `P` (29). `targetFilename` and `image` on those same 107 events
+# are intact, so the damage is confined to `user`.
+
+UNPARSED = "unparsed"
+
+#: A drive-letter path or a UNC prefix. Either means the value is a location,
+#: not a principal.
+_PATH_SHAPED = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+#: Event IDs whose `user` field is known-unreliable at the source. Suppressed
+#: rather than shape-checked per value: quarantining `P` and `_` individually
+#: treats the symptom, while the field itself is untrustworthy for this event
+#: type whatever it happens to contain.
+_NO_ACCOUNT_FROM_EVENT = {"15"}
+
+
+def account_shape_problem(value: str) -> str | None:
+    """Why this is not a usable account identifier, if it isn't."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) < 2:
+        return (
+            "An account name of one character is not an identifier. On Sysmon "
+            "Event ID 15 this is field-boundary debris from the alternate data "
+            "stream payload in `Contents`."
+        )
+    # `DOMAIN\\user` is the normal form and must pass. What must not pass is a
+    # path: a drive letter, a UNC prefix, a forward slash, or more than one
+    # backslash. The first version of this check rejected a single backslash
+    # and would have quarantined almost every real account in the estate.
+    if _PATH_SHAPED.search(text) or text.count("\\") > 1 or "/" in text:
+        return "This is shaped like a path, not an account."
+    return None
+
+
+def host_shape_problem(value: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if _NOT_A_MACHINE and text.lower() in _NOT_A_MACHINE:
+        return "This is a name Windows defines, not a machine."
+    return None
+
+
 # --- the extractor ---------------------------------------------------------
 
 #: Fields read by some node type below. Anything else present in a body is
@@ -427,6 +497,20 @@ class _Builder:
         self.edges: dict[tuple[str, str, str], Edge] = {}
         self.unread: set[str] = set()
         self.truncated_logs: bool = False
+        #: Identifiers that failed their type's shape check. Kept, counted and
+        #: rendered as `unparsed` — never dropped.
+        self.quarantined: list[dict[str, Any]] = []
+
+    def quarantine(self, *, kind: str, field: str, value: Any, why: str) -> str:
+        key = f"unparsed:{kind}:{str(value)[:80]}"
+        self.quarantined.append(
+            {"kind": kind, "field": field, "value": str(value)[:120], "why": why}
+        )
+        self.node(
+            UNPARSED, key, str(value)[:40] or "(empty)", PARSED,
+            unparsed_kind=kind, source_field=field, why=why, raw=str(value)[:200],
+        )
+        return key
 
     def node(
         self, kind: str, merge_key: str, label: str, basis: str, **attrs: Any
@@ -478,7 +562,7 @@ def _populate(
     b: "_Builder",
     f: dict[str, Any],
     *,
-    rule_level: int | None = None,
+    risk_score: int | None = None,
     confirmed_techniques: Iterable[str] = (),
 ) -> None:
     """Read one set of fields into a builder.
@@ -516,7 +600,28 @@ def _populate(
     # ---- Account ---------------------------------------------------------
     sid = val(f"{ED}targetUserSid") or val(f"{ED}subjectUserSid")
     user = val(f"{ED}user") or val(f"{ED}targetUserName") or val(f"{ED}subjectUserName")
+    event_id = val("data.win.system.eventID") or val("event_id")
     account = None
+    if user and str(event_id or "") in _NO_ACCOUNT_FROM_EVENT:
+        # The field is untrustworthy for this event type whatever it contains,
+        # so it does not become an account at all — and the raw value is kept
+        # visible rather than silently discarded.
+        b.quarantine(
+            kind="account", field=f"{ED}user", value=user,
+            why=(
+                f"Sysmon Event ID {event_id} carries the alternate data stream's "
+                "bytes in `Contents`, and Wazuh's decoding of those bytes leaks "
+                "into the adjacent `user` field. Every 1-2 character account "
+                "name in this estate's stored log context — 107 of 299,087 — "
+                "comes from this event ID. The field is not read as an account."
+            ),
+        )
+        user = None
+    elif user:
+        problem = account_shape_problem(user)
+        if problem:
+            b.quarantine(kind="account", field=f"{ED}user", value=user, why=problem)
+            user = None
     if sid or user:
         key = f"account:sid:{sid.lower()}" if sid else f"account:{str(user).lower()}"
         account = b.node(
@@ -811,11 +916,22 @@ def _populate(
         )
 
     # ---- Risk, carried on every node this alert touched ------------------
-    if rule_level is not None:
+    # Two different numbers, kept apart. `indicator_risk_score` is the
+    # aggregator's sum over this alert's indicators and is not a severity;
+    # `source_severity` is what the alert's own source says. Conflating them
+    # put a 0-100 score behind thresholds written for Wazuh's 1-16 scale.
+    if risk_score:
         for entity in b.entities.values():
-            prior = entity.attrs.get("rule_level")
-            if prior is None or int(rule_level) > int(prior):
-                entity.attrs["rule_level"] = int(rule_level)
+            prior = entity.attrs.get("indicator_risk_score")
+            if prior is None or int(risk_score) > int(prior):
+                entity.attrs["indicator_risk_score"] = int(risk_score)
+    severity, severity_raw = normalise(f)
+    if severity is not None:
+        for entity in b.entities.values():
+            prior = entity.attrs.get("source_severity")
+            if prior is None or severity > int(prior):
+                entity.attrs["source_severity"] = severity
+                entity.attrs["source_severity_raw"] = severity_raw
 
     unread = sorted(
         k for k in f
@@ -833,7 +949,7 @@ def _populate(
 def extract(
     alert_body: str | None,
     *,
-    rule_level: int | None = None,
+    risk_score: int | None = None,
     confirmed_techniques: Iterable[str] = (),
     log_events: Iterable[dict[str, Any]] = (),
     max_log_events: int = MAX_LOG_EVENTS,
@@ -849,15 +965,16 @@ def extract(
     """
     b = _Builder()
     fields = read_fields(alert_body)
-    _populate(b, fields, rule_level=rule_level,
+    _populate(b, fields, risk_score=risk_score,
               confirmed_techniques=confirmed_techniques)
     for index, event in enumerate(log_events or ()):
         if index >= max_log_events:
             b.truncated_logs = True
             break
-        _populate(b, fields_of_log_event(event), rule_level=rule_level,
+        _populate(b, fields_of_log_event(event), risk_score=risk_score,
                   confirmed_techniques=confirmed_techniques)
     source_type = source_type_of(fields)
+    severity, severity_raw = normalise(fields)
     return Extracted(
         entities=list(b.entities.values()),
         edges=list(b.edges.values()),
@@ -865,6 +982,9 @@ def extract(
         source_type=source_type,
         mapped=source_type in MAPPED_DECODERS,
         truncated_logs=b.truncated_logs,
+        source_severity=severity,
+        source_severity_raw=severity_raw,
+        quarantined=b.quarantined,
     )
 
 

@@ -63,7 +63,7 @@ async def build(number: int, *, live: bool = False) -> tuple[dict, float]:
             AlertEvidence(
                 run_id=run_id, rule_id=rule_id, detection=detection,
                 event_time=when, rule_level=level,
-                extracted=extract(body, rule_level=level, confirmed_techniques=confirmed),
+                extracted=extract(body, risk_score=level, confirmed_techniques=confirmed),
             )
         )
     graph = assemble(evidence)

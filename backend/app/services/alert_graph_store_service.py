@@ -27,6 +27,7 @@ from app.models.database import (
 )
 from app.services.alert_graph_assembly_service import AlertEvidence, assemble
 from app.services.alert_graph_extraction_service import Extracted, extract
+from app.services.source_severity_service import reserve_for_unrated
 
 
 def confirmed_ids(assessment: Any) -> list[str]:
@@ -53,7 +54,7 @@ async def materialise_run(
     run_id: Any,
     alert_body: str | None,
     event_time: datetime | None,
-    rule_level: int | None,
+    risk_score: int | None,
     assessment: Any = None,
     log_events: Any = None,
 ) -> tuple[int, int]:
@@ -66,7 +67,7 @@ async def materialise_run(
     times across alert bodies.
     """
     found = extract(
-        alert_body, rule_level=rule_level,
+        alert_body, risk_score=risk_score,
         confirmed_techniques=confirmed_ids(assessment),
         log_events=log_events or (),
     )
@@ -75,7 +76,13 @@ async def materialise_run(
     await db.execute(
         update(AlertBodyInvestigationRun)
         .where(AlertBodyInvestigationRun.id == run_id)
-        .values(graph_source_type=found.source_type[:64])
+        .values(
+            graph_source_type=found.source_type[:64],
+            # The alert's own severity, so a bounded read can rank on severity
+            # rather than on indicator reputation.
+            source_severity=found.source_severity,
+            source_severity_raw=found.source_severity_raw,
+        )
     )
     await db.execute(delete(AlertGraphEntity).where(AlertGraphEntity.run_id == run_id))
     await db.execute(delete(AlertGraphEdge).where(AlertGraphEdge.run_id == run_id))
@@ -84,7 +91,9 @@ async def materialise_run(
             AlertGraphEntity(
                 run_id=run_id, kind=entity.kind, merge_key=entity.merge_key[:512],
                 label=(entity.label or "?")[:255], basis=entity.basis,
-                attrs=entity.attrs, event_time=event_time, rule_level=rule_level,
+                attrs=entity.attrs, event_time=event_time,
+                indicator_risk_score=(risk_score or None),
+                source_severity=found.source_severity,
             )
         )
     for edge in found.edges:
@@ -98,14 +107,88 @@ async def materialise_run(
     return len(found.entities), len(found.edges)
 
 
-#: How many of a case's alerts the graph will read. Measured on the two worst
-#: cases in this estate: #61 carries 2,818 alerts and #71 carries 2,154, which
-#: are host-wide buckets rather than incidents — an artefact of membership
-#: being derived from a time window. Reading all of #61 took 1,105 ms against
-#: a 400 ms budget and produced 180 nodes against a 150 cap. Bounded at 300,
-#: #61 comes in under both, and the payload says what was left out: a graph
-#: that silently dropped 2,500 alerts reads as the whole picture.
+#: What a bounded read is allowed to pull, measured in stored entity rows
+#: rather than in alerts.
+#:
+#: Alerts were the wrong unit. Assembly time tracks the rows, and the rows per
+#: alert vary by two orders of magnitude depending on how much log context the
+#: alert carries: case #1849 holds 4,860 entities across 2,367 alerts (2 per
+#: alert) while #61 holds 64,430 across 2,818 (23 per alert). Bounding at 300
+#: alerts therefore meant 726 rows on one case and 31,555 on another — and
+#: once the bound ranked on severity rather than on indicator reputation it
+#: began selecting exactly the richest alerts, taking assembly from 215 ms to
+#: 3,958 ms and node counts from 72 to 298.
+#:
+#: Calibrated on the measurement: 30k rows assembles in ~2.6s, so ~4k lands
+#: near 350ms, inside the 400ms budget.
+MAX_ENTITY_ROWS = 4000
+
+#: A ceiling on alerts as well, so a case of a million trivial alerts cannot
+#: spend the whole entity budget on rows that say nothing.
 MAX_ALERTS_PER_GRAPH = 300
+
+
+async def _bounded_selection(
+    db: AsyncSession,
+    run_ids: Sequence[Any],
+    *,
+    max_alerts: int,
+    max_rows: int,
+) -> tuple[list[Any], int, int]:
+    """The alerts a bounded read will use, chosen by severity, bounded by rows.
+
+    Returns (chosen, dropped_alerts, rows_read).
+    """
+    counts = dict(
+        (
+            await db.execute(
+                select(AlertGraphEntity.run_id, func.count())
+                .where(AlertGraphEntity.run_id.in_(run_ids))
+                .group_by(AlertGraphEntity.run_id)
+            )
+        ).all()
+    )
+    rated = (
+        await db.execute(
+            select(AlertBodyInvestigationRun.id)
+            .where(
+                AlertBodyInvestigationRun.id.in_(run_ids),
+                AlertBodyInvestigationRun.source_severity.isnot(None),
+            )
+            .order_by(
+                AlertBodyInvestigationRun.source_severity.desc(),
+                AlertBodyInvestigationRun.event_time.desc().nullslast(),
+            )
+        )
+    ).scalars().all()
+    unrated = (
+        await db.execute(
+            select(AlertBodyInvestigationRun.id)
+            .where(
+                AlertBodyInvestigationRun.id.in_(run_ids),
+                AlertBodyInvestigationRun.source_severity.is_(None),
+            )
+            .order_by(AlertBodyInvestigationRun.event_time.desc().nullslast())
+        )
+    ).scalars().all()
+
+    # Unrated alerts keep their share rather than sorting last. An alert whose
+    # source states no severity is a gap in coverage, not a quiet alert, and
+    # 892 of 15,255 are in that position.
+    keep_unrated = reserve_for_unrated(len(run_ids), len(unrated), max_alerts)
+    ordered = list(unrated[:keep_unrated]) + list(rated)
+
+    chosen: list[Any] = []
+    rows = 0
+    for run_id in ordered:
+        if len(chosen) >= max_alerts:
+            break
+        cost = int(counts.get(run_id, 0))
+        if chosen and rows + cost > max_rows:
+            break
+        chosen.append(run_id)
+        rows += cost
+    return chosen, len(run_ids) - len(chosen), rows
 
 
 async def graph_for_runs(
@@ -113,6 +196,7 @@ async def graph_for_runs(
     run_ids: Sequence[Any],
     *,
     max_alerts: int = MAX_ALERTS_PER_GRAPH,
+    max_rows: int = MAX_ENTITY_ROWS,
 ) -> dict[str, Any]:
     """Assemble a graph from the stored rows of these alerts.
 
@@ -124,35 +208,43 @@ async def graph_for_runs(
 
     considered = list(run_ids)
     dropped_alerts = 0
+    rows_read = 0
     if len(considered) > max_alerts:
-        # Keep the alerts most likely to carry the attack: worst rule level
-        # first, then most recent. A severity-blind truncation would keep 300
-        # routine level-3 events and drop the level-15 one the case is about.
-        ranked = (
-            await db.execute(
-                select(AlertBodyInvestigationRun.id)
-                .where(AlertBodyInvestigationRun.id.in_(considered))
-                .order_by(
-                    AlertBodyInvestigationRun.highest_risk_score.desc().nullslast(),
-                    AlertBodyInvestigationRun.event_time.desc().nullslast(),
-                )
-                .limit(max_alerts)
-            )
-        ).scalars().all()
-        dropped_alerts = len(considered) - len(ranked)
-        considered = list(ranked)
+        considered, dropped_alerts, rows_read = await _bounded_selection(
+            db, considered, max_alerts=max_alerts, max_rows=max_rows
+        )
 
     run_ids = considered
+    # Columns, not ORM objects. Hydrating 4,000 AlertGraphEntity instances and
+    # 3,000 AlertGraphEdge instances per case cost roughly 600ms of the 886ms
+    # that case #61 took; the rows themselves are a cheap indexed read.
     entities = (
         await db.execute(
-            select(AlertGraphEntity).where(AlertGraphEntity.run_id.in_(run_ids))
+            select(
+                AlertGraphEntity.run_id,
+                AlertGraphEntity.kind,
+                AlertGraphEntity.merge_key,
+                AlertGraphEntity.label,
+                AlertGraphEntity.basis,
+                AlertGraphEntity.attrs,
+                AlertGraphEntity.event_time,
+                AlertGraphEntity.source_severity,
+            ).where(AlertGraphEntity.run_id.in_(run_ids))
         )
-    ).scalars().all()
+    ).all()
     edges = (
         await db.execute(
-            select(AlertGraphEdge).where(AlertGraphEdge.run_id.in_(run_ids))
+            select(
+                AlertGraphEdge.run_id,
+                AlertGraphEdge.kind,
+                AlertGraphEdge.source_key,
+                AlertGraphEdge.target_key,
+                AlertGraphEdge.basis,
+                AlertGraphEdge.attrs,
+                AlertGraphEdge.event_time,
+            ).where(AlertGraphEdge.run_id.in_(run_ids))
         )
-    ).scalars().all()
+    ).all()
 
     # Rebuild the per-alert view the assembler expects, so stored rows and a
     # live extraction go through exactly the same merge, inference and status
@@ -166,7 +258,7 @@ async def graph_for_runs(
                 AlertBodyInvestigationRun.detection_name,
                 AlertBodyInvestigationRun.graph_source_type,
                 AlertBodyInvestigationRun.event_time,
-                AlertBodyInvestigationRun.highest_risk_score,
+                AlertBodyInvestigationRun.source_severity,
             ).where(AlertBodyInvestigationRun.id.in_(run_ids))
         )
     ).all()
@@ -182,25 +274,25 @@ async def graph_for_runs(
     grouped: dict[str, Extracted] = {}
     stamps: dict[str, datetime | None] = {}
     levels: dict[str, int | None] = {}
-    for row in entities:
-        key = str(row.run_id)
+    for run_id, kind, merge_key, label, basis, attrs, when, severity in entities:
+        key = str(run_id)
         grouped.setdefault(key, Extracted()).entities.append(
             Entity(
-                kind=row.kind, merge_key=row.merge_key, label=row.label,
-                basis=row.basis, attrs=dict(row.attrs or {}),
+                kind=kind, merge_key=merge_key, label=label,
+                basis=basis, attrs=dict(attrs or {}),
             )
         )
-        stamps.setdefault(key, row.event_time)
-        levels.setdefault(key, row.rule_level)
-    for row in edges:
-        key = str(row.run_id)
+        stamps.setdefault(key, when)
+        levels.setdefault(key, severity)
+    for run_id, kind, source_key, target_key, basis, attrs, when in edges:
+        key = str(run_id)
         grouped.setdefault(key, Extracted()).edges.append(
             Edge(
-                kind=row.kind, source=row.source_key, target=row.target_key,
-                basis=row.basis, attrs=dict(row.attrs or {}),
+                kind=kind, source=source_key, target=target_key,
+                basis=basis, attrs=dict(attrs or {}),
             )
         )
-        stamps.setdefault(key, row.event_time)
+        stamps.setdefault(key, when)
 
     # Every alert asked for, including the ones that yielded nothing. Leaving
     # those out is how an unreadable source becomes an unexplained blank.
@@ -238,9 +330,12 @@ async def graph_for_runs(
     graph["coverage"] = {
         "alerts_read": len(run_ids),
         "alerts_dropped": dropped_alerts,
+        "entity_rows_read": rows_read,
+        "ranked_by": "the severity each alert's own source states",
         "note": (
             f"Drawn from the {len(run_ids)} most severe of "
-            f"{len(run_ids) + dropped_alerts} alerts in this case; "
+            f"{len(run_ids) + dropped_alerts} alerts in this case, ranked on "
+            "the severity each alert's own source states; "
             f"{dropped_alerts} were not read."
         ) if dropped_alerts else None,
     }

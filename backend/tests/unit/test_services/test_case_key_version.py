@@ -21,7 +21,9 @@ from app.services.alert_session_service import CASE_KEY_VERSION, case_key_for
 # Fixed inputs, and the digest the current formula produces for them.
 FIXTURE = dict(
     source="Siembiot",
-    client="Expertware",
+    # Whatever is passed here, the digest is the same — see
+    # test_the_key_no_longer_depends_on_the_client.
+    client="unknown",
     host="EXP-FIN-034.corp.local",
     session_started_at=datetime(2026, 8, 16, 9, 2, 11, 482000, tzinfo=timezone.utc),
 )
@@ -31,14 +33,14 @@ def test_the_case_key_formula_has_not_changed_without_a_version_bump():
     without = case_key_for(**FIXTURE)
     with_discriminator = case_key_for(**FIXTURE, discriminator="run-1")
 
-    assert CASE_KEY_VERSION == 2, (
+    assert CASE_KEY_VERSION == 3, (
         "CASE_KEY_VERSION changed. That is fine — but the digests below and the "
         "migration that re-points rows keyed under the previous version have to "
         "change with it. Last time this happened without a migration, 881 of "
         "1,889 case rows stopped resolving and 811 AI analyses became unreachable."
     )
     assert without == (
-        "f09bc7852275d05a9dd731bbbc9a47c1fd44393df76895b4f99d35962cbd880e"
+        "2b9d4e6a85bf9da17613711c5cdb1a39721ada3f93689b67a321ddcb6dc5a781"
     ), (
         "The case key formula changed. Every stored row keyed under the old one "
         "will stop resolving. Bump CASE_KEY_VERSION, write a migration that "
@@ -66,3 +68,34 @@ def test_the_separator_cannot_be_forged_from_a_field_value():
     one = case_key_for("a|b", "c", "h", FIXTURE["session_started_at"])
     two = case_key_for("a", "b|c", "h", FIXTURE["session_started_at"])
     assert one != two
+
+
+def test_the_key_no_longer_depends_on_the_client():
+    """`alert_client` reads 'unknown' on 15,234 of 15,255 alerts, so it could
+    not distinguish one case from another — and for the 38 rows that did carry
+    a value it changed the key for a reason that had nothing to do with the
+    incident. It is pinned rather than removed: removing the component changes
+    the joined string for every row and would renumber the entire case list,
+    while pinning it to the value 1,851 of 1,889 rows already carry leaves
+    those keys byte-identical."""
+    baseline = case_key_for(**FIXTURE)
+    for client in ("unknown", "LIN", "Codex Desktop", "", None, "Expertware"):
+        altered = dict(FIXTURE)
+        altered["client"] = client
+        assert case_key_for(**altered) == baseline, client
+
+
+def test_the_other_inputs_still_discriminate():
+    """Pinning one component must not flatten the rest: a different host, a
+    different source or a different opening still has to be a different case."""
+    baseline = case_key_for(**FIXTURE)
+    for field, value in (
+        ("source", "other-manager"),
+        ("host", "EXP-FIN-035.corp.local"),
+    ):
+        altered = dict(FIXTURE)
+        altered[field] = value
+        assert case_key_for(**altered) != baseline, field
+    later = dict(FIXTURE)
+    later["session_started_at"] = FIXTURE["session_started_at"].replace(microsecond=0)
+    assert case_key_for(**later) != baseline

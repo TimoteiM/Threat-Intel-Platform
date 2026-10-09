@@ -611,8 +611,15 @@ export interface CaseGraphNode {
   /** observed | parsed | inferred — what the status was computed from. */
   basis: string;
   attrs: Record<string, unknown>;
-  /** Highest rule.level of any alert that touched it. */
-  risk: number | null;
+  /** The severity the alert's own source states, normalised 0-100. Null when
+   *  no alert touching this entity came from a source that states one —
+   *  which is a gap in coverage, not a low severity. */
+  severity: number | null;
+  severity_rated?: boolean;
+  /** The worst indicator-reputation score of any alert that touched it. NOT a
+   *  severity: it is a seven-component sum of which five components are URL,
+   *  email, attachment or sandbox signals. */
+  indicator_risk_score?: number | null;
   witnesses: Array<{
     run_id: string;
     rule_id: string | null;

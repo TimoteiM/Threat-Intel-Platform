@@ -715,6 +715,12 @@ class AlertBodyInvestigationRun(Base):
     #: during extraction so an empty graph can say *which* source it could not
     #: read, instead of rendering a blank canvas that reads as "no attack".
     graph_source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The alert's severity as its own source states it, normalised to 0-100.
+    #: Null where the source states none — never 0, because a blank encoded as
+    #: a measurement is the bug this column exists to replace.
+    source_severity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The native value and scale, so a normalised number can be traced back.
+    source_severity_raw: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # sha256 of the normalised alert body — lets a repeated delivery reuse the
     # run it already produced instead of investigating the same alert twice.
     alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -1274,7 +1280,12 @@ class AlertGraphEntity(Base):
     event_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    rule_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The worst indicator-reputation score of any alert that touched this
+    #: entity. NOT a severity: it is the aggregator's seven-component sum, and
+    #: five of those components are URL, email, attachment or sandbox signals.
+    indicator_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The alert's own source severity, normalised 0-100. This is the severity.
+    source_severity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )

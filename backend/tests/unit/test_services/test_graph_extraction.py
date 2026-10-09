@@ -21,6 +21,7 @@ from app.services.alert_graph_extraction_service import (
     INFERRED,
     OBSERVED,
     PARSED,
+    account_shape_problem,
     extract,
     host_key,
     read_fields,
@@ -47,7 +48,7 @@ def _text_body(**eventdata: str) -> str:
 def _evidence(body: str, *, run_id="r1", rule="100210", at=NOW, level=12, confirmed=()):
     return AlertEvidence(
         run_id=run_id, rule_id=rule, detection="d", event_time=at, rule_level=level,
-        extracted=extract(body, rule_level=level, confirmed_techniques=confirmed),
+        extracted=extract(body, risk_score=level, confirmed_techniques=confirmed),
     )
 
 
@@ -552,3 +553,94 @@ def test_a_windows_authority_name_is_not_a_machine():
         assert host_key(name) is None, name
     # And a machine that merely starts with one of those words is unaffected.
     assert host_key(r"\\BUILTINSRV01\c$") == "builtinsrv01"
+
+
+# --- shape guards: quarantine, never drop ----------------------------------
+
+def test_event_id_15_never_yields_an_account_and_says_why():
+    """Sysmon EID 15 carries the alternate data stream's bytes in `Contents`,
+    and Wazuh's decoding of those bytes leaks into the adjacent `user` field.
+    107 of 299,087 user fields in stored log context are 1-2 characters and
+    100% of them are EID 15 — values `_` (78) and `P` (29).
+
+    Quarantining per value would treat the symptom: the field is untrustworthy
+    for this event type whatever it happens to contain, so the mapping is
+    suppressed and the raw value is kept visible."""
+    body = "\n".join([
+        "Alert: EXP-5190TV3 - Sigma Sysmon Archive Exe",
+        "Rule: 103100",
+        "Rule level: 3",
+        "Agent: EXP-5190TV3 | 1090",
+        "Computer: EXP-5190TV3.int.expertware.net",
+        "Event ID: 15",
+        r"data.win.eventdata.image: C:\WINDOWS\Explorer.EXE",
+        r"data.win.eventdata.targetFilename: C:\Users\ftibu\Downloads\getvpn32.cmp",
+        "data.win.eventdata.user: P",
+        "data.win.eventdata.contents: \u6e41\u6861\u6965",
+    ])
+    out = extract(body)
+    assert not [e for e in out.entities if e.kind == "account"]
+    quarantined = [e for e in out.entities if e.kind == "unparsed"]
+    assert len(quarantined) == 1
+    assert quarantined[0].attrs["raw"] == "P"
+    assert quarantined[0].attrs["source_field"].endswith("user")
+    assert "Event ID 15" in quarantined[0].attrs["why"]
+    assert out.quarantined and out.quarantined[0]["value"] == "P"
+    # And the fields the corruption did NOT touch are still read. Measured:
+    # targetFilename and image are intact on all 107 events.
+    processes = {e.label for e in out.entities if e.kind == "process"}
+    assert "Explorer.EXE" in processes
+
+
+def test_a_domain_qualified_account_is_not_mistaken_for_a_path():
+    """`DOMAIN\\user` is the normal form. The first version of this guard
+    rejected any backslash and would have quarantined almost every real
+    account in the estate."""
+    for name in (r"CORP\jdoe", "jdoe", r"NT AUTHORITY\SYSTEM", r"INT\lvizeteu"):
+        assert account_shape_problem(name) is None, name
+
+
+@pytest.mark.parametrize("value", ["P", "_", r"C:\Users\x", r"\\SRV01\share", "a/b", r"A\B\C"])
+def test_an_identifier_shaped_like_a_path_or_a_fragment_is_quarantined(value):
+    assert account_shape_problem(value) is not None
+
+
+def test_a_quarantined_identifier_is_kept_rather_than_dropped():
+    """Dropping hides the parser bug that produced it, which is how this class
+    keeps recurring: six delimiter bugs before `_UNC`, and that one surfaced
+    only because a seeding helper printed a host called `program`."""
+    body = _text_body(
+        image=r"C:\Windows\System32\cmd.exe", processId="4",
+        user=r"C:\Users\someone",
+    )
+    out = extract(body)
+    assert not [e for e in out.entities if e.kind == "account"]
+    kept = [e for e in out.entities if e.kind == "unparsed"]
+    assert len(kept) == 1
+    assert kept[0].status == CLAIMED, "an unparsed value is never corroborated"
+    assert out.quarantined, "the count must rise so a new source shows up"
+
+
+# --- the severity field, renamed to say what it is -------------------------
+
+def test_the_indicator_score_and_the_source_severity_are_separate_numbers():
+    """A 0-100 indicator-reputation sum was travelling in a field named
+    `rule_level` and being read against thresholds of 13/10/7 written for
+    Wazuh's 1-16 scale."""
+    body = _text_body(image=r"C:\Windows\System32\cmd.exe", processId="4")
+    out = extract(body, risk_score=90)
+    process = next(e for e in out.entities if e.kind == "process")
+    assert process.attrs["indicator_risk_score"] == 90
+    # Rule level 12 of 16 normalises to 75, and is a different number.
+    assert process.attrs["source_severity"] == round(12 / 16 * 100)
+    assert process.attrs["source_severity_raw"] == "rule.level=12/16"
+
+
+def test_an_unscored_alert_contributes_no_indicator_score_rather_than_zero():
+    """7,260 of 15,255 runs read 0 where the smallest real score is 5, so 0
+    means unscored. Encoding it as a measurement ranked nearly half the estate
+    as least severe."""
+    body = _text_body(image=r"C:\Windows\System32\cmd.exe", processId="4")
+    out = extract(body, risk_score=0)
+    process = next(e for e in out.entities if e.kind == "process")
+    assert "indicator_risk_score" not in process.attrs

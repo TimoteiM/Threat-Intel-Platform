@@ -93,15 +93,32 @@ const KIND: Record<string, { glyph: string; caption: string; shape: string; colo
   ip: { glyph: "◆", caption: "address", shape: "diamond", color: "#C2255C" },
   url: { glyph: "⇢", caption: "url", shape: "round-rectangle", color: "#AE3EC9" },
   technique: { glyph: "✶", caption: "technique", shape: "star", color: "#868E96" },
+  // An identifier that failed its type's shape check. Drawn, not dropped:
+  // dropping hides the parser bug that produced it, which is how this class
+  // keeps recurring.
+  unparsed: { glyph: "?", caption: "unparsed", shape: "octagon", color: "#7048E8" },
 };
 
-/** Risk arc colour, from the highest rule.level that touched the node. */
-function riskColour(level: number | null | undefined): string {
-  if (level == null) return "transparent";
-  if (level >= 13) return "#E03131";
-  if (level >= 10) return "#F76707";
-  if (level >= 7) return "#F59F00";
-  return "#ADB5BD";
+/** The risk arc, from the severity the alert's own source states.
+ *
+ *  Four states, not three. "Unrated" is its own colour because 892 of 15,255
+ *  alerts come from a source that states no severity, and 7,260 of them
+ *  previously read 0 on a field whose smallest real value is 5 — so nearly
+ *  half the estate was rendering as "least severe" when it had simply never
+ *  been scored. That is a fact about our coverage, not about those alerts.
+ *
+ *  The thresholds here are placeholders on a normalised 0-100 scale and are
+ *  deliberately coarse thirds. No severity bands have been agreed: the
+ *  distribution of the old score was about twenty reachable values with four
+ *  carrying a third of everything, so a band edge near one of them moved
+ *  1,244 alerts on a one-point change. */
+const UNRATED_ARC = "#7048E8";
+
+function riskColour(severity: number | null | undefined, rated: boolean): string {
+  if (!rated || severity == null) return UNRATED_ARC;
+  if (severity >= 75) return "#E03131";
+  if (severity >= 50) return "#F76707";
+  return "#F59F00";
 }
 
 function labelOf(node: CaseGraphNode): string {
@@ -261,7 +278,7 @@ export default function CaseGraph({
             : "#868E96",
           typeColour: kind.color,
           shape: kind.shape,
-          risk: riskColour(node.risk),
+          risk: riskColour(node.severity, node.severity_rated !== false),
           claimed: node.status === "claimed" ? 1 : 0,
           onPath: highlighted.has(node.id) ? 1 : 0,
           pivots: node.pivot_alerts || 0,
@@ -728,6 +745,9 @@ function Legend({ counts, mode }: { counts: Record<string, number>; mode: Mode }
       ) : (
         <span style={{ color: "var(--text-subtle)" }}>colour = entity type</span>
       )}
+      <span style={{ color: UNRATED_ARC }} title="The alert's source states no severity. That is a gap in our coverage, not a quiet alert.">
+        ◯ unrated severity
+      </span>
     </div>
   );
 }
@@ -760,6 +780,43 @@ function Detail({ node, onClose }: { node: CaseGraphNode; onClose: () => void })
           {node.status}
         </span>{" "}
         <span style={{ color: "var(--text-subtle)" }}>({node.basis})</span>
+      </div>
+
+      {node.kind === "unparsed" ? (
+        <div style={{ marginTop: 8, lineHeight: 1.55 }}>
+          <div style={{ color: "#7048E8" }}>
+            This value failed its type's shape check and is shown as it was
+            stored, rather than being dropped.
+          </div>
+          <div style={{ marginTop: 6, color: "var(--text-muted)" }}>
+            {String(node.attrs?.why || "")}
+          </div>
+        </div>
+      ) : null}
+
+      <div style={{ marginTop: 8, color: "var(--text-muted)" }}>
+        severity:{" "}
+        {node.severity_rated === false || node.severity == null ? (
+          <span
+            style={{ color: UNRATED_ARC }}
+            title="No alert touching this entity came from a source that states a severity."
+          >
+            unrated
+          </span>
+        ) : (
+          <>
+            {node.severity}/100{" "}
+            <span style={{ color: "var(--text-subtle)" }}>
+              (as the alert's own source states it)
+            </span>
+          </>
+        )}
+        {node.indicator_risk_score != null ? (
+          <div style={{ color: "var(--text-subtle)", marginTop: 2 }}>
+            worst indicator reputation: {node.indicator_risk_score}/100 — a
+            score over the alert's indicators, not a severity
+          </div>
+        ) : null}
       </div>
 
       {node.kind === "host" ? (

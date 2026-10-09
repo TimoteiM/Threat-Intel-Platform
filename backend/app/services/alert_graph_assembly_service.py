@@ -465,6 +465,7 @@ def _render_payload(
 ) -> dict[str, Any]:
     def node_json(node: AssembledNode) -> dict[str, Any]:
         runs = {w.run_id for w in node.witnesses}
+        # The alert's own source severity, not the indicator-reputation sum.
         levels = [w.rule_level for w in node.witnesses if w.rule_level is not None]
         return {
             "id": node.merge_key,
@@ -473,7 +474,19 @@ def _render_payload(
             "status": node.status,
             "basis": node.basis,
             "attrs": node.attrs,
-            "risk": max(levels) if levels else None,
+            # Source-native severity, 0-100, or None when every alert that
+            # touched this entity came from a source stating none. None is a
+            # fourth state the renderer draws distinctly — not "low".
+            "severity": max(levels) if levels else None,
+            "severity_rated": bool(levels),
+            "indicator_risk_score": max(
+                (
+                    int(node.attrs["indicator_risk_score"])
+                    for _ in (1,)
+                    if node.attrs.get("indicator_risk_score") is not None
+                ),
+                default=None,
+            ),
             "witnesses": [
                 {
                     "run_id": w.run_id, "rule_id": w.rule_id,
