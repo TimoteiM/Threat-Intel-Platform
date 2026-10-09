@@ -6,8 +6,8 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Two rules that were learned expensively on 2026-10-09 and are not obvious from
-the code:
+Three rules that were learned expensively on 2026-10-09 and are not obvious
+from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -20,6 +20,11 @@ the code:
   the case graph was built, measured and re-run across eleven cases before
   anyone noticed its input could never reach its threshold: every number
   described a path no user was on.
+- **[A source that stops looks exactly like a source that is quiet](docs/problems/sources-that-stopped.md)**
+  — every alarm here measured work in progress and none measured work that
+  never arrived, so two sources worth 34% of all alerts went silent for 17 and
+  23 days unnoticed. A new alarm needs to say which of the two it can tell
+  apart.
 
 Open problems with the evidence behind them live in
 [`docs/problems/`](docs/problems/); the incident notes live in
