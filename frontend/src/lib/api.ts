@@ -668,6 +668,35 @@ export interface CaseGraph {
     note: string;
   } | null;
   over_cap?: boolean;
+  /** For a key that no longer derives: what became of it. 842 of this
+   *  estate's 1,889 case rows were re-pointed at the live case covering the
+   *  same incident, so a dead key redirects rather than rendering nothing. */
+  supersession?: {
+    state: "mapped" | "merged" | "ambiguous" | "target_unknown" | "expired";
+    note: string | null;
+    continues_as: { case_key: string; case_number: number | null } | null;
+    chains_through: { case_key: string; case_number: number | null } | null;
+    candidates: Array<{ case_key: string; case_number: number | null }>;
+    this_row: {
+      case_number: number | null;
+      resolution: string | null;
+      closed_at: string | null;
+      closed_by: string | null;
+      has_analysis: boolean;
+    };
+  } | null;
+  /** Conclusions recorded under earlier keys for this same incident,
+   *  attributed and dated. Never merged into this case's own verdict. */
+  earlier_keys?: Array<{
+    case_number: number | null;
+    case_key: string;
+    resolution: string | null;
+    closed_at: string | null;
+    closed_by: string | null;
+    state: string;
+    narrative_markdown: string | null;
+    attribution: string;
+  }>;
   note?: string;
   continues?: { case_key: string; case_number: number | null } | null;
 }

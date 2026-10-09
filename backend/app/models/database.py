@@ -1166,6 +1166,19 @@ class AlertCaseSpine(Base):
     closed_narrative_fingerprint: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    #: What became of a key that no longer re-derives:
+    #: mapped | ambiguous | target_unknown | expired. Null means the key still
+    #: resolves and the question does not arise.
+    supersession_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    supersession_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Every live case this row might be, when it is ambiguous. A wrong
+    #: pointer silently attributes one incident's analysis to another, so an
+    #: unresolved row keeps all its candidates rather than picking one.
+    supersession_candidates: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: Which key formula produced `case_key`. Bumped by whoever changes the
+    #: formula, alongside a migration — the absence of this is why 880 rows
+    #: were orphaned on 2026-10-07.
+    case_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     # How often the closing job has tried and failed to read this case back.
     #
     # A case whose membership no longer re-derives stayed open and kept its

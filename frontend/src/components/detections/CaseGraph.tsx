@@ -494,9 +494,57 @@ export default function CaseGraph({
     return <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Drawing…</div>;
   }
   if (!data.nodes.length) {
+    const went = data.supersession;
     return (
       <div style={{ fontSize: 12, color: "var(--text-muted)", maxWidth: 620, lineHeight: 1.6 }}>
         {data.note || "Nothing to draw for this case."}
+        {went?.continues_as ? (
+          <div style={{ marginTop: 10 }}>
+            This incident continues as{" "}
+            <a
+              href={`/detections/cases/${went.continues_as.case_key}?hours=${hours || 720}`}
+              style={{ color: "var(--accent)", fontWeight: 600 }}
+            >
+              case #{went.continues_as.case_number}
+            </a>
+            , which is where its graph is drawn.
+          </div>
+        ) : null}
+        {went?.chains_through ? (
+          <div style={{ marginTop: 10 }}>
+            It was merged into case #{went.chains_through.case_number}, whose key does
+            not derive either — the trail continues through that row.
+          </div>
+        ) : null}
+        {went?.candidates?.length ? (
+          <div style={{ marginTop: 10 }}>
+            Possible continuations, none of them certain enough to follow
+            automatically:{" "}
+            {went.candidates.map((c, i) => (
+              <React.Fragment key={c.case_key}>
+                {i ? ", " : ""}
+                <a
+                  href={`/detections/cases/${c.case_key}?hours=${hours || 720}`}
+                  style={{ color: "var(--accent)" }}
+                >
+                  #{c.case_number}
+                </a>
+              </React.Fragment>
+            ))}
+          </div>
+        ) : null}
+        {went?.this_row?.has_analysis ? (
+          <div style={{ marginTop: 10, color: "var(--text-subtle)" }}>
+            This row's own analysis is kept
+            {went.this_row.closed_at
+              ? `, recorded ${went.this_row.closed_at.slice(0, 10)}`
+              : ""}
+            {went.this_row.resolution
+              ? `, concluding ${went.this_row.resolution.replace(/_/g, " ")}`
+              : ""}
+            .
+          </div>
+        ) : null}
         {data.sources?.unmapped?.length ? (
           <div style={{ marginTop: 8, color: "var(--text-subtle)" }}>
             Sources in this case:{" "}
@@ -618,6 +666,12 @@ function Banners({ data }: { data: CaseGraphData }) {
   if (data.duplicate_keys) {
     rows.push({ tone: "#868E96", text: data.duplicate_keys.note });
   }
+  (data.earlier_keys || []).forEach((earlier) => {
+    // Attributed and dated, and deliberately not folded into this case's own
+    // verdict: a conclusion recorded under one key is a judgement about that
+    // key's alerts.
+    rows.push({ tone: "#4C6EF5", text: earlier.attribution });
+  });
   const claimedShare = data.integrity
     ? (data.integrity.edges_claimed || 0) /
       Math.max(1, (data.integrity.edges_claimed || 0) + (data.integrity.edges_corroborated || 0))

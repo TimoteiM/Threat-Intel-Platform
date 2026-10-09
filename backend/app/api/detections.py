@@ -1231,6 +1231,10 @@ async def get_case_graph(
     from app.models.database import AlertCaseSpine
     from app.services.asset_criticality_service import criticality_for
     from app.services.case_collision_service import shadow_payload, shadowing_keys
+    from app.services.case_supersession_service import (
+        earlier_keys_for,
+        where_this_key_went,
+    )
     from app.services.alert_graph_store_service import graph_for_runs, pivots_for
 
     scope = _scope(request)
@@ -1242,11 +1246,11 @@ async def get_case_graph(
         raise HTTPException(404, "No such case")
 
     if case is None:
-        # The key no longer re-derives over this window — 878 of this estate's
-        # 1,880 case rows are in that state. The detail endpoint answers with
-        # `case: null` and renders the spine header, so this says the same
-        # thing in words rather than failing: an error reads as a broken
-        # feature and a blank canvas reads as "no attack here".
+        # The key no longer re-derives over this window. 842 of this estate's
+        # 1,889 case rows were re-pointed at the live case covering the same
+        # incident (migration 052), so the first thing to try is the pointer:
+        # a dead key should redirect rather than render nothing.
+        went = await where_this_key_went(db, case_key)
         return {
             "case_key": case_key,
             "case_number": spine.case_number,
@@ -1256,11 +1260,15 @@ async def get_case_graph(
             "sources": {"by_source": [], "unmapped": []},
             "over_cap": False,
             "continues": None,
+            "supersession": went,
             "note": (
-                "This case cannot be re-derived over the last "
-                f"{hours} hours, so there is nothing to draw. Its alerts have "
-                "either aged out of the window or been re-grouped under a "
-                "different case."
+                (went or {}).get("note")
+                or (
+                    "This case cannot be re-derived over the last "
+                    f"{hours} hours, so there is nothing to draw. Its alerts "
+                    "have either aged out of the window or been re-grouped "
+                    "under a different case."
+                )
             ),
         }
 
@@ -1291,6 +1299,9 @@ async def get_case_graph(
     graph["continues"] = case.get("continues")
     graph["case_key"] = case_key
     graph["case_number"] = case.get("case_number")
+    # Analyses written under earlier keys for this same incident, attributed
+    # and dated. Never merged into this case's own verdict.
+    graph["earlier_keys"] = await earlier_keys_for(db, case_key)
 
     # Earlier keys for this same incident. Matched on the weaker signal and
     # labelled as such, because a key that no longer re-derives has no alert

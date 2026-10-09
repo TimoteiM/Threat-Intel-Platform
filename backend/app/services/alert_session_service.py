@@ -87,6 +87,17 @@ class SessionAssignment:
     case_key: str
 
 
+#: Which revision of the formula below `case_key_for` implements.
+#:
+#: Bumped by whoever changes the formula, together with a migration that
+#: re-points the rows keyed under the previous revision. Version 1 ran until
+#: 2026-10-07, when the formula changed with no migration and 881 of 1,889
+#: stored case rows stopped resolving — 811 of them carrying an AI analysis
+#: nothing could then open. `tests/unit/test_services/test_case_key_version.py`
+#: fails if the formula moves without this moving with it.
+CASE_KEY_VERSION = 2
+
+
 def case_key_for(
     source: str, client: str, host: str, session_started_at: datetime,
     *, discriminator: str = "",
