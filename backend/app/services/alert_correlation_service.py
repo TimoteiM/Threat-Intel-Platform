@@ -49,6 +49,7 @@ from app.services.alert_case_store import (
     upsert_spine,
 )
 from app.services.alert_field_service import UNKNOWN_CLIENT, UNKNOWN_SOURCE
+from app.services.case_disposition_review_service import alerts_at_close_payload
 from app.services import tenant_scope
 from app.tasks.case_event_task import dispatch
 from app.tasks.case_narrative_task import dispatch as dispatch_narratives
@@ -1243,7 +1244,7 @@ async def correlate_alerts(
                         "closed_at": _iso(existing_row.closed_at),
                         "closure_kind": existing_row.closure_kind,
                         "resolution": existing_row.resolution,
-                        "alerts_at_close": existing_row.alerts_at_close,
+                        "alerts_at_close": alerts_at_close_payload(existing_row.alerts_at_close),
                         **closure_rules.metrics(
                             opened_at=existing_row.opened_at,
                             created_at=existing_row.created_at,
@@ -1359,7 +1360,7 @@ async def correlate_alerts(
                 "closed_at": _iso(spine.closed_at),
                 "closure_kind": spine.closure_kind,
                 "resolution": spine.resolution,
-                "alerts_at_close": spine.alerts_at_close,
+                "alerts_at_close": alerts_at_close_payload(spine.alerts_at_close),
                 **closure_rules.metrics(
                     opened_at=spine.opened_at,
                     created_at=spine.created_at,

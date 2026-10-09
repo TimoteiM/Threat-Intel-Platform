@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from app.services.absence import UNPARSED, absent
+from app.services.absence import LOWER_BOUND, absent
 
 #: The old member-list cap. `alerts_at_close` was recorded from a list capped
 #: at 100, so a row reading exactly 100 is a floor and not a count: the case
@@ -43,6 +43,28 @@ from app.services.absence import UNPARSED, absent
 #: flagged here are in that state, and printing "judged on 100" for them
 #: asserts a number known to be wrong.
 MEMBER_LIST_CAP = 100
+
+#: Why exactly 100 is reported as a floor even for a case closed after both
+#: writers were changed to record the full count. Nothing on the row says which
+#: writer produced it, and a real 100 cannot be told apart from a capped one, so
+#: the claim that is always true is the one made.
+_FLOOR_REASON = (
+    "How many alerts this case held when it closed was recorded from a member "
+    f"list capped at {MEMBER_LIST_CAP}, so it reads exactly {MEMBER_LIST_CAP} "
+    "and the true number is unknown — at least that many."
+)
+
+
+def alerts_at_close_payload(value: int | None) -> Any:
+    """`alerts_at_close` as a payload carries it: a count, or why it is not one.
+
+    Exactly 100 is the old member-list cap and travels as a floor. It used to
+    travel as the number 100, and every consumer read it as a count.
+    """
+    if value == MEMBER_LIST_CAP:
+        return absent(LOWER_BOUND, _FLOOR_REASON, raw=str(value)).as_json()
+    return value
+
 
 #: Resolutions that represent a judgement about the case. `expired` and
 #: `merged` are excluded throughout: every such row has `alerts_at_close = 0`,
@@ -62,6 +84,7 @@ class DispositionReview:
     holds_now: int
     closed_by: str | None
     closed_at: str | None
+    closure_kind: str | None = None
 
     @property
     def judged_on_is_known(self) -> bool:
@@ -81,6 +104,15 @@ class DispositionReview:
 
     @property
     def automatic(self) -> bool:
+        """Whether no person formed this conclusion.
+
+        From `closure_kind`, not from `closed_by`. Two cases were closed by an
+        analyst before the platform recorded who (#61 and #892), and reading
+        the missing name as "automatic" told #61's reader that nobody's
+        assessment was in question when a person's was.
+        """
+        if self.closure_kind == "analyst":
+            return False
         return not self.closed_by
 
     def as_json(self) -> dict[str, Any]:
@@ -91,12 +123,8 @@ class DispositionReview:
                 self.judged_on
                 if self.judged_on_is_known
                 else absent(
-                    UNPARSED,
-                    "How many alerts this verdict was formed on was recorded "
-                    f"from a list capped at {MEMBER_LIST_CAP}, so it reads "
-                    f"exactly {MEMBER_LIST_CAP} and the true number is "
-                    "unknown — at least that many. The gap below is therefore "
-                    "a floor.",
+                    LOWER_BOUND,
+                    f"{_FLOOR_REASON} The gap below is therefore a floor.",
                     raw=str(self.judged_on),
                 ).as_json()
             ),
@@ -107,6 +135,7 @@ class DispositionReview:
             "closed_at": self.closed_at,
             "closed_by": self.closed_by,
             "decided_automatically": self.automatic,
+            "closure_kind": self.closure_kind,
             "attribution": self._attribution(),
             "whose_judgement": self._whose(),
             "what_to_do": (
@@ -143,9 +172,17 @@ class DispositionReview:
                 "a platform defect in when a case closed, since fixed — so "
                 "nobody's assessment is in question here."
             )
+        who = self.closed_by or (
+            "An analyst, whose name was not recorded because the case was "
+            "closed before the platform recorded who closed it,"
+        )
+        over = (
+            f"{self.judged_on} alerts" if self.judged_on_is_known
+            else f"at least {MEMBER_LIST_CAP} alerts (the exact number was never recorded)"
+        )
         return (
-            f"{self.closed_by} signed this case off over {self.judged_on} "
-            "alerts. The remainder arrived afterwards because of a platform "
+            f"{who} signed this case off over {over}. "
+            "The remainder arrived afterwards because of a platform "
             "defect in when a case closed, since fixed, so the additional "
             "evidence was never available to them."
         )
@@ -159,6 +196,7 @@ def review_for(
     current_run_ids: Sequence[Any],
     closed_by: str | None = None,
     closed_at: Any = None,
+    closure_kind: str | None = None,
 ) -> DispositionReview | None:
     """Whether this case's conclusion covers everything it now holds.
 
@@ -185,4 +223,5 @@ def review_for(
         closed_at=(
             closed_at.isoformat() if hasattr(closed_at, "isoformat") else closed_at
         ),
+        closure_kind=closure_kind,
     )

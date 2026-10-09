@@ -18,7 +18,8 @@ from app.services.alert_correlation_service import correlate_alerts
 from app.services.case_disposition_review_service import review_for
 
 _SPINE = """
-select case_key, case_number, resolution, alerts_at_close, closed_by, closed_at
+select case_key, case_number, resolution, alerts_at_close, closed_by, closed_at,
+       closure_kind
 from alert_case_spine
 """
 
@@ -48,7 +49,7 @@ async def run() -> None:
                 current_run_ids=[
                     a.get("run_id") for a in (case.get("alerts") or []) if a.get("run_id")
                 ],
-                closed_by=row[4], closed_at=row[5],
+                closed_by=row[4], closed_at=row[5], closure_kind=row[6],
             )
             if review:
                 found.append(review)
@@ -77,7 +78,7 @@ async def run() -> None:
             f"  #{str(review.case_number):<7}{review.resolution:<16}"
             f"{judged:>7}{review.holds_now:>7}{covers:>8}  "
             f"{(review.closed_at or '')[:10]} "
-            f"{review.closed_by or '(automatic)'}"
+            f"{review.closed_by or ('(analyst, unrecorded)' if not review.automatic else '(automatic)')}"
         )
     if found:
         print()

@@ -273,7 +273,10 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     case_key=row.case_key,
                     resolution=resolution,
                     title=case.get("label") or row.title,
-                    alerts_at_close=len(members) or int(case.get("alert_count") or 0),
+                    # The full count, not the member list: `alerts` is capped
+                    # at 100 by case_by_key, and recording its length is how
+                    # 31 closed cases came to read exactly 100 and none more.
+                    alerts_at_close=int(case.get("alert_count") or 0) or len(members),
                     closed_at=now,
                     closure_kind="inherited" if inherited else "auto",
                 )

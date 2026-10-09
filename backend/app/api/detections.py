@@ -36,6 +36,7 @@ from app.models.schemas import AnalystFeedbackCreate
 from app.models.database import AlertCaseSpine
 from app.services.alert_correlation_service import case_by_key, correlate_alerts
 from app.services.alert_entity_profile_service import build_entity_profile
+from app.services.case_disposition_review_service import alerts_at_close_payload
 from app.services.alert_tuning_service import build_tuning_recommendations
 from app.services.attack_coverage_service import attack_coverage, mismatch_alerts, tactic_alerts
 from app.services.detection_quality_service import detection_quality
@@ -539,7 +540,7 @@ async def get_case(
             "closed_at": spine.closed_at.isoformat() if spine.closed_at else None,
             "closure_kind": spine.closure_kind,
             "resolution": spine.resolution,
-            "alerts_at_close": spine.alerts_at_close,
+            "alerts_at_close": alerts_at_close_payload(spine.alerts_at_close),
             "continues_case_key": spine.continues_case_key,
             # When the activity began, and separately when this platform first
             # recorded the case. They differ whenever alerts arrive replayed,
@@ -1371,6 +1372,7 @@ async def get_case_graph(
             current_run_ids=run_ids,
             closed_by=spine.closed_by,
             closed_at=spine.closed_at,
+            closure_kind=spine.closure_kind,
         )
         graph["disposition_review"] = review.as_json() if review else None
 
@@ -1629,7 +1631,10 @@ async def close_case_manually(
         case_key=case_key,
         resolution=resolution,
         title=(case or {}).get("label") or spine.title,
-        alerts_at_close=len((case or {}).get("alerts") or []) or (spine.alerts_at_close or 0),
+        # The case's full count. `alerts` is the member list, capped at
+        # `max_members` (100 by default), and recording its length is how 31
+        # closed cases came to read exactly 100 and none ever more.
+        alerts_at_close=int((case or {}).get("alert_count") or 0) or (spine.alerts_at_close or 0),
         closed_at=now,
         closure_kind=CaseClosureKind.ANALYST.value,
         closed_by=str(identity.get("username") or identity.get("email") or "analyst"),

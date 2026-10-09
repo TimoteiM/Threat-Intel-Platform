@@ -107,3 +107,64 @@ def test_duplicate_run_ids_do_not_manufacture_growth():
         case_number=1, resolution="false_positive", alerts_at_close=2,
         current_run_ids=["a", "a", "b", "b"],
     ) is None
+
+
+# —— the 100-member cap ————————————————————————————————————————————————
+
+def test_a_count_recorded_at_the_old_cap_is_a_floor_not_a_number():
+    """24 of the flagged cases read exactly 100 because the member list they
+    were counted from was capped there. "Judged on 100" asserts a count nobody
+    took; the payload carries an absence saying it is a floor."""
+    from app.services.absence import LOWER_BOUND
+
+    review = review_for(
+        case_number=71, resolution="needs_review", alerts_at_close=100,
+        current_run_ids=[f"r{i}" for i in range(1217)], closed_at=CLOSED,
+    )
+    payload = review.as_json()
+    judged = payload["judged_on"]
+    assert judged != 100 and judged["absent"] is True
+    assert judged["kind"] == LOWER_BOUND
+    assert judged["raw"] == "100"
+    assert "at least" in judged["reason"]
+    assert payload["proportion_judged"] is None
+    assert "covers" not in payload["attribution"]
+
+
+def test_the_lifecycle_payload_carries_the_floor_too():
+    """The same 100 travelled raw in every case payload's lifecycle."""
+    from app.services.case_disposition_review_service import alerts_at_close_payload
+
+    assert alerts_at_close_payload(100)["kind"] == "lower_bound"
+    assert alerts_at_close_payload(99) == 99
+    assert alerts_at_close_payload(101) == 101
+    assert alerts_at_close_payload(None) is None
+
+
+# —— whose judgement ——————————————————————————————————————————————————————
+
+def test_an_analyst_close_with_no_recorded_name_is_not_called_automatic():
+    """#61 and #892 were closed by a person before `closed_by` existed. Reading
+    the missing name as "automatic" told #61's reader that nobody's assessment
+    was in question when a person's was."""
+    review = review_for(
+        case_number=61, resolution="inconclusive", alerts_at_close=100,
+        current_run_ids=[f"r{i}" for i in range(561)], closed_by=None,
+        closed_at=CLOSED, closure_kind="analyst",
+    )
+    assert review is not None and not review.automatic
+    payload = review.as_json()
+    assert payload["decided_automatically"] is False
+    whose = payload["whose_judgement"]
+    assert "not by an analyst" not in whose
+    assert "name was not recorded" in whose
+    assert "at least 100" in whose
+
+
+def test_an_automatic_close_is_still_automatic_when_its_kind_is_stated():
+    review = review_for(
+        case_number=464, resolution="false_positive", alerts_at_close=5,
+        current_run_ids=[f"r{i}" for i in range(20)], closure_kind="auto",
+        closed_at=CLOSED,
+    )
+    assert review.automatic

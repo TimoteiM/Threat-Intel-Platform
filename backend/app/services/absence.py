@@ -48,6 +48,12 @@ CHECK_FAILED = "check_failed"          # the check could not run at all
 #: and calling that "fresh" would be the blank-as-measurement bug the whole
 #: convention exists to stop.
 TOO_LITTLE_HISTORY = "too_little_history"
+#: A number was recorded, but from a truncated list, so it is only a floor.
+#: Distinct from `unparsed`, which says a value failed its shape check: this
+#: one parsed perfectly and is wrong in a known direction. `raw` carries the
+#: floor. Added for `alerts_at_close`, recorded from a member list capped at
+#: 100, where "judged on 100" asserted a count nobody took.
+LOWER_BOUND = "lower_bound"
 #: An absence whose kind this code did not recognise. Its own bucket, because
 #: degrading an unrecognised kind into `unparsed` would file it under a kind
 #: that *means* something — the convention's own failure mode implemented
@@ -56,7 +62,7 @@ UNRECOGNISED = "unrecognised_absence"
 
 KINDS = frozenset({
     NO_FIELD_MAP, UNPARSED, UNCLASSIFIED, TARGET_UNKNOWN, UNRATED,
-    NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, UNRECOGNISED,
+    NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, LOWER_BOUND, UNRECOGNISED,
 })
 
 

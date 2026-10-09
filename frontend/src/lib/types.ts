@@ -2182,7 +2182,9 @@ export interface CorrelatedCase {
     closed_at?: string | null;
     closure_kind?: string | null;
     resolution?: string | null;
-    alerts_at_close?: number | null;
+    /** A count, or an absence when the stored figure is the old 100-member
+     *  cap — a floor, not a count (`kind: "lower_bound"`, `raw: "100"`). */
+    alerts_at_close?: number | { absent: true; kind: string; reason: string; raw: string | null } | null;
     /** First alert happened -> a case existed about it. Null for a case
      *  recorded long after the fact, which is a backfill, not a detection. */
     detect_seconds?: number | null;

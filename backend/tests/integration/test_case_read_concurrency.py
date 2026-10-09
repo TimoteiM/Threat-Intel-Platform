@@ -14,59 +14,25 @@ reason, only when no Postgres is reachable.
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy import select
+
+from tests.integration._scratch_db import scratch_database
 
 CONCURRENCY = 24
 HOSTS = 6
 
 
-def _server_url():
-    from app.config import get_settings
-
-    return make_url(get_settings().database_url)
-
-
-async def _reachable(url) -> bool:
-    engine = create_async_engine(url, poolclass=NullPool)
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
-    finally:
-        await engine.dispose()
-
-
 @pytest_asyncio.fixture
 async def scratch():
     """A throwaway database with the application schema and some alerts."""
-    from app.models.database import AlertBodyInvestigationRun, Base
+    from app.models.database import AlertBodyInvestigationRun
 
-    server = _server_url()
-    if not await _reachable(server):
-        pytest.skip(f"No Postgres reachable at {server.render_as_string(hide_password=True)}")
-
-    name = f"tip_case_race_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    admin = create_async_engine(server, poolclass=NullPool, isolation_level="AUTOCOMMIT")
-    async with admin.connect() as conn:
-        await conn.execute(text(f'CREATE DATABASE "{name}"'))
-    engine = create_async_engine(server.set(database=name), poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(text("CREATE SEQUENCE alert_case_number_seq AS BIGINT START 1"))
-        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with scratch_database() as (_url, factory):
         now = datetime.now(timezone.utc)
         async with factory() as db:
             for h in range(HOSTS):
@@ -80,11 +46,6 @@ async def scratch():
                     ))
             await db.commit()
         yield factory
-    finally:
-        await engine.dispose()
-        async with admin.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        await admin.dispose()
 
 
 async def _spine(factory):
