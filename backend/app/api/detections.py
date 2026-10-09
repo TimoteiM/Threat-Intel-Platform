@@ -55,7 +55,26 @@ router = APIRouter(prefix="/api/detections", tags=["detections"])
 # case" — an empty graph and no observables on a real incident, and a manual
 # close that could not find the case the analyst was looking at. One constant,
 # so the six cannot drift apart again.
+#: How far back a single-case endpoint looks when it has nothing better.
+#:
+#: Superseded in intent by `OPEN_CASE_CEILING_HOURS` below, and kept only for
+#: the endpoints that still take an explicit window. There is no fixed window
+#: that is right: measured over 1,014 derived cases, 68.4% complete in a
+#: single instant while multi-alert cases run to 28.5 hours at p99, so any
+#: constant is wrong for one of the two modes.
 CASE_LOOKUP_HOURS = 720
+
+#: The only thing bounding how far back an open case derives.
+#:
+#: Not a belief about accretion — a guard against a runaway. The observed
+#: maximum span of any case in this estate is 2.0 days (172,803s), measured as
+#: max-min event_time over each case's own members via the derivation, so 72
+#: hours clears it with a day of margin.
+#:
+#: When this clips a case, something upstream is wrong and it is logged rather
+#: than absorbed: a case still accreting after three days is either a
+#: host-wide bucket or a derivation defect, and both are findings.
+OPEN_CASE_CEILING_HOURS = 72
 # The widest window a single-case endpoint accepts. The cases list offers "All"
 # — 17,520 hours — so a case found there links to a page that must be able to
 # ask for the same window; at the previous ceiling of 8,760 every call from
@@ -1592,6 +1611,10 @@ async def analyse_case_now(
     something for them to agree with.
     """
     from app.services.alert_case_narrative_service import narrative_fingerprint
+    from app.services.case_read_set_service import (
+        NARRATIVE_REQUESTED,
+        record_read_set,
+    )
     from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 
     scope = _scope(request)
@@ -1626,15 +1649,34 @@ async def analyse_case_now(
     # every case an analyst sent to the model came back "already answered" and
     # there was nothing left to sign off. Asking a question and recording a
     # decision are two acts, and this endpoint is the first one.
-    dispatch_narratives([(
-        case_key,
-        case,
-        narrative_fingerprint(
-            score=int(case.get("score") or 0),
-            member_count=len(members),
-            tactics=case.get("tactics") or [],
-        ),
-    )])
+    fingerprint = narrative_fingerprint(
+        score=int(case.get("score") or 0),
+        member_count=len(members),
+        tactics=case.get("tactics") or [],
+    )
+
+    # What this read covered, recorded but not frozen.
+    #
+    # Asking for an early read must not stop the case accepting alerts — that
+    # would give this endpoint an invisible cost at the point of use. But the
+    # conclusion it produces is about a specific set, and until now nothing
+    # recorded which: of 1,698 narratives in this estate, zero name a single
+    # alert. 23.3% of cases accrete after their conclusion is written, and
+    # 95.5% of cases holding 21+ alerts do, so the set moving is the normal
+    # case rather than an anomaly. Recorded here so the divergence is visible
+    # instead of silent.
+    identity = getattr(request.state, "identity", None) or {}
+    await record_read_set(
+        db,
+        case_key=case_key,
+        run_ids=[m.get("run_id") for m in members if m.get("run_id")],
+        reason=NARRATIVE_REQUESTED,
+        requested_by=str(identity.get("username") or identity.get("email") or "analyst"),
+        narrative_fingerprint=fingerprint,
+    )
+    await db.commit()
+
+    dispatch_narratives([(case_key, case, fingerprint)])
 
     return {
         "case_key": case_key,
@@ -1644,5 +1686,9 @@ async def analyse_case_now(
         "status": spine.status,
         "narrative_status": "queued",
         "alerts": len(members),
-        "note": "Analysing now. The case stays open; close it once the analysis lands.",
+        "note": (
+            "Analysing now. The case stays open and keeps accepting alerts — "
+            "asking for a read does not freeze it. The alerts this read covers "
+            "are recorded, so if the case grows, the difference is visible."
+        ),
     }

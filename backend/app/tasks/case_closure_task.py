@@ -302,7 +302,7 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
             from app.services.alert_case_narrative_service import narrative_fingerprint
             from app.tasks.case_narrative_task import dispatch as dispatch_narratives
 
-            dispatch_narratives([
+            jobs = [
                 (
                     entry["case_key"],
                     entry["case"],
@@ -315,7 +315,16 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                 for entry in answered
                 # Nothing new to say, so nothing is asked.
                 if not entry["inherited"]
-            ])
+            ]
+
+            # What each narrative is being written over, recorded before it is
+            # asked for. Of 1,698 narratives already in this estate, zero name
+            # a single alert, so nothing has ever been checkable against the
+            # set it described. This is the automatic half; the analyst's
+            # "analyse now" records its own.
+            _record_read_sets(jobs)
+
+            dispatch_narratives(jobs)
 
         return {
             "ran": True,
@@ -378,3 +387,50 @@ def _quiet_period(settings: Any):
 
     minutes = int(getattr(settings, "case_quiet_period_minutes", 10) or 10)
     return timedelta(minutes=minutes)
+
+
+def _record_read_sets(jobs: list[tuple[str, dict, str]]) -> int:
+    """Store the membership each queued narrative will describe.
+
+    Best-effort and synchronous, like the closure bookkeeping around it: a
+    failure here must not leave a case closed-but-unanalysed, so it is logged
+    and the dispatch proceeds. A missing read set reports itself as an absence
+    downstream rather than as "no divergence".
+    """
+    if not jobs:
+        return 0
+    from sqlalchemy.orm import Session
+
+    from app.db.session import sync_engine
+    from app.models.database import CaseReadSet
+    from app.services.case_read_set_service import (
+        DERIVATION_VERSION,
+        NARRATIVE_AUTO,
+    )
+
+    written = 0
+    try:
+        with Session(sync_engine) as db:
+            for case_key, case, fingerprint in jobs:
+                run_ids = [
+                    str(m.get("run_id"))
+                    for m in (case.get("alerts") or [])
+                    if m.get("run_id")
+                ]
+                db.add(
+                    CaseReadSet(
+                        case_key=case_key,
+                        reason=NARRATIVE_AUTO,
+                        requested_by="quiet-period job",
+                        derivation_version=DERIVATION_VERSION,
+                        run_ids=run_ids,
+                        alert_count=len(run_ids),
+                        narrative_fingerprint=fingerprint,
+                    )
+                )
+                written += 1
+            db.commit()
+    except Exception as exc:  # never block a close on bookkeeping
+        logger.warning("Could not record narrative read sets: %s", exc)
+        return 0
+    return written

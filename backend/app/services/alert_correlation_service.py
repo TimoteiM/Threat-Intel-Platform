@@ -1267,6 +1267,7 @@ async def correlate_alerts(
                     None,
                 ),
                 session_started_at=session.session_started_at,
+                first_alert_at=_event_time(first, cutoff),
                 session_seq=session.session_seq,
                 last_activity_at=last_event,
                 score=score,

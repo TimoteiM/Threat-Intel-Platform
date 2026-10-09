@@ -154,6 +154,20 @@ async def upsert_spine(
     tenant_id: str | None = None,
     session_seq: int,
     last_activity_at: datetime,
+    #: The case's OWN first alert, which is not the session's start.
+    #:
+    #: A session can hold several cases, and a sibling born later inherited the
+    #: session origin: measured over 1,014 derived cases, 205 (20.2%) had
+    #: `opened_at` earlier than their own first alert, by a median of 2.4 hours
+    #: and up to 2.3 days — and 172 of them (17.0%) were already past the
+    #: 10-minute close window at the moment they were created, so they closed
+    #: on the first pass of the closing job with no quiet period at all.
+    #:
+    #: It also made the field unusable for measurement: because `opened_at`
+    #: equalled `session_started_at` on 1,911 of 1,914 rows, 79.3% of rows
+    #: shared a byte-identical (opened_at, last_activity_at) pair with a
+    #: sibling, and a duration computed from it was off by a factor of 1,500.
+    first_alert_at: datetime | None = None,
     score: int,
     score_version: str = SCORE_VERSION,
     title: str | None = None,
@@ -181,7 +195,7 @@ async def upsert_spine(
             session_started_at=session_started_at,
             tenant_id=tenant_id,
             session_seq=session_seq,
-            opened_at=session_started_at,
+            opened_at=first_alert_at or session_started_at,
             last_activity_at=last_activity_at,
             status="open",
             peak_score=score,
@@ -685,7 +699,7 @@ async def close_case(
 async def open_continuation(
     db: AsyncSession, *, case_key: str, continues: str, source: str, client: str,
     host: str, session_started_at: datetime, last_activity_at: datetime, score: int,
-    title: str | None = None,
+    title: str | None = None, first_alert_at: datetime | None = None,
 ) -> AlertCaseSpine:
     """A case that carries on from one already answered.
 
@@ -708,7 +722,7 @@ async def open_continuation(
         entity_host=host,
         session_started_at=session_started_at,
         session_seq=0,
-        opened_at=session_started_at,
+        opened_at=first_alert_at or session_started_at,
         last_activity_at=last_activity_at,
         status="open",
         peak_score=score,

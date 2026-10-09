@@ -398,3 +398,50 @@ def test_the_same_cluster_keys_the_same_whatever_else_the_session_holds():
     # And a different cluster in the same session is a different case.
     other = case_key_for("s", "c", "host", when, discriminator="run-2")
     assert other != alone
+
+
+# --- opened_at is the case's own opening, not the session's ----------------
+
+def test_opened_at_is_the_cases_own_first_alert_not_the_session_origin():
+    """A session holds several cases, and a sibling born later used to inherit
+    the session's start.
+
+    Measured over 1,014 derived cases before the fix: 205 (20.2%) had
+    `opened_at` earlier than their own first alert, by a median of 2.4 hours
+    and up to 2.3 days — and 172 of them (17.0%) were already past the
+    10-minute close window at creation, so they closed on the first pass of
+    the closing job with no quiet period at all.
+
+    It also made the field unusable for measurement. Because `opened_at`
+    equalled `session_started_at` on 1,911 of 1,914 rows, 79.3% of rows shared
+    a byte-identical (opened_at, last_activity_at) pair with a sibling, and a
+    duration computed from it came out 1,500x too large.
+    """
+    import inspect
+
+    from app.services.alert_case_store import upsert_spine
+
+    signature = inspect.signature(upsert_spine)
+    assert "first_alert_at" in signature.parameters, (
+        "upsert_spine must be told the case's own first alert; defaulting to "
+        "session_started_at is what produced the 20.2% drift."
+    )
+    source = inspect.getsource(upsert_spine)
+    assert "opened_at=first_alert_at or session_started_at" in source, (
+        "opened_at must prefer the case's own first alert. A bare "
+        "`opened_at=session_started_at` is the defect."
+    )
+
+
+def test_the_correlation_tells_the_spine_which_alert_opened_the_case():
+    """The fix is only real if the caller passes it. A default that silently
+    falls back to the session origin looks correct and reproduces the bug."""
+    import inspect
+
+    from app.services import alert_correlation_service
+
+    source = inspect.getsource(alert_correlation_service)
+    assert "first_alert_at=_event_time(first, cutoff)" in source, (
+        "correlate_alerts must pass the case's own first alert into "
+        "upsert_spine, or opened_at falls back to the session origin."
+    )

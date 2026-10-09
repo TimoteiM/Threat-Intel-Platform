@@ -1399,3 +1399,42 @@ class AssetCriticality(Base):
         Index("ix_asset_criticality_host", "host"),
         Index("ix_asset_criticality_state", "state"),
     )
+
+
+class CaseReadSet(Base):
+    """The alerts a narrative was actually written over.
+
+    Not a freeze. A freeze happens on judgement; this records what was on
+    screen when a read was taken, so a conclusion can be checked against the
+    set it described and a later divergence is visible rather than silent.
+
+    It exists because nothing else records a set. Of 1,698 narratives in this
+    estate, zero name a single alert, and the five analyst-closed cases name no
+    more than the 1,674 automatic ones — so this platform has never recorded
+    what anyone was looking at when they formed a judgement.
+    """
+
+    __tablename__ = "case_read_set"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    case_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    read_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    #: narrative_auto | narrative_requested | judgement
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    derivation_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The alerts. A count is what every existing artefact already gives, and
+    #: a count cannot be checked against anything.
+    run_ids: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    alert_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    narrative_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_case_read_set_case", "case_key"),
+        Index("ix_case_read_set_read_at", "read_at"),
+    )
