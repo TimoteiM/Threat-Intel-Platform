@@ -931,6 +931,10 @@ def _populate(
             prior = entity.attrs.get("source_severity")
             if prior is None or severity > int(prior):
                 entity.attrs["source_severity"] = severity
+                # Every grading the source gave, not only the winning one.
+                # `data.level=alert (also crlevel=low)` is more informative
+                # than 86, and a firewall disagreeing with itself is something
+                # an analyst should see.
                 entity.attrs["source_severity_raw"] = severity_raw
 
     unread = sorted(

@@ -47,7 +47,7 @@ def _text_body(**eventdata: str) -> str:
 
 def _evidence(body: str, *, run_id="r1", rule="100210", at=NOW, level=12, confirmed=()):
     return AlertEvidence(
-        run_id=run_id, rule_id=rule, detection="d", event_time=at, rule_level=level,
+        run_id=run_id, rule_id=rule, detection="d", event_time=at, source_severity=level,
         extracted=extract(body, risk_score=level, confirmed_techniques=confirmed),
     )
 

@@ -96,6 +96,43 @@ def _scaled(level: int, maximum: int) -> int:
     return max(1, round((maximum - level) / maximum * 100))
 
 
+def _fortios_signals(fields: dict[str, Any]) -> list[tuple[int, str]]:
+    """Every severity FortiOS states about one event, with its own wording."""
+    found: list[tuple[int, str]] = []
+    ips = str(fields.get("data.crlevel") or "").strip().lower()
+    if ips in _FORTIOS_IPS:
+        found.append((_FORTIOS_IPS[ips], f"crlevel={ips}"))
+    native = str(fields.get("data.level") or "").strip().lower()
+    if native in _FORTIOS_LEVELS:
+        found.append(
+            (_scaled(_FORTIOS_LEVELS[native], _FORTIOS_MAX), f"data.level={native}")
+        )
+    return found
+
+
+def _loudest_of(signals: list[tuple[int, str]]) -> tuple[int, str] | None:
+    """LOUDEST WINS: when one source grades an event more than once, take the
+    most severe grading and keep every grading in the raw value.
+
+    A named rule rather than inline logic, because the next source with two
+    severity fields will face the same question and should not have to
+    rediscover the answer.
+
+    The rule exists because the obvious alternative is wrong. Preferring the
+    *more specific* signal let `crlevel=low` (29) override `data.level=alert`
+    (86) and under-rank an event the firewall itself had shouted about. Neither
+    field subsumes the other — `crlevel` grades the attack signature,
+    `data.level` grades the log record — so the only defensible resolution is
+    to take the louder and show both, because a source disagreeing with itself
+    is something an analyst should see rather than something to average away.
+    """
+    if not signals:
+        return None
+    score, raw = max(signals, key=lambda pair: pair[0])
+    others = ", ".join(r for _s, r in signals if r != raw)
+    return score, raw + (f" (also {others})" if others else "")
+
+
 def normalise(fields: dict[str, Any]) -> tuple[int | None, str | None]:
     """The alert's native severity as (1-100, raw value).
 
@@ -109,24 +146,9 @@ def normalise(fields: dict[str, Any]) -> tuple[int | None, str | None]:
       FortiOS syslog severity   `data.level`     emergency..debug, 8 levels
       Wazuh rule level          `rule.level`     1-16
     """
-    # Both are the firewall's own statements about its own event and neither
-    # subsumes the other: `crlevel` grades the attack signature, `data.level`
-    # grades the log record. Taking the more specific one alone would let
-    # `crlevel=low` (29) override `data.level=alert` (86) and under-rank an
-    # event the firewall itself shouted about, so the louder of the two wins.
-    fortios: list[tuple[int, str]] = []
-    ips = str(fields.get("data.crlevel") or "").strip().lower()
-    if ips in _FORTIOS_IPS:
-        fortios.append((_FORTIOS_IPS[ips], f"crlevel={ips}"))
-    native = str(fields.get("data.level") or "").strip().lower()
-    if native in _FORTIOS_LEVELS:
-        fortios.append(
-            (_scaled(_FORTIOS_LEVELS[native], _FORTIOS_MAX), f"data.level={native}")
-        )
-    if fortios:
-        score, raw = max(fortios, key=lambda pair: pair[0])
-        others = ", ".join(r for _s, r in fortios if r != raw)
-        return score, f"{raw}" + (f" (also {others})" if others else "")
+    native = _loudest_of(_fortios_signals(fields))
+    if native is not None:
+        return native
 
     raw = fields.get("rule.level")
     if raw is None:

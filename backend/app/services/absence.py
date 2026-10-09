@@ -40,10 +40,15 @@ TARGET_UNKNOWN = "target_unknown"      # the thing it points at cannot be found
 UNRATED = "unrated"                    # the source states no value
 NEVER_OBSERVED = "never_observed"      # the check ran and has never once matched
 CHECK_FAILED = "check_failed"          # the check could not run at all
+#: An absence whose kind this code did not recognise. Its own bucket, because
+#: degrading an unrecognised kind into `unparsed` would file it under a kind
+#: that *means* something — the convention's own failure mode implemented
+#: inside the convention. The original string travels as `raw`.
+UNRECOGNISED = "unrecognised_absence"
 
 KINDS = frozenset({
     NO_FIELD_MAP, UNPARSED, UNCLASSIFIED, TARGET_UNKNOWN, UNRATED,
-    NEVER_OBSERVED, CHECK_FAILED,
+    NEVER_OBSERVED, CHECK_FAILED, UNRECOGNISED,
 })
 
 
@@ -68,7 +73,15 @@ class Absent:
         if self.kind not in KINDS:
             # Not an exception: an unanticipated kind is still an absence, and
             # raising here would turn "we could not describe why" into a 500.
-            object.__setattr__(self, "kind", UNPARSED)
+            #
+            # But not `unparsed` either. Filing an unrecognised kind under a
+            # kind that means something is this convention's own failure mode
+            # committed inside the convention, so it gets its own bucket and
+            # the original string is kept.
+            original = self.kind
+            object.__setattr__(self, "kind", UNRECOGNISED)
+            if self.raw is None:
+                object.__setattr__(self, "raw", str(original)[:200])
 
     def as_json(self) -> dict[str, Any]:
         """The shape every renderer handles. Deliberately not a bare string:

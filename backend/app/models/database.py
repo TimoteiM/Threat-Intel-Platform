@@ -306,7 +306,10 @@ class IOCRecord(Base):
         nullable=False,
     )
     type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    value: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    #: A truncated indicator is worse than an absent one: it never matches
+    #: anything while still appearing recorded. 5 rows sat at exactly 512
+    #: before migration 057, both long tracking URLs.
+    value: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     context: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[str | None] = mapped_column(String(20))
 
@@ -698,7 +701,10 @@ class AlertBodyInvestigationRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Sender-supplied free text, and the case label derives from the
+    #: first alert's title — so a ceiling here becomes a truncated case
+    #: name. 771 rows sat at exactly 255 before migration 057.
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     alert_body: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")

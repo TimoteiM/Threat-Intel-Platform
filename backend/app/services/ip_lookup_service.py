@@ -16,6 +16,7 @@ from typing import Any
 
 import requests
 
+from app.services import enrichment_health_service as health
 from app.services.absence import CHECK_FAILED, absent
 from sqlalchemy.orm import Session
 
@@ -151,6 +152,8 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
         )
         resp.raise_for_status()
         tf_data = resp.json()
+        health.record("threatfox", ok=tf_data.get("query_status") == "ok",
+                      error=str(tf_data.get("query_status")))
         if tf_data.get("query_status") == "ok":
             for ioc in tf_data.get("data", []) or []:
                 result["threatfox"].append({
@@ -189,6 +192,7 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
             ip, type(e).__name__,
         )
         result["errors"].append(f"ThreatFox: {type(e).__name__}")
+        health.record("threatfox", ok=False, error=type(e).__name__)
         result["threatfox_status"] = absent(
             CHECK_FAILED,
             "ThreatFox could not be reached, so this address was not checked "

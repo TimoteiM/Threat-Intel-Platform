@@ -324,7 +324,7 @@ async def graph_for_runs(
             rule_id=rules.get(key, (None, None))[0],
             detection=rules.get(key, (None, None))[1],
             event_time=stamps.get(key),
-            rule_level=levels.get(key),
+            source_severity=levels.get(key),
             extracted=found,
             source_type=sources.get(key),
         )

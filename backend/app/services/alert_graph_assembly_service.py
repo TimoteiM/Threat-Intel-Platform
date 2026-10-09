@@ -61,7 +61,11 @@ class Witness:
     rule_id: str | None
     detection: str | None
     event_time: datetime | None
-    rule_level: int | None
+    #: The severity the alert's own source states, normalised 0-100. Named
+    #: `rule_level` until the sweep that followed the column rename found it
+    #: still carrying that name while holding this value — the same conflation
+    #: one layer down.
+    source_severity: int | None
 
 
 @dataclass
@@ -102,7 +106,11 @@ class AlertEvidence:
     rule_id: str | None
     detection: str | None
     event_time: datetime | None
-    rule_level: int | None
+    #: The severity the alert's own source states, normalised 0-100. Named
+    #: `rule_level` until the sweep that followed the column rename found it
+    #: still carrying that name while holding this value — the same conflation
+    #: one layer down.
+    source_severity: int | None
     extracted: Extracted
     #: Carried for the empty-state message, which has to name the source.
     source_type: str | None = None
@@ -124,7 +132,7 @@ def assemble(evidence: Iterable[AlertEvidence]) -> dict[str, Any]:
     for item in evidence_seen:
         witness = Witness(
             run_id=item.run_id, rule_id=item.rule_id, detection=item.detection,
-            event_time=item.event_time, rule_level=item.rule_level,
+            event_time=item.event_time, source_severity=item.source_severity,
         )
         for entity in item.extracted.entities:
             node = nodes.get(entity.merge_key)
@@ -466,7 +474,9 @@ def _render_payload(
     def node_json(node: AssembledNode) -> dict[str, Any]:
         runs = {w.run_id for w in node.witnesses}
         # The alert's own source severity, not the indicator-reputation sum.
-        levels = [w.rule_level for w in node.witnesses if w.rule_level is not None]
+        levels = [
+            w.source_severity for w in node.witnesses if w.source_severity is not None
+        ]
         return {
             "id": node.merge_key,
             "kind": node.kind,

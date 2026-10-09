@@ -15,6 +15,7 @@ from app.services.absence import (
     NO_FIELD_MAP,
     UNPARSED,
     UNRATED,
+    UNRECOGNISED,
     Absent,
     absent,
     is_absent,
@@ -42,12 +43,28 @@ def test_every_absence_carries_a_reason_a_person_can_read():
         assert reason_of(value) == "Something specific did not happen."
 
 
-def test_an_unanticipated_kind_is_still_an_absence_rather_than_an_error():
+def test_an_unanticipated_kind_gets_its_own_bucket_not_a_meaningful_one():
     """Raising would turn "we could not describe why" into a 500, which is a
-    worse answer than an imprecise one."""
+    worse answer than an imprecise one — so it degrades.
+
+    But not into `unparsed`. Filing an unrecognised kind under a kind that
+    *means* something is this convention's own failure mode committed inside
+    the convention: a reader would see "a value was present and failed its
+    shape check" when in fact nothing is known about why it is missing. It
+    gets `unrecognised_absence`, and the original string survives as `raw` so
+    the gap is traceable.
+    """
     value = Absent(kind="something-nobody-anticipated", reason="x")
-    assert value.kind == UNPARSED
+    assert value.kind == UNRECOGNISED
+    assert value.kind != UNPARSED
+    assert value.raw == "something-nobody-anticipated"
     assert is_absent(value)
+
+
+def test_an_unrecognised_kind_does_not_overwrite_a_raw_value_it_was_given():
+    value = Absent(kind="mystery", reason="x", raw="the actual bad value")
+    assert value.kind == UNRECOGNISED
+    assert value.raw == "the actual bad value"
 
 
 def test_the_raw_value_survives_so_a_parser_bug_stays_visible():
