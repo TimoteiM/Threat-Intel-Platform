@@ -32,7 +32,7 @@ async def run(limit: int | None, batch: int) -> None:
                     AlertBodyInvestigationRun.alert_body,
                     AlertBodyInvestigationRun.event_time,
                     AlertBodyInvestigationRun.created_at,
-                    AlertBodyInvestigationRun.highest_risk_score,
+                    AlertBodyInvestigationRun.indicator_risk_score,
                     AlertBodyInvestigationRun.result_attack_assessment,
                     AlertLogContext.logs,
                 )

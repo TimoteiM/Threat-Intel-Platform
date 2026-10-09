@@ -577,12 +577,39 @@ def score_case(
             f"{len(extra)} further tactic(s) claimed by the rules, not evidenced here"
         )
 
-    if max_risk >= 70:
-        score += 15
-        reasons.append(f"an alert in this window scored {max_risk}/100 on its own")
-    if "malicious" in verdicts:
-        score += 15
-        reasons.append("at least one alert concluded malicious")
+    # One bonus, not two. These were separate terms — `max_risk >= 70` and
+    # `"malicious" in verdicts` — and they fire on the same population: by
+    # dominant source over 1,009 live cases, both at 6.3% for
+    # windows_eventchannel, both at 100.0% for appsec-agent, both at 38.6% for
+    # Palo Alto syslog. Measured by joining `alert_case_spine` to
+    # `alert_body_investigation_runs` and grouping on `graph_source_type`,
+    # which is the right pairing because the spine holds the score and the runs
+    # hold the source.
+    #
+    # The asymmetry is structural and worth seeing before changing this
+    # function. `indicator_risk_score` (once `highest_risk_score`) is the
+    # maximum over an alert's indicators of a seven-component phishing sum, so
+    # a source that carries no URL, attachment or email body cannot reach 70
+    # unless OpenCTI's step-floor fires. 93.7% of Windows cases therefore
+    # cannot earn these points at all, while every appsec-agent case does.
+    #
+    # Left in place rather than re-scored: 30 points on a 100-point scale whose
+    # dominant term is rule agreement (up to 90, source-neutral), and all three
+    # of the estate's true positives still rank correctly — #1440 and #1106 at
+    # 100, #1833 at 73. Re-scoring on a sample of three would be worse than the
+    # bias. If a real severity input arrives, this is the term to replace.
+    indicator_evidence = max_risk >= 70 or "malicious" in verdicts
+    if indicator_evidence:
+        score += 30
+        why = []
+        if max_risk >= 70:
+            why.append(f"an alert's indicators scored {max_risk}/100")
+        if "malicious" in verdicts:
+            why.append("at least one alert concluded malicious")
+        reasons.append(
+            " and ".join(why)
+            + " — indicator reputation, which endpoint-only sources rarely reach"
+        )
 
     return min(score, 100), reasons
 
@@ -614,7 +641,7 @@ _RUN_COLUMNS = (
     AlertBodyInvestigationRun.detection_rule_name,
     AlertBodyInvestigationRun.detection_name,
     AlertBodyInvestigationRun.overall_verdict,
-    AlertBodyInvestigationRun.highest_risk_score,
+    AlertBodyInvestigationRun.indicator_risk_score,
     AlertBodyInvestigationRun.result_attack_assessment,
     _IOCS,
 )
@@ -1023,7 +1050,7 @@ async def correlate_alerts(
             shape = shape_factor(progression, tempo)
 
             verdicts = [str(m.overall_verdict or "") for m in members]
-            max_risk = max((int(m.highest_risk_score or 0) for m in members), default=0)
+            max_risk = max((int(m.indicator_risk_score or 0) for m in members), default=0)
             raw_score, reasons = score_case(
                 shape=shape,
                 distinct_rules=len(rules), tactics=tactics, max_risk=max_risk,
@@ -1170,7 +1197,7 @@ async def correlate_alerts(
                             # loses which alert belonged to whom.
                             "entity_user": m.entity_user,
                             "overall_verdict": m.overall_verdict,
-                            "highest_risk_score": m.highest_risk_score,
+                            "highest_risk_score": m.indicator_risk_score,
                         }
                         for m in ordered
                     ][:100],

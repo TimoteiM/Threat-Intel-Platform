@@ -738,7 +738,7 @@ async def _subject_snapshot(db: DBSession, subject_type: str, subject_id) -> dic
         return None
     return {
         "platform_classification": run.overall_verdict,
-        "platform_risk_score": run.highest_risk_score,
+        "platform_risk_score": run.indicator_risk_score,
         "detection_rule_id": run.detection_rule_id,
     }
 

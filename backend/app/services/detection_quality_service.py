@@ -56,7 +56,7 @@ async def detection_quality(
                 AlertBodyInvestigationRun.detection_rule_id,
                 AlertBodyInvestigationRun.detection_rule_name,
                 AlertBodyInvestigationRun.overall_verdict,
-                AlertBodyInvestigationRun.highest_risk_score,
+                AlertBodyInvestigationRun.indicator_risk_score,
                 AlertBodyInvestigationRun.created_at,
                 AlertBodyInvestigationRun.result_attack_assessment,
                 AlertBodyInvestigationRun.result_summary,
@@ -122,7 +122,7 @@ def _accumulate(entry: dict[str, Any], run: Any) -> None:
     if verdict in entry["verdicts"]:
         entry["verdicts"][verdict] += 1
 
-    entry["highest_risk_score"] = max(entry["highest_risk_score"], int(run.highest_risk_score or 0))
+    entry["highest_risk_score"] = max(entry["highest_risk_score"], int(run.indicator_risk_score or 0))
 
     created = run.created_at
     if created and (entry["last_seen"] is None or created > entry["last_seen"]):

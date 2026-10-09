@@ -44,7 +44,7 @@ class _Run:
         # a row shape the query no longer returns.
         self.detection_name = rule
         self.overall_verdict = verdict
-        self.highest_risk_score = 40
+        self.indicator_risk_score= 40
         self.result_attack_assessment = None
         # What ties this alert to another. A case is no longer every alert on a
         # device within six hours — members must share evidence — so a stub

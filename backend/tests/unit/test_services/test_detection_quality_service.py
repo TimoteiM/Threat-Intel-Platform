@@ -30,7 +30,7 @@ def _run(rule_id="100002", verdict="benign", **overrides):
         detection_rule_id=rule_id,
         detection_rule_name=overrides.pop("rule_name", "Suspicious process"),
         overall_verdict=verdict,
-        highest_risk_score=overrides.pop("risk", 10),
+        indicator_risk_score=overrides.pop("risk", 10),
         created_at=datetime.now(timezone.utc) - timedelta(hours=1),
         result_summary=payload.get("summary"),
         result_extraction=payload.get("extraction"),

@@ -31,7 +31,7 @@ from app.services.alert_graph_store_service import graph_for_runs
 _ALERTS = """
 select r.id::text, r.detection_rule_id, r.detection_name,
        coalesce(r.event_time, r.created_at), r.alert_body,
-       r.highest_risk_score, r.result_attack_assessment
+       r.indicator_risk_score, r.result_attack_assessment
 from alert_body_investigation_runs r
 join alert_case_spine s on s.case_number = :number
 where r.entity_host = s.entity_host

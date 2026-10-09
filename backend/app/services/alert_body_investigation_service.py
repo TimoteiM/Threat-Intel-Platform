@@ -485,6 +485,9 @@ def _merge_event_summary(summary: dict[str, Any], event_reports: list[dict[str, 
             counts[classification] += 1
         if classification in ("malicious", "suspicious"):
             flagged += 1
+        # Summary-payload key, not the column. This dict is serialised into
+        # `result_summary` and into the outbound callback, so the name is a
+        # wire contract; the column it lands in is `indicator_risk_score`.
         summary["highest_risk_score"] = max(
             int(summary.get("highest_risk_score") or 0), int(verdict.get("risk_score") or 0)
         )

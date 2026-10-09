@@ -151,7 +151,7 @@ def run_alert_body_investigation_task(
             status="completed",
             indicator_count=int(summary.get("indicators_total") or 0),
             overall_verdict=str(summary.get("overall_verdict") or "inconclusive"),
-            highest_risk_score=int(summary.get("highest_risk_score") or 0),
+            indicator_risk_score=int(summary.get("highest_risk_score") or 0),
             result_json=payload,
             completed_at=datetime.now(timezone.utc),
         )

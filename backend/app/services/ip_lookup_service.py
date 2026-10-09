@@ -11,10 +11,12 @@ from __future__ import annotations
 import ipaddress
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+
+from app.services.absence import CHECK_FAILED, absent
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -161,9 +163,39 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
                     "last_seen": ioc.get("last_seen"),
                     "tags": ioc.get("tags") or [],
                 })
+        else:
+            # abuse.ch answered but declined the query. Recorded, because a
+            # declined query and a query with no matches are different facts.
+            result["threatfox_status"] = absent(
+                CHECK_FAILED,
+                "ThreatFox answered but declined the query: "
+                f"{tf_data.get('query_status')}. Nothing was checked against "
+                "this feed.",
+                raw=str(tf_data.get("query_status")),
+            ).as_json()
     except Exception as e:
-        logger.debug(f"ThreatFox lookup failed for {ip}: {e}")
+        # Measured on `ip_lookups.result_json`, which is where every lookup's
+        # outcome is persisted and therefore the right table to ask: 800 of the
+        # 800 most recent rows record `ThreatFox: HTTPError`, and
+        # `threatfox_count` is 0 on all 6,259 rows. The feed has never once
+        # answered — abuse.ch requires an Auth-Key and the request below sends
+        # an empty `API-KEY` header.
+        #
+        # Logged at warning, not debug. At debug this failed silently for
+        # 6,259 lookups and surfaced as a zero that looked like a clean result.
+        logger.warning(
+            "ThreatFox lookup failed for %s: %s. The feed has never returned a "
+            "match in this deployment; it needs an abuse.ch Auth-Key.",
+            ip, type(e).__name__,
+        )
         result["errors"].append(f"ThreatFox: {type(e).__name__}")
+        result["threatfox_status"] = absent(
+            CHECK_FAILED,
+            "ThreatFox could not be reached, so this address was not checked "
+            "against it. This is not a clean result — the feed needs an "
+            "abuse.ch Auth-Key and has never answered in this deployment.",
+            raw=type(e).__name__,
+        ).as_json()
 
     return result
 
@@ -200,3 +232,48 @@ def lookup_ip_with_history(ip: str, *, timeout: int = 15) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Could not persist IP lookup history for %s: %s", ip, exc)
     return result
+
+
+# --- reading a stored lookup, and saying how old it is ----------------------
+
+#: When a stored lookup stops being presentable as current.
+#:
+#: Measured on `ip_lookups.queried_at` — the right table because it is the one
+#: holding every lookup this platform has ever performed. Of 6,259 rows: 53
+#: under a day, 186 under a week, 2,409 under 30 days, and 15 older than 90
+#: days, spanning 2026-03-03 to 2026-10-09. The re-lookup rate is already 4.2
+#: per address, so something refreshes them; this threshold decides only what
+#: is *labelled* stale, not what is re-fetched.
+STALE_AFTER = timedelta(days=30)
+
+
+def freshness_of(queried_at: datetime | None) -> dict[str, Any]:
+    """How old a stored verdict is, in terms a panel can show.
+
+    An IP's reputation changes, so a cached verdict without an age is a claim
+    about the present made from the past. The age travels with the verdict.
+    """
+    if queried_at is None:
+        return absent(
+            CHECK_FAILED,
+            "This lookup has no recorded time, so its age cannot be stated and "
+            "it should not be read as current.",
+        ).as_json()
+    now = datetime.now(timezone.utc)
+    stamp = queried_at if queried_at.tzinfo else queried_at.replace(tzinfo=timezone.utc)
+    age = now - stamp
+    stale = age > STALE_AFTER
+    if stale:
+        # Logged so "how often is a stale verdict actually read" is answerable
+        # from data in a month rather than guessed at now. No refresh path is
+        # added until that number exists.
+        logger.info(
+            "stale_ip_verdict_read ip_lookup_age_days=%d threshold_days=%d",
+            age.days, STALE_AFTER.days,
+        )
+    return {
+        "queried_at": stamp.isoformat(),
+        "age_days": age.days,
+        "stale": stale,
+        "threshold_days": STALE_AFTER.days,
+    }

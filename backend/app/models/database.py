@@ -704,7 +704,15 @@ class AlertBodyInvestigationRun(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     indicator_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     overall_verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    highest_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The worst indicator-reputation score among this alert's indicators.
+    #:
+    #: NOT a severity, despite having been used as one. It is the maximum over
+    #: the alert's indicators of a seven-component weighted sum, five of whose
+    #: components are URL, email, attachment and sandbox signals, with a
+    #: step-floor from OpenCTI — so it measures how much of a phishing formula
+    #: a source can reach. Windows alerts average 8.8 and Fortigate 62.0.
+    #: `source_severity` is the severity. See migration 055.
+    indicator_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # The alert's indicator values, kept in step with result_json by a
     # database trigger (migration 040). Correlation reads this to ask what
@@ -720,7 +728,7 @@ class AlertBodyInvestigationRun(Base):
     #: a measurement is the bug this column exists to replace.
     source_severity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: The native value and scale, so a normalised number can be traced back.
-    source_severity_raw: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_severity_raw: Mapped[str | None] = mapped_column(String(96), nullable=True)
     # sha256 of the normalised alert body — lets a repeated delivery reuse the
     # run it already produced instead of investigating the same alert twice.
     alert_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

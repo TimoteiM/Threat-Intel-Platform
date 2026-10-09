@@ -114,6 +114,13 @@ def deliver_alert_callback(
         "external_ref": payload.get("external_ref"),
         "status": status,
         "overall_verdict": overall_verdict,
+        # The external name is retained deliberately. Internally this column
+        # is `indicator_risk_score` (migration 055), because it is the maximum
+        # over an alert's indicators of a seven-component phishing-and-
+        # reputation sum rather than a severity. The wire field keeps the old
+        # name because breaking an outbound contract to fix an internal naming
+        # problem is not a trade worth making. If the consumer is ours, migrate
+        # it on a version bump rather than silently.
         "highest_risk_score": highest_risk_score,
         "delivered_at": datetime.now(timezone.utc).isoformat(),
         "document_count": len(documents),

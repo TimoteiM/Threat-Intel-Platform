@@ -141,7 +141,7 @@ def refresh_run_report(run_id: str, investigation_id: str) -> bool:
         stored["summary"] = {**(stored.get("summary") or {}), **summary}
         run.result_json = stored
         run.overall_verdict = summary.get("overall_verdict") or run.overall_verdict
-        run.highest_risk_score = summary.get("highest_risk_score") or run.highest_risk_score
+        run.indicator_risk_score = summary.get("highest_risk_score") or run.indicator_risk_score
         db.commit()
 
     logger.info("sandbox batch: refreshed run %s for %s", run_id, investigation_id)

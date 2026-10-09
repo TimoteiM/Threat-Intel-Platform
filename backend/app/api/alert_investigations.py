@@ -1358,7 +1358,7 @@ async def get_analysis_status(
         "finished": status in ("completed", "failed", "cancelled"),
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "overall_verdict": run.overall_verdict,
-        "highest_risk_score": run.highest_risk_score,
+        "highest_risk_score": run.indicator_risk_score,
         # The analyst-facing report: de-anonymised on purpose, for a person.
         "report_markdown": ai_report.get("report_markdown") or "",
         # When this interpretation was written and what informed it. Without a
@@ -2275,7 +2275,7 @@ async def _hydrated_run_payload(db: DBSession, run: AlertBodyInvestigationRun) -
         stored["summary"] = payload["summary"]
         run.result_json = stored
         run.overall_verdict = summary.get("overall_verdict") or run.overall_verdict
-        run.highest_risk_score = summary.get("highest_risk_score") or run.highest_risk_score
+        run.indicator_risk_score = summary.get("highest_risk_score") or run.indicator_risk_score
         await db.commit()
     except Exception as exc:  # a failed write must not break the read
         logger.warning("Could not persist hydrated alert run %s: %s", run.id, exc)
@@ -2422,7 +2422,7 @@ def _list_item(row: AlertBodyInvestigationRun) -> dict[str, Any]:
         "status": row.status,
         "indicator_count": row.indicator_count,
         "overall_verdict": row.overall_verdict,
-        "highest_risk_score": row.highest_risk_score,
+        "highest_risk_score": row.indicator_risk_score,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         "error": (row.result_json or {}).get("error"),

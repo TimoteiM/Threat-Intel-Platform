@@ -99,3 +99,48 @@ def test_the_other_inputs_still_discriminate():
     later = dict(FIXTURE)
     later["session_started_at"] = FIXTURE["session_started_at"].replace(microsecond=0)
     assert case_key_for(**later) != baseline
+
+
+def test_every_key_component_that_claims_to_separate_actually_can():
+    """A sweep, because the last instance of this was found by accident.
+
+    `test_separator_cannot_be_forged_from_scope_text` used to forge a
+    collision through `client` — a field that reads 'unknown' on 99.9% of
+    rows. Once the component was pinned, the test still passed, but it was
+    passing because both sides were identical rather than because the
+    separator held. A test asserting separation across a component that cannot
+    vary proves nothing, and nothing warned.
+
+    So this states which components are load-bearing and checks each one
+    separately. A future pin that empties one of these fails here.
+    """
+    separating = {
+        "source": "other-manager",
+        "host": "a-different-host",
+    }
+    pinned = {"client"}
+
+    baseline = case_key_for(**FIXTURE)
+    for field, value in separating.items():
+        altered = dict(FIXTURE)
+        altered[field] = value
+        assert case_key_for(**altered) != baseline, (
+            f"{field} is listed as separating but changing it does not change "
+            "the key. Either the component was pinned without updating this "
+            "list, or a test elsewhere is asserting separation it no longer has."
+        )
+    for field in pinned:
+        altered = dict(FIXTURE)
+        altered[field] = "something-else-entirely"
+        assert case_key_for(**altered) == baseline, (
+            f"{field} is listed as pinned but changing it changes the key. If "
+            "it has been reinstated deliberately, bump CASE_KEY_VERSION and "
+            "write the migration — see migration 053."
+        )
+    # The opening time, which is the component the whole supersession migration
+    # leans on for identity.
+    later = dict(FIXTURE)
+    later["session_started_at"] = FIXTURE["session_started_at"].replace(microsecond=0)
+    assert case_key_for(**later) != baseline
+    # And the discriminator, which separates two cases inside one session.
+    assert case_key_for(**FIXTURE, discriminator="run-1") != baseline

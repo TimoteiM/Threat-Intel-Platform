@@ -81,7 +81,11 @@ async def materialise_run(
             # The alert's own severity, so a bounded read can rank on severity
             # rather than on indicator reputation.
             source_severity=found.source_severity,
-            source_severity_raw=found.source_severity_raw,
+            # Truncated defensively as well as widened: a raw value longer
+            # than the column silently failed the whole insert, and it failed
+            # on precisely the Fortigate alerts the firewall graded as attacks.
+            source_severity_raw=(found.source_severity_raw or None) and
+            found.source_severity_raw[:96],
         )
     )
     await db.execute(delete(AlertGraphEntity).where(AlertGraphEntity.run_id == run_id))

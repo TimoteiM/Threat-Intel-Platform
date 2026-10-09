@@ -163,7 +163,7 @@ class _Row:
         self.title = title
         self.created_at = datetime.now(timezone.utc)
         self.overall_verdict = "suspicious"
-        self.highest_risk_score = 50
+        self.indicator_risk_score= 50
         self.detection_rule_id = rule_id
         self.detection_rule_name = rule_name
         self.result_attack_assessment = assessment

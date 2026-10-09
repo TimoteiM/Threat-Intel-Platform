@@ -111,6 +111,12 @@ CASE_KEY_VERSION = 3
 #: which would renumber the whole case list. Pinning it to the value 1,851
 #: rows already carry leaves those keys byte-identical and re-keys only the 38
 #: that were being separated for the wrong reason.
+#: Do not restore `client` here. It looks like a missing scope and it is not:
+#: the component is dead on purpose, and reinstating it would re-key the 1,851
+#: rows this value keeps stable, renumber the case list, and bring back a
+#: discriminator that discriminates nothing. If a client field ever genuinely
+#: varies, add it as a new component under CASE_KEY_VERSION 4 with a migration
+#: — the same path migration 053 took.
 _CLIENT_IN_KEY = "unknown"
 
 

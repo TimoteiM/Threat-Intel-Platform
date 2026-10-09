@@ -53,39 +53,115 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.absence import UNRATED, Absent, absent
+
 #: Wazuh's rule levels run 1-16 inclusive. 0 is not a level the agent emits.
 WAZUH_MAX_LEVEL = 16
+
+#: FortiOS syslog severity, lowest number most severe. From Fortinet's own
+#: documented set; the two that actually occur in this estate are `notice`
+#: (2,527 alerts) and `alert` (6).
+_FORTIOS_LEVELS = {
+    "emergency": 0, "alert": 1, "critical": 2, "error": 3,
+    "warning": 4, "notification": 5, "notice": 5, "information": 6,
+    "informational": 6, "debug": 7,
+}
+_FORTIOS_MAX = 7
+
+#: FortiGuard IPS severity, where the firewall has actually classified an
+#: attack. More specific than the syslog level, so preferred when present.
+_FORTIOS_IPS = {"critical": 100, "high": 86, "medium": 57, "low": 29, "info": 14}
 
 #: Sources whose Wazuh level is a per-decoder constant and so cannot order
 #: anything within themselves. Recorded here so a caller can say why a ranking
 #: inside one of these sources is arbitrary, rather than presenting it as
 #: meaningful.
+#:
+#: `fortigate-firewall-v5` is no longer in this set: Wazuh flattens every one
+#: of its alerts to `rule.level = 1`, but FortiOS states its own severity in
+#: `data.level`, and reading that instead gives the source a real signal. The
+#: bug this fixes is live — every Fortigate alert normalised to 6/100 and the
+#: 300-alert bound therefore ranked all 2,533 of them as uniformly trivial.
 FLAT_SEVERITY_SOURCES = {
-    "fortigate-firewall-v5": "Wazuh assigns level 1 to 2,527 of its 2,533 alerts",
     "appsec-agent": "Wazuh assigns level 2 to all 2,685 of its alerts",
 }
 
 
+def _scaled(level: int, maximum: int) -> int:
+    """An ordinal severity onto 1-100, lowest number most severe.
+
+    Never 0. A severity of 0 would be indistinguishable from an absent one,
+    which is the error this whole module exists to undo.
+    """
+    return max(1, round((maximum - level) / maximum * 100))
+
+
 def normalise(fields: dict[str, Any]) -> tuple[int | None, str | None]:
-    """The alert's native severity as (0-100, raw value).
+    """The alert's native severity as (1-100, raw value).
 
     Returns (None, None) when the source states no severity. Never 0 for an
-    absent value.
+    absent value — `severity_absence` turns that into a reason.
+
+    Order of preference, most specific first. Each is the source's own
+    statement about its own event; none is inferred:
+
+      FortiGuard IPS severity   `data.crlevel`   critical/high/medium/low/info
+      FortiOS syslog severity   `data.level`     emergency..debug, 8 levels
+      Wazuh rule level          `rule.level`     1-16
     """
+    # Both are the firewall's own statements about its own event and neither
+    # subsumes the other: `crlevel` grades the attack signature, `data.level`
+    # grades the log record. Taking the more specific one alone would let
+    # `crlevel=low` (29) override `data.level=alert` (86) and under-rank an
+    # event the firewall itself shouted about, so the louder of the two wins.
+    fortios: list[tuple[int, str]] = []
+    ips = str(fields.get("data.crlevel") or "").strip().lower()
+    if ips in _FORTIOS_IPS:
+        fortios.append((_FORTIOS_IPS[ips], f"crlevel={ips}"))
+    native = str(fields.get("data.level") or "").strip().lower()
+    if native in _FORTIOS_LEVELS:
+        fortios.append(
+            (_scaled(_FORTIOS_LEVELS[native], _FORTIOS_MAX), f"data.level={native}")
+        )
+    if fortios:
+        score, raw = max(fortios, key=lambda pair: pair[0])
+        others = ", ".join(r for _s, r in fortios if r != raw)
+        return score, f"{raw}" + (f" (also {others})" if others else "")
+
     raw = fields.get("rule.level")
     if raw is None:
         return None, None
     # The text form joins aggregated values with " | ": `Rule level: 15 | 3`.
     first = str(raw).split("|")[0].strip()
     try:
-        level = int(first)
+        wazuh = int(first)
     except ValueError:
         return None, None
-    if level <= 0 or level > WAZUH_MAX_LEVEL:
+    if wazuh <= 0 or wazuh > WAZUH_MAX_LEVEL:
         # Outside the documented range, so this is not a Wazuh level and
         # guessing its scale would be inventing severity.
         return None, f"rule.level={first}"
-    return round(level / WAZUH_MAX_LEVEL * 100), f"rule.level={level}/16"
+    return max(1, round(wazuh / WAZUH_MAX_LEVEL * 100)), f"rule.level={wazuh}/16"
+
+
+def severity_absence(source_type: str | None) -> Absent:
+    """Why this alert has no severity, for the places that must say so.
+
+    892 of 15,255 alerts are in this position — measured on
+    `alert_body_investigation_runs.source_severity` after the backfill, which
+    is the right table because it is the one the graph and the bounded read
+    both consume.
+    """
+    name = str(source_type or "an unrecognised source")
+    return absent(
+        UNRATED,
+        (
+            f"{name} states no severity this platform knows how to read, so "
+            "this alert has no severity rather than a low one. Nothing was "
+            "assessed."
+        ),
+        raw=name,
+    )
 
 
 def is_flat(source_type: str | None) -> str | None:

@@ -32,7 +32,7 @@ def _run(**overrides) -> SimpleNamespace:
         "status": "completed",
         "indicator_count": 2,
         "overall_verdict": "benign",
-        "highest_risk_score": 5,
+        "indicator_risk_score": 5,
         "created_at": datetime(2026, 8, 5, 10, 0, tzinfo=timezone.utc),
         "completed_at": datetime(2026, 8, 5, 10, 4, tzinfo=timezone.utc),
         "result_json": {
@@ -993,7 +993,7 @@ CONCLUDED_OUTCOME = {
 def _pending_run(**overrides):
     return _run(
         overall_verdict="inconclusive",
-        highest_risk_score=0,
+        indicator_risk_score=0,
         result_json={
             "schema_version": "1.0",
             "summary": {"overall_verdict": "inconclusive", "indicators_investigating": 1},
@@ -1025,7 +1025,7 @@ def test_reading_a_run_folds_in_a_finished_investigation(stub_run, monkeypatch):
     # The verdict is written back, so the next export is already complete.
     assert run.result_json["indicator_reports"][0]["status"] == "completed"
     assert run.overall_verdict == "malicious"
-    assert run.highest_risk_score == 88
+    assert run.indicator_risk_score == 88
     assert db.commits == 1
 
 

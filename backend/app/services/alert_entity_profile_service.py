@@ -113,7 +113,7 @@ async def build_entity_profile(
                     AlertBodyInvestigationRun.detection_rule_id,
                     AlertBodyInvestigationRun.detection_rule_name,
                     AlertBodyInvestigationRun.overall_verdict,
-                    AlertBodyInvestigationRun.highest_risk_score,
+                    AlertBodyInvestigationRun.indicator_risk_score,
                     AlertBodyInvestigationRun.result_attack_assessment,
                     # Only the sub-document this profile reads. Selecting the
                     # whole `result_json` pulled every alert's indicator
@@ -160,7 +160,7 @@ async def build_entity_profile(
             when = _event_time(row)
             if when and (rule_last.get(key) is None or when > rule_last[key]):
                 rule_last[key] = when
-            rule_risk[key] = max(rule_risk[key], int(row.highest_risk_score or 0))
+            rule_risk[key] = max(rule_risk[key], int(row.indicator_risk_score or 0))
 
         tactics = _tactics_of(row.result_attack_assessment)
         for tactic in tactics:
@@ -174,7 +174,7 @@ async def build_entity_profile(
                     "rule": rule_name or rule_id or "unattributed",
                     "tactics": sorted(tactics),
                     "verdict": row.overall_verdict,
-                    "risk": int(row.highest_risk_score or 0),
+                    "risk": int(row.indicator_risk_score or 0),
                 }
             )
 
@@ -314,7 +314,7 @@ async def build_entity_profile(
             "runs_total": len(rows),
         },
         "verdicts": [{"name": n, "count": c} for n, c in verdicts.most_common()],
-        "max_risk": max((int(r.highest_risk_score or 0) for r in rows), default=0),
+        "max_risk": max((int(r.indicator_risk_score or 0) for r in rows), default=0),
         "rules": [
             {
                 "id": rid or None,

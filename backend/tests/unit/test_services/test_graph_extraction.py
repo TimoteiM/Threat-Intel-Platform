@@ -644,3 +644,51 @@ def test_an_unscored_alert_contributes_no_indicator_score_rather_than_zero():
     out = extract(body, risk_score=0)
     process = next(e for e in out.entities if e.kind == "process")
     assert "indicator_risk_score" not in process.attrs
+
+
+# --- severity, read from the source that states it -------------------------
+
+def test_fortigate_severity_comes_from_fortios_not_from_wazuhs_flattened_level():
+    """Wazuh assigns `rule.level = 1` to 2,527 of Fortigate's 2,533 alerts, so
+    reading that ranked every firewall alert as uniformly trivial — including
+    in the 300-alert bound. FortiOS states its own severity in `data.level`,
+    where `notice` and `alert` do differ."""
+    from app.services.source_severity_service import normalise
+
+    notice, raw_notice = normalise({"data.level": "notice", "rule.level": "1"})
+    alarm, raw_alarm = normalise({"data.level": "alert", "rule.level": "1"})
+    assert notice < alarm, (notice, alarm)
+    assert "data.level" in raw_notice and "data.level" in raw_alarm
+
+
+def test_the_louder_of_two_firewall_signals_wins():
+    """`crlevel` grades the attack signature and `data.level` grades the log
+    record; neither subsumes the other. Preferring the more specific one alone
+    let `crlevel=low` override `data.level=alert` and under-rank an event the
+    firewall itself shouted about."""
+    from app.services.source_severity_service import normalise
+
+    score, raw = normalise({"data.crlevel": "low", "data.level": "alert"})
+    assert score == normalise({"data.level": "alert"})[0]
+    assert "also crlevel=low" in raw
+
+
+def test_a_severity_is_never_zero_even_at_the_bottom_of_a_scale():
+    """0 would be indistinguishable from an absent severity, which is the
+    error this module exists to undo."""
+    from app.services.source_severity_service import normalise
+
+    for fields in ({"data.level": "debug"}, {"rule.level": "1"}):
+        score, _raw = normalise(fields)
+        assert score is not None and score >= 1
+
+
+def test_a_source_stating_no_severity_gets_an_absence_with_a_reason():
+    from app.services.absence import UNRATED
+    from app.services.source_severity_service import normalise, severity_absence
+
+    assert normalise({}) == (None, None)
+    missing = severity_absence("unstructured syslog")
+    assert missing.kind == UNRATED
+    assert "unstructured syslog" in missing.reason
+    assert "rather than a low one" in missing.reason
