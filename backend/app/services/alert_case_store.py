@@ -54,6 +54,9 @@ def supersession_stats() -> dict[str, int]:
 
 
 def reset_supersession_stats() -> None:
+    # Cleared, not updated: absorption adds a `released` count of its own, and
+    # an update left it behind, so "reset" depended on what had run before.
+    _SUPERSESSION_STATS.clear()
     _SUPERSESSION_STATS.update({"superseded": 0, "chains_collapsed": 0})
 
 
@@ -409,6 +412,30 @@ async def snapshot_if_changed(
     )
 
 
+#: The state a pointer written by the platform itself carries. The same value
+#: `case_supersession_service.ALREADY_MERGED` reads back: a record made by the
+#: code that performed the merge, at the time, which nothing inferred later
+#: may override.
+SUPERSESSION_MERGED = "merged"
+
+#: A released row is a live case again, and a null state is what the column
+#: means by that. Its earlier pointer is not erased from the record: the note
+#: says it was released, appended to whatever was there.
+_RELEASED_STATE = None
+_RELEASED_NOTE = func.coalesce(AlertCaseSpine.supersession_note + " ", "") + (
+    "Released by a correlation pass: the case it pointed at died, and this one "
+    "was not eligible to follow it."
+)
+
+
+def _absorbed_note(live_case_key: str, at: datetime) -> str:
+    return (
+        f"Absorbed into {live_case_key[:12]} by a correlation pass at "
+        f"{at.isoformat(timespec='seconds')}: its session started inside that "
+        "case's session, so its alerts are now that case's."
+    )
+
+
 async def absorb_superseded(
     db: AsyncSession,
     *,
@@ -510,6 +537,16 @@ async def absorb_superseded(
     now = datetime.now(timezone.utc)
     for row in dead:
         row.superseded_by_case_key = live_case_key
+        # Who wrote the pointer, and when. This is the platform performing the
+        # merge, the contemporaneous evidence `merged` stands for; leaving it
+        # blank made these the only pointers in the table a reader could not
+        # account for. The database now refuses a pointer without a state.
+        row.supersession_state = SUPERSESSION_MERGED
+        # Appended: a row the migration left ambiguous keeps the record of
+        # why, and of which candidates it weighed.
+        row.supersession_note = " ".join(
+            filter(None, (row.supersession_note, _absorbed_note(live_case_key, now)))
+        )
         # 'closed', not 'superseded'.
         #
         # `superseded` was a status with no exit: the Cases table reads
@@ -562,7 +599,16 @@ async def absorb_superseded(
         await db.execute(
             update(AlertCaseSpine)
             .where(*collapse_where)
-            .values(superseded_by_case_key=live_case_key, updated_at=now)
+            .values(
+                superseded_by_case_key=live_case_key,
+                # A re-aimed pointer keeps the provenance it had, as the
+                # migration's chain collapse does; one that had none gets this
+                # pass's, because this pass is what wrote it.
+                supersession_state=func.coalesce(
+                    AlertCaseSpine.supersession_state, SUPERSESSION_MERGED,
+                ),
+                updated_at=now,
+            )
         )
     ).rowcount or 0
 
@@ -591,6 +637,7 @@ async def absorb_superseded(
             .values(
                 superseded_by_case_key=None, status="open", closed_at=None,
                 closure_kind=None, resolution=None, updated_at=now,
+                supersession_state=_RELEASED_STATE, supersession_note=_RELEASED_NOTE,
             )
         )
     ).rowcount or 0
@@ -606,6 +653,7 @@ async def absorb_superseded(
             )
             .values(
                 superseded_by_case_key=None,
+                supersession_state=_RELEASED_STATE, supersession_note=_RELEASED_NOTE,
                 # status follows closed_at, which is the invariant the Cases
                 # table reads. Never 'superseded', which is the state that had
                 # no exit.

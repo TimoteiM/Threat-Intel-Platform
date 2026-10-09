@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Computed,
     DateTime,
     Float,
@@ -1131,6 +1132,15 @@ class AlertCaseSpine(Base):
     it, whether it is still open, and the worst it ever got.
     """
     __tablename__ = "alert_case_spine"
+    __table_args__ = (
+        # A pointer never travels without saying who wrote it. The live
+        # correlation pass wrote two without, and they were the only rows in
+        # 866 a reader could not account for. Migration 059.
+        CheckConstraint(
+            "superseded_by_case_key IS NULL OR supersession_state IS NOT NULL",
+            name="ck_case_spine_pointer_has_provenance",
+        ),
+    )
 
     case_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     alert_source: Mapped[str] = mapped_column(String(128), nullable=False)

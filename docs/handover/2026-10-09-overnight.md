@@ -86,3 +86,39 @@ Branch `feature/email-investigation-upload`. Commits only, no pushes. Appended a
 **Unresolved.**
 - The SLA findings (contradiction 4, decision at top).
 - `case_closure_task` still passes `len(members)` (capped) as `member_count` into the narrative fingerprint, while correlation computes the fingerprint from the full count. For a case over 100 alerts the two fingerprints can never agree, which may re-queue its narrative. I haven't measured this.
+
+## Item 3 — the two unprovenanced pointers
+
+**Done.** Migration 059 is applied to the live database (`alembic current` = 059). Committed ("Every supersession pointer says who wrote it").
+
+**What wrote them.** `alert_case_store.absorb_superseded`, the live correlation pass. It set `superseded_by_case_key` and nothing else; its chain-collapse UPDATE did the same. Only the one-off CLI (`app.cli.case_supersession`) ever set a state, so every pointer the platform wrote after that CLI ran was unprovenanced. I know the writer by elimination, not by assumption:
+- Every other pointer writer also sets a state (the CLI) or a note (`collapse_chains`). Migration 044 only clears pointers.
+- Both rows match the shape absorption selects: same host, dead session starting inside the target's (by 0.04 s and 0.69 s).
+- #1973 was closed `merged` 25 ms before its target #1974 was created, which is one transaction.
+- Neither write (14:29 and 16:12) fell in the hourly :05 slot, so both came from page loads.
+
+**Measured on `alert_case_spine`.**
+- Before: 866 pointers, of which 848 `mapped`, 16 `merged` and 2 NULL (#1866 → #1867, #1973 → #1974).
+- After: 848 `mapped`, 18 `merged`, 0 NULL.
+
+**What changed.**
+- `absorb_superseded` writes `supersession_state = 'merged'` plus a dated note. `merged` is the existing state for "the platform recorded where this case went, at the time". The note is appended, so a row the CLI left `ambiguous` keeps its record.
+- The collapse UPDATE does `coalesce(state, 'merged')`, so it keeps whatever provenance a row had.
+- A released row is a live case again, so its state goes to NULL and the note records the release. Before this, a `mapped` row with no pointer would have contradicted itself.
+- **Gap closed in the database:** CHECK `ck_case_spine_pointer_has_provenance` (`superseded_by_case_key IS NULL OR supersession_state IS NOT NULL`), declared on the model too. Migration 059 backfills by the condition, not by the two keys, then adds the constraint.
+- `reset_supersession_stats()` now clears the dict. It had left a `released` key behind, which made a unit test depend on test order once a real release ran in the same process.
+
+**Tests.** `tests/integration/test_pointer_provenance.py`, real Postgres:
+- absorption writes `merged` with a note;
+- the database refuses a stateless pointer;
+- a release clears the state and keeps the history in the note.
+- **Negative control:** with the service change reverted, absorption raises `CheckViolationError`. So **the code must deploy before migration 059 runs**, which is the order I used: rebuild, then migrate, then rebuild again.
+
+**Gate.**
+- Suite: 14 failed / 2160 passed, the same 14 (diffed).
+- #1440 is 6/6 at `hours=720`.
+- api/worker/beat rebuilt before and after the migration. Watchdog: schema ok, pipeline not stalled, ingest unchanged.
+- No `CheckViolation`, `IntegrityError` or traceback in api/worker/beat logs since the deploy.
+
+**Unresolved.**
+- #1866 was an auto-closed `false_positive` when absorption pointed it at #1867 a day later. I left its resolution alone (hard stop on verdicts). Whether absorbing an already-answered case is right is a question about absorption, not about provenance.
