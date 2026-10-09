@@ -667,7 +667,17 @@ export interface CaseGraph {
     by_source: Array<{ source: string; alerts: number; mapped: boolean; entities: number }>;
     unmapped: string[];
   };
-  collapsed?: Array<{ id: string; kind: string; edge: string; members: number }>;
+  /** `observations` is what the folded nodes stand for after the earlier merge
+   *  passes, and `members` is how many nodes were folded. On case #71 the 6
+   *  folded process nodes had absorbed 176 further keys, so the two read 7 and
+   *  183; they are equal when nothing was absorbed. */
+  collapsed?: Array<{
+    id: string;
+    kind: string;
+    edge: string;
+    members: number;
+    observations?: number;
+  }>;
   coverage?: { alerts_read: number; alerts_dropped: number; note: string | null };
   duplicate_keys?: {
     also_known_as: Array<{ case_number: number | null; case_key: string; resolution: string | null }>;
@@ -675,6 +685,22 @@ export interface CaseGraph {
     note: string;
   } | null;
   over_cap?: boolean;
+  /** Why this key does not re-derive, measured rather than guessed. The note
+   *  that used to stand here named the window or a re-grouping in every case;
+   *  across the 61 live keys that do not derive, 60 of them cannot be helped by
+   *  any window at all, and `hours` is a URL parameter, so an analyst's natural
+   *  next move is a futile one. */
+  unreachable?: {
+    reason:
+      | "regrouped"
+      | "retired_key_format"
+      | "aged_out"
+      | "no_alerts_remain"
+      | "undetermined";
+    note: string;
+    window_cannot_help: boolean;
+    detail?: Record<string, unknown>;
+  } | null;
   /** For a key that no longer derives: what became of it. 842 of this
    *  estate's 1,889 case rows were re-pointed at the live case covering the
    *  same incident, so a dead key redirects rather than rendering nothing. */

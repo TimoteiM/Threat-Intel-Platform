@@ -515,6 +515,12 @@ export default function CaseGraph({
     return (
       <div style={{ fontSize: 12, color: "var(--text-muted)", maxWidth: 620, lineHeight: 1.6 }}>
         {data.note || "Nothing to draw for this case."}
+        {data.unreachable?.window_cannot_help ? (
+          <div style={{ marginTop: 10, color: "var(--text-subtle, var(--text-muted))" }}>
+            Widening the window will not recover this one — <code>?hours=</code> is
+            in the address bar, and for this case no value of it helps.
+          </div>
+        ) : null}
         {went?.continues_as ? (
           <div style={{ marginTop: 10 }}>
             This incident continues as{" "}
@@ -809,6 +815,18 @@ function Detail({ node, onClose }: { node: CaseGraphNode; onClose: () => void })
             <span style={{ color: "var(--text-subtle)" }}>
               (as the alert's own source states it)
             </span>
+            {node.attrs?.source_severity_raw ? (
+              <div style={{ color: "var(--text-subtle)", marginTop: 2 }}>
+                {String(node.attrs.source_severity_raw)}
+                {String(node.attrs.source_severity_raw).includes("also ") ? (
+                  <span style={{ color: "#F59F00" }}>
+                    {" "}
+                    — the source graded this event twice and the two disagree;
+                    the louder grading is shown above
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </>
         )}
         {node.indicator_risk_score != null ? (

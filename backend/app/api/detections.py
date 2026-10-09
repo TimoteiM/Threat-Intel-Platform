@@ -499,8 +499,24 @@ async def get_case(
     host = (case or {}).get("entity_host") or (spine.entity_host if spine else None)
     profile = await build_entity_profile(db, host=host, scope=scope) if host else None
 
+    # When the case does not form, say why. The graph tab explains itself and
+    # this endpoint did not, so the same case read two ways gave an analyst an
+    # explanation on one tab and silence on the other.
+    unreachable = None
+    if case is None and spine is not None:
+        from app.services.case_supersession_service import where_this_key_went
+        from app.services.case_unreachable_service import why_unreachable
+
+        unreachable = (
+            await why_unreachable(
+                db, spine=spine, hours=hours,
+                pointer=await where_this_key_went(db, case_key),
+            )
+        ).as_json()
+
     return {
         "case_key": case_key,
+        "unreachable": unreachable,
         # None when the case no longer forms — its alerts may have aged out of
         # the window, or a late arrival may have re-anchored it under a new key.
         # The spine still answers who owned it and what it reached.
@@ -1251,6 +1267,7 @@ async def get_case_graph(
     from app.services.asset_criticality_service import criticality_for
     from app.services.case_collision_service import shadow_payload, shadowing_keys
     from app.services.case_disposition_review_service import review_for
+    from app.services.case_unreachable_service import why_unreachable
     from app.services.graph_draw_summary_service import summarise
     from app.services.case_supersession_service import (
         earlier_keys_for,
@@ -1272,6 +1289,12 @@ async def get_case_graph(
         # incident (migration 052), so the first thing to try is the pointer:
         # a dead key should redirect rather than render nothing.
         went = await where_this_key_went(db, case_key)
+        # Why, measured. The sentence that used to stand here named the window
+        # or a re-grouping in every case, and for 51 of the 61 live keys that
+        # do not derive it was false in both halves: their host component uses
+        # a retired composite form that no stored alert carries, so no window
+        # can recover them and no pointer exists to follow.
+        reason = await why_unreachable(db, spine=spine, hours=hours, pointer=went)
         return {
             "case_key": case_key,
             "case_number": spine.case_number,
@@ -1282,15 +1305,8 @@ async def get_case_graph(
             "over_cap": False,
             "continues": None,
             "supersession": went,
-            "note": (
-                (went or {}).get("note")
-                or (
-                    "This case cannot be re-derived over the last "
-                    f"{hours} hours, so there is nothing to draw. Its alerts "
-                    "have either aged out of the window or been re-grouped "
-                    "under a different case."
-                )
-            ),
+            "unreachable": reason.as_json(),
+            "note": reason.note,
         }
 
     # The whole case, not the first hundred alerts of it.
