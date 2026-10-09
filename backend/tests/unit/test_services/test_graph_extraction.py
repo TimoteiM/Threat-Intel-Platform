@@ -488,17 +488,42 @@ def test_a_collapsed_group_is_only_corroborated_if_every_member_was():
 # --- the empty state -------------------------------------------------------
 
 def test_an_unreadable_source_says_which_source_rather_than_drawing_nothing():
-    """Case #1106 is Palo Alto syslog. A blank canvas reads as "no attack
-    here", which is the exact bug the 404-on-a-stale-key had."""
-    body = (
-        "<12>Sep 14 08:21:27 172.16.23.1 1,2026/09/14 08:21:26,013101014199,"
-        "THREAT,spyware,2818,2026/09/14 08:21:25,10.64.0.109"
-    )
+    """A blank canvas reads as "no attack here", which is the exact bug the
+    404-on-a-stale-key had.
+
+    This was written against Palo Alto syslog, which now has a field map — see
+    `test_panos_field_map.py`. The property it protects is not about PAN-OS, so
+    it moves to `appsec-agent`, which is still unmapped and is the larger case:
+    2,685 alerts, and the whole of case #1849's 1,887.
+    """
+    body = "\n".join([
+        "Alert: appsec detection",
+        "Rule: 100100",
+        "Decoder: appsec-agent",
+    ])
     graph = assemble([_evidence(body, run_id="a")])
     assert graph["nodes"] == []
     assert "has no field map" in graph["note"]
     assert "not a finding that the case is harmless" in graph["note"]
     assert graph["sources"]["unmapped"]
+
+
+def test_palo_alto_syslog_is_no_longer_one_of_those_sources():
+    """The source that case #1106 is made of. 224 runs, 734 records, and zero
+    rows in `alert_graph_entity` before this map existed."""
+    body = (
+        "<12>Sep 14 08:21:27 172.16.23.1 1,2026/09/14 08:21:26,013101014199,"
+        "THREAT,spyware,2818,2026/09/14 08:21:25,10.64.0.109,10.14.0.10,"
+        "0.0.0.0,0.0.0.0,LEO - DNS NTP DHCP,povgrp\\f0316,,dns-base,vsys1,"
+        "user-wired,SERVER,ae2.1218,ae2.1,LogForw,2026/09/14 08:21:25,1,1,"
+        "51448,53,0,0,0x3000,udp,sinkhole,\"www.darmika.be\","
+        "generic:www.darmika.be(757811880),any,medium,client-to-server"
+        + ",".join([""] * 96)
+    )
+    graph = assemble([_evidence(body, run_id="a")])
+    assert graph["nodes"], graph.get("note")
+    assert "domain" in {n["kind"] for n in graph["nodes"]}
+    assert not graph["sources"]["unmapped"]
 
 
 def test_a_graph_reports_every_source_it_drew_from_not_only_broken_ones():

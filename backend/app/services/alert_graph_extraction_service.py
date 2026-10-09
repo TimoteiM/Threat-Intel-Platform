@@ -57,7 +57,13 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from app.services.alert_field_service import is_machine_account
-from app.services.source_severity_service import normalise
+from app.services import panos_field_map
+from app.services.source_severity_service import _loudest_of, normalise
+
+#: What `graph_source_type` reads for Palo Alto syslog. Named like a field map
+#: rather than like a transport, because `unstructured syslog` — what these 224
+#: runs read today — describes how it arrived, not what it is.
+PANOS_SOURCE = "palo_alto_panos"
 
 # --- basis, and the status it earns ----------------------------------------
 
@@ -104,6 +110,8 @@ EDGE_BASIS = {
     "created_service": PARSED,      # sc create ... in a command line
     "service_binary": PARSED,       # binpath= ... in a command line
     "evidenced_by": OBSERVED,       # an alert witnessed this node
+    "requested": OBSERVED,          # a firewall saw this address ask for this
+    "attributed_to": OBSERVED,      # PAN-OS User-ID bound an address to a user
 }
 
 
@@ -147,7 +155,7 @@ class Edge:
 #:                                              currently measure 0.0%)
 #:     (none: PAN-OS, syslog)     865    5.7%   not mapped
 #:     syscheck_*, macOS, json     76    0.5%   not mapped
-MAPPED_DECODERS = frozenset({"windows_eventchannel"})
+MAPPED_DECODERS = frozenset({"windows_eventchannel", PANOS_SOURCE})
 
 #: How many stored SIEM events one alert contributes. Measured: 40 sampled log
 #: contexts hold 14,674 events, so roughly 370 each, and the 1,858 runs that
@@ -950,6 +958,104 @@ def _populate(
     b.unread.update(unread)
 
 
+def _populate_panos(b: "_Builder", records: list[Any]) -> None:
+    """Read PAN-OS records into a builder.
+
+    The model is deliberately not the Windows one. PAN-OS witnesses a session
+    between two addresses, so the subject is an address and not a process, and
+    nothing here claims to have seen a parent, a hash or a command line.
+
+    The firewall itself does not become a node. It reported 718 of the 734
+    records in the store, so it would join every node in every PAN-OS case to
+    one hub — the host-wide bucket shape — while telling an analyst nothing
+    they did not already know from the case's source. It is kept as the
+    `reported_by` attribute of the session instead.
+    """
+    for record in records:
+        if not record.readable:
+            b.quarantine(
+                kind="panos_record", field="alert_body",
+                value=record.raw, why=record.problem or "unreadable",
+            )
+            continue
+
+        src = record.get("src_ip")
+        dst = record.get("dst_ip")
+        subject = (
+            b.node("ip", f"ip:{src}", src, OBSERVED, address=src,
+                   zone=record.get("src_zone"))
+            if src else None
+        )
+        target = (
+            b.node("ip", f"ip:{dst}", dst, OBSERVED, address=dst,
+                   zone=record.get("dst_zone"))
+            if dst else None
+        )
+
+        name, signature = panos_field_map.threat_id(record)
+        if subject and target:
+            b.edge(
+                "connected_to", subject, target,
+                port=record.get("dst_port"), protocol=record.get("protocol"),
+                application=record.get("application"),
+                # The firewall's verdict on the session, which is not the
+                # platform's: `alert` means it was allowed and logged.
+                firewall_action=record.get("action"),
+                threat=name or None, threat_id=signature,
+                # A URL-filtering record states a category and no signature.
+                # Kept apart so an analyst is not shown `content-delivery-
+                # networks` where a detection name belongs.
+                url_category=record.get("category") or None,
+                severity=record.get("severity") or None,
+                rule=record.get("rule"), reported_by=record.get("device_name"),
+                subtype=record.get("subtype"),
+            )
+
+        # User-ID: the firewall states which principal held the address.
+        user = record.get("src_user")
+        if user and subject:
+            problem = account_shape_problem(user)
+            if problem:
+                b.quarantine(
+                    kind="account", field="panos.src_user", value=user, why=problem
+                )
+            else:
+                account = b.node(
+                    "account", f"account:{user.lower()}", user, OBSERVED, user=user,
+                    machine_account=is_machine_account(user),
+                )
+                b.edge("attributed_to", subject, account)
+
+        # What was asked for. One position, three meanings, keyed on subtype.
+        kind = panos_field_map.misc_kind(record)
+        value = panos_field_map.misc_value(record)
+        asked = None
+        if kind == "domain":
+            bare = value.split("/", 1)[0].lower()
+            asked = b.node("domain", f"domain:{bare}", bare, OBSERVED)
+        elif kind == "url":
+            # A vulnerability record names the resource without its host, so
+            # the server is part of the identity: the same page on two servers
+            # is two resources.
+            full = value if "/" in value.rstrip("/") else f"{dst or '?'}/{value}"
+            asked = b.node("url", f"url:{full.lower()}", full[:72], OBSERVED, url=full)
+        elif kind == "file":
+            asked = b.node(
+                "file", f"file:{(dst or '?')}:{value.lower()}", value, OBSERVED,
+                served_by=dst or None,
+            )
+        if asked and subject:
+            b.edge(
+                "requested", subject, asked,
+                application=record.get("application"),
+                firewall_action=record.get("action"),
+                threat=name or None,
+                url_category=record.get("category") or None,
+            )
+        if asked and target and kind in ("url", "file"):
+            b.edge("hosted_on", asked, target)
+
+
 def extract(
     alert_body: str | None,
     *,
@@ -968,6 +1074,24 @@ def extract(
     and its log context has to be one node, not two.
     """
     b = _Builder()
+
+    # PAN-OS arrives outside Wazuh as a positional record, so it is detected
+    # from the body and not from `decoder.name`, which it does not carry.
+    panos = panos_field_map.records_of(alert_body)
+    if panos:
+        _populate_panos(b, panos)
+        loudest = _loudest_of(panos_field_map.severity_signals(panos))
+        return Extracted(
+            entities=list(b.entities.values()),
+            edges=list(b.edges.values()),
+            unread=sorted(b.unread),
+            source_type=PANOS_SOURCE,
+            mapped=True,
+            source_severity=loudest[0] if loudest else None,
+            source_severity_raw=loudest[1] if loudest else None,
+            quarantined=b.quarantined,
+        )
+
     fields = read_fields(alert_body)
     _populate(b, fields, risk_score=risk_score,
               confirmed_techniques=confirmed_techniques)
