@@ -408,6 +408,13 @@ async def get_correlated_cases(
         # reader must still see the whole answer.
         result = {**cached, "cases": list(cached.get("cases") or [])}
     else:
+        # This read still writes the spine, and that is a known debt rather
+        # than a design. Of 303 live cases created in the 14 days to
+        # 2026-10-09, 224 (74%) were first written outside the hourly job's
+        # slot — by this page. Turning it off moves case creation, and with it
+        # MTTD and the start of the closing job's quiet period, onto an hourly
+        # cadence until the scheduled pass runs more often. The insert is
+        # conflict-safe (see upsert_spine), so concurrent reads cannot 500.
         result = await correlate_alerts(
             db, scope=scope, hours=hours, min_rules=min_rules,
             min_score=min_score, limit=limit, since=since_at, until=until_at,

@@ -26,6 +26,26 @@ T0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
 KEY = "a" * 64
 
 
+def _inserted_values(query) -> dict:
+    """The literal values of an INSERT, with the sequence call left out."""
+    return {
+        col if isinstance(col, str) else col.key: bind.value
+        for col, bind in query._values.items()
+        if hasattr(bind, "value")
+    }
+
+
+class _Scalar:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
 class _FakeDB:
     """A dict-backed stand-in that answers the store's two reads honestly."""
 
@@ -43,9 +63,30 @@ class _FakeDB:
         else:
             self.snapshots.append(row)
 
+    def _spine_key(self, query):
+        params = query.compile().params
+        return next((v for k, v in params.items() if k.startswith("case_key")), None)
+
     async def execute(self, query):
         name = (query.get_execution_options() or {}).get("query_name")
         db = self
+
+        # The spine row is created with INSERT .. ON CONFLICT DO NOTHING and
+        # then read back, so the database rather than a prior read decides who
+        # created it. Modelled here with the same outcome: the first insert of
+        # a key wins and takes a number, a second one changes nothing.
+        if name == "spine_insert":
+            values = _inserted_values(query)
+            if values["case_key"] in self.spine:
+                return _Scalar(None)
+            self.sequence += 1
+            values["case_number"] = self.sequence
+            self.spine[values["case_key"]] = AlertCaseSpine(**values)
+            return _Scalar(values["case_key"])
+        if name == "spine_read_back":
+            return _Scalar(self.spine.get(self._spine_key(query)))
+        if name == "spine_number_read":
+            return _Scalar(self.spine[self._spine_key(query)].case_number)
 
         class _R:
             # The case-number sequence. A spine row now takes its number from

@@ -1500,7 +1500,10 @@ async def case_for_run(
     if run is None or not run.entity_host:
         return None
 
-    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500)
+    # A lookup, so it does not write. The window here is the caller's, 1 to
+    # 720 hours, and a case key depends on the window — persisting minted a
+    # spine row per window an analyst happened to pick.
+    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500, persist=False)
     for case in result["cases"]:
         if case["source"] != str(run.alert_source or UNKNOWN_SOURCE):
             continue
@@ -1578,7 +1581,12 @@ async def case_by_key(
     # pass keeps those answerable rather than returning a wrong "no such case".
     if only_entity is None:
         return None
-    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500)
+    # Read-only like the narrowed pass above. This fallback used to persist,
+    # so a lookup that missed wrote a spine row for every case in the estate
+    # at the lookup's window — the closing job reaches it every minute.
+    result = await correlate_alerts(
+        db, scope=scope, hours=hours, limit=500, persist=False, max_members=max_members,
+    )
     for case in result["cases"]:
         if case.get("case_key") == case_key:
             return case

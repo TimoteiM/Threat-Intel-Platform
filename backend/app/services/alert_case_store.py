@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import case, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,31 +188,53 @@ async def upsert_spine(
     now = datetime.now(timezone.utc)
 
     if row is None:
-        row = AlertCaseSpine(
-            case_key=case_key,
-            alert_source=source,
-            alert_client=client,
-            entity_host=host,
-            session_started_at=session_started_at,
-            tenant_id=tenant_id,
-            session_seq=session_seq,
-            opened_at=first_alert_at or session_started_at,
-            last_activity_at=last_activity_at,
-            status="open",
-            peak_score=score,
-            peak_score_version=score_version,
-            peak_at=now,
-            # The handle a person uses, taken once from the sequence. The key
-            # stays a sha256 because it has to be derivable from the events.
-            case_number=await next_case_number(db),
-            title=title,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(row)
+        # The database decides who creates the row, not a read followed by a
+        # write. Two passes that both found no row used to both INSERT, and the
+        # loser raised on the primary key — a 500 on the cases page, 7 of 8
+        # concurrent requests in a reproduction. The loser now finds the
+        # winner's row and refreshes it like any other existing case.
+        inserted = (
+            await db.execute(
+                pg_insert(AlertCaseSpine)
+                .values(
+                    case_key=case_key,
+                    alert_source=source,
+                    alert_client=client,
+                    entity_host=host,
+                    session_started_at=session_started_at,
+                    tenant_id=tenant_id,
+                    session_seq=session_seq,
+                    opened_at=first_alert_at or session_started_at,
+                    last_activity_at=last_activity_at,
+                    status="open",
+                    peak_score=score,
+                    peak_score_version=score_version,
+                    peak_at=now,
+                    # The handle a person uses, taken once from the sequence.
+                    # The key stays a sha256 because it has to be derivable
+                    # from the events. A losing insert burns a number; gaps
+                    # are fine, a number has to be unique, not contiguous.
+                    case_number=func.nextval("alert_case_number_seq"),
+                    title=title,
+                    created_at=now,
+                    updated_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=[AlertCaseSpine.case_key])
+                .returning(AlertCaseSpine.case_key)
+                .execution_options(query_name="spine_insert")
+            )
+        ).scalar_one_or_none()
+        row = (
+            await db.execute(
+                select(AlertCaseSpine)
+                .where(AlertCaseSpine.case_key == case_key)
+                .execution_options(populate_existing=True, query_name="spine_read_back")
+            )
+        ).scalar_one()
         if known is not None:
             known[case_key] = row
-        return row
+        if inserted is not None:
+            return row
 
     # Only touch the row when something actually changed. It used to stamp
     # `updated_at` on every recompute, so one page load issued 673 UPDATEs
@@ -227,7 +250,21 @@ async def upsert_spine(
         row.last_activity_at = newest
         changed = True
     if row.case_number is None:
-        row.case_number = await next_case_number(db)
+        # Conditional in SQL, so two passes filling the same gap cannot each
+        # take a number and leave the case answering to whichever wrote last.
+        await db.execute(
+            update(AlertCaseSpine)
+            .where(AlertCaseSpine.case_key == case_key, AlertCaseSpine.case_number.is_(None))
+            .values(case_number=func.nextval("alert_case_number_seq"))
+            .execution_options(synchronize_session=False, query_name="spine_number_fill")
+        )
+        row.case_number = (
+            await db.execute(
+                select(AlertCaseSpine.case_number)
+                .where(AlertCaseSpine.case_key == case_key)
+                .execution_options(query_name="spine_number_read")
+            )
+        ).scalar_one()
         changed = True
     # Filled in when correlation knows it and the row does not. Never
     # overwritten: a case does not change client, and a pass that happened to

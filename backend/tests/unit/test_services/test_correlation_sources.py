@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.database import AlertCaseSpine
 from app.services.alert_correlation_service import correlate_alerts
 from app.services import tenant_scope
 
@@ -80,6 +81,16 @@ class _Result:
         return self._rows[0] if self._rows else 0
 
 
+class _Row(_Result):
+    """One stored row, read back by key — not a draw from the sequence."""
+
+    def __init__(self, row):
+        super().__init__([row])
+
+    def scalar_one(self):
+        return self._rows[0]
+
+
 class _DB:
     """A database that answers each of the service's reads differently.
 
@@ -95,6 +106,7 @@ class _DB:
         self._rows = rows
         self._history = list(history or [])
         self.added = []
+        self.spine = {}
         self.commits = 0
 
     # Every read the service makes is named, so this answers by name rather
@@ -116,6 +128,22 @@ class _DB:
             return _Result(self._rows)
         if name == "anchor_walk":
             return _Result(self._history)
+        # The spine row is created with INSERT .. ON CONFLICT and read back.
+        # Answered as a database would: the insert wins, the read finds it.
+        if name == "spine_insert":
+            values = {
+                col if isinstance(col, str) else col.key: bind.value
+                for col, bind in query._values.items()
+                if hasattr(bind, "value")
+            }
+            _Result._sequence += 1
+            row = AlertCaseSpine(**values, case_number=_Result._sequence)
+            self.spine[row.case_key] = row
+            self.added.append(row)
+            return _Result([row.case_key])
+        if name == "spine_read_back":
+            key = next(v for k, v in query.compile().params.items() if k.startswith("case_key"))
+            return _Row(self.spine[key])
         # Spine and snapshot reads: nothing persisted in these fixtures.
         return _Result([])
 
