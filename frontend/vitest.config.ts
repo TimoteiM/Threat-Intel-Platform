@@ -16,6 +16,11 @@ import { defineConfig } from "vitest/config";
  * monitor rule applied to the renderer.
  */
 export default defineConfig({
+  // Next compiles JSX itself and the repo tsconfig leaves `jsx: preserve`, so
+  // esbuild has to be told here or every component test fails with
+  // "React is not defined" — a test-environment false failure, which is the
+  // same class as the headless Esc artefact.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "jsdom",
     globals: true,

@@ -646,6 +646,18 @@ export interface CaseGraphEdge {
   witness_count: number;
 }
 
+/** The honest-absence convention on the wire.
+ *
+ *  A missing value arrives as a reason rather than as null or zero. The
+ *  platform has paid for both alternatives: `threatfox_count` reads 0 for
+ *  every address in the estate while that feed has never once answered. */
+export interface AbsentValue {
+  absent: true;
+  kind: string;
+  reason: string;
+  raw?: string | null;
+}
+
 export interface CaseGraph {
   case_key: string;
   case_number: number | null;
@@ -684,6 +696,10 @@ export interface CaseGraph {
     matched_on: string;
     note: string;
   } | null;
+  /** What is known about each indicator node, keyed by its label. Joined
+   *  from `ip_lookups` and `investigations`; 63.9% of reputation lookups are
+   *  over 30 days old, so every entry carries its own age. */
+  enrichment?: Record<string, Record<string, unknown>>;
   over_cap?: boolean;
   /** Why this key does not re-derive, measured rather than guessed. The note
    *  that used to stand here named the window or a re-grouping in every case;

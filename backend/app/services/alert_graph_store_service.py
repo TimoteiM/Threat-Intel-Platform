@@ -360,6 +360,30 @@ async def graph_for_runs(
             f"{dropped_alerts} were not read."
         ) if dropped_alerts else None,
     }
+
+    # What is known about each indicator the graph drew.
+    #
+    # Here rather than in the endpoint, so the acceptance CLI and the page get
+    # the same graph. The first version added it in `get_case_graph` alone and
+    # the CLI could not see it — the same entry-point divergence that let a
+    # severity bound be measured eleven times on a path no user was on.
+    #
+    # Two indexed reads over at most a few dozen values, against a graph capped
+    # at 150 nodes.
+    from app.services.indicator_enrichment_service import enrich
+
+    indicators = [
+        (str(node.get("label") or ""), str(node.get("kind") or ""))
+        for node in (graph.get("nodes") or [])
+        if node.get("kind") in ("ip", "domain", "url", "file")
+    ]
+    graph["enrichment"] = (
+        {value: found.as_json() for value, found in (
+            await enrich(db, values=indicators)
+        ).items()}
+        if indicators
+        else {}
+    )
     return graph
 
 

@@ -23,11 +23,13 @@ import fcose from "cytoscape-fcose";
 import dagre from "cytoscape-dagre";
 import { EXTERNAL_BAND, planBands } from "./bands";
 import { planTimeline, type TimelinePlan } from "./timeline";
+import { IndicatorPanel } from "./IndicatorPanel";
 import { recentre } from "./viewport";
 import {
   getCaseGraph,
   type CaseGraph as CaseGraphData,
   type CaseGraphNode,
+  type AbsentValue,
 } from "@/lib/api";
 
 let registered = false;
@@ -897,7 +899,12 @@ export default function CaseGraph({
             ) : null}
           </div>
           {selected ? (
-            <Detail node={selected} onClose={() => setSelected(null)} fill={fullscreen} />
+            <Detail
+              node={selected}
+              enrichment={data.enrichment?.[selected.label]}
+              onClose={() => setSelected(null)}
+              fill={fullscreen}
+            />
           ) : null}
         </div>
 
@@ -1023,10 +1030,12 @@ function Legend({ counts, mode }: { counts: Record<string, number>; mode: Mode }
 
 function Detail({
   node,
+  enrichment,
   onClose,
   fill = false,
 }: {
   node: CaseGraphNode;
+  enrichment?: Record<string, unknown>;
   onClose: () => void;
   /** Fullscreen: as tall as the canvas beside it, not the inline 560. */
   fill?: boolean;
@@ -1035,6 +1044,7 @@ function Detail({
     ([k, v]) => v != null && v !== "" && k !== "members",
   );
   const members = (node.attrs?.members as string[] | undefined) || [];
+  const indicator = ["ip", "domain", "url", "file"].includes(node.kind);
   return (
     <aside
       style={{
@@ -1059,6 +1069,15 @@ function Detail({
         </span>{" "}
         <span style={{ color: "var(--text-subtle)" }}>({node.basis})</span>
       </div>
+      {indicator ? (
+        enrichment ? (
+          <IndicatorPanel data={enrichment} />
+        ) : (
+          <div style={{ marginTop: 10, color: "var(--text-subtle)" }}>
+            Nothing has been looked up for this indicator yet.
+          </div>
+        )
+      ) : null}
 
       {node.kind === "unparsed" ? (
         <div style={{ marginTop: 8, lineHeight: 1.55 }}>
