@@ -164,6 +164,20 @@ class SourceFreshness:
         delivering inside the recent window is not stale however old its last
         materialised run looks, which is the column trap above.
         """
+        # KNOWN WEAKNESS, measured 2026-10-12 and not yet fixed because the
+        # replacement needs a threshold nobody has approved.
+        #
+        # `recent_runs > 0` means ONE alert clears any length of outage.
+        # `fortigate-firewall-v5` delivered a single alert at 01:59 after 26.3
+        # days of silence and this check went from STALE to fresh on it — the
+        # alarm written for that source now says it is fine.
+        #
+        # The replacement cannot use the median gap either: for a bursty
+        # source the median measures the gap *within* a burst (0.02h for
+        # Fortigate, about a minute for windows_eventchannel) and says nothing
+        # about how long it normally goes quiet between them. That wants a high
+        # percentile of the gap distribution and a rate comparison, both of
+        # which are constants to be chosen from the data rather than picked.
         if self.unjudgeable is not None or self.recent_runs > 0:
             return False
         allowed = self.allowed_silence
@@ -310,11 +324,28 @@ async def check(db: AsyncSession, *, now: datetime | None = None) -> IngestFresh
                     ),
                     raw=str(runs),
                 )
+        # `last_seen` comes from `graph_source_type`, which is written at
+        # materialise time, so for a live source it lags the last backfill. It
+        # read 2.5 days for `windows_eventchannel` while that source was
+        # delivering 97 alerts in 12 hours — a wrong number reported to a
+        # reader, even though `stale` was still computed correctly because the
+        # recent count overrides it. The classified arrivals know better, so
+        # they win when they exist.
+        seen = list(arrivals.get(source, []))
+        last_seen = row.last_seen
+        if seen:
+            newest = max(seen)
+            stored = (
+                last_seen if last_seen is None or last_seen.tzinfo
+                else last_seen.replace(tzinfo=timezone.utc)
+            )
+            last_seen = newest if stored is None or newest > stored else stored
+
         # Counted inside this source's own allowed silence, capped at the
         # window actually read. A source with no cadence gets the whole window,
         # since there is nothing narrower to justify.
         candidate = SourceFreshness(
-            source=source, runs=runs, last_seen=row.last_seen, recent_runs=0,
+            source=source, runs=runs, last_seen=last_seen, recent_runs=0,
             typical_gap=gap, now=now, unjudgeable=unjudgeable,
         )
         window = min(candidate.allowed_silence or RECENT, RECENT)
@@ -322,10 +353,8 @@ async def check(db: AsyncSession, *, now: datetime | None = None) -> IngestFresh
             SourceFreshness(
                 source=source,
                 runs=runs,
-                last_seen=row.last_seen,
-                recent_runs=arrivals_within(
-                    arrivals.get(source, []), now=now, window=window
-                ),
+                last_seen=last_seen,
+                recent_runs=arrivals_within(seen, now=now, window=window),
                 recent_window=window,
                 typical_gap=gap,
                 now=now,

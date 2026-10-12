@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.services.absence import KINDS, TOO_LITTLE_HISTORY, absent
 from app.services.ingest_freshness_service import (
     MIN_RUNS_FOR_CADENCE,
@@ -182,3 +184,40 @@ class TestTheRecentWindowIsPerSource:
         from app.services.ingest_freshness_service import recent_arrivals_by_source
 
         assert callable(recent_arrivals_by_source)
+
+
+class TestTheReportedSilenceIsNotTheStaleColumn:
+    def test_a_classified_arrival_beats_the_materialised_last_seen(self):
+        """`graph_source_type` is written at materialise time, so for a live
+        source `last_seen` lags the last backfill. It reported 2.5 days of
+        silence for `windows_eventchannel` while that source was delivering 97
+        alerts in 12 hours."""
+        from app.services.ingest_freshness_service import arrivals_within
+
+        arrivals = [NOW - timedelta(minutes=4)]
+        assert arrivals_within(arrivals, now=NOW, window=MIN_SILENCE) == 1
+        # The report must use the arrival, not the stale column.
+        source = _source(
+            source="windows_eventchannel", runs=9306,
+            last_seen=NOW - timedelta(minutes=4), recent_runs=97,
+        )
+        assert source.as_json()["silent_for_hours"] == pytest.approx(0.1, abs=0.05)
+
+    def test_one_alert_after_a_long_outage_currently_clears_the_alarm(self):
+        """A recorded weakness, asserted so it cannot change unnoticed.
+
+        Fortigate delivered a single alert after 26.3 days of silence and this
+        check went from STALE to fresh on it. The replacement needs a
+        percentile-based cadence and a rate comparison — constants that have
+        not been chosen — so the present behaviour is pinned here rather than
+        left to be rediscovered.
+        """
+        barely = _source(
+            source="fortigate-firewall-v5", runs=2533,
+            last_seen=NOW - timedelta(minutes=30), recent_runs=1,
+            typical_gap=timedelta(minutes=1),
+        )
+        assert barely.stale is False, (
+            "if this now reports stale, the recovery condition was changed — "
+            "update the comment in SourceFreshness.stale and this test"
+        )
