@@ -28,24 +28,37 @@ from app.models.database import (
 from app.services.alert_graph_assembly_service import AlertEvidence, assemble
 from app.services.alert_graph_extraction_service import Extracted, extract
 from app.services.source_severity_service import reserve_for_unrated
+from app.services.technique_attribution_service import (
+    attribute,
+    corroborated_ids,
+)
 
 
 def confirmed_ids(assessment: Any) -> list[str]:
     """The ATT&CK ids this alert's investigation actually corroborated.
 
     Anything a *rule* asserts is a claim: `rule.mitre.id` is its author's
-    mapping, not a finding. 30,794 of the 30,834 mappings in this estate have
-    never been corroborated, so reading the rule's opinion as a result would
-    turn the graph into a confident fiction.
+    mapping, not a finding. Measured 2026-10-12 across 16,574 stored alerts,
+    rules assert 26,843 mappings and 42 technique entries carry
+    `status = confirmed` — four of them outside the test rig.
+
+    Delegates, and does not compute. This function read `techniques[]` alone
+    while `alert_correlation_service` also read `additional_techniques`, so one
+    column had two meanings depending on who asked. That is the small version
+    of the nine-membership-consumers defect and is fixed the same way: one
+    definition, in `technique_attribution_service`, that every consumer reads.
     """
-    techniques = (assessment or {}).get("techniques")
-    if not isinstance(techniques, list):
-        return []
-    return [
-        str(t.get("id"))
-        for t in techniques
-        if isinstance(t, dict) and t.get("status") == "confirmed" and t.get("id")
-    ]
+    return corroborated_ids(assessment)
+
+
+def model_only_ids(assessment: Any) -> list[str]:
+    """Techniques the evidence supports that no rule claimed.
+
+    727 of the 768 alerts with any supporting evidence are in this state, and
+    the graph could not see one of them. Not corroboration, and never counted
+    as such.
+    """
+    return attribute(assessment).model_only()
 
 
 async def materialise_run(
@@ -69,6 +82,7 @@ async def materialise_run(
     found = extract(
         alert_body, risk_score=risk_score,
         confirmed_techniques=confirmed_ids(assessment),
+        model_only_techniques=model_only_ids(assessment),
         log_events=log_events or (),
     )
     # Remembered on the run, so a case with no extractable alerts can name the

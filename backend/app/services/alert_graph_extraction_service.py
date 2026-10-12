@@ -58,6 +58,11 @@ from typing import Any, Iterable
 
 from app.services.alert_field_service import is_machine_account
 from app.services import panos_field_map
+from app.services.technique_attribution_service import (
+    BOTH,
+    MODEL_ONLY,
+    RULE_ONLY,
+)
 from app.services.source_severity_service import _loudest_of, normalise
 
 #: What `graph_source_type` reads for Palo Alto syslog. Named like a field map
@@ -572,6 +577,7 @@ def _populate(
     *,
     risk_score: int | None = None,
     confirmed_techniques: Iterable[str] = (),
+    model_only_techniques: Iterable[str] = (),
 ) -> None:
     """Read one set of fields into a builder.
 
@@ -913,21 +919,47 @@ def _populate(
             b.edge("service_binary", service, binary, basis=PARSED)
 
     # ---- Techniques ------------------------------------------------------
+    #
+    # Two independent namers, four states, and only one of them is
+    # corroboration. `named_by` rides on the node so a renderer can tell a
+    # rule's assertion from the telemetry's finding without re-deriving it:
+    #
+    #   both        rule and evidence agree. The only corroborated state.
+    #   rule_only   an assertion with nothing behind it.
+    #   model_only  the evidence supports it and no rule claimed it. Drawn
+    #               because 727 of the 768 alerts that have any supporting
+    #               evidence are in this state — the rule named something else
+    #               — and the graph could not see any of them.
+    #
+    # `model_only` is INFERRED, never OBSERVED. It is a finding, not a
+    # corroboration, and the word keeps one meaning.
     confirmed = {str(t).upper() for t in confirmed_techniques}
+    model_only = {
+        str(t).upper() for t in model_only_techniques
+    } - confirmed
     raw_ids = get("rule.mitre.id")
     ids = raw_ids if isinstance(raw_ids, list) else ([raw_ids] if raw_ids else [])
-    for tid in dict.fromkeys(str(i).strip().upper() for i in ids if str(i).strip()):
+    anchor = subject or source_proc or (f"host:{local}" if local else None)
+    rule_ids = dict.fromkeys(str(i).strip().upper() for i in ids if str(i).strip())
+    for tid in rule_ids:
+        named = BOTH if tid in confirmed else RULE_ONLY
         technique = b.node(
             "technique", f"technique:{tid}", tid,
-            OBSERVED if tid in confirmed else INFERRED, id=tid,
+            OBSERVED if tid in confirmed else INFERRED, id=tid, named_by=named,
         )
         # Attached to the thing the alert was about, so a technique hangs off
         # the process or host it touched rather than off the case hub.
-        anchor = subject or source_proc or (f"host:{local}" if local else None)
         b.edge(
             "evidenced_by", anchor, technique,
-            basis=OBSERVED if tid in confirmed else INFERRED,
+            basis=OBSERVED if tid in confirmed else INFERRED, named_by=named,
         )
+    for tid in sorted(model_only - set(rule_ids)):
+        technique = b.node(
+            "technique", f"technique:{tid}", tid, INFERRED,
+            id=tid, named_by=MODEL_ONLY,
+        )
+        b.edge("evidenced_by", anchor, technique, basis=INFERRED,
+               named_by=MODEL_ONLY)
 
     # ---- Risk, carried on every node this alert touched ------------------
     # Two different numbers, kept apart. `indicator_risk_score` is the
@@ -1067,6 +1099,7 @@ def extract(
     *,
     risk_score: int | None = None,
     confirmed_techniques: Iterable[str] = (),
+    model_only_techniques: Iterable[str] = (),
     log_events: Iterable[dict[str, Any]] = (),
     max_log_events: int = MAX_LOG_EVENTS,
 ) -> Extracted:
@@ -1100,13 +1133,15 @@ def extract(
 
     fields = read_fields(alert_body)
     _populate(b, fields, risk_score=risk_score,
-              confirmed_techniques=confirmed_techniques)
+              confirmed_techniques=confirmed_techniques,
+              model_only_techniques=model_only_techniques)
     for index, event in enumerate(log_events or ()):
         if index >= max_log_events:
             b.truncated_logs = True
             break
         _populate(b, fields_of_log_event(event), risk_score=risk_score,
-                  confirmed_techniques=confirmed_techniques)
+                  confirmed_techniques=confirmed_techniques,
+                  model_only_techniques=model_only_techniques)
     source_type = source_type_of(fields)
     severity, severity_raw = normalise(fields)
     return Extracted(
