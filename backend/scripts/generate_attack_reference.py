@@ -120,6 +120,10 @@ def main() -> int:
     lines.append("}\n")
 
     args.out.write_text("".join(lines))
+    unresolved = sorted(
+        t for t, e in techniques.items()
+        if e["revoked"] and not e["current_equivalent"]
+    )
     revoked = sum(1 for e in techniques.values() if e["revoked"])
     deprecated = sum(1 for e in techniques.values() if e["deprecated"])
     retired = sum(1 for e in techniques.values() if e["retired"])
@@ -129,6 +133,11 @@ def main() -> int:
     print(
         f"wrote {args.out} — {len(techniques)} techniques, ATT&CK {version}\n"
         f"  chains resolved past an intermediate: {chained}\n"
+        + (
+            f"  !! {len(unresolved)} revoked technique(s) whose chain does NOT "
+            f"resolve — cyclic in this release: {unresolved}\n"
+            if unresolved else ""
+        ) +
         f"  revoked {revoked} ({successor} with a successor recorded), "
         f"deprecated {deprecated}, retired (union) {retired}"
     )
@@ -213,24 +222,8 @@ def _techniques(
         if old and new:
             techniques[old]["revoked_by"] = new
 
-    # ATT&CK revocation can chain: T1073 -> T1574.002 -> T1574.001, and
-    # T1150 and T1162 both run through T1547.011 to T1647. Three cases in
-    # 19.2, no cycles. `revoked_by` stays faithful to the single relationship
-    # ATT&CK states; `current_equivalent` walks to the end of the chain,
-    # because naming a successor that is itself revoked would give an analyst
-    # the equivalent as of some intermediate release rather than as of this
-    # one. The `seen` guard is for a future release that does form a cycle —
-    # it would otherwise be an infinite loop inside a build script.
     for technique_id, entry in techniques.items():
-        current, seen = technique_id, {technique_id}
-        while techniques[current].get("revoked_by"):
-            nxt = techniques[current]["revoked_by"]
-            if nxt in seen:
-                current = technique_id      # cyclic: claim no equivalent
-                break
-            seen.add(nxt)
-            current = nxt
-        entry["current_equivalent"] = None if current == technique_id else current
+        entry["current_equivalent"] = _current_equivalent(techniques, technique_id)
 
     for entry in techniques.values():
         entry.pop("stix_id", None)
@@ -239,6 +232,38 @@ def _techniques(
         # flags together, which is how the two would drift apart.
         entry["retired"] = bool(entry["revoked"] or entry["deprecated"])
     return techniques
+
+
+def _current_equivalent(
+    techniques: dict[str, dict[str, Any]], technique_id: str
+) -> str | None:
+    """The end of ATT&CK's revocation chain, or None when it does not resolve.
+
+    Revocation chains: T1073 -> T1574.002 -> T1574.001, and T1150 and T1162
+    both run through T1547.011 to T1647. Three cases in 19.2. `revoked_by`
+    stays faithful to the single relationship ATT&CK states; this walks to the
+    end, because naming a successor that is itself revoked gives an analyst
+    the equivalent as of some intermediate release rather than as of this one.
+
+    On a cycle it **refuses**, returning None rather than the last id it
+    happened to reach. Handing back a partial walk would answer with an
+    intermediate, which is the defect this function exists to prevent — the
+    guard would otherwise reintroduce it at the one moment it is supposed to
+    be protecting against it.
+
+    None is not ambiguous here: `revoked` is a separate flag, so a caller
+    distinguishes "revoked, and the chain does not resolve" from "not
+    revoked, so there is nothing to point at". Two statements, not one.
+    """
+    current: str = technique_id
+    seen = {technique_id}
+    while techniques[current].get("revoked_by"):
+        nxt = str(techniques[current]["revoked_by"])
+        if nxt in seen:
+            return None
+        seen.add(nxt)
+        current = nxt
+    return None if current == technique_id else current
 
 
 def _attack_id(obj: dict[str, Any]) -> str:

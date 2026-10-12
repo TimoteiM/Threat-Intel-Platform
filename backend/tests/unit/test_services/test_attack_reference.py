@@ -160,3 +160,72 @@ def test_an_id_that_is_not_attacks_resolves_to_nothing() -> None:
     assert describe_technique("T9999") is None
     assert describe_technique("{0=T1098}") is None
     assert describe_technique("") is None
+
+
+# --- the cycle guard, fed actual cycles -------------------------------------
+#
+# The guard exists for a future ATT&CK release that revokes in a loop. The
+# question that matters is what it returns when it trips: a partial walk would
+# answer with an intermediate, which is the exact defect `current_equivalent`
+# was added to prevent, reintroduced at the one moment it is meant to be
+# guarding against it.
+
+from scripts.generate_attack_reference import _current_equivalent
+
+
+def _catalogue(**links: str | None) -> dict:
+    return {tid: {"revoked_by": to} for tid, to in links.items()}
+
+
+def test_a_two_step_cycle_refuses_rather_than_answering() -> None:
+    cat = _catalogue(T1000="T2000", T2000="T1000")
+    assert _current_equivalent(cat, "T1000") is None
+    assert _current_equivalent(cat, "T2000") is None
+
+
+def test_a_longer_cycle_refuses() -> None:
+    cat = _catalogue(T1000="T2000", T2000="T3000", T3000="T1000")
+    for tid in ("T1000", "T2000", "T3000"):
+        assert _current_equivalent(cat, tid) is None
+
+
+def test_a_self_revocation_refuses() -> None:
+    assert _current_equivalent(_catalogue(T1000="T1000"), "T1000") is None
+
+
+def test_a_chain_that_enters_a_cycle_refuses_rather_than_stopping_short() -> None:
+    """The dangerous case. T1000 -> T2000 -> T3000 -> T2000: there is a real
+    chain before the loop, so a guard that returned the last id reached would
+    hand back T3000 and look entirely plausible.
+    """
+    cat = _catalogue(T1000="T2000", T2000="T3000", T3000="T2000")
+    assert _current_equivalent(cat, "T1000") is None
+
+
+def test_a_clean_chain_still_walks_to_the_end() -> None:
+    cat = _catalogue(T1000="T2000", T2000="T3000", T3000=None)
+    assert _current_equivalent(cat, "T1000") == "T3000"
+    assert _current_equivalent(cat, "T3000") is None
+
+
+def test_a_technique_that_was_never_revoked_has_no_equivalent() -> None:
+    assert _current_equivalent(_catalogue(T1000=None), "T1000") is None
+
+
+def test_refusal_is_distinguishable_from_never_revoked() -> None:
+    """None alone would conflate two different facts. It does not have to
+    carry both, because `revoked` is a separate flag — which is the same
+    refusal to collapse two statements as revoked_by vs current_equivalent,
+    and as retired vs revoked/deprecated.
+    """
+    for tid, entry in TECHNIQUE_REFERENCE.items():
+        if entry["current_equivalent"] is None:
+            # Either it was never revoked, or it was and the chain failed —
+            # and the reader can tell which.
+            assert entry["revoked"] in (True, False)
+            if entry["revoked"]:
+                pytest.fail(
+                    f"{tid} is revoked with no resolvable equivalent; the "
+                    "generator prints this loudly and it needs a decision, "
+                    "not a silent blank"
+                )
