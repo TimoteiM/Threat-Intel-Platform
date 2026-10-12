@@ -2,6 +2,24 @@
 
 **To:** the detection-engineering owners of the Wazuh ruleset
 **From:** Threat Intel Platform, measured 2026-10-12
+
+---
+
+## If you read one paragraph
+
+**Two rules account for most of both findings, and they need two different
+actions from two different owners.**
+
+| rule | where it lives | what it accounts for | what would resolve it |
+|---:|---|---|---|
+| **81640** | **stock** Wazuh ruleset | 824 of 1,395 mapping conflicts — **59%** | a report upstream, not a change here |
+| **103026** | **local** content | 312 of 371 retired-id mappings — **84%** | two id changes next time it is touched |
+
+Everything below is the evidence for those two lines and the long tail behind
+them. If the tail never gets looked at, these two still carry most of the
+value — and neither is a backlog item: one is a report, one is a two-line
+remap.
+
 **Two things, deliberately separate.** Part one is a question about mappings that conflict with telemetry. Part two is a small maintenance item about ATT&CK versions — different problem, different fix, and it is not evidence for part one.
 
 **Ask (part one):** a verdict on the twenty shapes below — for each, is the rule's
