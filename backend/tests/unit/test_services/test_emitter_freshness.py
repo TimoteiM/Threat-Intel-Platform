@@ -12,7 +12,7 @@ from datetime import date, timedelta
 
 from app.services.emitter_freshness_service import (
     HOST,
-    MIN_ACTIVE_DAYS,
+    MIN_BASELINE_VOLUME,
     SHADOW_RATIO,
     SOURCE,
     WINDOW_DAYS,
@@ -65,15 +65,44 @@ class TestRateNotTimeSinceLast:
 
 
 class TestTooLittleHistoryIsNotHealth:
-    def test_an_emitter_below_the_floor_is_unjudgeable(self):
-        """179 of 192 hosts are in this state, including the two worst. A
+    def test_a_genuinely_sparse_emitter_is_unjudgeable(self):
+        """The floor is on demonstrated history, not on recent activity. A
         blank must not read as a clean bill."""
-        counts = {d: 3 for d in DAYS[:MIN_ACTIVE_DAYS - 1]}
-        out = summarise(grouping=HOST, per_emitter={"expsql003": counts},
+        counts = {d: 1 for d in DAYS[:4]}
+        out = summarise(grouping=HOST, per_emitter={"tiny": counts},
                         eligible=DAYS)[0]
         assert not out.judgeable
         assert out.ratio is None
         assert not out.would_alarm(), "unjudgeable must never alarm"
+
+    def test_a_dark_host_does_not_disqualify_itself_from_judgement(self):
+        """The version this replaces counted recent active days, so a host
+        dark for 38 days had too few of them to judge — the metric got
+        blinder the worse the problem was. History cannot be eroded by the
+        failure being detected."""
+        counts = {d: 60 for d in DAYS[:14]}      # a busy past
+        # ...then nothing at all for the rest of the window.
+        out = summarise(grouping=HOST, per_emitter={"expsql003": counts},
+                        eligible=DAYS)[0]
+        assert out.judgeable, "a dark host must still be judgeable"
+        assert out.ratio == 0.0
+        assert out.would_alarm()
+
+    def test_a_ramp_up_in_the_history_does_not_excuse_a_decline(self):
+        """`expdc001`'s windows were [36, 97, 54, 27, 16, 1] newest-first. A
+        median of the prior five is 27, so a recent 36 read as 1.333 —
+        healthy — while it was at 37% of the week before."""
+        days = DAYS[:42]
+        counts = {}
+        # Oldest-to-newest ramp: 1, 16, 27, 54, 97, then a drop to 36.
+        for i, volume in enumerate([1, 16, 27, 54, 97, 36]):
+            for d in days[i * 7:(i + 1) * 7]:
+                counts[d] = volume // 7 + (1 if volume % 7 else 0)
+        out = summarise(grouping=HOST, per_emitter={"expdc001": counts},
+                        eligible=days)[0]
+        assert out.judgeable
+        # Measured against the most it has been seen to do, not the middle.
+        assert out.baseline is not None and out.baseline >= 91
 
     def test_it_is_reported_rather_than_dropped(self):
         out = summarise(grouping=HOST, per_emitter={"quiet": {DAYS[0]: 1}},

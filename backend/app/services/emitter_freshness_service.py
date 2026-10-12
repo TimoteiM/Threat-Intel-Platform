@@ -79,9 +79,16 @@ BASELINE_WINDOWS = 8
 #: Provisional, for the shadow run only. Not a setting.
 SHADOW_RATIO = 0.25
 
-#: An emitter needs this many eligible days with traffic before it has a
-#: baseline at all. Below it, the answer is "cannot say", not "healthy".
-MIN_ACTIVE_DAYS = 10
+#: An emitter needs to have DEMONSTRATED this much volume in some past window
+#: before this can judge it. A floor on history, not on recent activity.
+#:
+#: The version this replaces counted recent active days, and it got blinder the
+#: worse the problem was: a host dark for 38 days has few active days *because*
+#: it is dark, so the metric disqualified itself from judging exactly the
+#: emitters worth judging. 179 of 192 hosts were unjudgeable, the two worst
+#: among them. History is a property of the past and cannot be eroded by the
+#: failure being detected.
+MIN_BASELINE_VOLUME = 20
 
 #: Days the platform itself took nothing. A per-emitter baseline must not
 #: inherit a floor from a platform outage.
@@ -148,7 +155,7 @@ class EmitterVolume:
             "grouping": self.grouping,
             "emitter": self.emitter,
             "recent_window": self.recent,
-            "baseline_window_median": (
+            "baseline_window_peak": (
                 round(self.baseline, 1) if self.baseline is not None else None
             ),
             # The honest per-day form, which does not depend on how many
@@ -215,17 +222,34 @@ def summarise(
             continue
         recent = windows[0]
         prior = [w for w in windows[1:BASELINE_WINDOWS + 1]]
-        baseline = median(prior) if prior else None
-        if active < MIN_ACTIVE_DAYS or not baseline:
-            # Too little history to have a normal, so no ratio is computed.
-            # Reported as unjudgeable rather than as healthy.
+
+        # The most this emitter has been seen to produce in a comparable
+        # window, not the median of them.
+        #
+        # The median was wrong for a reason the first run made visible.
+        # `expdc001`'s windows run [36, 97, 54, 27, 16, 1] newest-first: it
+        # ramped up through September from an almost-silent August, so the
+        # median of its prior windows is 27 and a recent 36 reads as 1.333 —
+        # healthy — while it is in fact at 37% of the week before. A median
+        # over a history containing a ramp-up measures the ramp, not the
+        # health. `expsql003` is worse: [1, 428, 0, 1, 0, 0] has a median of
+        # 0, so a host that produced 428 alerts in a week was unjudgeable.
+        #
+        # Demonstrated capacity cannot be dragged down by quiet history, which
+        # is the same principle as the volume floor below: what an emitter has
+        # done is a fact about the past.
+        baseline = float(max(prior)) if prior else None
+        if baseline is None or baseline < MIN_BASELINE_VOLUME:
+            # Never produced enough in any past window to be measured against.
+            # Genuinely sparse, and "cannot say" is the honest answer — which
+            # is a different statement from "healthy" and is listed by name.
             out.append(
                 EmitterVolume(grouping, emitter, recent, None, active, None, len(prior))
             )
             continue
         out.append(
             EmitterVolume(
-                grouping, emitter, recent, float(baseline), active,
+                grouping, emitter, recent, baseline, active,
                 recent / baseline, len(prior),
             )
         )
@@ -294,41 +318,43 @@ async def check(
     return reports
 
 
-# --- what the first shadow run already showed, before any week of evidence ---
+# --- what the first shadow run showed, and what it changed -----------------
 #
-# Run 2026-10-12 over 60 days, 43 eligible, the collapse and the 8 zero-ingest
-# days excluded, test hosts excluded:
+# Run 2026-10-12 over 60 days, 43 eligible, the collapse and 8 zero-ingest days
+# excluded, test hosts excluded. The source grouping named exactly the two
+# known-silent sources. The host grouping — where the value was supposed to be
+# — caught one of the six degraded hosts, and the reason was the statistic
+# rather than the threshold.
 #
-#     source grouping   13 emitters,  8 unjudgeable
-#                       would alarm: appsec-agent 0.000, fortigate 0.017
-#     host grouping    192 emitters, 179 unjudgeable
-#                       would alarm: exprevpxy002 0.000, expdc002 0.214
+# The window series made it visible, newest-first:
 #
-# The source grouping names exactly the two known-silent sources, which is the
-# result it was built for. **The host grouping, which is where the value was
-# supposed to be, catches one of the six degraded hosts.**
+#     expdc001     [36,  97,  54, 27, 16, 1]   median 27 -> ratio 1.333
+#     expdc002     [ 6,  70,  45, 28,  2, 0]   median 28 -> ratio 0.214
+#     expsql003    [ 1, 428,   0,  1,  0, 0]   median  0 -> unjudgeable
+#     exp-8brrpb4  [ 8,  35,  30,209,  0, 0]   median 30 -> ratio 0.267
+#     exp-fin-034  [ 0,   0,   0,  0,  8, 0]   median  0 -> unjudgeable
 #
-#     expsql003      1.4% of prior   UNJUDGEABLE   3 active days
-#     exp-22my264    0.9%            UNJUDGEABLE   9 active days
-#     exp-fin-034    silent 38d      UNJUDGEABLE   1 active day
-#     exp-8brrpb4    2.9%            judged healthy at ratio 0.267
-#     exp-d0my264   10.9%            judged healthy at ratio 0.571
-#     expdc001      21.1%            judged healthy at ratio 1.333
-#     expdc002       4.1%            WOULD ALARM   at ratio 0.214
+# Zero-activity days were already counted as zeros — `eligible` is a calendar
+# list and `_windows` sums `counts.get(d, 0)` — so the denominator was never
+# the problem. The median was. These series contain a ramp-up through
+# September from an almost-silent August, and a median over that measures the
+# ramp rather than the health.
 #
-# Two separate reasons, and neither is the threshold:
+# Against demonstrated capacity instead, the same series give:
 #
-# 1. `MIN_ACTIVE_DAYS = 10` makes 179 of 192 hosts unjudgeable. Most hosts in
-#    this estate are low-volume, and a per-host volume baseline built from
-#    7-day sums has nothing to work with. The two worst hosts are in this
-#    group, so raising or lowering 25% cannot reach them.
+#     expdc001     36/97  = 0.371    does not fire, and should not: it is at
+#                                    37% of the week before, a real decline
+#                                    but not a collapse
+#     expdc002      6/70  = 0.086    fires
+#     expsql003     1/428 = 0.002    fires
+#     exp-8brrpb4   8/209 = 0.038    fires
+#     exp-fin-034   0/8            baseline 8 is under the volume floor, so it
+#                                    stays unjudgeable — it is a genuinely
+#                                    sparse emitter, and its 38 days of silence
+#                                    is better answered by a last-seen list
+#                                    than by a rate
 #
-# 2. Chunking *eligible* days into windows mixes wall-clock periods. `expdc001`
-#    reads 1.333 — above its own baseline — because its recent window is seven
-#    recent eligible days while its baseline windows reach back across the
-#    collapse exclusion into September. Comparing a rate per eligible day,
-#    rather than a sum per window, removes that.
-#
-# So a week of shadow output from this statistic would mostly measure the
-# statistic. Both are structural choices rather than thresholds, so they are
-# recorded here and left for a decision rather than changed quietly.
+# The direction of failure is the thing to check before shipping any monitor
+# here, because this is the third one that broke toward reassurance: "one
+# alert clears any outage", "zero means never scored", and "a dark host has
+# too little history to judge".
