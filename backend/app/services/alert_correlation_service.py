@@ -758,6 +758,19 @@ async def correlate_alerts(
     #: precisely the late ones. `alerts_truncated` on each case says whether
     #: it bit.
     max_members: int = 100,
+    # Build an uncapped run_id -> case_key map alongside the cases.
+    #
+    # Opt-in, because the cases list endpoint returns this payload and a map of
+    # every membership in the window would be ~12,000 entries of weight nobody
+    # asked for. Off by default, so no existing consumer changes.
+    #
+    # It exists because `case["alerts"]` is capped at `max_members` and keeps
+    # the EARLIEST, so asking "is this run in this case" against that list is
+    # only ever answerable for the first 100 members. That is the fourth place
+    # in this codebase a capped collection has been read as if it were whole,
+    # and raising the cap would leave the fifth. A membership question gets a
+    # membership answer.
+    member_index: bool = False,
     # (source, client, host) — restricts the pass to one entity, for a caller
     # that wants one case rather than the estate.
     only_entity: tuple[str, str, str] | None = None,
@@ -882,6 +895,8 @@ async def correlate_alerts(
     emissions: list[dict[str, Any]] = []
     narrative_jobs: list[tuple[str, dict[str, Any], str]] = []
     cases: list[dict[str, Any]] = []
+    #: run_id -> case_key for every membership, when `member_index` is on.
+    case_key_by_run: dict[str, str] = {}
     # Each incident becomes a group of its own, keyed on the row, so it forms
     # a single-member case and can never be pooled with the alerts it
     # summarises. Added before the loop below so it takes the same path as
@@ -1226,6 +1241,12 @@ async def correlate_alerts(
                 }
             )
 
+            if member_index:
+                # From `members`, which is the whole membership, never from the
+                # slice emitted above.
+                for member in members:
+                    case_key_by_run[str(member.id)] = case_key
+
             # Persistence is an overlay. Membership was computed above from
             # event time and is deliberately not written down; what is stored is
             # only the part that has to survive the read — ownership, status,
@@ -1483,6 +1504,9 @@ async def correlate_alerts(
         "clients_seen": len({key[1] for key in grouped}),
         "cases": cases[:limit],
         "total_cases": len(cases),
+        # Uncapped, and only when asked for. Absent rather than empty when not
+        # requested, so a caller cannot read "no membership" from "not built".
+        **({"case_key_by_run": case_key_by_run} if member_index else {}),
     }
 
 
@@ -1504,16 +1528,30 @@ async def case_for_run(
     # A lookup, so it does not write. The window here is the caller's, 1 to
     # 720 hours, and a case key depends on the window — persisting minted a
     # spine row per window an analyst happened to pick.
-    result = await correlate_alerts(db, scope=scope, hours=hours, limit=500, persist=False)
+    #
+    # Membership is answered from the uncapped index, not by scanning
+    # `case["alerts"]`. That list stops at `max_members` and keeps the
+    # earliest, so an alert at position 101 of its own case was told it had no
+    # case at all — on #1849 that is 1,789 of 1,889 alerts, and the alert page
+    # is where an analyst finds out the alert in front of them is one of many.
+    # A degraded view would be acceptable; "no case" is wrong.
+    result = await correlate_alerts(
+        db, scope=scope, hours=hours, limit=500, persist=False, member_index=True,
+    )
+    case_key = (result.get("case_key_by_run") or {}).get(str(run.id))
+    if case_key is None:
+        return None
     for case in result["cases"]:
-        if case["source"] != str(run.alert_source or UNKNOWN_SOURCE):
-            continue
-        if case["client"] != str(run.alert_client or UNKNOWN_CLIENT):
-            continue
-        if case["entity_host"] == run.entity_host and any(
-            alert["run_id"] == str(run.id) for alert in case["alerts"]
-        ):
+        if case["case_key"] == case_key:
             return case
+    # The run is in a case that `limit` cut from the list. Saying nothing here
+    # would be the same wrong answer by a different route, so the shortfall is
+    # named rather than returned as absence.
+    logger.info(
+        "case_for_run_beyond_limit run_id=%s case_key=%s limit=%d total_cases=%d "
+        "— the alert's case formed but was not among the cases returned",
+        run.id, case_key, 500, result.get("total_cases"),
+    )
     return None
 
 

@@ -17,6 +17,8 @@ decision is a guess about whether a classification was right.
 
 from __future__ import annotations
 
+import logging
+
 import uuid
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -43,6 +45,8 @@ from app.services.detection_quality_service import detection_quality
 from app.services import tenant_scope
 # The client selector, shared with the Alerts page rather than written twice.
 from app.api.alert_investigations import _selectable_tenants
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/detections", tags=["detections"])
 
@@ -1203,11 +1207,22 @@ async def case_sla_summary(
     measure of how many single alerts arrived — it would make the service look
     fastest in exactly the weeks it did least.
 
-    Two exclusions, both stated in the response rather than applied silently:
-    a case recorded long after its first alert is a backfill and has no
-    detection time, and a case closed because it aged out of the correlation
-    window was never answered, so counting it as a resolution would reward
-    losing track of one.
+    Exclusions, all stated in the response rather than applied silently: a
+    case recorded long after its first alert is a backfill and has no detection
+    time, and a case that was never answered is not a resolution, so counting
+    one would reward losing track of it.
+
+    That second exclusion named `aged_out` and nothing in this codebase has
+    ever written that value — the expiry path writes `expired` — so it had
+    never once fired. At the 30-day default it let every `expired`, `merged`
+    and `unreadable` closure count as a resolution. A filter true of no row
+    cannot exclude any more than a discriminator true of every row can link.
+
+    Which kinds answer a case is now declared in one place,
+    `alert_case_closure_service.classify_closure`, and a kind that is in
+    neither list is reported by name rather than quietly counted — because the
+    kind that escaped last time, `unreadable`, is not even in
+    `CaseClosureKind`.
     """
     from app.config import get_settings
     from app.models.database import AlertCaseSpine
@@ -1227,23 +1242,44 @@ async def case_sla_summary(
     ).scalars().all()
 
     cases: list[dict[str, Any]] = []
-    aged_out = 0
+    never_answered: dict[str, int] = {}
+    unclassified: dict[str, int] = {}
     for row in rows:
-        if row.closure_kind == "aged_out":
-            aged_out += 1
+        verdict = closure.classify_closure(row.closure_kind)
+        if verdict != closure.JUDGEMENT:
+            name = str(row.closure_kind or "(none)")
+            bucket = never_answered if verdict == closure.NOT_A_JUDGEMENT else unclassified
+            bucket[name] = bucket.get(name, 0) + 1
             continue
         metrics = closure.metrics(
             opened_at=row.opened_at, created_at=row.created_at, closed_at=row.closed_at,
         )
         cases.append({
-            "alert_count": row.alerts_at_close or 1,
+            # None, not 1. `or 1` filed every case whose size was never
+            # recorded as a single-alert case.
+            "alert_count": row.alerts_at_close if (row.alerts_at_close or 0) > 0 else None,
             **metrics,
         })
+
+    if unclassified:
+        # Loud, because the last kind to escape the enum did so silently and
+        # was counted as a resolution for as long as it existed.
+        logger.error(
+            "sla_unclassified_closure_kind kinds=%s — these closures are in "
+            "neither JUDGEMENT_KINDS nor NOT_A_JUDGEMENT_KINDS, so they are "
+            "excluded from attainment rather than counted as resolutions. "
+            "Classify them in alert_case_closure_service.",
+            unclassified,
+        )
 
     summary = closure.summarise(cases, target_seconds=target)
     summary["window_days"] = days
     summary["cases_considered"] = len(cases)
-    summary["excluded_aged_out"] = aged_out
+    summary["excluded_never_answered"] = never_answered
+    summary["excluded_never_answered_total"] = sum(never_answered.values())
+    #: Non-empty means a closure kind exists that this endpoint does not
+    #: classify. Surfaced, never folded into attainment.
+    summary["excluded_unclassified"] = unclassified
     summary["excluded_backfilled_detection"] = sum(
         1 for c in cases if c.get("detect_excluded")
     )

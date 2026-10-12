@@ -483,6 +483,81 @@ def resolution_from_analysis(markdown: str | None) -> str:
 MAX_PLAUSIBLE_RESOLVE_LAG = MAX_HOLD
 
 
+#: Which closure kinds represent a case somebody or something ANSWERED, and
+#: which represent a case that was never answered at all.
+#:
+#: Declared here, exhaustively, because the exclusion this replaces named one
+#: kind — `aged_out` — that nothing in this codebase has ever written. The
+#: expiry path writes `expired`. So `/detections/sla` carried a filter that had
+#: never once fired, and every unanswered case counted as a resolution: the
+#: same shape as a discriminator true of no row rather than of every row, and
+#: just as unable to discriminate.
+#:
+#: Measured on `alert_case_spine` (live rows, 2026-10-12): auto 1,058,
+#: expired 58, inherited 45, analyst 4, unreadable 4, none 1.
+#:
+#: `unreadable` is the reason this is a declaration and not an enum lookup:
+#: `case_closure_task` writes it and `CaseClosureKind` does not contain it, so
+#: a kind has already escaped the enum once.
+JUDGEMENT_KINDS = frozenset({
+    "auto",       # the quiet period elapsed and the job answered it
+    "analyst",    # a person answered it
+    "inherited",  # it carries its parent's answer, deliberately
+})
+
+NOT_A_JUDGEMENT_KINDS = frozenset({
+    "expired",     # its alerts left the correlation window unanswered
+    "merged",      # its alerts moved into another case, which answers them
+    "unreadable",  # nothing in it could be read
+    "aged_out",    # historical spelling of `expired`; nothing writes it now
+})
+
+JUDGEMENT = "judgement"
+NOT_A_JUDGEMENT = "not_a_judgement"
+UNCLASSIFIED = "unclassified"
+
+
+def classify_closure(kind: str | None) -> str:
+    """Whether this closure answered the case, did not, or is unrecognised.
+
+    An unrecognised kind is never treated as an answer. Including it would
+    inflate attainment silently, which is exactly the defect being fixed; the
+    caller reports it by name instead.
+    """
+    name = str(kind or "").strip()
+    if name in JUDGEMENT_KINDS:
+        return JUDGEMENT
+    if name in NOT_A_JUDGEMENT_KINDS:
+        return NOT_A_JUDGEMENT
+    return UNCLASSIFIED
+
+
+#: Closure kinds that write a *disposition* at close time rather than leaving
+#: the case `awaiting_analysis` for the model to answer. Only `inherited` and
+#: `analyst` do, and `inherited` is the one applied automatically.
+#:
+#: This matters because a disposition written at close is a verdict formed on
+#: whatever the case held at that instant, and a continuation is created
+#: precisely because activity resumed — so it is answered mid-burst.
+ANSWERS_AT_CLOSE = frozenset({"inherited", "analyst"})
+
+
+def accreted_after_close(
+    *, closed_at: datetime | None, last_activity_at: datetime | None
+) -> bool:
+    """Did this case gain a member with an event time after it was answered?
+
+    `last_activity_at` is the case's own latest member event time, so this is
+    stored proof of accretion after a close and needs no re-derivation. It is
+    the measurement that showed the two close-anchor fixes hold on the
+    quiet-period path (0 of 1,063 `auto` closes) and that every accretion in
+    the estate is a continuation closed as `inherited` (20 of 45).
+    """
+    if closed_at is None or last_activity_at is None:
+        return False
+    return _as_utc(last_activity_at) > _as_utc(closed_at)
+
+
 def metrics(
     *,
     opened_at: datetime,
@@ -567,9 +642,19 @@ def summarise(cases: Iterable[dict[str, Any]], *, target_seconds: float) -> dict
     this estate hold one alert, and a mean that includes them is mostly a
     measure of how many single alerts arrived.
     """
-    buckets: dict[str, list[dict[str, Any]]] = {"single": [], "multi": []}
+    # Three populations, not two. `alert_count or 1` filed every case whose
+    # size was never recorded as a single-alert case — 63 live rows carry
+    # `alerts_at_close = 0`, which means nobody counted, not that there was
+    # one. A sentinel read as a measurement is the most repeated defect in
+    # this codebase, so an uncounted case goes in its own bucket and is
+    # reported rather than averaged into the smaller one.
+    buckets: dict[str, list[dict[str, Any]]] = {"single": [], "multi": [], "uncounted": []}
     for case in cases:
-        buckets["multi" if int(case.get("alert_count") or 1) > 1 else "single"].append(case)
+        size = case.get("alert_count")
+        if size is None or int(size) <= 0:
+            buckets["uncounted"].append(case)
+            continue
+        buckets["multi" if int(size) > 1 else "single"].append(case)
 
     def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         detects = [r["detect_seconds"] for r in rows if r.get("detect_seconds") is not None]
@@ -588,5 +673,11 @@ def summarise(cases: Iterable[dict[str, Any]], *, target_seconds: float) -> dict
         "target_seconds": target_seconds,
         "single_alert": _stats(buckets["single"]),
         "multi_alert": _stats(buckets["multi"]),
-        "all": _stats(buckets["single"] + buckets["multi"]),
+        # Their timings are real and are included in `all`; only the
+        # single-vs-multi split is unavailable for them, and saying so is the
+        # point of reporting them apart.
+        "size_never_counted": _stats(buckets["uncounted"]),
+        "all": _stats(
+            buckets["single"] + buckets["multi"] + buckets["uncounted"]
+        ),
     }

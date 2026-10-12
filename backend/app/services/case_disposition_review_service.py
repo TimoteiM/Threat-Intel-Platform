@@ -13,21 +13,57 @@ many words, because an analyst reading "this verdict was formed on 5 of the 20
 alerts this case now holds" will reasonably ask whose work is being
 questioned, and the answer is the platform's.
 
-Two causes, and the larger one is not the one found first
---------------------------------------------------------
-    17 of 30   the close anchor: a case was answered CASE_WINDOW after it
-               OPENED rather than after its last alert, so alerts the
-               correlation was still right to give it arrived afterwards.
-               Fixed by moving the anchor; 9,731 of 12,064 memberships
-               (80.7%) had been landing after their case closed.
-     13 of 30  `opened_at` holding the session's start rather than the case's
-               own first alert, so 172 cases were born already past their
-               close window and answered on the first pass with no quiet
-               period at all. Fixed separately.
+Two causes that were fixed, and a third that was not
+---------------------------------------------------
+    the close anchor: a case was answered CASE_WINDOW after it OPENED rather
+    than after its last alert, so alerts the correlation was still right to
+    give it arrived afterwards. Fixed by moving the anchor; 9,731 of 12,064
+    memberships (80.7%) had been landing after their case closed.
 
-Both fixes are forward-looking. They stop the thirty becoming thirty-one; they
-cannot revise a conclusion that was already written, which is why these
-surface for review rather than being corrected.
+    `opened_at` holding the session's start rather than the case's own first
+    alert, so 172 cases were born already past their close window and answered
+    on the first pass with no quiet period at all. Fixed separately.
+
+**This docstring used to claim those two fixes "stop the thirty becoming
+thirty-one". That was false, and it was false in a way worth recording.**
+
+The population has gone 30 -> 56 -> 60 -> 61, and seven of the flagged cases
+closed after both fixes shipped. The claim was not wrong because the fixes
+failed; it was wrong because it generalised them to a path they never touched.
+Measured on `alert_case_spine` (live rows with a disposition and a close time,
+2026-10-12), using `last_activity_at > closed_at` — the case's own latest
+member event time against when it was answered, which is stored proof of
+accretion after a close and needs no re-derivation:
+
+    auto         0 of 1,063   0.0%   <- the two fixes govern this path
+    analyst      0 of     4
+    unreadable   0 of     4
+    expired      0 of    15
+    inherited   20 of    45  44.4%   <- every accretion in the estate
+
+So on the quiet-period close the fixes hold completely. Every case in this
+estate that accreted after being answered is a **continuation closed as
+`inherited`**, and all 20 of them are continuations.
+
+Those are real arrivals, not a wider re-derivation: of the 1,654 alerts that
+joined those 20 cases after their close, **1,654 were ingested after the close
+(`created_at > closed_at`) and 0 were already stored**. The worst are #2021,
+judged on 8 alerts and now holding 299 more; #2020, judged on 49 with 269
+after; #1908, judged on **one** alert with 125 after.
+
+Why this path and no other: `inherited` is the only close that writes a
+disposition *at* close time, carrying the parent's answer instead of waiting
+for the model. An `auto` close writes `awaiting_analysis` and is answered
+later. And inheritance is applied to exactly the cases most likely to still be
+accreting — a continuation exists *because* activity resumed on that entity,
+so it is born mid-burst, satisfies its quiet gate during a lull, inherits a
+verdict, and the burst continues.
+
+It is not a close-timing bug, so it is not fixable by moving a clock. A
+verdict inherited at close and a member set that keeps deriving are the two
+halves of the same question, which is what freezing membership on judgement was
+meant to answer. Until that exists, these surface for review rather than being
+corrected, and the count will keep growing.
 """
 
 from __future__ import annotations
