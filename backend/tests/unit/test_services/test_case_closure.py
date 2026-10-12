@@ -84,7 +84,11 @@ def test_a_case_is_answered_once_it_has_been_quiet_for_its_window():
     members = [alert("A"), alert("A", minutes=3)]
     decision = _decide(members, last_minutes=3, now_minutes=3 + 361)
     assert decision.due
-    assert decision.reason == "quiet for its full window"
+    # The gate now asks both clocks, and the reason names which were
+    # clear. Production always supplies the ingest clock; this path is the
+    # fallback, and it says so rather than reading as equivalent.
+    assert decision.reason.startswith("quiet for its full window")
+    assert "no ingest time was supplied" in decision.reason
 
 
 def test_the_clock_runs_from_the_last_alert_not_from_the_opening():
@@ -140,7 +144,11 @@ def test_a_case_still_producing_new_detections_is_answered_anyway():
     assert not _decide(members, last_minutes=8, now_minutes=12).due
     decision = _decide(members, last_minutes=8, now_minutes=8 + 361)
     assert decision.due
-    assert decision.reason == "quiet for its full window"
+    # The gate now asks both clocks, and the reason names which were
+    # clear. Production always supplies the ingest clock; this path is the
+    # fallback, and it says so rather than reading as equivalent.
+    assert decision.reason.startswith("quiet for its full window")
+    assert "no ingest time was supplied" in decision.reason
     # The escalation itself is still detectable; it simply does not extend the
     # period, which is what "does not stretch" means.
     assert closure.is_escalating(members, now=T0 + timedelta(minutes=12))
@@ -166,7 +174,11 @@ def test_a_long_case_is_answered_one_window_after_its_last_alert():
     assert not _decide(members, last_minutes=370, now_minutes=385).due
     decision = _decide(members, last_minutes=370, now_minutes=370 + 361)
     assert decision.due
-    assert decision.reason == "quiet for its full window"
+    # The gate now asks both clocks, and the reason names which were
+    # clear. Production always supplies the ingest clock; this path is the
+    # fallback, and it says so rather than reading as equivalent.
+    assert decision.reason.startswith("quiet for its full window")
+    assert "no ingest time was supplied" in decision.reason
 
 
 # --- what happens to late alerts ---------------------------------------------
@@ -504,3 +516,21 @@ def test_the_window_is_not_shorter_than_the_correlation_gap():
         "one means alerts arrive for a case that is already answered: at ten "
         "minutes against six hours, 9,731 of 12,064 memberships did."
     )
+
+
+def test_the_same_case_with_both_clocks_clear_is_answered_and_names_both():
+    """The production path: the closure task supplies the ingest clock, so the
+    ordinary answer is the two-clock one."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.alert_case_closure_service import CASE_WINDOW, decide
+
+    now = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+    quiet = now - CASE_WINDOW - timedelta(minutes=1)
+    decision = decide(
+        [], last_activity_at=quiet, opened_at=now - timedelta(days=2),
+        created_at=now - timedelta(days=2), now=now, quiet_period=CASE_WINDOW,
+        last_ingest_at=quiet,
+    )
+    assert decision.due is True
+    assert decision.reason == "quiet for its full window in both clocks"

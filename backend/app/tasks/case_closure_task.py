@@ -45,6 +45,34 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _newest_ingest(members: list[Any]) -> datetime | None:
+    """When this case last received an alert, by our own receipt clock.
+
+    `created_at` rather than `event_time`: the question is when evidence
+    arrived, and a sender's stamp answers a different one. Returns None when no
+    member carries a receipt time, so the caller falls back to the event clock
+    and says so, rather than treating an absence as "nothing arrived".
+    """
+    newest: datetime | None = None
+    for member in members or ():
+        raw = (member or {}).get("created_at")
+        if raw is None:
+            continue
+        when = raw
+        if isinstance(when, str):
+            try:
+                when = datetime.fromisoformat(when)
+            except ValueError:
+                continue
+        if not isinstance(when, datetime):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if newest is None or when > newest:
+            newest = when
+    return newest
+
+
 
 @celery_app.task(name="app.tasks.case_closure_task.close_quiet_cases", time_limit=240,
                  soft_time_limit=210)
@@ -146,6 +174,15 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                 )
                 case = await case_by_key(
                     db, row.case_key, scope=tenant_scope.INTERNAL, hours=age_hours,
+                    # The whole membership, not the first hundred. The quiet
+                    # gate now asks when this case last *received* an alert,
+                    # and `alerts` is capped at 100 keeping the EARLIEST — so
+                    # reading the newest ingest from it would answer with the
+                    # oldest hundred: the capped-collection mistake this
+                    # codebase has made four times, committed inside the fix
+                    # for it. Costs a full member list per candidate per pass;
+                    # the job is scheduled, not interactive.
+                    max_members=100_000,
                 )
                 if case is None:
                     # Genuinely unreadable: its alerts no longer form this
@@ -242,6 +279,12 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     created_at=row.created_at,
                     now=now,
                     quiet_period=_quiet_period(settings),
+                    # The other clock. A case can be quiet in event time for
+                    # its whole window while alerts about what happened inside
+                    # it are still arriving: 22 of 71 flagged dispositions had
+                    # a member ingested after the verdict, #2083 closing on 2
+                    # alerts while 52 more landed afterwards.
+                    last_ingest_at=_newest_ingest(members),
                 )
                 if not decision.due:
                     continue

@@ -208,6 +208,7 @@ def decide(
     now: datetime,
     created_at: datetime | None = None,
     quiet_period: timedelta = CASE_WINDOW,
+    last_ingest_at: datetime | None = None,
 ) -> ClosureDecision:
     """Whether this open case should be answered now.
 
@@ -228,6 +229,28 @@ def decide(
     does not stretch: the period is the same for every case, so a busy host's
     case is answered one window after its last alert and the next alerts open
     a case of their own.
+
+    Quiet in BOTH clocks
+    --------------------
+    `last_activity_at` is the newest member's *event* time, and that is only
+    half the question. Evidence arrives on the ingest clock, and a case can be
+    quiet in event time for its whole window while alerts about things that
+    happened inside it are still landing. Measured by splitting the 71 flagged
+    dispositions on `created_at` rather than `event_time`: 22 had a member
+    ingested after the verdict was written, and they are not all continuations
+    — #2083 closed on 2 alerts and holds 54, with 52 ingested afterwards;
+    #2007 closed on 4 and holds 103, with 17 afterwards.
+
+    This is the third clock defect in this file's history, after the close
+    anchor running from the opening and `opened_at` holding the session's
+    origin. The sentence is the same one each time: **a case that is still
+    receiving alerts is not quiet**, and it applies to the clock the alerts
+    arrive on just as much as to the clock they claim.
+
+    So the window must be clear in both. `last_ingest_at` is the newest
+    member's `created_at`; when it is not supplied the gate falls back to the
+    event clock alone, which is the old behaviour and is stated in the reason
+    rather than assumed to be equivalent.
 
     `members` is not read. It is kept in the signature because the callers
     pass it and because a decision about a case ought to be able to see the
@@ -276,8 +299,29 @@ def decide(
             False, "still receiving alerts", quiet_period, quiet_for
         )
 
+    # The other clock. No correction for skew is needed or wanted here:
+    # `created_at` is our own receipt time, so it cannot run ahead of us the
+    # way a sender's stamp can.
+    if last_ingest_at is not None:
+        since_ingest = now - _as_utc(last_ingest_at)
+        if since_ingest < quiet_period:
+            return ClosureDecision(
+                False,
+                "still receiving alerts — quiet since its last event, but one "
+                "arrived more recently than that",
+                quiet_period,
+                min(quiet_for, since_ingest),
+            )
+        return ClosureDecision(
+            True, "quiet for its full window in both clocks", quiet_period,
+            min(quiet_for, since_ingest),
+        )
+
     return ClosureDecision(
-        True, "quiet for its full window", quiet_period, quiet_for
+        True,
+        "quiet for its full window by event time; no ingest time was supplied",
+        quiet_period,
+        quiet_for,
     )
 
 

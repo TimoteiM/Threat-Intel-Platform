@@ -149,3 +149,101 @@ class TestInheritanceIsTheOpenDefect:
             "a case whose verdict was written at close has gained members "
             "since; the verdict describes less evidence than the case holds"
         )
+
+
+class TestQuietMeansQuietInBothClocks:
+    """The third clock defect in this file's history, after the close anchor
+    running from the opening and `opened_at` holding the session's origin.
+
+    Measured by splitting the 71 flagged dispositions on `created_at` rather
+    than `event_time`: 22 had a member ingested after the verdict was written,
+    and not all are continuations — #2083 closed on 2 alerts and holds 54, with
+    52 ingested afterwards; #2007 on 4 holding 103, with 17 after.
+    """
+
+    def _args(self, **over):
+        base = dict(
+            last_activity_at=NOW - CASE_WINDOW - timedelta(minutes=1),
+            opened_at=NOW - timedelta(days=2),
+            created_at=NOW - timedelta(days=2),
+            now=NOW,
+            quiet_period=CASE_WINDOW,
+        )
+        base.update(over)
+        return base
+
+    def test_a_case_quiet_in_event_time_but_still_receiving_is_not_due(self):
+        """#2083's shape: nothing new happened for six hours, but evidence
+        about what did happen is still landing."""
+        decision = decide([], **self._args(
+            last_ingest_at=NOW - timedelta(minutes=2)
+        ))
+        assert decision.due is False
+        assert "arrived more recently" in decision.reason
+
+    def test_quiet_in_both_clocks_is_due_and_says_so(self):
+        decision = decide([], **self._args(
+            last_ingest_at=NOW - CASE_WINDOW - timedelta(minutes=1)
+        ))
+        assert decision.due is True
+        assert "both clocks" in decision.reason
+
+    def test_the_event_clock_still_gates_on_its_own(self):
+        """Adding a second condition must not weaken the first."""
+        decision = decide([], **self._args(
+            last_activity_at=NOW - timedelta(minutes=1),
+            last_ingest_at=NOW - timedelta(days=5),
+        ))
+        assert decision.due is False
+        assert decision.reason == "still receiving alerts"
+
+    def test_a_missing_ingest_time_falls_back_and_names_the_fallback(self):
+        """An absence is reported, not read as "nothing arrived"."""
+        decision = decide([], **self._args(last_ingest_at=None))
+        assert decision.due is True
+        assert "no ingest time was supplied" in decision.reason
+
+    def test_the_reported_quiet_period_is_the_shorter_of_the_two(self):
+        decision = decide([], **self._args(
+            last_ingest_at=NOW - CASE_WINDOW - timedelta(hours=3)
+        ))
+        assert decision.quiet_for == CASE_WINDOW + timedelta(minutes=1)
+
+
+class TestTheGateReadsTheWholeMembership:
+    def test_the_closure_task_asks_for_an_uncapped_member_list(self):
+        """Reading the newest ingest from a list capped at 100 that keeps the
+        EARLIEST would answer with the oldest hundred — the capped-collection
+        mistake, committed inside the fix for it."""
+        import pathlib
+
+        task = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "app" / "tasks" / "case_closure_task.py"
+        ).read_text()
+        assert "max_members=100_000" in task
+        assert "last_ingest_at=_newest_ingest(members)" in task
+
+    def test_the_newest_receipt_wins_whatever_the_event_order(self):
+        from app.tasks.case_closure_task import _newest_ingest
+
+        members = [
+            {"created_at": (NOW - timedelta(hours=9)).isoformat()},
+            {"created_at": NOW - timedelta(minutes=3)},
+            {"created_at": (NOW - timedelta(days=2)).isoformat()},
+        ]
+        assert _newest_ingest(members) == NOW - timedelta(minutes=3)
+
+    def test_members_without_a_receipt_time_yield_an_absence(self):
+        from app.tasks.case_closure_task import _newest_ingest
+
+        assert _newest_ingest([]) is None
+        assert _newest_ingest([{"event_time": NOW}, {"created_at": None}]) is None
+        assert _newest_ingest([{"created_at": "not a date"}]) is None
+
+    def test_a_naive_receipt_time_is_read_as_utc(self):
+        from app.tasks.case_closure_task import _newest_ingest
+
+        assert _newest_ingest([{"created_at": "2026-10-12T11:00:00"}]) == (
+            datetime(2026, 10, 12, 11, 0, tzinfo=timezone.utc)
+        )
