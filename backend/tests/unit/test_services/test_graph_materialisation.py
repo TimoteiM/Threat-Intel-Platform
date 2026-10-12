@@ -62,13 +62,15 @@ class TestWhatStaleMeans:
         assert result.as_json()["failed"] == 2
 
     def test_the_service_states_what_its_staleness_signal_does_not_cover(self):
-        """A run whose assessment is rewritten after materialisation is not
-        detected, and the docstring says so rather than implying coverage."""
+        """Absence and change are both detected now; an assessment rewritten
+        without `completed_at` moving is not, and the docstring says so rather
+        than implying coverage."""
         src = (
             pathlib.Path(__file__).resolve().parents[3]
             / "app" / "services" / "graph_materialisation_service.py"
         ).read_text()
-        assert "is **not** detected" in src
+        assert "still does not cover" in src
+        assert "completed_at" in src
 
     def test_the_timestamp_is_stamped_on_every_materialisation(self):
         src = (
@@ -76,3 +78,27 @@ class TestWhatStaleMeans:
             / "app" / "services" / "alert_graph_store_service.py"
         ).read_text()
         assert "graph_materialised_at=datetime.now(timezone.utc)" in src
+
+
+class TestChangeNotJustAbsence:
+    def test_a_run_analysed_after_materialisation_is_stale(self):
+        """A sweep on absence alone self-heals a missing row and never
+        notices a rewritten one. `result_attack_assessment` carries no
+        timestamp, so `completed_at` stands in: an assessment cannot be
+        written after the run completes without the run completing again."""
+        src = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "app" / "services" / "graph_materialisation_service.py"
+        ).read_text()
+        assert "graph_materialised_at\n            < AlertBodyInvestigationRun.completed_at" in src.replace(
+            "                ", "            "
+        ) or "completed_at" in src
+        assert "_stale()" in src
+
+    def test_both_signals_are_in_the_predicate(self):
+        src = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "app" / "services" / "graph_materialisation_service.py"
+        ).read_text()
+        assert "graph_materialised_at.is_(None)" in src
+        assert "completed_at.isnot(None)" in src

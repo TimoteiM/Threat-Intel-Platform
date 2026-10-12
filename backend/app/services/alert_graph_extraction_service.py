@@ -269,6 +269,34 @@ def _first_value(raw: str) -> str:
 # commas yields "Dynamic-link Library Injection" as a technique id.
 _INDEXED = re.compile(r"\d+\s*=\s*([^,}]+)")
 
+#: One indexed slot can hold more than one technique. A rule in this estate
+#: writes `T1082/T1046` as a single entry, and the capture above keeps it whole
+#: because `/` is not a comma or a brace — so the graph grew a node for a
+#: technique id that does not exist in ATT&CK, on **2,575 alerts**, one of 78
+#: distinct technique identities.
+#:
+#: Split on the separators a human uses to mean "and" inside one slot. The
+#: twelfth delimiter-boundary instance in this codebase, and the second caught
+#: by reading output rather than by a complaint.
+_ID_SEPARATORS = re.compile(r"[\s/;|]+")
+
+
+def _technique_ids(raw: str) -> list[str]:
+    """Every ATT&CK id in one indexed slot, in order, de-duplicated."""
+    out: list[str] = []
+    for part in _ID_SEPARATORS.split(str(raw or "")):
+        candidate = part.strip().strip(".,;").upper()
+        if not candidate.startswith("T"):
+            continue
+        # A technique id is T#### with an optional .### sub-technique. Anything
+        # else in this position is not an id and is left out rather than
+        # guessed at.
+        if not re.fullmatch(r"T\d{4}(?:\.\d{3})?", candidate):
+            continue
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
 
 def _flatten(obj: Any, prefix: str = "") -> dict[str, Any]:
     out: dict[str, Any] = {}
@@ -308,14 +336,22 @@ def read_fields(alert_body: str | None) -> dict[str, Any]:
         if key in fields:
             continue  # first occurrence wins, as the corpus survey assumed
         if label == "MITRE":
-            ids = _INDEXED.findall(raw.split("|")[0])
+            ids = [
+                tid
+                for slot in _INDEXED.findall(raw.split("|")[0])
+                for tid in _technique_ids(slot)
+            ]
             if ids:
-                fields["rule.mitre.id"] = [i.strip() for i in ids]
+                fields["rule.mitre.id"] = list(dict.fromkeys(ids))
             continue
         if label == "Mitre.Sub_technique.ID":
             fields.setdefault(
                 "rule.mitre.id",
-                [p.strip() for p in _first_value(raw).split(",") if p.strip()],
+                [
+                    tid
+                    for part in _first_value(raw).split(",")
+                    for tid in _technique_ids(part)
+                ],
             )
             continue
         value = _first_value(raw)

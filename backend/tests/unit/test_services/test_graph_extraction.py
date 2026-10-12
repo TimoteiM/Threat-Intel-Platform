@@ -746,3 +746,53 @@ def test_a_host_local_entity_names_its_host():
         node = next(e for e in out.entities if e.kind == kind)
         assert node.attrs.get("host") == host, kind
         assert node.merge_key.split(":")[1] == host, kind
+
+
+# --- the twelfth delimiter instance: two ids in one indexed slot -----------
+
+def test_two_techniques_in_one_mitre_slot_are_two_techniques():
+    """A rule in this estate writes `T1082/T1046` as a single entry, and the
+    indexed-list capture keeps it whole because `/` is neither a comma nor a
+    brace. The graph grew a node for a technique id that does not exist in
+    ATT&CK, on 2,575 alerts — one of 78 distinct technique identities."""
+    body = "\n".join([
+        "Alert: EXP-FIN-034 - something fired",
+        "Rule: 81640",
+        "Agent: EXP-FIN-034 | 1634",
+        "Decoder: windows_eventchannel",
+        "MITRE: {0=T1218.011, 1=T1071, 2=T1218, 3=T1082/T1046}",
+    ])
+    assert read_fields(body)["rule.mitre.id"] == [
+        "T1218.011", "T1071", "T1218", "T1082", "T1046",
+    ]
+
+
+def test_a_value_that_is_not_a_technique_id_is_left_out_not_guessed_at():
+    """MITRE packs ids, names and tactics into three indexed lists. Only the
+    ids belong here, and `Defense Evasion` is not one."""
+    body = "\n".join([
+        "Alert: x", "Rule: 1", "Agent: H | 1", "Decoder: windows_eventchannel",
+        "MITRE: {0=T1055.001, 1=Defense Evasion, 2=T99, 3=T1106}",
+    ])
+    assert read_fields(body)["rule.mitre.id"] == ["T1055.001", "T1106"]
+
+
+def test_the_sub_technique_field_splits_the_same_way():
+    body = "Alert: x\nMitre.Sub_technique.ID: T1055.001, T1003/T1003.001"
+    assert read_fields(body)["rule.mitre.id"] == [
+        "T1055.001", "T1003", "T1003.001",
+    ]
+
+
+def test_no_fabricated_technique_reaches_the_graph():
+    from app.services.alert_graph_extraction_service import extract
+
+    body = "\n".join([
+        "Alert: x", "Rule: 81640", "Agent: H | 1",
+        "Decoder: windows_eventchannel", "MITRE: {0=T1082/T1046}",
+    ])
+    ids = {
+        e.attrs.get("id") for e in extract(body).entities if e.kind == "technique"
+    }
+    assert ids == {"T1082", "T1046"}
+    assert not any("/" in str(i) for i in ids)

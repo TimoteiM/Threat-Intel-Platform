@@ -20,6 +20,7 @@ from collections import Counter
 from sqlalchemy import text
 
 from app.db.session import AsyncSessionLocal
+from app.analyst.attack_mapping import parent_technique
 from app.services.technique_attribution_service import attribute
 
 
@@ -41,6 +42,8 @@ async def run(limit: int, include_test: bool) -> None:
         rigs = set() if include_test else await test_hosts(db)
 
     pairs: Counter = Counter()
+    parent_level = 0
+    runs_conflict = 0
     by_rule: Counter = Counter()
     runs = 0
     for row in rows:
@@ -52,13 +55,26 @@ async def run(limit: int, include_test: bool) -> None:
             continue
         runs += 1
         claimed, supported = found.disagreement
+        # Agreement at the parent is not a conflict. A rule claiming T1071
+        # while the telemetry supports T1071.001 agrees about Application
+        # Layer Protocol and differs only in depth — 202 of 1,584, almost all
+        # of them the model being the more specific of the two.
+        if {parent_technique(t) for t in claimed} & {
+            parent_technique(t) for t in supported
+        }:
+            parent_level += 1
+            continue
         # One alert, one entry. Counting pairs turned a rule that asserts five
         # techniques into five disagreements for a single alert.
+        runs_conflict += 1
         pairs[(claimed, supported)] += 1
         by_rule[(row.detection_rule_id, row.detection_name, claimed, supported)] += 1
 
     scope = "including test hosts" if include_test else f"excluding {len(rigs)} test host(s)"
-    print(f"alerts where the rule and the evidence disagree: {runs}  ({scope})")
+    print(f"alerts where the rule and the evidence name different techniques: "
+          f"{runs}  ({scope})")
+    print(f"  agreeing at the parent technique, differing only in depth: {parent_level}")
+    print(f"  GENUINE CONFLICTS — this is the list to work through:   {runs_conflict}")
     print("\nby what each side named (one row = one shape of disagreement):")
     for (claimed, supported), n in pairs.most_common(limit):
         print(f"  {n:5d} alerts  rule claims {','.join(claimed)[:44]:44s} "

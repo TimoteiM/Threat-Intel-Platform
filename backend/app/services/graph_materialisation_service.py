@@ -22,11 +22,25 @@ writer, it repairs whatever a failed run left behind, and it is idempotent:
 
 What "stale" means here
 -----------------------
-`graph_materialised_at IS NULL` is the only staleness signal this service
-claims, and it means *never materialised*. A run whose assessment is rewritten
-after materialisation is **not** detected, and that is stated rather than
-quietly assumed away: re-analysis is rare, and a signal that pretended to cover
-it would be worse than one that says what it covers.
+Two signals, because absence and change are different failures:
+
+    graph_materialised_at IS NULL                    never materialised
+    graph_materialised_at < completed_at             the analysis finished
+                                                     after the graph was
+                                                     written, so the rows
+                                                     predate the assessment
+                                                     they should reflect
+
+The second closes the gap a sweep on absence alone leaves. `result_attack_assessment`
+carries no timestamp of its own, so `completed_at` — when the analysis
+finished — stands in for it: an assessment cannot be written after the run
+completes without the run completing again, and when it does, `completed_at`
+moves. It is the right column rather than a convenient one, and it is the only
+one this table has.
+
+What it still does not cover is an assessment rewritten *without* `completed_at`
+moving. Nothing in this codebase does that today, and saying so is better than
+a signal that implies more coverage than it has.
 """
 
 from __future__ import annotations
@@ -70,14 +84,28 @@ class SweepResult:
         }
 
 
+def _stale() -> Any:
+    """Never materialised, or materialised before the analysis finished."""
+    return (
+        AlertBodyInvestigationRun.graph_materialised_at.is_(None)
+        | (
+            AlertBodyInvestigationRun.completed_at.isnot(None)
+            & (
+                AlertBodyInvestigationRun.graph_materialised_at
+                < AlertBodyInvestigationRun.completed_at
+            )
+        )
+    )
+
+
 async def pending_count(db: AsyncSession) -> int:
-    """Runs that have never been materialised."""
+    """Runs whose graph rows are missing or older than their analysis."""
     return int(
         (
             await db.execute(
                 select(func.count())
                 .select_from(AlertBodyInvestigationRun)
-                .where(AlertBodyInvestigationRun.graph_materialised_at.is_(None))
+                .where(_stale())
             )
         ).scalar()
         or 0
@@ -85,7 +113,7 @@ async def pending_count(db: AsyncSession) -> int:
 
 
 async def sweep(db: AsyncSession, *, limit: int = BATCH) -> SweepResult:
-    """Materialise the oldest unmaterialised runs.
+    """Materialise the oldest stale runs.
 
     Oldest first, so a backlog drains in the order it arrived and a reader
     watching `remaining` sees it fall monotonically rather than jumping about.
@@ -105,7 +133,7 @@ async def sweep(db: AsyncSession, *, limit: int = BATCH) -> SweepResult:
                 AlertLogContext,
                 AlertLogContext.run_id == AlertBodyInvestigationRun.id,
             )
-            .where(AlertBodyInvestigationRun.graph_materialised_at.is_(None))
+            .where(_stale())
             .order_by(AlertBodyInvestigationRun.created_at)
             .limit(limit)
         )
