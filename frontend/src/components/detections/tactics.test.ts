@@ -42,12 +42,22 @@ describe("the three absences, kept apart", () => {
     ]);
   });
 
-  it("gives a node with no nameable technique its own column", () => {
+  it("puts a node with no nameable technique in a gutter, not a column", () => {
     const result = plan(["Execution", null, null]);
-    const unplaced = result.columns.find((c) => c.id === UNPLACED);
-    expect(unplaced).toBeDefined();
-    expect(unplaced!.label).toBe(UNPLACED_LABEL);
-    expect(unplaced!.count).toBe(2);
+    expect(result.gutter).not.toBeNull();
+    expect(result.gutter!.label).toBe(UNPLACED_LABEL);
+    expect(result.gutter!.count).toBe(2);
+  });
+
+  it("keeps the gutter out of the kill chain entirely", () => {
+    // The Narrative axis reads left to right as a kill chain, so a column
+    // appended at the end reads as a final stage. Structural rather than
+    // positional: a renderer cannot draw it inline by accident. Same answer
+    // as the Timeline's untimed gutter, not a second convention.
+    const result = plan(["Execution", null]);
+    expect(result.columns.some((c) => c.id === UNPLACED)).toBe(false);
+    expect(result.columns.map((c) => c.label)).toEqual(ORDER);
+    expect(result.columns[result.columns.length - 1].label).toBe("Impact");
   });
 
   it("never folds an unplaceable node into a real tactic", () => {
@@ -67,17 +77,15 @@ describe("the three absences, kept apart", () => {
     expect(result.omitted.map((o) => o.label)).toEqual(["Defense Evasion"]);
   });
 
-  it("has no unplaced column when nothing is unplaceable", () => {
-    const result = plan(["Execution"]);
-    expect(result.columns.some((c) => c.id === UNPLACED)).toBe(false);
+  it("has no gutter at all when everything placed", () => {
+    expect(plan(["Execution"]).gutter).toBeNull();
   });
 });
 
 describe("the columns themselves", () => {
   it("draws every tactic the release has, in the matrix order", () => {
     const result = plan(["Stealth"]);
-    expect(result.columns.filter((c) => c.state !== UNPLACED).map((c) => c.label))
-      .toEqual(ORDER);
+    expect(result.columns.map((c) => c.label)).toEqual(ORDER);
   });
 
   it("places Stealth, which 18.6% of this estate's nodes resolve to", () => {
@@ -88,7 +96,7 @@ describe("the columns themselves", () => {
     const stealth = result.columns.find((c) => c.label === "Stealth");
     expect(stealth!.state).toBe(POPULATED);
     expect(stealth!.count).toBe(6290);
-    expect(result.columns.find((c) => c.id === UNPLACED)).toBeUndefined();
+    expect(result.gutter).toBeNull();
   });
 
   it("counts nodes per tactic", () => {
@@ -103,7 +111,7 @@ describe("the columns themselves", () => {
 
   it("treats blank and whitespace tactics as unplaceable, not as a tactic", () => {
     const result = planTactics({ tactics: ["", "   ", undefined], order: ORDER });
-    expect(result.columns.find((c) => c.id === UNPLACED)!.count).toBe(3);
+    expect(result.gutter!.count).toBe(3);
     expect(result.omitted).toEqual([]);
   });
 });
@@ -121,7 +129,8 @@ describe("a payload with no tactic order", () => {
 
   it("still separates the unplaceable nodes", () => {
     const result = planTactics({ tactics: ["Execution", null], order: [] });
-    expect(result.columns.find((c) => c.id === UNPLACED)!.count).toBe(1);
+    expect(result.gutter!.count).toBe(1);
+    expect(result.columns.map((c) => c.label)).toEqual(["Execution"]);
   });
 
   it("does not report every tactic as retired when the order is missing", () => {
@@ -156,7 +165,10 @@ describe("columnFor", () => {
 
   it("never returns a column that is not in the plan", () => {
     const result = plan(["Execution", null, "Defense Evasion"]);
-    const ids = new Set(result.columns.map((c) => c.id));
+    const ids = new Set([
+      ...result.columns.map((c) => c.id),
+      ...(result.gutter ? [result.gutter.id] : []),
+    ]);
     for (const tactic of ["Execution", "Stealth", "Defense Evasion", null, ""]) {
       expect(ids.has(columnFor(tactic, result))).toBe(true);
     }

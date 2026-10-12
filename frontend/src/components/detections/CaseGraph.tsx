@@ -22,6 +22,13 @@ import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import fcose from "cytoscape-fcose";
 import dagre from "cytoscape-dagre";
 import { EXTERNAL_BAND, planBands } from "./bands";
+import {
+  LABEL_MAX_PX,
+  type Measure,
+  approximateMeasurer,
+  canvasMeasurer,
+  fitToWidth,
+} from "./nodeLabel";
 import { planTimeline, type TimelinePlan } from "./timeline";
 import { IndicatorPanel } from "./IndicatorPanel";
 import { recentre } from "./viewport";
@@ -47,46 +54,19 @@ type Mode = "narrative" | "topology" | "timeline";
  *  the controls altogether. */
 const ZOOM_STEP = 1.2;
 
-/** ATT&CK tactics in kill-chain order. A node sits in the column of the
- *  earliest technique that touched it, so an attack walks rightward. */
-const TACTICS: Array<{ id: string; label: string }> = [
-  { id: "initial-access", label: "Initial Access" },
-  { id: "execution", label: "Execution" },
-  { id: "persistence", label: "Persistence" },
-  { id: "privilege-escalation", label: "Privilege Esc." },
-  { id: "defense-evasion", label: "Defense Evasion" },
-  { id: "credential-access", label: "Credential Access" },
-  { id: "discovery", label: "Discovery" },
-  { id: "lateral-movement", label: "Lateral Movement" },
-  { id: "collection", label: "Collection" },
-  { id: "command-and-control", label: "Command & Control" },
-  { id: "exfiltration", label: "Exfiltration" },
-  { id: "impact", label: "Impact" },
-];
-
-/** Technique prefix -> tactic. Enough of ATT&CK to place the techniques this
- *  estate actually fires; anything unmapped lands in its own column rather
- *  than being guessed into one. */
-const TECHNIQUE_TACTIC: Record<string, string> = {
-  T1566: "initial-access", T1189: "initial-access", T1078: "initial-access",
-  T1190: "initial-access", T1204: "execution", T1059: "execution",
-  T1106: "execution", T1053: "execution", T1547: "persistence",
-  T1543: "persistence", T1136: "persistence", T1098: "persistence",
-  T1055: "privilege-escalation", T1068: "privilege-escalation",
-  T1562: "defense-evasion", T1070: "defense-evasion", T1112: "defense-evasion",
-  T1027: "defense-evasion", T1003: "credential-access", T1110: "credential-access",
-  T1555: "credential-access", T1087: "discovery", T1082: "discovery",
-  T1016: "discovery", T1018: "discovery", T1057: "discovery", T1083: "discovery",
-  T1021: "lateral-movement", T1570: "lateral-movement",
-  T1005: "collection", T1113: "collection", T1071: "command-and-control",
-  T1105: "command-and-control", T1095: "command-and-control",
-  T1041: "exfiltration", T1486: "impact", T1531: "impact", T1489: "impact",
-};
-
-function tacticOf(techniqueId: string): string | null {
-  const parent = (techniqueId || "").split(".")[0].toUpperCase();
-  return TECHNIQUE_TACTIC[parent] || null;
-}
+/* Tactics used to be two hand-written lists here: twelve in kill-chain order,
+ * and 38 technique prefixes mapping into them. Both were written against a
+ * pre-19 ATT&CK and neither could say it had gone stale — 19 split Defense
+ * Evasion into Stealth and Defense Impairment, so three mappings pointed at a
+ * tactic that no longer exists and 6,290 technique nodes in this estate,
+ * 18.6% of all of them, resolved to a tactic with no entry at all. They would
+ * have been coloured as unplaced.
+ *
+ * Both now arrive with the graph: `attrs.tactic` on each technique node and
+ * `attack.tactic_order` for the ordering, from the bundled catalogue of all
+ * 858. The copies existed because the catalogue was backend-only, so sending
+ * it is the fix rather than deleting them — a copy nobody can reach gets
+ * rewritten. */
 
 /** One glyph per node type, plus the caption that sits under the label. A
  *  colour alone cannot be read by everyone, so the shape and the word carry
@@ -131,10 +111,36 @@ function riskColour(severity: number | null | undefined, rated: boolean): string
   return "#F59F00";
 }
 
-function labelOf(node: CaseGraphNode): string {
+/**
+ * Three lines at most, because the node box is 104x44 at font-size 10 with
+ * line-height 1.25 — so 12.5px a line, and a fourth overflows. A technique
+ * wants all three: the id, ATT&CK's name for it, and the kind caption.
+ *
+ * The name line is fitted on *measured* width, not sliced at a character
+ * count: ATT&CK's leaf names run to a median of 30 characters against a line
+ * that holds about 96px, and in a proportional font eighteen W's and
+ * "Disable or Modif…" are nothing like the same width. See `nodeLabel.ts`.
+ *
+ * `retired` replaces the caption rather than being appended anywhere, so it
+ * costs no width and no height and cannot steal the name's line. It is a
+ * word, not only a dashed border, because colour and line style are not
+ * readable by everyone and the PNG export may be looked at in monochrome —
+ * the same reason `KIND` carries a glyph and a caption and not just a colour.
+ */
+export function labelOf(node: CaseGraphNode, measure: Measure): string {
   const caption = KIND[node.kind]?.caption || node.kind;
   const glyph = KIND[node.kind]?.glyph || "•";
-  return `${glyph} ${node.label}\n${caption}`;
+  const head = `${glyph} ${node.label}`;
+  if (node.kind !== "technique") return `${head}\n${caption}`;
+
+  const attrs = (node.attrs || {}) as Record<string, unknown>;
+  const name = String(attrs.short_name || "");
+  const retired = attrs.retired === true;
+  const foot = retired ? `retired ${caption}` : caption;
+  // No name to show means the id is not ATT&CK's: the id stands alone rather
+  // than borrowing a name from anywhere, and the panel carries the absence.
+  if (!name) return `${head}\n${foot}`;
+  return `${head}\n${fitToWidth(name, LABEL_MAX_PX, measure)}\n${foot}`;
 }
 
 /** Ticks, lane labels and the untimed gutter, drawn over the canvas.
@@ -268,6 +274,18 @@ export default function CaseGraph({
     };
   }, [caseKey, hours]);
 
+  /** Measured with the font the labels are drawn in, so truncation matches
+   *  what the canvas renders. Falls back to a pessimistic average when no 2D
+   *  context is available — a stubbed context reports every string as 0px
+   *  wide, which would silently say every label fits. */
+  const measure = useMemo<Measure>(() => {
+    const family =
+      (typeof window !== "undefined" && container.current
+        ? window.getComputedStyle(container.current).fontFamily
+        : "") || "sans-serif";
+    return canvasMeasurer(`10px ${family}`) || approximateMeasurer();
+  }, []);
+
   const byId = useMemo(() => {
     const map = new Map<string, CaseGraphNode>();
     (data?.nodes || []).forEach((n) => map.set(n.id, n));
@@ -276,14 +294,22 @@ export default function CaseGraph({
 
   /** The earliest tactic that touched each node, walked outward from the
    *  techniques so a process inherits the column of the step it belongs to. */
+  const tacticOrder = useMemo<string[]>(
+    () => ((data?.attack as { tactic_order?: string[] } | undefined)?.tactic_order) || [],
+    [data],
+  );
+
   const tacticByNode = useMemo(() => {
     const out = new Map<string, string>();
     if (!data) return out;
-    const rank = new Map(TACTICS.map((t, i) => [t.id, i]));
+    const rank = new Map(tacticOrder.map((t, i) => [t, i]));
     data.nodes
       .filter((n) => n.kind === "technique")
       .forEach((technique) => {
-        const tactic = tacticOf(String(technique.attrs?.id || technique.label));
+        // Resolved server-side against the pinned catalogue. Absent only when
+        // the id is not ATT&CK's, which is a finding and stays uncoloured
+        // rather than being guessed into a tactic.
+        const tactic = String(technique.attrs?.tactic || "");
         if (tactic) out.set(technique.id, tactic);
       });
     // One hop back along every edge that reaches a technique.
@@ -296,7 +322,7 @@ export default function CaseGraph({
       }
     });
     return out;
-  }, [data]);
+  }, [data, tacticOrder]);
 
   /** The causal path from the entry node to the highest-value asset touched. */
   const highlighted = useMemo(() => {
@@ -365,15 +391,18 @@ export default function CaseGraph({
       out.push({
         data: {
           id: node.id,
-          label: labelOf(node),
+          label: labelOf(node, measure),
           kind: node.kind,
           parent,
           tacticColour: tactic
-            ? `hsl(${(TACTICS.findIndex((t) => t.id === tactic) * 29) % 360} 62% 48%)`
+            ? `hsl(${(Math.max(tacticOrder.indexOf(tactic), 0) * 29) % 360} 62% 48%)`
             : "#868E96",
           typeColour: kind.color,
           shape: kind.shape,
           risk: riskColour(node.severity, node.severity_rated !== false),
+          // An ATT&CK id this release has retired. A second, non-colour
+          // channel for the word already on the caption line.
+          retired: (node.attrs as Record<string, unknown> | undefined)?.retired === true ? 1 : 0,
           claimed: node.status === "claimed" ? 1 : 0,
           onPath: highlighted.has(node.id) ? 1 : 0,
           pivots: node.pivot_alerts || 0,
@@ -421,10 +450,22 @@ export default function CaseGraph({
       wheelSensitivity: 0.2,
       style: [
         {
+          // A retired ATT&CK id, in a channel that survives monochrome and
+          // colour-blindness. `border-color` already carries severity, so
+          // only the style is free to say this.
+          selector: "node[retired = 1]",
+          style: { "border-style": "dashed" },
+        },
+        {
           selector: "node",
           style: {
             label: "data(label)",
             "text-wrap": "wrap",
+            // A backstop, not the mechanism. The name line is already fitted
+            // on measured width in `labelOf`; if that measurement is ever
+            // wrong this wraps the label inside the node instead of letting
+            // it spill across the canvas.
+            "text-max-width": `${LABEL_MAX_PX}px`,
             "text-valign": "center",
             "font-size": 10,
             "line-height": 1.25,

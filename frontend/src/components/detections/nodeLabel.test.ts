@@ -14,7 +14,7 @@ import {
  */
 const WIDTHS: Record<string, number> = { W: 12, M: 11, i: 2, l: 2, ".": 3, " ": 3 };
 const proportional = (text: string) =>
-  [...text].reduce((sum, ch) => sum + (WIDTHS[ch] ?? 6), 0);
+  Array.from(text).reduce((sum, ch) => sum + (WIDTHS[ch] ?? 6), 0);
 
 describe("fitToWidth", () => {
   it("leaves a name that fits completely alone, with no ellipsis", () => {
@@ -39,7 +39,7 @@ describe("fitToWidth", () => {
     const narrow = fitToWidth("i".repeat(18), 96, proportional);
     expect(narrow).toBe("i".repeat(18));             // 36px — fits whole
     expect(wide.endsWith(ELLIPSIS)).toBe(true);      // 216px — cut hard
-    expect([...wide].filter((c) => c === "W").length).toBeLessThan(18);
+    expect(Array.from(wide).filter((c) => c === "W").length).toBeLessThan(18);
   });
 
   it("never returns something wider than the budget", () => {
@@ -77,7 +77,7 @@ describe("fitToWidth", () => {
     // Four astral characters at 6px each under a 14px budget.
     const fitted = fitToWidth("\u{1F600}\u{1F600}\u{1F600}", 14, proportional);
     expect(fitted).not.toContain("�");
-    expect([...fitted].every((ch) => ch === "\u{1F600}" || ch === ELLIPSIS)).toBe(true);
+    expect(Array.from(fitted).every((ch) => ch === "\u{1F600}" || ch === ELLIPSIS)).toBe(true);
   });
 
   it("is monotonic: a bigger budget never yields a shorter label", () => {

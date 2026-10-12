@@ -26,9 +26,18 @@
  *                it is empty.
  *
  *   UNPLACED     A node whose technique id this platform cannot name, so it
- *                has no tactic. Drawn as its own column, never folded into a
- *                real one. An id in our data that ATT&CK does not have is a
- *                finding, and guessing it into Execution would hide it.
+ *                has no tactic. Never folded into a real column — guessing it
+ *                into Execution would turn "we cannot say" into a claim.
+ *
+ *                It is returned as `gutter`, not as the last entry of
+ *                `columns`, because the Narrative axis reads left to right as
+ *                a kill chain: a column appended at the end reads as a final
+ *                stage. This is the same problem the Timeline solved for
+ *                untimed nodes, and it gets the same answer rather than a
+ *                second convention — a labelled gutter outside the sequence,
+ *                visually separated, carrying its own count. Keeping it out
+ *                of `columns` makes that structural, so a renderer cannot
+ *                draw it inline by accident.
  *
  * The first two are both "no nodes here". The difference is whether the
  * absence is about the incident or about the catalogue, and only one of them
@@ -59,7 +68,15 @@ export interface OmittedTactic {
 }
 
 export interface TacticPlan {
+  /** The kill chain itself, in ATT&CK's matrix order. Nothing else. */
   readonly columns: readonly TacticColumn[];
+  /**
+   * Nodes that are not on the axis at all, for a gutter outside the
+   * sequence. Null when everything placed. Never append this to `columns`:
+   * see the note above, and `timeline.ts`'s untimed gutter for the same
+   * treatment of the same idea.
+   */
+  readonly gutter: TacticColumn | null;
   /** Tactics the nodes claim that this ATT&CK release does not have. */
   readonly omitted: readonly OmittedTactic[];
   /** The ATT&CK release the columns came from, for the caption. */
@@ -104,7 +121,7 @@ export function planTactics(input: PlanInput): TacticPlan {
   const counts = new Map<string, number>();
   let unplaced = 0;
 
-  for (const raw of input.tactics ?? []) {
+  for (const raw of (input.tactics ?? []) as readonly (string | null | undefined)[]) {
     const tactic = typeof raw === "string" ? raw.trim() : "";
     if (!tactic) {
       unplaced += 1;
@@ -117,9 +134,9 @@ export function planTactics(input: PlanInput): TacticPlan {
   const columns: TacticColumn[] = [];
 
   if (order.length === 0) {
-    for (const [label, count] of counts) {
+    counts.forEach((count, label) => {
       columns.push({ label, id: slugOf(label), state: POPULATED, count });
-    }
+    });
   } else {
     for (const label of order) {
       const count = counts.get(label) ?? 0;
@@ -132,20 +149,21 @@ export function planTactics(input: PlanInput): TacticPlan {
     }
   }
 
-  const omitted: OmittedTactic[] = [...counts.keys()]
+  const omitted: OmittedTactic[] = Array.from(counts.keys())
     .filter((label) => order.length > 0 && !known.has(label))
     .map((label) => ({ label, reason: RETIRED_TACTIC }));
 
-  if (unplaced > 0) {
-    columns.push({
-      label: UNPLACED_LABEL,
-      id: UNPLACED,
-      state: UNPLACED,
-      count: unplaced,
-    });
-  }
+  const gutter: TacticColumn | null =
+    unplaced > 0
+      ? { label: UNPLACED_LABEL, id: UNPLACED, state: UNPLACED, count: unplaced }
+      : null;
 
-  return { columns, omitted, attackVersion: input.attackVersion ?? null };
+  return {
+    columns,
+    gutter,
+    omitted,
+    attackVersion: input.attackVersion ?? null,
+  };
 }
 
 /**
@@ -161,8 +179,6 @@ export function columnFor(
 ): string {
   const label = typeof tactic === "string" ? tactic.trim() : "";
   if (!label) return UNPLACED;
-  const match = plan.columns.find(
-    (column) => column.state !== UNPLACED && column.label === label,
-  );
+  const match = plan.columns.find((column) => column.label === label);
   return match ? match.id : UNPLACED;
 }
