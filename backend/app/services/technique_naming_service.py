@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.analyst.attack_mapping import describe_technique
-from app.analyst.attack_reference import ATTACK_VERSION
+from app.analyst.attack_reference import ATTACK_VERSION, TACTIC_ORDER
 from app.services.absence import UNRECOGNISED, absent
 
 #: Node kinds whose label is an ATT&CK id.
@@ -166,4 +166,12 @@ def annotate(graph: dict[str, Any]) -> dict[str, Any]:
     attack["version"] = ATTACK_VERSION
     attack["retired_drawn"] = retired
     attack["unnameable_drawn"] = unresolved
+    # The tactics this ATT&CK release actually has, in its own matrix order.
+    #
+    # Sent with the data rather than left for the renderer to know, because
+    # that is the difference between a discovery problem and a reachability
+    # one: the frontend kept 12 hand-written columns and 38 technique
+    # mappings, three of them already stale, for no reason other than that
+    # the catalogue was backend-only. A copy nobody can reach gets rewritten.
+    attack["tactic_order"] = list(TACTIC_ORDER)
     return graph
