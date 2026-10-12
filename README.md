@@ -6,7 +6,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Five rules that were learned expensively and are not obvious from the code:
+Six rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -30,6 +30,14 @@ Five rules that were learned expensively and are not obvious from the code:
   "21.1% of prior" from 194 alerts over 24 days against 41 over 18 — on equal
   windows it was 37%, a decline rather than a collapse. Two weeks apart, same
   shape, both caught only by someone re-reading their own figure.
+- **The environment is part of what you are measuring — in both directions.**
+  A monitor is not done until it has run against live data and had its output
+  checked against reality; and a test environment produces false *failures* as
+  readily as false passes. The ingest alarm passed 21 tests and then reported
+  2.5 days of silence for a source delivering 97 alerts in 12 hours. The
+  opposite, the same week: headless Chromium showed Esc failing to leave
+  fullscreen, which was nearly filed as a bug — the headless shell owns no
+  window for the browser to take the key, and both real paths work.
 - **A monitor is not done until it has run against live data and had its
   output checked against reality.** A green test proves the code does what it
   says; only live data proves it says the right thing. The ingest alarm passed
@@ -44,6 +52,11 @@ Five rules that were learned expensively and are not obvious from the code:
   one test machine. Four confirmations exist in the whole production estate.
   Say "assertions" rather than "mappings" when describing what this platform
   produces.
+
+- **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
+  — `cy.fit()` scales to whichever dimension binds first, so a tall narrow
+  layout renders at thumbnail scale. A property of fit-against-aspect, not of
+  any one layout.
 
 Open problems with the evidence behind them live in
 [`docs/problems/`](docs/problems/); the incident notes live in
