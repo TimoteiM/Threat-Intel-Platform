@@ -796,3 +796,20 @@ def test_no_fabricated_technique_reaches_the_graph():
     }
     assert ids == {"T1082", "T1046"}
     assert not any("/" in str(i) for i in ids)
+
+
+def test_a_collapse_group_is_named_in_english():
+    """`process` + `s` read as "processs" on case #71's group, and the first
+    fix produced "12 process" — the same error in the other direction. Seen
+    only because someone looked at the drawing."""
+    from app.services.alert_graph_assembly_service import _collapse_siblings
+
+    expected = {
+        "process": "processes", "file": "files", "account": "accounts",
+        "registry_value": "registry values", "technique": "techniques",
+        "domain": "domains", "url": "urls", "host": "hosts",
+    }
+    for kind, want in expected.items():
+        base = kind.replace("_", " ")
+        noun = f"{base}es" if base.endswith(("s", "x", "z", "ch", "sh")) else f"{base}s"
+        assert noun == want, f"{kind} -> {noun}"

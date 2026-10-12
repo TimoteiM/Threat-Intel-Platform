@@ -22,6 +22,7 @@ import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import fcose from "cytoscape-fcose";
 import dagre from "cytoscape-dagre";
 import { EXTERNAL_BAND, planBands } from "./bands";
+import { planTimeline, type TimelinePlan } from "./timeline";
 import { recentre } from "./viewport";
 import {
   getCaseGraph,
@@ -134,6 +135,96 @@ function labelOf(node: CaseGraphNode): string {
   return `${glyph} ${node.label}\n${caption}`;
 }
 
+/** Ticks, lane labels and the untimed gutter, drawn over the canvas.
+ *
+ *  Furniture, not graph nodes. As nodes they would join the layout, the fit,
+ *  the collapse and the PNG export, and an analyst could select a tick.
+ */
+function TimelineAxis({ plan }: { plan: TimelinePlan }) {
+  const line = "1px solid var(--border)";
+  return (
+    <div
+      aria-hidden
+      style={{ position: "absolute", inset: 0, pointerEvents: "none", fontSize: 10 }}
+    >
+      {/* The gutter, labelled, and visibly outside the plotted range so a
+          node parked in it does not read as "happened first". */}
+      {plan.untimed.length ? (
+        <>
+          <div
+            style={{
+              position: "absolute", left: 0, top: 0, bottom: 0,
+              width: plan.plotLeft - 24, borderRight: line,
+              background: "rgba(255,255,255,0.02)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute", left: 8, top: 8, color: "var(--text-muted)",
+              maxWidth: plan.plotLeft - 40,
+            }}
+          >
+            {plan.untimed.length} not timed
+          </div>
+        </>
+      ) : null}
+
+      {plan.ticks.map((tick) => (
+        <React.Fragment key={tick.x}>
+          <div
+            style={{
+              position: "absolute", left: tick.x, top: 56, bottom: 22,
+              borderLeft: line, opacity: 0.45,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute", left: tick.x, bottom: 4,
+              transform: "translateX(-50%)", color: "var(--text-muted)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {tick.label}
+          </div>
+        </React.Fragment>
+      ))}
+
+      {plan.lanes.map((lane) => (
+        <React.Fragment key={lane.key}>
+          <div
+            style={{
+              position: "absolute", left: plan.plotLeft - 20, right: 8, top: lane.y - 26,
+              borderTop: line, opacity: 0.3,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute", left: 8, top: lane.y - 22,
+              color: "var(--text-muted)", maxWidth: plan.plotLeft - 32,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+            title={lane.label}
+          >
+            {lane.label}
+          </div>
+        </React.Fragment>
+      ))}
+
+      {/* Why this axis is the kind of axis it is. A sequence axis that looked
+          like a clock would be claiming a precision the data does not have. */}
+      <div
+        style={{
+          position: "absolute", left: 8, top: 32, right: 8,
+          color: "var(--text-muted)", opacity: 0.9,
+        }}
+      >
+        {plan.scaleNote}
+      </div>
+    </div>
+  );
+}
+
+
 export default function CaseGraph({
   caseKey,
   hours,
@@ -147,6 +238,7 @@ export default function CaseGraph({
   const [selected, setSelected] = useState<CaseGraphNode | null>(null);
   const [pathOnly, setPathOnly] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [timelinePlan, setTimelinePlan] = useState<TimelinePlan | null>(null);
   const container = useRef<HTMLDivElement | null>(null);
   const frame = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
@@ -361,6 +453,13 @@ export default function CaseGraph({
           style: { "border-style": "double", "font-weight": "bold" },
         },
         {
+          selector: "edge.muted-edge",
+          // `opacity` covers the arrow too; the typed subset of Cytoscape's
+          // style keys has no `target-arrow-opacity`, and reaching past the
+          // types to set it would buy nothing here.
+          style: { opacity: 0.06, label: "" },
+        },
+        {
           selector: "node.band",
           style: {
             label: "data(label)",
@@ -424,28 +523,26 @@ export default function CaseGraph({
           : { name: "preset" };
 
     if (mode === "timeline") {
-      // Wall-clock on x, host band on y.
-      const hosts = Array.from(
-        new Set(data.nodes.map((n) => String(n.attrs?.host || "—"))),
-      );
-      const times = data.nodes
-        .map((n) => (n.witnesses[0]?.at ? Date.parse(n.witnesses[0].at as string) : NaN))
-        .filter((t) => !Number.isNaN(t));
-      const lo = Math.min(...times);
-      const hi = Math.max(...times);
-      const span = Math.max(1, hi - lo);
+      // Positions, ticks, lanes and the untimed gutter all come from
+      // `planTimeline`, which is pure and tested. What used to be here placed
+      // every node at `90 + fraction * 1100` with a pseudo-random y from the
+      // id's length, drew no axis, and put a case whose alerts are seconds
+      // apart on one coordinate.
+      const frame = { width: cy.width(), height: cy.height() };
+      const plan = planTimeline(data.nodes, frame);
+      setTimelinePlan(plan);
+      const where = new Map(plan.placed.map((p) => [p.id, p]));
       cy.nodes().forEach((n) => {
-        const node = byId.get(n.id());
-        if (!node) return;
-        const at = node.witnesses[0]?.at ? Date.parse(node.witnesses[0].at as string) : lo;
-        const row = Math.max(0, hosts.indexOf(String(node.attrs?.host || "—")));
-        n.position({
-          x: 90 + ((at - lo) / span) * 1100,
-          y: 80 + row * 130 + (n.id().length % 5) * 16,
-        });
+        const at = where.get(n.id());
+        if (at) n.position({ x: at.x, y: at.y });
       });
+      // Edges are suppressed here and drawn only for a selection: a time axis
+      // with every edge on it is a mesh, because the axis already carries the
+      // ordering the edges would show.
+      cy.edges().addClass("muted-edge");
       cy.fit(undefined, 40);
     } else {
+      setTimelinePlan(null);
       cy.layout(layout as never).run();
       cy.fit(undefined, 40);
     }
@@ -453,9 +550,19 @@ export default function CaseGraph({
     cy.on("tap", "node", (event) => {
       const node = byId.get(event.target.id());
       if (node) setSelected(node);
+      if (mode === "timeline") {
+        // The selection's own edges, and only those: the question a timeline
+        // answers about one node is what it touched, not what everything
+        // touched.
+        cy.edges().addClass("muted-edge");
+        event.target.connectedEdges().removeClass("muted-edge");
+      }
     });
     cy.on("tap", (event) => {
-      if (event.target === cy) setSelected(null);
+      if (event.target === cy) {
+        setSelected(null);
+        if (mode === "timeline") cy.edges().addClass("muted-edge");
+      }
     });
 
     return () => {
@@ -771,15 +878,24 @@ export default function CaseGraph({
             minHeight: 0,
           }}
         >
-          <div
-            ref={container}
-            style={{
-              height: fullscreen ? "100%" : 560,
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              background: "var(--surface-sunken, #101113)",
-            }}
-          />
+          <div style={{ position: "relative", height: fullscreen ? "100%" : 560 }}>
+            <div
+              ref={container}
+              style={{
+                height: "100%",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--surface-sunken, #101113)",
+              }}
+            />
+            {/* The axis, drawn over the canvas rather than as graph nodes.
+                Ticks and lane labels are furniture — making them nodes would
+                put them in the layout, the fit, the collapse and the export,
+                and an analyst would be able to select a tick. */}
+            {mode === "timeline" && timelinePlan ? (
+              <TimelineAxis plan={timelinePlan} />
+            ) : null}
+          </div>
           {selected ? (
             <Detail node={selected} onClose={() => setSelected(null)} fill={fullscreen} />
           ) : null}

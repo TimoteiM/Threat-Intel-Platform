@@ -427,7 +427,13 @@ def _collapse_siblings(
         for node in member_nodes:
             witnesses.extend(node.witnesses)
         every_corroborated = all(n.basis == OBSERVED for n in member_nodes)
-        noun = node_kind.replace("_", " ")
+        # "process" + "s" read as "processs" on case #71's collapse group,
+        # which is the sort of thing that survives because nobody looks at the
+        # drawing. A sibilant takes "es": process -> processes. The first fix
+        # here took no suffix at all and produced "12 process", which is the
+        # same class of error in the other direction.
+        base = node_kind.replace("_", " ")
+        noun = f"{base}es" if base.endswith(("s", "x", "z", "ch", "sh")) else f"{base}s"
         # How many extracted observations these nodes stand for, not how many
         # nodes were folded. By the time collapse runs, `_merge_same_binary`
         # has already folded every execution of one binary into one node: on
@@ -439,7 +445,7 @@ def _collapse_siblings(
         nodes[group_key] = AssembledNode(
             kind=node_kind,
             merge_key=group_key,
-            label=f"{len(member_nodes)} {noun}s",
+            label=f"{len(member_nodes)} {noun}",
             basis=OBSERVED if every_corroborated else PARSED,
             attrs={
                 "group": True,
