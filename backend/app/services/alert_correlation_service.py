@@ -67,6 +67,8 @@ from app.services.alert_session_service import (
     case_key_for,
 )
 
+from app.services.case_supersession_service import prior_judgement
+
 logger = logging.getLogger(__name__)
 
 # Roughly the order an intrusion moves through. Used only to ask whether a case
@@ -1389,6 +1391,12 @@ async def correlate_alerts(
                 ),
             }
             case_payload["continues"] = await case_reference(db, spine.continues_case_key)
+            # The parent's conclusion, attributed and dated. A continuation no
+            # longer inherits a disposition, so this is the only place the
+            # earlier answer appears — as context, which is what it is.
+            case_payload["prior_judgement"] = await prior_judgement(
+                db, continues_case_key=spine.continues_case_key
+            )
 
             case_payload["narrative"] = {
                 **narrative_lead(spine.narrative_markdown),

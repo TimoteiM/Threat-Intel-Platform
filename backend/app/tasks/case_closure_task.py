@@ -250,49 +250,75 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     # Another pass is already answering it.
                     continue
 
-                # A continuation that brought nothing its parent had not
-                # already answered arrives with the answer on it. Asking a
-                # model the same question again would cost a call to produce
-                # the same sentence — 47% of continuations, measured.
+                # A continuation does NOT inherit its parent's disposition.
                 #
-                # Anything else closes with no answer yet. The resolution is
-                # whatever the analysis concludes, and the narrative task
-                # writes it when the model returns; closing cannot wait for
-                # that without making MTTR measure queue depth.
+                # It used to: a continuation whose parent already had an answer
+                # was closed carrying that answer, to save a model call on 47%
+                # of continuations. Measured on `alert_case_spine` using
+                # `last_activity_at > closed_at`, that path held every
+                # post-close accretion in the estate — 20 of 45 `inherited`
+                # closes (44.4%) against 0 of 1,063 `auto` ones — and the
+                # arrivals were real: of 1,654 alerts that joined those 20
+                # after their close, 1,654 were ingested after it and 0 were
+                # already stored. #2021 carried a verdict formed on 8 alerts
+                # while holding 299 more; #1908 one alert against 125.
                 #
-                # A parent whose own answer is still pending is not an answer
-                # to inherit, so the continuation waits for its own.
-                inherited = bool(
-                    row.resolution
-                    and row.resolution != closure.AWAITING_ANALYSIS
-                    and row.continues_case_key
-                )
-                resolution = row.resolution if inherited else closure.AWAITING_ANALYSIS
+                # The reason is structural, not a clock. A continuation exists
+                # *because* activity resumed on that entity, so it is born
+                # mid-burst, clears its quiet gate in a lull, inherits a
+                # verdict, and the burst continues. No quiet period fixes that,
+                # because inheritance is the wrong operation: it copies a
+                # judgement onto a case nothing has judged.
+                #
+                # This platform already refused to do exactly this once. A dead
+                # key's resolution is never written onto the live case that
+                # covers the same incident; it is surfaced attributed and dated
+                # — "an earlier key for this incident, case #9, recorded
+                # 2026-10-07, concluded true positive" — and the live case
+                # keeps its own verdict. A continuation is the same shape by a
+                # different code path, so it gets the same treatment: the
+                # parent's conclusion is context on the page, and this case's
+                # disposition stays empty until something judges it on its own
+                # members.
+                #
+                # The cost is the 47% of continuations that now get their own
+                # model call. That is the price of a verdict being about the
+                # alerts it was formed on.
+                continuation = bool(row.continues_case_key)
                 await store.close_case(
                     db,
                     case_key=row.case_key,
-                    resolution=resolution,
+                    resolution=closure.AWAITING_ANALYSIS,
                     title=case.get("label") or row.title,
                     # The full count, not the member list: `alerts` is capped
                     # at 100 by case_by_key, and recording its length is how
                     # 31 closed cases came to read exactly 100 and none more.
                     alerts_at_close=int(case.get("alert_count") or 0) or len(members),
                     closed_at=now,
-                    closure_kind="inherited" if inherited else "auto",
+                    # `auto`, because the close is now exactly an auto close.
+                    # `inherited` stays a historical kind for the 45 rows that
+                    # really did carry a verdict written at close; keeping it
+                    # for closes that no longer do would split one value across
+                    # two meanings. The continuation fact is already recorded
+                    # in `continues_case_key`, which is a better record of it.
+                    closure_kind="auto",
                 )
                 answered.append({
-                    "inherited": bool(inherited),
+                    "continuation": continuation,
                     "case": case,
                     "case_key": row.case_key,
                     "case_number": row.case_number,
-                    "resolution": resolution,
+                    "resolution": closure.AWAITING_ANALYSIS,
                     "alerts": len(members),
                     "reason": decision.reason,
                     "quiet_for_seconds": round(decision.quiet_for.total_seconds()),
                 })
                 logger.info(
-                    "Closed case #%s (%s) as %s on %s alert(s) — %s",
-                    row.case_number, row.case_key[:12], resolution, len(members),
+                    "Closed case #%s (%s) as %s on %s alert(s)%s — %s",
+                    row.case_number, row.case_key[:12], closure.AWAITING_ANALYSIS,
+                    len(members),
+                    " (continues an earlier case; its conclusion is context, "
+                    "not this case's verdict)" if continuation else "",
                     decision.reason,
                 )
             await db.commit()
@@ -316,8 +342,9 @@ def close_quiet_cases(limit: int | None = None) -> dict[str, Any]:
                     ),
                 )
                 for entry in answered
-                # Nothing new to say, so nothing is asked.
-                if not entry["inherited"]
+                # Every closed case is asked, continuations included. The
+                # exclusion here was the other half of inheritance: a case that
+                # arrived with a borrowed answer was never asked for its own.
             ]
 
             # What each narrative is being written over, recorded before it is

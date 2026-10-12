@@ -344,6 +344,72 @@ async def where_this_key_went(db: Any, case_key: str) -> dict[str, Any] | None:
     }
 
 
+_CONTINUES_SQL = """
+select s.case_number, s.case_key, s.resolution, s.closed_at, s.closed_by,
+       s.closure_kind, s.narrative_markdown, s.alerts_at_close
+from alert_case_spine s
+where s.case_key = :parent
+"""
+
+
+async def prior_judgement(db: Any, *, continues_case_key: str | None) -> dict[str, Any] | None:
+    """The conclusion of the case this one continues, attributed and dated.
+
+    Context, never a verdict. A continuation used to be *closed carrying* its
+    parent's disposition, and that single path held every post-close accretion
+    in the estate: 20 of 45 such closes, against 0 of 1,063 quiet-period ones.
+    A continuation exists because activity resumed, so it is born mid-burst and
+    the burst continues after the borrowed verdict is written.
+
+    The wording follows `earlier_keys_for` deliberately. That function already
+    solved this for dead keys — a resolution recorded under one key is a
+    judgement about that key's alerts, and writing it onto another case is
+    rewriting a conclusion rather than recovering one. A continuation is the
+    same shape by a different code path, so it reads the same way.
+    """
+    if not continues_case_key:
+        return None
+    from sqlalchemy import text as _text
+
+    row = (
+        await db.execute(_text(_CONTINUES_SQL), {"parent": continues_case_key})
+    ).first()
+    if row is None:
+        return None
+
+    dated = (
+        f"recorded {row.closed_at.date().isoformat()}"
+        if row.closed_at
+        else "with no recorded closing date"
+    )
+    if row.resolution and row.resolution != "awaiting_analysis":
+        verdict = f", concluded {str(row.resolution).replace('_', ' ')}"
+        on = (
+            f" on {row.alerts_at_close} alert"
+            f"{'' if row.alerts_at_close == 1 else 's'}"
+            if (row.alerts_at_close or 0) > 0
+            else ""
+        )
+    else:
+        verdict, on = ", which recorded no conclusion", ""
+    return {
+        "case_key": row.case_key,
+        "case_number": row.case_number,
+        "resolution": row.resolution,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+        "closed_by": row.closed_by,
+        "closure_kind": row.closure_kind,
+        "alerts_at_close": row.alerts_at_close,
+        "narrative_markdown": row.narrative_markdown,
+        "attribution": (
+            f"This case continues case #{row.case_number}, {dated}"
+            f"{verdict}{on}. That is that case's judgement about its own "
+            "alerts, not this case's — this one is answered on the alerts it "
+            "holds."
+        ),
+    }
+
+
 async def earlier_keys_for(db: Any, case_key: str) -> list[dict[str, Any]]:
     """Analyses recorded under earlier keys for this same incident.
 
