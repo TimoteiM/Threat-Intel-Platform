@@ -6,7 +6,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Nine rules that were learned expensively and are not obvious from the code:
+Eight rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -30,22 +30,25 @@ Nine rules that were learned expensively and are not obvious from the code:
   "21.1% of prior" from 194 alerts over 24 days against 41 over 18 — on equal
   windows it was 37%, a decline rather than a collapse. Two weeks apart, same
   shape, both caught only by someone re-reading their own figure.
-- **The environment is part of what you are measuring — in both directions.**
-  A monitor is not done until it has run against live data and had its output
-  checked against reality; and a test environment produces false *failures* as
-  readily as false passes. The ingest alarm passed 21 tests and then reported
-  2.5 days of silence for a source delivering 97 alerts in 12 hours. The
-  opposite, the same week: headless Chromium showed Esc failing to leave
-  fullscreen, which was nearly filed as a bug — the headless shell owns no
-  window for the browser to take the key, and both real paths work.
-- **A monitor is not done until it has run against live data and had its
-  output checked against reality.** A green test proves the code does what it
-  says; only live data proves it says the right thing. The ingest alarm passed
-  21 tests and then, on its first live run, reported 2.5 days of silence for a
-  source delivering 97 alerts in 12 hours, and cleared a 26-day outage on the
-  strength of one alert. Both defects were invisible to every test, because the
-  tests asserted the behaviour the code was written for rather than the
-  behaviour the data produces.
+- **The environment is part of what you are measuring.** A monitor is not done
+  until it has run against live data, and a failure in a test environment is
+  not a defect until it has been reproduced outside one. The two halves are
+  one fact: a green test does not prove the thing works in production, and a
+  red one does not prove it is broken.
+
+  Both directions earned their place in a single week. *Forward:* the ingest
+  alarm passed 21 tests, then on its first live run reported 2.5 days of
+  silence for a source delivering 97 alerts in 12 hours, and cleared a 26-day
+  outage on the strength of one alert. ThreatFox is the sharper case — every
+  test that touched it supplied the feed's output itself, monkeypatching
+  Cobalt Strike and Emotet hits, while no test ever called `perform_ip_lookup`
+  and the real request 401'd on a wrong header name for 6,376 consecutive
+  lookups. A suite can assert elaborate behaviour on data the system has never
+  once retrieved. *Backward:* headless Chromium showed Esc failing to leave
+  fullscreen and it was nearly filed as a bug — the headless shell owns no
+  window for the browser to take the key, and both real paths work — and every
+  component test reported "React is not defined" until the JSX transform was
+  configured, which was the harness and not the components.
 
 - **[Every ATT&CK mapping we show is an assertion](docs/problems/attack-corroboration.md)**
   — 42 of 32,574 technique entries are corroborated, and 38 of those 42 are on
