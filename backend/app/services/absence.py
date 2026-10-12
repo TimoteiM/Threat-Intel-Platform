@@ -68,6 +68,14 @@ LOWER_BOUND = "lower_bound"
 #: degrading an unrecognised kind into `unparsed` would file it under a kind
 #: that *means* something — the convention's own failure mode implemented
 #: inside the convention. The original string travels as `raw`.
+#:
+#: Used for two things now, and the second is the more common in practice:
+#: an unrecognised absence *kind* (below, in `__post_init__`), and a value
+#: from an external vocabulary this code has not seen — ThreatFox's
+#: `query_status`, which abuse.ch does not document, so the set of possible
+#: values can grow without notice. Both are the same claim: something was
+#: said and we do not know what it means. Neither is a result and neither is
+#: a known failure, and the point of the kind is to refuse to pick.
 UNRECOGNISED = "unrecognised_absence"
 
 KINDS = frozenset({

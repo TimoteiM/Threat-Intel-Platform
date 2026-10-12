@@ -13,7 +13,10 @@ Eight rules that were learned expensively and are not obvious from the code:
   rebuilding changes the code for one. Between the two, any container still
   running the old code fails every query touching the change, and nothing
   notices because each half is internally consistent. This stopped all alert
-  analysis for 2h38m with no signal.
+  analysis for 2h38m with no signal. Its sibling is in the same document: **an
+  `.env` change is not a restart** — `env_file` is read when a container is
+  created, so `restart` reuses the old environment and `up -d` often sees no
+  config change and exits 0 having done nothing.
 - **[Name the entry point you measured](docs/deploy/measuring.md)** — a
   timing or correctness claim states the call path it went through. A bound on
   the case graph was built, measured and re-run across eleven cases before

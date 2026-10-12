@@ -227,3 +227,61 @@ def test_a_real_negative_and_a_sentinel_zero_are_distinguishable() -> None:
 
     sentinel = _threatfox({"errors": ["ThreatFox: HTTPError"], "threatfox": []})
     assert sentinel.kind == "check_failed"
+
+
+def test_an_unseen_status_says_so_rather_than_picking_a_side(
+    no_abuseipdb,
+) -> None:
+    """The vocabulary was measured, not documented, so it can grow.
+
+    An unrecognised value must not land in `ok`, in `no_result`, or in
+    `check_failed`. The first two would fabricate a result; the third asserts
+    "the check did not run", which a future status for a rate limit, a partial
+    result or a deprecated endpoint would make false.
+    """
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req:
+        req.post.return_value = _Resp({"query_status": "rate_limited_soon"})
+        result = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    status = result["threatfox_status"]
+    assert status["kind"] == "unrecognised_absence"
+    assert status["raw"] == "rate_limited_soon"
+    assert result["threatfox"] == []
+    assert "does not recognise" in status["reason"]
+
+
+def test_an_unseen_status_counts_against_feed_health(no_abuseipdb) -> None:
+    """Unknown resolves toward alarm, not toward reassurance. A monitor that
+    reads silence as success is a tracked defect class in this project."""
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req, \
+         patch.object(ip_lookup_service.health, "record") as rec:
+        req.post.return_value = _Resp({"query_status": "rate_limited_soon"})
+        ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert rec.call_args.kwargs["ok"] is False
+
+
+def test_the_refusal_set_holds_only_what_was_observed() -> None:
+    """A set documented as measured containing a guess is how an unrecognised
+    status becomes a confident claim without anyone deciding to make one."""
+    assert ip_lookup_service.THREATFOX_REFUSALS == {
+        "unknown_operation", "unknown_auth_key",
+    }
+    assert "no_result" not in ip_lookup_service.THREATFOX_REFUSALS
+
+
+def test_the_panel_shows_an_unrecognised_status_as_an_absence() -> None:
+    from app.services.indicator_enrichment_service import _threatfox
+
+    shown = _threatfox({
+        "errors": [],
+        "threatfox_status": {
+            "absent": True, "kind": "unrecognised_absence",
+            "raw": "rate_limited_soon", "reason": "... does not recognise ...",
+        },
+    })
+    assert shown["kind"] == "unrecognised_absence"

@@ -79,3 +79,66 @@ Renaming a column touches more than the model:
 After a rename, grep for the old name across raw SQL, ORM attributes,
 dataclass fields, serialisers and payload builders — then run the acceptance
 CLI, which exercises the endpoint's own call path.
+
+---
+
+## An .env change is not a restart
+
+**The sibling of the rule at the top of this file,** and the same shape: two
+things that both look like "apply the change" and neither of which does.
+
+`env_file: .env` is read when a container is **created**, not when it starts.
+So a new or edited variable in `.env` reaches a running container by exactly
+one route — recreating it:
+
+| command | effect on an `.env` change |
+|---|---|
+| `docker compose restart <svc>` | **nothing.** Reuses the existing container, which keeps the environment it was created with. |
+| `docker compose up -d <svc>` | **usually nothing.** Compose compares its computed config and frequently sees no change, so it leaves the container alone and reports success. |
+| `docker compose up -d --force-recreate <svc>` | works. |
+
+The middle row is the dangerous one. It exits 0, prints the service as
+running, and leaves the old environment in place — a command that looks like
+it did the thing.
+
+### What this cost on 2026-10-12
+
+`ABUSECH_AUTH_KEY` was added to `.env` to fix ThreatFox, which had failed on
+all 6,376 stored lookups. `up -d` was run against `api`, `worker` and `beat`
+and reported all three healthy. None of them had the variable:
+
+    api:    NOT present — needs restart
+    worker: NOT present — needs restart
+    beat:   NOT present — needs restart
+
+Ten minutes were spent re-reading the application's settings plumbing, which
+was correct, before checking the container's actual environment. Cheap only
+because it was checked at all; the failure mode if it had not been is a key
+that is "configured" and a feed that still returns nothing, which is
+indistinguishable from the bug that had just been fixed.
+
+### The procedure
+
+1. Edit `.env`.
+2. `docker compose up -d --force-recreate <services>` — every service that
+   reads the variable. For a feed credential that is usually `api` (serves it
+   to the page), `worker` (performs the lookups) and `beat` (schedules them).
+3. **Verify in the container, not in the config file:**
+
+       docker compose exec -T worker printenv THE_VARIABLE | wc -c
+
+   Check the length, never the value. A variable absent from the container
+   and a variable absent from the file produce the same application
+   behaviour and have different fixes.
+4. Check the queue is empty first (`redis-cli llen investigations`) if the
+   recreate is of `worker`. `task_acks_late` and the 3600s visibility timeout
+   mean an in-flight task is redelivered rather than lost, so this is about
+   latency rather than safety.
+
+### Why both rules exist
+
+In both cases the system is left in a state where each half is internally
+consistent and the join between them is wrong. A migrated database with
+un-rebuilt code; an updated `.env` with un-recreated containers. Nothing
+raises, every component reports health, and the only evidence is a behaviour
+nobody is watching.

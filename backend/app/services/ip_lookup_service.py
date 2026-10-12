@@ -17,7 +17,7 @@ from typing import Any
 import requests
 
 from app.services import enrichment_health_service as health
-from app.services.absence import CHECK_FAILED, absent
+from app.services.absence import CHECK_FAILED, UNRECOGNISED, absent
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -56,6 +56,24 @@ def is_valid_ip(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+#: The `query_status` values abuse.ch returns that mean "I will not answer
+#: this". Measured against the live API on 2026-10-12, because abuse.ch
+#: documents none of them — which is exactly why anything NOT in this set is
+#: reported as `unrecognised_absence` rather than being folded into one of
+#: these. A vocabulary nobody published can grow without telling us.
+#:
+#: `no_result` is deliberately absent: that one is a real negative.
+#: Only the two that were actually observed. Names like `illegal_auth_key`
+#: appear in third-party integration guides and were left out on purpose: a
+#: set described as measured has to contain only what was measured, and a
+#: guessed entry here would silently convert an unrecognised status into a
+#: confident claim — the precise failure this split exists to prevent.
+THREATFOX_REFUSALS = frozenset({
+    "unknown_operation",   # our query verb was wrong (200)
+    "unknown_auth_key",    # the key was rejected (403)
+})
 
 
 def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
@@ -214,15 +232,34 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
                 # because `is_valid_ip` has already run. If this is ever reused
                 # for an unvalidated value, that stops being true.
                 pass
-            else:
+            elif tf_status in THREATFOX_REFUSALS:
                 # abuse.ch answered and would not run the query. Distinct from
                 # `no_result`: nothing was checked, so nothing is known.
                 result["threatfox_status"] = absent(
                     CHECK_FAILED,
-                    "ThreatFox would not run this query: "
-                    f"{tf_data.get('query_status')}. Nothing was checked "
-                    "against this feed, so this is not a 'no hits' result.",
-                    raw=str(tf_data.get("query_status")),
+                    f"ThreatFox would not run this query: {tf_status}. "
+                    "Nothing was checked against this feed, so this is not a "
+                    "'no hits' result.",
+                    raw=tf_status,
+                ).as_json()
+            else:
+                # A status this code has not seen. The vocabulary above was
+                # measured, not documented, so it can grow without notice —
+                # and the honest answer to an unrecognised value is that we do
+                # not know what it means. Calling it `check_failed` would
+                # assert "the check did not run", which a new status for a
+                # rate limit, a partial result or a deprecated endpoint would
+                # make false. Same reasoning as `absent()` degrading an
+                # unrecognised *kind* rather than filing it under one that
+                # means something: do not pick a side, and keep the string.
+                result["threatfox_status"] = absent(
+                    UNRECOGNISED,
+                    "ThreatFox answered with a status this platform does not "
+                    f"recognise: {tf_status}. The feed's status vocabulary is "
+                    "undocumented, so this is neither a result nor a known "
+                    "failure, and nothing should be concluded from it either "
+                    "way until somebody looks.",
+                    raw=tf_status,
                 ).as_json()
         except Exception as e:
             # Measured on `ip_lookups.result_json`, which is where every
