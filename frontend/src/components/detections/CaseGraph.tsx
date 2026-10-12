@@ -31,6 +31,7 @@ import {
 } from "./nodeLabel";
 import { planTimeline, type TimelinePlan } from "./timeline";
 import { IndicatorPanel } from "./IndicatorPanel";
+import { TECHNIQUE_PANEL_KEYS, TechniquePanel } from "./TechniquePanel";
 import { recentre } from "./viewport";
 import {
   getCaseGraph,
@@ -1087,8 +1088,15 @@ function Detail({
   /** Fullscreen: as tall as the canvas beside it, not the inline 560. */
   fill?: boolean;
 }) {
+  const technique = node.kind === "technique";
   const attrs = Object.entries(node.attrs || {}).filter(
-    ([k, v]) => v != null && v !== "" && k !== "members",
+    ([k, v]) =>
+      v != null &&
+      v !== "" &&
+      k !== "members" &&
+      // Shown properly by TechniquePanel; repeating them as raw rows would
+      // put "retirement" twice and `tactics: [...]` once too often.
+      !(technique && TECHNIQUE_PANEL_KEYS.has(k)),
   );
   const members = (node.attrs?.members as string[] | undefined) || [];
   const indicator = ["ip", "domain", "url", "file"].includes(node.kind);
@@ -1116,6 +1124,9 @@ function Detail({
         </span>{" "}
         <span style={{ color: "var(--text-subtle)" }}>({node.basis})</span>
       </div>
+      {technique ? (
+        <TechniquePanel attrs={(node.attrs || {}) as Record<string, unknown>} />
+      ) : null}
       {indicator ? (
         enrichment ? (
           <IndicatorPanel data={enrichment} />
