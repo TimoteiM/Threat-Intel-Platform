@@ -229,3 +229,57 @@ def test_refusal_is_distinguishable_from_never_revoked() -> None:
                     "generator prints this loudly and it needs a decision, "
                     "not a silent blank"
                 )
+
+
+# --- the tactic ordering, derived rather than copied -------------------------
+
+def test_the_tactic_order_is_this_releases_matrix() -> None:
+    """ATT&CK states its order in the bundle's `x-mitre-matrix` object. The
+    generator used to carry a hand-written list instead, and it went stale
+    without saying so: 19 split Defense Evasion into Stealth and Defense
+    Impairment, so `defense-evasion` was still listed and neither replacement
+    was. Any phase missing from the order sorts last, which left 268
+    techniques unplaceable and picked the wrong primary tactic for 7.
+    """
+    from app.analyst.attack_reference import TACTIC_ORDER
+
+    assert TACTIC_ORDER == [
+        "Reconnaissance", "Resource Development", "Initial Access",
+        "Execution", "Persistence", "Privilege Escalation", "Stealth",
+        "Defense Impairment", "Credential Access", "Discovery",
+        "Lateral Movement", "Collection", "Command and Control",
+        "Exfiltration", "Impact",
+    ]
+    assert "Defense Evasion" not in TACTIC_ORDER
+
+
+def test_every_tactic_a_technique_claims_is_in_the_order() -> None:
+    """The property that failing silently cost 7 wrong primaries. A tactic the
+    order does not know sorts last, so this must hold for the primary tactic
+    of every technique to mean anything.
+    """
+    from app.analyst.attack_reference import TACTIC_ORDER
+
+    known = set(TACTIC_ORDER) | {"Unmapped"}
+    for tid, entry in TECHNIQUE_REFERENCE.items():
+        for tactic in entry["tactics"]:
+            assert tactic in known, f"{tid} claims {tactic!r}"
+
+
+def test_a_multi_tactic_techniques_primary_is_the_earliest_in_the_matrix() -> None:
+    from app.analyst.attack_reference import TACTIC_ORDER
+
+    for tid, entry in TECHNIQUE_REFERENCE.items():
+        if len(entry["tactics"]) < 2:
+            continue
+        positions = [TACTIC_ORDER.index(t) for t in entry["tactics"]]
+        assert positions == sorted(positions), f"{tid} tactics out of order"
+        assert entry["tactic"] == entry["tactics"][0], tid
+
+
+def test_the_seven_corrected_primaries() -> None:
+    """Named, because they are the measured consequence of the stale list."""
+    for tid in ("T1497", "T1497.001", "T1497.002", "T1497.003"):
+        assert TECHNIQUE_REFERENCE[tid]["tactic"] == "Stealth"
+    for tid in ("T1506", "T1527"):
+        assert TECHNIQUE_REFERENCE[tid]["tactic"] == "Stealth"

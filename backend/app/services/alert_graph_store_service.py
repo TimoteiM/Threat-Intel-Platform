@@ -384,6 +384,16 @@ async def graph_for_runs(
         if indicators
         else {}
     )
+
+    # What each ATT&CK id *is* — name, tactic, and whether 19.2 has retired it.
+    # Here for the same reason as the enrichment above: the page, the
+    # acceptance CLI and the exports must read one graph, and a name on the
+    # page with a bare id in an export is worse than ids throughout. No
+    # database access — the catalogue is bundled, so an offline deployment
+    # does not lose technique names because GitHub is unreachable.
+    from app.services.technique_naming_service import annotate
+
+    annotate(graph)
     return graph
 
 

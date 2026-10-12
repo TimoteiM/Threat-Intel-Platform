@@ -69,6 +69,13 @@ for the full form, such as a graph node label.
 
 from __future__ import annotations
 
+#: ATT&CK's own kill-chain order for this release, read from the bundle's
+#: matrix object. Exported so no consumer — including the frontend, which kept
+#: its own 12-column list and three stale technique mappings — has to
+#: hand-maintain a second copy. 19 split Defense Evasion into Stealth and
+#: Defense Impairment, which is what the copies got wrong.
+TACTIC_ORDER: list[str] = {tactic_order!r}
+
 #: The ATT&CK release this file was generated from. Surfaced wherever
 #: technique coverage is reported: names change and ids get revoked between
 #: versions, so "which ATT&CK" is part of the answer rather than a footnote.
@@ -79,10 +86,16 @@ ATTACK_VERSION = "{version}"
 TECHNIQUE_REFERENCE: dict[str, dict] = {{
 '''
 
-# ATT&CK's own ordering of the Enterprise kill chain. Used so a multi-tactic
-# technique's primary tactic is stable and matches how the matrix reads, rather
-# than depending on STIX object order.
-TACTIC_ORDER = [
+# Fallback only. ATT&CK states its own ordering in the bundle's
+# `x-mitre-matrix` object, and `_tactic_order` reads it from there — because
+# this list was written against a pre-19 matrix and silently went stale:
+# ATT&CK 19 split Defense Evasion into Stealth and Defense Impairment, so
+# `defense-evasion` below no longer exists and neither replacement was here.
+# Any phase missing from the ordering sorts last, which left 268 techniques
+# unplaceable and may have picked the wrong primary tactic for the 95 of those
+# that belong to more than one. Kept only so a bundle with no matrix object
+# still produces something ordered rather than arbitrary.
+FALLBACK_TACTIC_ORDER = [
     "reconnaissance",
     "resource-development",
     "initial-access",
@@ -113,7 +126,11 @@ def main() -> int:
     tactic_names = _tactic_names(objects)
     techniques = _techniques(objects, tactic_names)
 
-    lines = [HEADER.format(version=version)]
+    lines = [HEADER.format(
+        version=version,
+        tactic_order=[tactic_names.get(s) or _titleise(s)
+                      for s in _tactic_order(objects)],
+    )]
     for technique_id in sorted(techniques, key=_sort_key):
         entry = techniques[technique_id]
         lines.append(f"    {technique_id!r}: {_render(entry)},\n")
@@ -151,6 +168,38 @@ def _version(objects: list[dict[str, Any]]) -> str:
     return "unknown"
 
 
+def _tactic_order(objects: list[dict[str, Any]]) -> list[str]:
+    """ATT&CK's own kill-chain order, from the matrix object that states it.
+
+    `x-mitre-matrix.tactic_refs` is an ordered list of tactic ids — the order
+    the matrix is drawn in — so it is the authoritative answer and it moves
+    when ATT&CK moves. Derived rather than copied: a hand-maintained ordering
+    cannot tell you it has gone stale, which is exactly what happened to the
+    list above.
+    """
+    tactics = {
+        obj["id"]: str(obj.get("x_mitre_shortname") or "")
+        for obj in objects
+        if obj.get("type") == "x-mitre-tactic" and obj.get("id")
+    }
+    order: list[str] = []
+    for obj in objects:
+        if obj.get("type") != "x-mitre-matrix":
+            continue
+        for ref in obj.get("tactic_refs") or []:
+            shortname = tactics.get(ref)
+            if shortname and shortname not in order:
+                order.append(shortname)
+    if not order:
+        print(
+            "  !! no x-mitre-matrix object in this bundle; falling back to the "
+            "hardcoded ordering, which may not match this release",
+            file=sys.stderr,
+        )
+        return list(FALLBACK_TACTIC_ORDER)
+    return order
+
+
 def _tactic_names(objects: list[dict[str, Any]]) -> dict[str, str]:
     """`credential-access` -> `Credential Access`, from ATT&CK's own tactic objects."""
     names: dict[str, str] = {}
@@ -163,6 +212,8 @@ def _tactic_names(objects: list[dict[str, Any]]) -> dict[str, str]:
 def _techniques(
     objects: list[dict[str, Any]], tactic_names: dict[str, str]
 ) -> dict[str, dict[str, Any]]:
+    order = _tactic_order(objects)
+    unplaceable: set[str] = set()
     techniques: dict[str, dict[str, Any]] = {}
     for obj in objects:
         if obj.get("type") != "attack-pattern":
@@ -175,9 +226,10 @@ def _techniques(
             for phase in obj.get("kill_chain_phases") or []
             if phase.get("kill_chain_name") == "mitre-attack"
         ]
+        unplaceable |= {p for p in phases if p and p not in order}
         ordered = sorted(
             {phase for phase in phases if phase},
-            key=lambda phase: TACTIC_ORDER.index(phase) if phase in TACTIC_ORDER else 99,
+            key=lambda phase: order.index(phase) if phase in order else 99,
         )
         tactics = [tactic_names.get(phase) or _titleise(phase) for phase in ordered]
         techniques[technique_id] = {
@@ -196,6 +248,14 @@ def _techniques(
             "deprecated": bool(obj.get("x_mitre_deprecated")),
             "stix_id": str(obj.get("id") or ""),
         }
+
+    if unplaceable:
+        print(
+            f"  !! phases ATT&CK's own matrix does not list: "
+            f"{sorted(unplaceable)} — these sort last and their techniques' "
+            "primary tactic may be wrong",
+            file=sys.stderr,
+        )
 
     # STIX names a sub-technique by its leaf alone — "Spearphishing Link" — which
     # is ambiguous out of context. ATT&CK's own pages title it "Phishing:
