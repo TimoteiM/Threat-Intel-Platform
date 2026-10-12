@@ -35,9 +35,22 @@ Wazuh reserves rule IDs of 100000 and above for local rules; below that is the
 distributed ruleset. On that basis:
 
 - **849 of the conflicts are on stock ruleset rules.** Those are not yours to
-  fix and not ours. If our reading is right, the right destination is upstream.
+  fix and not ours.
 - **528 are on local rules**, which is the part this estate controls.
 - 18 carry a rule id we could not parse, which is ours to look at.
+
+That first number changes what this document is. A mapping error in local
+content is a configuration problem in one estate. A mapping error in the
+distributed ruleset is wrong in **every deployment that uses it**, and nobody
+running Wazuh has any particular reason to notice, because the rule fires
+correctly — it is only the ATT&CK technique attached to it that is wrong, and
+almost nothing downstream checks that against the telemetry.
+
+So if you agree with our reading of 81640, the useful destination is not this
+estate's configuration but an upstream report to the Wazuh ruleset's own
+issue tracker. We are not in a position to file that credibly; you are. One
+rule carrying 59% of the technique conflicts in a single estate is worth the
+ten minutes it would take.
 
 ## The twenty shapes, 1,326 alerts (95.1% of all conflicts)
 

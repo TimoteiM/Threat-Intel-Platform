@@ -143,63 +143,91 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
             result["errors"].append(f"AbuseIPDB: {type(e).__name__}")
 
     # ── ThreatFox ──
-    try:
-        resp = requests.post(
-            "https://threatfox-api.abuse.ch/api/v1/",
-            json={"query": "search_ioc", "search_term": ip},
-            headers={"API-KEY": ""},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        tf_data = resp.json()
-        health.record("threatfox", ok=tf_data.get("query_status") == "ok",
-                      error=str(tf_data.get("query_status")))
-        if tf_data.get("query_status") == "ok":
-            for ioc in tf_data.get("data", []) or []:
-                result["threatfox"].append({
-                    "ioc_value": ioc.get("ioc", ip),
-                    "ioc_type": ioc.get("ioc_type", "ip:port"),
-                    "threat_type": ioc.get("threat_type", "unknown"),
-                    "malware": ioc.get("malware_printable") or ioc.get("malware"),
-                    "confidence_level": ioc.get("confidence_level"),
-                    "first_seen": ioc.get("first_seen"),
-                    "last_seen": ioc.get("last_seen"),
-                    "tags": ioc.get("tags") or [],
-                })
-        else:
-            # abuse.ch answered but declined the query. Recorded, because a
-            # declined query and a query with no matches are different facts.
-            result["threatfox_status"] = absent(
-                CHECK_FAILED,
-                "ThreatFox answered but declined the query: "
-                f"{tf_data.get('query_status')}. Nothing was checked against "
-                "this feed.",
-                raw=str(tf_data.get("query_status")),
-            ).as_json()
-    except Exception as e:
-        # Measured on `ip_lookups.result_json`, which is where every lookup's
-        # outcome is persisted and therefore the right table to ask: 800 of the
-        # 800 most recent rows record `ThreatFox: HTTPError`, and
-        # `threatfox_count` is 0 on all 6,259 rows. The feed has never once
-        # answered — abuse.ch requires an Auth-Key and the request below sends
-        # an empty `API-KEY` header.
-        #
-        # Logged at warning, not debug. At debug this failed silently for
-        # 6,259 lookups and surfaced as a zero that looked like a clean result.
-        logger.warning(
-            "ThreatFox lookup failed for %s: %s. The feed has never returned a "
-            "match in this deployment; it needs an abuse.ch Auth-Key.",
-            ip, type(e).__name__,
-        )
-        result["errors"].append(f"ThreatFox: {type(e).__name__}")
-        health.record("threatfox", ok=False, error=type(e).__name__)
+    #
+    # Two things were wrong here, and either alone was enough to guarantee the
+    # 401 that every one of the 6,376 stored lookups recorded. The header was
+    # named `API-KEY`; abuse.ch's documented name is `Auth-Key`. And it was
+    # sent empty, from a literal, with no setting anywhere to put a key in.
+    auth_key = str(getattr(settings, "abusech_auth_key", "") or "").strip()
+    if not auth_key:
+        # Do not make the call. A request with no key is a round trip whose
+        # only possible outcome is a 401, and dressing that up as a network
+        # failure is what made this look like an outage for a month rather
+        # than a missing credential. Say which it is.
+        health.record("threatfox", ok=False, error="no_auth_key")
+        result["errors"].append("ThreatFox: no abuse.ch Auth-Key configured")
         result["threatfox_status"] = absent(
             CHECK_FAILED,
-            "ThreatFox could not be reached, so this address was not checked "
-            "against it. This is not a clean result — the feed needs an "
-            "abuse.ch Auth-Key and has never answered in this deployment.",
-            raw=type(e).__name__,
+            "ThreatFox was not asked about this address: no abuse.ch Auth-Key "
+            "is configured, and abuse.ch has required one since it made "
+            "authentication mandatory. This is a missing credential, not a "
+            "feed outage, and not a clean result. Set ABUSECH_AUTH_KEY.",
+            raw="no_auth_key",
         ).as_json()
+        # Fall through to the shared return; the request below is skipped.
+    else:
+        try:
+            resp = requests.post(
+                "https://threatfox-api.abuse.ch/api/v1/",
+                json={"query": "search_ioc", "search_term": ip},
+                # Never interpolated into a log line, an error string or the
+                # stored `result_json` — only this header.
+                headers={"Auth-Key": auth_key},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            tf_data = resp.json()
+            health.record("threatfox", ok=tf_data.get("query_status") == "ok",
+                          error=str(tf_data.get("query_status")))
+            if tf_data.get("query_status") == "ok":
+                for ioc in tf_data.get("data", []) or []:
+                    result["threatfox"].append({
+                        "ioc_value": ioc.get("ioc", ip),
+                        "ioc_type": ioc.get("ioc_type", "ip:port"),
+                        "threat_type": ioc.get("threat_type", "unknown"),
+                        "malware": ioc.get("malware_printable") or ioc.get("malware"),
+                        "confidence_level": ioc.get("confidence_level"),
+                        "first_seen": ioc.get("first_seen"),
+                        "last_seen": ioc.get("last_seen"),
+                        "tags": ioc.get("tags") or [],
+                    })
+            else:
+                # abuse.ch answered but declined the query. Recorded, because a
+                # declined query and a query with no matches are different facts.
+                result["threatfox_status"] = absent(
+                    CHECK_FAILED,
+                    "ThreatFox answered but declined the query: "
+                    f"{tf_data.get('query_status')}. Nothing was checked against "
+                    "this feed.",
+                    raw=str(tf_data.get("query_status")),
+                ).as_json()
+        except Exception as e:
+            # Measured on `ip_lookups.result_json`, which is where every
+            # lookup's outcome is persisted and therefore the right table to
+            # ask: all 6,376 rows written before 2026-10-12 record
+            # `ThreatFox: HTTPError` and `threatfox_count` 0. Every one of
+            # those was the 401 above — wrong header name, no key — so none of
+            # them is evidence about this feed's reliability. Reaching here
+            # now, with a key configured, is a real failure and new.
+            #
+            # Logged at warning, not debug. At debug this failed silently for
+            # 6,259 lookups and surfaced as a zero that looked like a clean
+            # result. The key is never included: `type(e).__name__` only.
+            logger.warning(
+                "ThreatFox lookup failed for %s: %s. A key is configured, so "
+                "this is the feed or the network rather than the credential.",
+                ip, type(e).__name__,
+            )
+            result["errors"].append(f"ThreatFox: {type(e).__name__}")
+            health.record("threatfox", ok=False, error=type(e).__name__)
+            result["threatfox_status"] = absent(
+                CHECK_FAILED,
+                "ThreatFox could not be reached, so this address was not "
+                "checked against it. This is not a clean result. An Auth-Key "
+                "is configured, so this is the feed or the network and not a "
+                "missing credential.",
+                raw=type(e).__name__,
+            ).as_json()
 
     return result
 

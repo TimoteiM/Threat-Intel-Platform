@@ -156,15 +156,25 @@ def _routable(value: str) -> bool:
 
 
 def _threatfox(row_json: Any) -> Any:
-    """ThreatFox has not answered once. The count is a sentinel."""
+    """ThreatFox has not answered once. The count is a sentinel.
+
+    The lookup itself now records *why* in `threatfox_status`, and that is
+    preferred over anything reconstructed here: "no Auth-Key is configured"
+    and "the feed was unreachable" are different facts about whose problem it
+    is, and every row written before 2026-10-12 was the first one wearing the
+    second one's clothes.
+    """
+    stored = (row_json or {}).get("threatfox_status")
+    if isinstance(stored, dict) and stored.get("absent"):
+        return stored
     errors = (row_json or {}).get("errors")
     errors = errors if isinstance(errors, list) else []
     if any("threatfox" in str(e).lower() for e in errors):
         return absent(
             CHECK_FAILED,
-            "ThreatFox has not been reachable for this lookup, so nothing was "
-            "checked against it. The stored count reads 0 for every address in "
-            "this estate and means 'not asked', not 'no hits'.",
+            "ThreatFox did not answer for this lookup, so nothing was checked "
+            "against it. The stored count reads 0 for every address in this "
+            "estate and means 'not asked', not 'no hits'.",
             raw=next((str(e) for e in errors if "threatfox" in str(e).lower()), None),
         )
     return (row_json or {}).get("threatfox") or []

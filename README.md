@@ -6,7 +6,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Six rules that were learned expensively and are not obvious from the code:
+Nine rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -52,6 +52,19 @@ Six rules that were learned expensively and are not obvious from the code:
   one test machine. Four confirmations exist in the whole production estate.
   Say "assertions" rather than "mappings" when describing what this platform
   produces.
+
+- **An absence convention sits downstream of correctness.** `app/services/absence.py`
+  makes a *missing* value legible; it cannot make a *wrong* one safe, and it
+  offers no protection at all against a query that returns the right shape
+  from the wrong row. `ip_lookups` is append-only history, the IP read had no
+  `ORDER BY`, and a dict comprehension kept whichever row Postgres returned
+  last — not the newest on 218 of 1,535 addresses. On two it inverted the very
+  distinction the module exists for, showing a confident `0` where the check
+  had failed and "the provider did not answer" where a real 0 was stored. It
+  defeated the convention from inside the one module built to enforce it. If
+  rows accumulate per subject, select `distinct on (subject) ... order by
+  subject, stamp desc`, and ask what one row means before computing any
+  percentage over the table.
 
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow

@@ -90,6 +90,18 @@ class Settings(BaseSettings):
             "ABUSEIPDB_API_KEY2", "ABUSEIPDB_API_KEY_2", "ABUSEIPDB_API_KEY_FALLBACK"
         ),
     )
+    # abuse.ch, shared by ThreatFox, MalwareBazaar and URLhaus — one key for
+    # all three. ThreatFox has required it since abuse.ch made authentication
+    # mandatory, and without it every lookup this platform has ever made came
+    # back 401: `threatfox_count` reads 0 on all 6,376 rows, which is a
+    # sentinel and not a measurement. Obtain one by signing in at
+    # auth.abuse.ch and generating it from the profile page.
+    abusech_auth_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ABUSECH_AUTH_KEY", "ABUSE_CH_AUTH_KEY", "THREATFOX_AUTH_KEY"
+        ),
+    )
     phishtank_api_key: str = ""
     otx_api_key: str = Field(
         default="",
