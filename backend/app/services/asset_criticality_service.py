@@ -18,6 +18,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,3 +176,113 @@ def dclist_targets(text: str | None) -> list[str]:
     domain and a person maps it.
     """
     return [m.group(1).lower() for m in _DCLIST.finditer(text or "")]
+
+
+# --- which machines are the estate ------------------------------------------
+#
+# Measured 2026-10-12 on `alert_body_investigation_runs` over 2026-09-18..09-24,
+# the last full week before the ingestion collapse: 5,477 alerts from 100
+# hosts, of which **2,579 (47%) came from `Windows-Test-Device`** and 4,237
+# (77%) from that host plus `EXP-4LWK334`.
+#
+# So an estate-wide number computed without this filter is substantially a
+# number about one test machine. That is the fifth instance in this codebase of
+# a statistic whose dominant term is an artefact rather than the thing being
+# measured, after `Manager: Siembiot`, "same device as the alert",
+# `(source, client, host)` membership, and `ioc_values` boilerplate.
+
+PRODUCTION = "production"
+TEST = "test"
+ENVIRONMENTS = (PRODUCTION, TEST, UNKNOWN)
+
+
+async def environments_for(
+    db: AsyncSession, hosts: Iterable[str]
+) -> dict[str, dict[str, Any]]:
+    """Environment and its state per host label.
+
+    A host with no row is absent from the result and is `unknown` — which is
+    not `production`. The caller must keep that distinction: counting unknowns
+    as production is how a test rig ends up inside an estate figure, and
+    dropping them is how a real machine disappears from one.
+    """
+    labels = [h for h in dict.fromkeys((h or "").strip().lower() for h in hosts) if h]
+    if not labels:
+        return {}
+    rows = (
+        await db.execute(
+            select(AssetCriticality).where(AssetCriticality.host.in_(labels))
+        )
+    ).scalars().all()
+    return {
+        row.host: {
+            "environment": row.environment or UNKNOWN,
+            "state": row.environment_state,
+            "reason": row.environment_reason,
+        }
+        for row in rows
+        if row.environment
+    }
+
+
+async def test_hosts(db: AsyncSession, *, include_proposed: bool = False) -> set[str]:
+    """The host labels classed as test.
+
+    `include_proposed` is off by default: a proposal nobody has agreed to must
+    not silently remove a host's alerts from the estate's numbers. A figure
+    that wants the wider exclusion asks for it and says which it used.
+    """
+    query = select(AssetCriticality.host).where(AssetCriticality.environment == TEST)
+    if not include_proposed:
+        query = query.where(AssetCriticality.environment_state == CONFIRMED)
+    return {h for h in (await db.execute(query)).scalars().all() if h}
+
+
+@dataclass(frozen=True)
+class EstateScope:
+    """What a figure covered, carried with the figure.
+
+    The point is that an estate number can no longer be quoted without saying
+    which hosts it excluded and how many it could not classify. Both halves
+    matter: the excluded set is the correction, and the unknown set is the
+    remaining uncertainty.
+    """
+
+    excluded_test: tuple[str, ...]
+    unknown_hosts: int
+    production_hosts: int
+    include_proposed: bool
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "excluded_test_hosts": list(self.excluded_test),
+            "excluded_test_count": len(self.excluded_test),
+            "unclassified_hosts": self.unknown_hosts,
+            "production_hosts": self.production_hosts,
+            "proposed_included": self.include_proposed,
+            "note": (
+                f"Excludes {len(self.excluded_test)} host(s) classed as test. "
+                f"{self.unknown_hosts} host(s) carry no environment "
+                "classification and are counted here as unknown, not as "
+                "production."
+            ),
+        }
+
+
+async def estate_scope(
+    db: AsyncSession, hosts: Iterable[str], *, include_proposed: bool = False
+) -> tuple[set[str], EstateScope]:
+    """Split a host set into (kept, what-was-excluded-and-why)."""
+    labels = {h for h in ((h or "").strip().lower() for h in hosts) if h}
+    excluded = await test_hosts(db, include_proposed=include_proposed)
+    known = await environments_for(db, labels)
+    kept = labels - excluded
+    production = sum(
+        1 for h in kept if known.get(h, {}).get("environment") == PRODUCTION
+    )
+    return kept, EstateScope(
+        excluded_test=tuple(sorted(labels & excluded)),
+        unknown_hosts=len(kept) - production,
+        production_hosts=production,
+        include_proposed=include_proposed,
+    )

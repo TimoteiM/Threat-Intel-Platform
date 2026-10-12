@@ -1392,8 +1392,28 @@ class AssetCriticality(Base):
     #: on, so a tier set against `EXP-DC-01` is found when an alert names
     #: `exp-dc-01.corp.local`.
     host: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    #: crown_jewel | high | normal
-    tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: crown_jewel | high | normal, or NULL when no criticality judgement has
+    #: been recorded. Nullable because one row now carries two independent
+    #: judgements, and requiring a tier in order to record an environment would
+    #: mean inventing the first to record the second.
+    tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: production | test | unknown, or NULL for no judgement.
+    #:
+    #: Recorded because the estate's own figures were dominated by one machine:
+    #: in the week before the ingestion collapse, 2,579 of 5,477 alerts (47%)
+    #: came from `Windows-Test-Device`, and the top two hosts carried 77%. A
+    #: statistic whose dominant term is a test rig is a statistic about the
+    #: test rig.
+    #:
+    #: Classified, not hidden. Alerts from a test host still render and still
+    #: investigate; what changes is that anything claiming to describe the
+    #: estate leaves them out and says so.
+    environment: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: confirmed | proposed, for the environment specifically. A proposal must
+    #: not silently remove a host from the estate's numbers.
+    environment_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Why this host is classed as it is, in words.
+    environment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: confirmed | proposed
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed")
     #: Why, in words. For a proposal, which signal suggested it; for a
