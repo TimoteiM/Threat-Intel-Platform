@@ -106,26 +106,27 @@ def test_an_unresolvable_chain_refuses_rather_than_naming_an_intermediate(
 def test_an_id_absent_from_the_catalogue_is_an_absence_not_a_blank() -> None:
     found = name_technique("T9999")
     assert found["id"] == "T9999"
-    assert found["naming"]["absent"] is True
-    assert found["naming"]["kind"] == "unrecognised_absence"
-    assert found["naming"]["raw"] == "T9999"
-    assert ATTACK_VERSION in found["naming"]["reason"]
-    # No guessed name, and nothing borrowed from anywhere else.
-    assert "name" not in found
+    assert found["name"]["absent"] is True
+    assert found["name"]["kind"] == "unrecognised_absence"
+    assert found["name"]["raw"] == "T9999"
+    assert ATTACK_VERSION in found["name"]["reason"]
+    # The absence rides on `name` itself, as it does on `abuse_score` and
+    # `investigated` elsewhere — one shape for the idea, not two.
     assert "short_name" not in found
+    assert "tactic" not in found
 
 
 def test_a_malformed_id_keeps_its_raw_value_for_the_finding() -> None:
     """Fixed at the extractor, but the renderer must still not be able to be
     handed one and silently draw nothing."""
     found = name_technique("{0=T1489}")
-    assert found["naming"]["kind"] == "unrecognised_absence"
-    assert found["naming"]["raw"] == "{0=T1489}"
+    assert found["name"]["kind"] == "unrecognised_absence"
+    assert found["name"]["raw"] == "{0=T1489}"
 
 
 def test_an_empty_id_does_not_throw() -> None:
-    assert name_technique("")["naming"]["absent"] is True
-    assert name_technique(None)["naming"]["absent"] is True
+    assert name_technique("")["name"]["absent"] is True
+    assert name_technique(None)["name"]["absent"] is True
 
 
 def test_case_is_normalised() -> None:

@@ -22,6 +22,30 @@ from sqlalchemy import text
 from app.db.session import AsyncSessionLocal
 from app.analyst.attack_mapping import parent_technique
 from app.services.technique_attribution_service import attribute
+from app.services.technique_naming_service import name_technique
+
+
+def _named(ids) -> str:
+    """`T1059.001 (PowerShell)`, with retirement stated where it applies.
+
+    The same resolver the graph, the panel and the exports read, so an id
+    cannot be named one thing here and another there. A bare id in a terminal
+    is the same problem as a bare id on a node: the reader has to go and look
+    it up, and most do not.
+    """
+    out = []
+    for tid in ids:
+        found = name_technique(tid)
+        name = found.get("name")
+        if not isinstance(name, str):
+            # Not in the catalogue. Printed as recorded, never guessed.
+            out.append(f"{tid} (not in ATT&CK {found.get('attack_version')})")
+            continue
+        label = f"{tid} ({found.get('short_name') or name})"
+        if found.get("retired"):
+            label += f" [retired, now {found.get('current_equivalent')}]"
+        out.append(label)
+    return ", ".join(out)
 
 
 async def run(limit: int, include_test: bool) -> None:
@@ -94,15 +118,23 @@ async def run(limit: int, include_test: bool) -> None:
         print("\n  refinements, commonest first — the rule is right and the "
               "telemetry made it precise:")
         for (r_ids, m_ids), n in refinements.most_common(6):
-            print(f"    {n:5d} alerts  {','.join(r_ids)} -> {','.join(m_ids)}")
+            print(f"    {n:5d} alerts  {_named(r_ids)} -> {_named(m_ids)}")
+    from app.analyst.attack_reference import ATTACK_VERSION
+
+    print(f"\nnames and retirement status from MITRE ATT&CK Enterprise "
+          f"{ATTACK_VERSION}. 'retired' is a fact about the id in this "
+          "release, not a judgement on the rule: a detection that mapped to "
+          "an id mapped correctly for the ATT&CK of its day.")
     print("\nby what each side named (one row = one shape of disagreement):")
     for (claimed, supported), n in pairs.most_common(limit):
-        print(f"  {n:5d} alerts  rule claims {','.join(claimed)[:44]:44s} "
-              f"evidence supports {','.join(supported)}")
+        print(f"  {n:5d} alerts")
+        print(f"          rule claims       {_named(claimed)}")
+        print(f"          evidence supports {_named(supported)}")
     print("\nby detection rule — this is the list to work through:")
     for (rule_id, name, claimed, supported), n in by_rule.most_common(limit):
-        print(f"  {n:5d} alerts  rule {str(rule_id):8s} {str(name)[:34]:34s} "
-              f"{','.join(claimed)[:30]} -> {','.join(supported)}")
+        print(f"  {n:5d} alerts  rule {str(rule_id):8s} {str(name)[:46]}")
+        print(f"          claims   {_named(claimed)}")
+        print(f"          evidence {_named(supported)}")
 
 
 def main() -> None:

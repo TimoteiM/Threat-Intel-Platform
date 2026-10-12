@@ -51,7 +51,7 @@ const UNNAMEABLE = {
   id: "T9999",
   attack_version: "19.2",
   named_by: "rule_only",
-  naming: {
+  name: {
     absent: true,
     kind: "unrecognised_absence",
     raw: "T9999",

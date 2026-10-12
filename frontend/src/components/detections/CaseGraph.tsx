@@ -29,6 +29,7 @@ import {
   canvasMeasurer,
   fitToWidth,
 } from "./nodeLabel";
+import { stampPng } from "./exportStamp";
 import { planTimeline, type TimelinePlan } from "./timeline";
 import { IndicatorPanel } from "./IndicatorPanel";
 import { TECHNIQUE_PANEL_KEYS, TechniquePanel } from "./TechniquePanel";
@@ -722,13 +723,24 @@ export default function CaseGraph({
   }, [toggleFullscreen, fullscreen]);
 
   const exportAs = useCallback(
-    (what: "png" | "json") => {
+    async (what: "png" | "json") => {
       const cy = cyRef.current;
       if (!cy || !data) return;
+      const attack = (data.attack || {}) as Record<string, unknown>;
       let href: string;
       let name: string;
       if (what === "png") {
-        href = cy.png({ full: true, scale: 2, bg: "#101113" });
+        // Stamped with the ATT&CK release the names came from. The picture
+        // leaves the product and carries technique names, some belonging to
+        // ids ATT&CK has retired; without the release on the image the
+        // version becomes something inferred from the file's timestamp.
+        href = await stampPng(cy.png({ full: true, scale: 2, bg: "#101113" }), {
+          caseNumber: data.case_number ?? null,
+          attackVersion: (attack.version as string) ?? null,
+          retiredDrawn: (attack.retired_drawn as number) ?? null,
+          unnameableDrawn: (attack.unnameable_drawn as number) ?? null,
+          exportedAt: new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC",
+        });
         name = `case-${data.case_number ?? "graph"}.png`;
       } else {
         href = URL.createObjectURL(
@@ -743,6 +755,16 @@ export default function CaseGraph({
       if (what === "json") setTimeout(() => URL.revokeObjectURL(href), 2000);
     },
     [data],
+  );
+
+  const onExport = useCallback(
+    (what: "png" | "json") => {
+      // The button handler cannot be async itself; a rejected stamp must not
+      // surface as an unhandled rejection in the console of a page an
+      // analyst is working in.
+      void exportAs(what).catch(() => undefined);
+    },
+    [exportAs],
   );
 
   /** The narrative paragraph, built from the highlighted path. Written from
@@ -912,10 +934,10 @@ export default function CaseGraph({
           >
             {fullscreen ? "exit fullscreen" : "fullscreen"}
           </button>
-          <button onClick={() => exportAs("png")} style={chip}>
+          <button onClick={() => onExport("png")} style={chip}>
             PNG
           </button>
-          <button onClick={() => exportAs("json")} style={chip}>
+          <button onClick={() => onExport("json")} style={chip}>
             JSON
           </button>
         </div>

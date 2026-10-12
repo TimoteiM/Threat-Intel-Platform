@@ -60,6 +60,12 @@ from app.analyst.attack_mapping import describe_technique
 from app.analyst.attack_reference import ATTACK_VERSION, TACTIC_ORDER
 from app.services.absence import UNRECOGNISED, absent
 
+
+def is_absent_json(value: Any) -> bool:
+    """An absence after `as_json()`. `absence.is_absent` checks the dataclass,
+    and by the time it is on a graph node it is a plain dict."""
+    return isinstance(value, dict) and value.get("absent") is True
+
 #: Node kinds whose label is an ATT&CK id.
 TECHNIQUE_KIND = "technique"
 
@@ -74,9 +80,16 @@ def name_technique(technique_id: Any) -> dict[str, Any]:
     raw = str(technique_id or "").strip()
     found = describe_technique(raw)
     if not found:
+        # The absence rides on `name` itself, not on a side-channel key.
+        # That is this platform's convention everywhere else — `abuse_score`
+        # is a number or an Absent, `investigated` is a record or an Absent —
+        # and a second shape for the same idea is the duplication defect in
+        # miniature. `short_name` is omitted rather than also made absent:
+        # one statement that the id cannot be named is enough.
         return {
             "id": raw.upper() or raw,
-            "naming": absent(
+            "attack_version": ATTACK_VERSION,
+            "name": absent(
                 UNRECOGNISED,
                 f"This id is not in the bundled ATT&CK catalogue "
                 f"(Enterprise {ATTACK_VERSION}), so this platform cannot say "
@@ -155,7 +168,7 @@ def annotate(graph: dict[str, Any]) -> dict[str, Any]:
         attrs = node.setdefault("attrs", {})
         resolved = name_technique(attrs.get("id") or node.get("label"))
         attrs.update(resolved)
-        if resolved.get("naming"):
+        if is_absent_json(resolved.get("name")):
             unresolved += 1
         elif resolved.get("retired"):
             retired += 1

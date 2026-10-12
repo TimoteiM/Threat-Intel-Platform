@@ -24,9 +24,10 @@ import { Absence, isAbsent } from "./IndicatorPanel";
  * alone, 4,308 are ours alone, and 12 are both. Showing a single "technique"
  * would merge a claim with a finding.
  *
- * **An id ATT&CK does not have is shown, not hidden.** It arrives as an
- * absence typed `unrecognised_absence` carrying the raw value, and renders
- * through the same `Absence` component as every other absence in this UI.
+ * **An id ATT&CK does not have is shown, not hidden.** `name` itself carries
+ * an absence typed `unrecognised_absence` with the raw value — the same shape
+ * as `abuse_score` on an indicator — and renders through the same `Absence`
+ * component as every other absence in this UI.
  */
 
 const line: React.CSSProperties = { display: "flex", gap: 8, marginTop: 3 };
@@ -55,7 +56,7 @@ const NAMED_BY: Record<string, { label: string; detail: string }> = {
 };
 
 export function TechniquePanel({ attrs }: { attrs: Record<string, unknown> }) {
-  const naming = attrs.naming;
+  const naming = attrs.name;
   const version = typeof attrs.attack_version === "string" ? attrs.attack_version : null;
 
   // The id could not be named. Everything below depends on a name, so this is
@@ -166,7 +167,6 @@ export const TECHNIQUE_PANEL_KEYS = new Set([
   "deprecated_without_replacement",
   "retirement",
   "attack_version",
-  "naming",
   "named_by",
   "evidenceable",
 ]);
