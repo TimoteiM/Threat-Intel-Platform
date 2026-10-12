@@ -104,6 +104,15 @@ celery_app.conf.update(
             "task": "app.tasks.pipeline_watch_task.watch_ingest",
             "schedule": crontab(hour="6,18", minute=11),
         },
+        # Re-ask about addresses whose stored verdict has aged past the 30 days
+        # at which the indicator panel starts marking it old. 800 are due as of
+        # 2026-10-12, median 56 days; at 150 a run they drain in under a week.
+        # Once daily and early, because this spends AbuseIPDB quota that an
+        # analyst's own lookup has first claim on during the working day.
+        "ip-lookup-refresh": {
+            "task": "app.tasks.ip_refresh_task.refresh_stale_ip_lookups",
+            "schedule": crontab(hour=4, minute=23),
+        },
         # A CAPE analysis outlives the worker that started it: its state is in
         # Postgres, so a worker killed mid-poll leaves a row still owed an
         # answer. This picks those up, and retires any that blew their polling
@@ -215,4 +224,10 @@ celery_app.autodiscover_tasks([
     # Third time this list has been the bug. The API queued the CAPE workflow
     # happily and the worker answered "Received unregistered task", so every
     # submission sat in `queued` for ever.
+    #
+    # Seventh. This one would fail quietly in a way the others did not: beat
+    # would queue the refresh, the worker would reject it as unregistered, and
+    # the symptom is stored IP verdicts that keep getting older — which looks
+    # exactly like a refresh working on addresses nobody happens to view.
+    "app.tasks.ip_refresh_task",
 ])
