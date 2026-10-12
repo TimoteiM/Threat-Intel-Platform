@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from typing import Any
 import sys
 import time
 
@@ -96,7 +97,13 @@ async def build(number: int, *, live: bool = False,
 
         started = time.perf_counter()
         graph = await graph_for_runs(db, run_ids)
-        return graph, (time.perf_counter() - started) * 1000
+        millis = (time.perf_counter() - started) * 1000
+
+        # Measured first, compared second: the comparison calls the endpoint
+        # and would otherwise be inside the timing. Skipped for `--live`,
+        # which is deliberately a different path — it re-parses the bodies.
+        await assert_same_graph_as_endpoint(db, case_key, hours, graph)
+        return graph, millis
 
 
 _RUNS = """
@@ -109,13 +116,27 @@ order by coalesce(r.event_time, r.created_at)
 """
 
 
-def assert_endpoint_path() -> None:
-    """Fail if this command stops exercising the endpoint's own query.
+#: Keys the endpoint adds on top of the graph and the CLI is not expected to
+#: carry. Declared, so adding one is a decision rather than a drift — anything
+#: not on this list that the endpoint has and the CLI does not is a failure.
+ENDPOINT_ONLY = frozenset({
+    "case_key",             # echoed back to the caller that asked for it
+    "case_number",          # the endpoint knows the spine row
+    "criticality",          # a per-host overlay the page draws
+    "disposition_review",   # about the case's verdict, not its graph
+    "earlier_keys",         # supersession history
+    "supersession",         # where a dead key went
+    "duplicate_keys",
+    "pivots",               # cross-case, and expensive
+    "draw_summary",         # about the drawing, computed at the API layer
+    "continues",
+    "prior_judgement",
+    "unreachable",
+})
 
-    The guard exists because the previous version of this file had its own
-    SQL, and the divergence was invisible: both produced a graph, both looked
-    right, and only one was the path users take.
-    """
+
+def assert_endpoint_path() -> None:
+    """Fail if this command stops exercising the endpoint's own query."""
     import inspect
 
     from app.api import detections
@@ -133,6 +154,44 @@ def assert_endpoint_path() -> None:
                 f"This CLI no longer calls {call!r} while the endpoint does. "
                 "A CLI that measures a parallel implementation is not a check "
                 "on the system."
+            )
+
+
+async def assert_same_graph_as_endpoint(db: Any, case_key: str, hours: int,
+                                        mine: dict) -> None:
+    """Fail if the endpoint's graph carries something this one does not.
+
+    The call-path guard above compares source text, and that is not the
+    property anyone wants. It passed while the two outputs diverged: indicator
+    enrichment was added inside `get_case_graph`, so the page had it and this
+    command could not see it — both sides still called each other's functions,
+    so every string the guard looks for was present.
+
+    This compares the outputs instead, which is the property. The endpoint
+    legitimately adds overlays the CLI has no business computing, so those are
+    declared in `ENDPOINT_ONLY`; anything else the endpoint has and this does
+    not is a divergence, and divergence in this direction is the dangerous one
+    — it means the thing being measured is not the thing being served.
+    """
+    from app.api import detections
+
+    theirs = await detections.get_case_graph(
+        case_key=case_key, db=db, hours=hours, request=None,
+    )
+    missing = sorted(set(theirs) - set(mine) - ENDPOINT_ONLY)
+    if missing:
+        raise SystemExit(
+            "The endpoint's graph carries keys this command does not: "
+            f"{missing}. Either move the work into `graph_for_runs` so both "
+            "paths get it, or add the key to ENDPOINT_ONLY and say why it "
+            "belongs only to the page."
+        )
+    for key in ("nodes", "edges"):
+        if len(theirs.get(key) or []) != len(mine.get(key) or []):
+            raise SystemExit(
+                f"The endpoint draws {len(theirs.get(key) or [])} {key} and "
+                f"this command {len(mine.get(key) or [])}. Same case, same "
+                "window, two answers."
             )
 
 
