@@ -22,6 +22,7 @@ import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import fcose from "cytoscape-fcose";
 import dagre from "cytoscape-dagre";
 import { EXTERNAL_BAND, planBands } from "./bands";
+import { recentre } from "./viewport";
 import {
   getCaseGraph,
   type CaseGraph as CaseGraphData,
@@ -500,10 +501,7 @@ export default function CaseGraph({
       const zoom = cy.zoom();
       const pan = cy.pan();
       // cy.width()/height() are the size it last knew, i.e. before this one.
-      const centre = {
-        x: (cy.width() / 2 - pan.x) / zoom,
-        y: (cy.height() / 2 - pan.y) / zoom,
-      };
+      const before = { width: cy.width(), height: cy.height() };
       cy.resize();
       if (fitOnNextResize.current) {
         fitOnNextResize.current = false;
@@ -514,7 +512,7 @@ export default function CaseGraph({
       }
       cy.viewport({
         zoom,
-        pan: { x: cy.width() / 2 - centre.x * zoom, y: cy.height() / 2 - centre.y * zoom },
+        pan: recentre(before, { width: cy.width(), height: cy.height() }, zoom, pan),
       });
     });
     observer.observe(el);
