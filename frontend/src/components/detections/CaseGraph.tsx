@@ -293,7 +293,13 @@ export default function CaseGraph({
   }, [data]);
 
   /** The earliest tactic that touched each node, walked outward from the
-   *  techniques so a process inherits the column of the step it belongs to. */
+   *  techniques so a process takes the tactic of the step it belongs to.
+   *
+   *  This tints nodes. It does not place them: Narrative is laid out by dagre
+   *  `rankDir: "LR"` from the graph's own structure, and there are no tactic
+   *  columns. Comments here used to say there were, which is how a module
+   *  got built for an axis that does not exist — see
+   *  docs/problems/tactic-columns-are-not-drawn.md. */
   const tacticOrder = useMemo<string[]>(
     () => ((data?.attack as { tactic_order?: string[] } | undefined)?.tactic_order) || [],
     [data],
