@@ -145,3 +145,50 @@ describe("verdict is its own channel", () => {
     expect(screen.getByText("0")).toBeTruthy();
   });
 });
+
+describe("an absence that cannot be resolved by looking", () => {
+  // 1,040 of the 1,173 ip nodes drawn in case graphs are private or reserved.
+  // The panel used to tell an analyst a missing lookup on 10.x was "unusual
+  // rather than normal", which is an instruction to go and find a record that
+  // no feed has ever held.
+  const privateAddress = {
+    value: "10.1.1.4",
+    kind: "ip",
+    looked_up: {
+      absent: true,
+      kind: "out_of_scope",
+      reason:
+        "This is a private or reserved address, so no reputation service " +
+        "has an opinion about it and none was asked. Its meaning comes " +
+        "from which host it is, not from a feed.",
+      raw: null,
+    },
+  };
+
+  it("opens with 'not applicable', not 'not known'", () => {
+    const { container } = render(<IndicatorPanel data={privateAddress} />);
+    const cell = container.querySelector('[data-absent="out_of_scope"]');
+    expect(cell).not.toBeNull();
+    expect(cell!.textContent).toContain("not applicable");
+    expect(cell!.textContent).not.toContain("not known");
+  });
+
+  it("still says 'not known' for a kind it has no opinion about", () => {
+    const { container } = render(
+      <IndicatorPanel
+        data={{
+          value: "8.8.8.8",
+          kind: "ip",
+          looked_up: {
+            absent: true,
+            kind: "some_kind_added_later",
+            reason: "Something else happened.",
+            raw: null,
+          },
+        }}
+      />,
+    );
+    const cell = container.querySelector('[data-absent="some_kind_added_later"]');
+    expect(cell!.textContent).toContain("not known");
+  });
+});

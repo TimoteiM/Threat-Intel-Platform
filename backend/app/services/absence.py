@@ -48,6 +48,16 @@ CHECK_FAILED = "check_failed"          # the check could not run at all
 #: and calling that "fresh" would be the blank-as-measurement bug the whole
 #: convention exists to stop.
 TOO_LITTLE_HISTORY = "too_little_history"
+#: The subject lies outside what this check can ever cover, by construction.
+#: Distinct from `never_observed`, which says a check ran and never matched,
+#: and from `unclassified`, which says the judgement has not been made yet —
+#: both of those invite someone to go and look, and here there is nowhere to
+#: look. Added 2026-10-12 after measuring the indicator panel's own draws: of
+#: 1,173 drawn `ip` nodes, 1,040 are private or reserved addresses that no
+#: reputation service has an opinion about, and the panel was telling analysts
+#: a missing lookup on 10.x was "unusual rather than normal". Every public
+#: address it draws is covered, 133 of 133.
+OUT_OF_SCOPE = "out_of_scope"
 #: A number was recorded, but from a truncated list, so it is only a floor.
 #: Distinct from `unparsed`, which says a value failed its shape check: this
 #: one parsed perfectly and is wrong in a known direction. `raw` carries the
@@ -62,7 +72,8 @@ UNRECOGNISED = "unrecognised_absence"
 
 KINDS = frozenset({
     NO_FIELD_MAP, UNPARSED, UNCLASSIFIED, TARGET_UNKNOWN, UNRATED,
-    NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, LOWER_BOUND, UNRECOGNISED,
+    NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, OUT_OF_SCOPE,
+    LOWER_BOUND, UNRECOGNISED,
 })
 
 

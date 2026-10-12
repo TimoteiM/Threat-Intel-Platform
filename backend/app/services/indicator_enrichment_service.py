@@ -4,13 +4,31 @@ The graph draws addresses, domains, URLs and hashes. Two tables hold what was
 found out about them, and they fail in different ways, so the panel has to
 treat them differently rather than merging them into one "verdict".
 
-Measured 2026-10-12 before building anything on them:
+Measured 2026-10-12 before building anything on them, then re-measured the
+same day because the first pass counted the wrong things:
 
-    ip_lookups      6,371 rows. 1,420 of the 1,424 public addresses in
-                    `ioc_values` are covered (99.7%), so absence is rare. Age
-                    is the problem: **63.9% of rows were queried more than 30
-                    days ago**, the oldest in March. A verdict from March shown
-                    without its date is a confident lie about today.
+    ip_lookups      6,376 rows — but it is **append-only history**, 1,535
+                    distinct addresses at 4.2 rows each, one address holding
+                    186. So a count of rows is not a count of answers, and the
+                    first figure here ("63.9% of rows older than 30 days") was
+                    a statistic about the archive, not about anything read.
+                    Per address, newest row only: 820 of 1,535 (53.4%).
+
+                    Narrowed to what this panel actually draws —
+                    `alert_graph_entity` where kind = 'ip' — the picture
+                    changes again, and in the other direction:
+
+                      133 draws of 84 public addresses, **every one covered**
+                      1,040 draws of 407 private or reserved addresses,
+                        none covered and none coverable
+                      24 of the 133 public draws are over 30 days old (18.0%)
+
+                    Coverage is not the problem here and never was; the
+                    earlier "1,420 of 1,424 covered (99.7%)" was measured over
+                    `alert_body_investigation_runs.ioc_values` — a different
+                    population from the graph's nodes, and named in this
+                    docstring as though `ioc_values` were a table of its own.
+                    Age is a real but minority problem, on 24 draws.
 
     investigations  2,488 rows, and **no `ip` observable type exists at all**.
                     url 83.4% of distinct values, domain 35.9%, ip 0.0%. The
@@ -34,6 +52,7 @@ And two enrichment sources inside `ip_lookups` are not equal:
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -41,7 +60,13 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.absence import CHECK_FAILED, NEVER_OBSERVED, UNCLASSIFIED, absent
+from app.services.absence import (
+    CHECK_FAILED,
+    NEVER_OBSERVED,
+    OUT_OF_SCOPE,
+    UNCLASSIFIED,
+    absent,
+)
 
 #: Past this, a stored verdict is shown with its age marked. Not discarded:
 #: an old answer is still an answer, and the analyst decides what it is worth.
@@ -52,9 +77,20 @@ STALE_AFTER = timedelta(days=30)
 #: missing from it.
 INVESTIGATED_TYPES = ("url", "domain", "hash")
 
+#: `ip_lookups` is append-only history, so this has to say which row it wants.
+#: It did not. `{str(r.ip): r for r in rows}` kept whichever row Postgres
+#: happened to return last, which on 218 of 1,535 addresses (14.2%) was not
+#: the newest. On 16 the stored abuse score differed, and on two of those the
+#: pick inverted the distinction this whole module is built on: 57.141.20.61
+#: was shown a confident `0` when the newest row holds NULL (the check
+#: failed), and 44.204.162.73 was shown "AbuseIPDB did not answer" when the
+#: newest row holds a real 0. The `investigations` read below picks the newest
+#: explicitly; this one is the same table shape and did not.
 _IP_SQL = """
-select ip, abuse_score, isp, country_code, threatfox_count, result_json, queried_at
+select distinct on (ip)
+       ip, abuse_score, isp, country_code, threatfox_count, result_json, queried_at
 from ip_lookups where ip = any(:values)
+order by ip, queried_at desc
 """
 
 _INV_SQL = """
@@ -94,6 +130,29 @@ def _stale(queried_at: datetime | None, now: datetime) -> dict[str, Any]:
         "age_days": age.days,
         "stale": age > STALE_AFTER,
     }
+
+
+def _routable(value: str) -> bool:
+    """Whether a reputation service could have an opinion about this address.
+
+    Private, loopback, link-local and reserved space is 1,040 of the 1,173
+    `ip` nodes this panel draws. No feed has ever been asked about them and
+    none ever will be, so their absence is a different claim from a public
+    address that was somehow missed — and the panel used to make the second
+    claim about all of them.
+    """
+    try:
+        addr = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return False
+    return not (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
 
 
 def _threatfox(row_json: Any) -> Any:
@@ -149,10 +208,17 @@ async def enrich(
             if row is None:
                 out[value] = Enrichment(value, kind, {
                     "looked_up": absent(
+                        OUT_OF_SCOPE,
+                        "This is a private or reserved address, so no "
+                        "reputation service has an opinion about it and none "
+                        "was asked. Its meaning comes from which host it is, "
+                        "not from a feed.",
+                    ) if not _routable(value) else absent(
                         NEVER_OBSERVED,
-                        "This address has no reputation lookup stored. 1,420 of "
-                        "1,424 public addresses in this estate do, so this is "
-                        "unusual rather than normal.",
+                        "This address is routable but has no reputation lookup "
+                        "stored. Every other public address drawn in this "
+                        "estate has one, so this is unusual rather than "
+                        "normal and is worth looking up by hand.",
                     ),
                 })
                 continue
@@ -168,7 +234,7 @@ async def enrich(
                 "country_code": row.country_code,
                 "threatfox": _threatfox(row.result_json),
                 "investigated": absent(
-                    NEVER_OBSERVED,
+                    OUT_OF_SCOPE,
                     "Addresses are not investigated by this platform: of 2,488 "
                     "investigations, none has an `ip` observable type. This is "
                     "how the pipeline is built, not a missing record.",

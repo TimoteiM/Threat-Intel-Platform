@@ -28,10 +28,23 @@ export const isAbsent = (value: unknown): value is AbsentValue =>
   !!value && typeof value === "object" &&
   (value as { absent?: boolean }).absent === true;
 
+/**
+ * How an absence opens. "not known" is right for a question that was asked
+ * and came back empty, and wrong for one that cannot be asked: a private
+ * address has no reputation to be unknown, and telling an analyst it is "not
+ * known" invites them to go and find it.
+ *
+ * Unlisted kinds fall back to "not known", which is the safe direction —
+ * a kind this file has not heard of is one nobody can claim is inapplicable.
+ */
+const OPENING: Record<string, string> = {
+  out_of_scope: "not applicable",
+};
+
 export function Absence({ value }: { value: AbsentValue }) {
   return (
     <span title={value.reason} style={{ color: "var(--text-subtle)" }} data-absent={value.kind}>
-      not known — {value.reason.split(". ")[0]}.
+      {OPENING[value.kind] ?? "not known"} — {value.reason.split(". ")[0]}.
     </span>
   );
 }
