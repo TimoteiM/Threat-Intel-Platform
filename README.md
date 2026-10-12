@@ -17,11 +17,22 @@ Eight rules that were learned expensively and are not obvious from the code:
   `.env` change is not a restart** — `env_file` is read when a container is
   created, so `restart` reuses the old environment and `up -d` often sees no
   config change and exits 0 having done nothing.
-- **[Name the entry point you measured](docs/deploy/measuring.md)** — a
-  timing or correctness claim states the call path it went through. A bound on
-  the case graph was built, measured and re-run across eleven cases before
-  anyone noticed its input could never reach its threshold: every number
-  described a path no user was on.
+- **[Name the entry point you measured — and check the instrument can return the bad answer](docs/deploy/measuring.md)**
+  — a timing or correctness claim states the call path it went through. A
+  bound on the case graph was built, measured and re-run across eleven cases
+  before anyone noticed its input could never reach its threshold: every
+  number described a path no user was on.
+
+  The same test applies to the instrument, not just to the thing measured.
+  Before trusting a check, ask what it would show if the answer were bad. On
+  2026-10-12 three checks in a row could not have failed: a `docker compose
+  exec python` that re-imports from the bind mount and so reports the source
+  rather than the running process; a file mtime, which moves on `touch` and
+  not on content; and a timestamp accidentally compared against itself. Each
+  returned "fine" because "not fine" was not among its possible outputs. The
+  check that worked that day picked a signal whose two values distinguish the
+  two code versions — a stored field present versus absent — and got it from
+  the live process through the broker.
 - **[A source that stops looks exactly like a source that is quiet](docs/problems/sources-that-stopped.md)**
   — every alarm here measured work in progress and none measured work that
   never arrived, so two sources worth 34% of all alerts went silent for 17 and

@@ -186,6 +186,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+from app.code_version import code_version  # noqa: E402  (after app setup)
+
 # ── Routes ──
 app.include_router(api_router)
 
@@ -195,6 +197,12 @@ def _health_payload() -> dict:
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
+        # Which code this *process* loaded, not which code is on disk. The
+        # difference is two hours of an afternoon: `backend/` is bind-mounted,
+        # so every filesystem check reported seven commits as deployed while
+        # the running API had never imported them. Unauthenticated, because a
+        # question you cannot ask without a session is one nobody asks.
+        "code": code_version(),
     }
 
 

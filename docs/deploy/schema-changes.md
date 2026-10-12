@@ -192,12 +192,18 @@ running".
 |---|---|
 | migration | rebuild **every** container running the code |
 | `.env` | `up -d --force-recreate` — `restart` reuses the old environment |
-| **mounted Python source** | **`restart`** — the files are already current, only the process is stale |
+| mounted Python source, **`api`** | **nothing** — `--reload` picks it up |
+| mounted Python source, **`worker` / `beat`** | **`docker compose restart worker beat`** — Celery has no autoreload |
 
-Note the inversion. For `.env` the files are stale and `restart` is useless.
-Here the files are fine and `restart` is the whole fix. Reaching for
-`--force-recreate` reflexively is harmless but hides which of the two you are
-in.
+The last two rows are the live hazard and they are deliberately split. Since
+`--reload` went on, writing "restart for mounted source" would teach a reflex
+that is wrong for `api` and would get `worker` skipped — which is the worse
+half, because the API racing ahead of the worker means two processes writing
+the same tables under different rules. Both stale is at least
+self-consistent; a skew is not.
+
+Note the inversion against the `.env` row. There the files are stale and
+`restart` is useless; here the files are fine and only the process is stale.
 
 ### The structural fix, and what it does not cover
 
@@ -211,9 +217,35 @@ That asymmetry is its own hazard — the API can now be hours ahead of the
 worker. If a graph reads correctly on the page and wrongly after
 materialisation, suspect that before suspecting the code.
 
-### What would have caught it sooner
+### Asking a process what it is running
 
-Nothing in the repository reports which commit a running process loaded. A
-`/health` that returned the git SHA of the code the process imported would
-have turned a two-hour invisible condition into one HTTP call — and would
-make the api/worker asymmetry visible rather than inferred. Not built.
+Built. Both answers come from `app/code_version.py`, computed **at import
+time**, which is the only moment that corresponds to "what this process
+loaded".
+
+    curl -s localhost:8000/health | jq .code          # the API
+    celery_app.send_task("app.tasks.pipeline_watch_task.code_version")   # the worker
+
+Two processes are on the same code when `code_fingerprint` matches. It caught
+a real skew on its first use: the API and the worker disagreed because a file
+had been edited between one importing and the other restarting.
+
+Three things it avoids, each of which would have reproduced the original bug
+inside the fix for it:
+
+- **Not `git rev-parse` at request time.** That reads the bind mount and
+  reports the working tree — the same thing every check that failed already
+  reported. It would have said "deployed" all afternoon. It could not have
+  worked here regardless: there is no `/app/.git` (the mount is `backend/`,
+  `.git` is above it) and no git binary in the image.
+- **Not the container's start time.** With `--reload`, WatchFiles replaces
+  the server child without restarting the container, so the two diverge by
+  design and permanently. Measured minutes after enabling it: container
+  started 16:08:40, process imported 16:28:40.
+- **Not an empty string when git is unavailable.** Blank renders as "unknown"
+  and gets read as "fine", so the absence is named and says what to use
+  instead.
+
+The fingerprint rather than a SHA is the load-bearing value: it is a hash of
+the bytes this process imported, so it covers uncommitted edits — which, on a
+bind mount during development, is most of them.

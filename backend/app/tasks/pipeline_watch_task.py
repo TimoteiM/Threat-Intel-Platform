@@ -148,3 +148,30 @@ def emitter_freshness_shadow() -> dict[str, Any]:
     except Exception as exc:
         logger.error("emitter_freshness_shadow_failed error=%s", type(exc).__name__)
         return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@celery_app.task(name="app.tasks.pipeline_watch_task.code_version")
+def code_version_task() -> dict[str, Any]:
+    """What code the *worker* process is running.
+
+    The API answers this over HTTP at /health. The worker cannot, and it needs
+    its own because `--reload` does not cover Celery: the API now reloads on a
+    file change and the worker does not, so api-new/worker-old is the live
+    skew. That is worse than both being stale — both-stale is at least
+    self-consistent, while a skew has two processes writing the same tables
+    under different rules.
+
+    Read it the way a live process must always be read: enqueue through the
+    broker and take the result. `docker compose exec worker python` spawns a
+    new interpreter that re-imports from the mount, so it reports the source
+    and never the process — which is how a two-hour staleness stayed invisible
+    on 2026-10-12.
+
+        from app.tasks.celery_app import celery_app
+        celery_app.send_task("app.tasks.pipeline_watch_task.code_version")
+
+    Two processes are on the same code when `code_fingerprint` matches.
+    """
+    from app.code_version import code_version
+
+    return code_version()
