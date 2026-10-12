@@ -177,8 +177,13 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
             )
             resp.raise_for_status()
             tf_data = resp.json()
-            health.record("threatfox", ok=tf_data.get("query_status") == "ok",
-                          error=str(tf_data.get("query_status")))
+            # `no_result` is the feed working. Counting it as a failure would
+            # make the enrichment health monitor read "ThreatFox is broken"
+            # from a feed answering correctly about unlisted addresses, which
+            # is most of them.
+            tf_status = str(tf_data.get("query_status") or "")
+            health.record("threatfox", ok=tf_status in ("ok", "no_result"),
+                          error=tf_status)
             if tf_data.get("query_status") == "ok":
                 for ioc in tf_data.get("data", []) or []:
                     result["threatfox"].append({
@@ -191,14 +196,32 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
                         "last_seen": ioc.get("last_seen"),
                         "tags": ioc.get("tags") or [],
                     })
+            elif tf_data.get("query_status") == "no_result":
+                # A real negative, and the whole point of this module is not to
+                # confuse one with a failure. Measured against the live API on
+                # 2026-10-12, because abuse.ch does not document the vocabulary:
+                #
+                #   ok                 200  matches, in `data`
+                #   no_result          200  the IOC is not in ThreatFox
+                #   unknown_operation  200  our query verb was wrong
+                #   unknown_auth_key   403  the key was rejected
+                #   (empty key)        401  no JSON at all — this is the
+                #                           HTTPError all 6,376 historical
+                #                           rows recorded
+                #
+                # One caveat kept deliberately: a malformed `search_term` also
+                # returns `no_result`, so this is only a trustworthy negative
+                # because `is_valid_ip` has already run. If this is ever reused
+                # for an unvalidated value, that stops being true.
+                pass
             else:
-                # abuse.ch answered but declined the query. Recorded, because a
-                # declined query and a query with no matches are different facts.
+                # abuse.ch answered and would not run the query. Distinct from
+                # `no_result`: nothing was checked, so nothing is known.
                 result["threatfox_status"] = absent(
                     CHECK_FAILED,
-                    "ThreatFox answered but declined the query: "
-                    f"{tf_data.get('query_status')}. Nothing was checked against "
-                    "this feed.",
+                    "ThreatFox would not run this query: "
+                    f"{tf_data.get('query_status')}. Nothing was checked "
+                    "against this feed, so this is not a 'no hits' result.",
                     raw=str(tf_data.get("query_status")),
                 ).as_json()
         except Exception as e:

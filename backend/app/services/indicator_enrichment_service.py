@@ -39,11 +39,20 @@ same day because the first pass counted the wrong things:
 
 And two enrichment sources inside `ip_lookups` are not equal:
 
-    ThreatFox   `errors` records `ThreatFox: HTTPError` on **all 6,371 rows**,
-                while `threatfox_count` reads 0 on every one. The count is a
-                sentinel, not a measurement — the same shape as a feed failing
-                6,259 times at debug level and surfacing as zero. Reported as
-                `check_failed`, never as "no hits".
+    ThreatFox   `errors` records `ThreatFox: HTTPError` on **all 6,376 rows
+                written before 2026-10-12**, while `threatfox_count` reads 0
+                on every one. On those rows the count is a sentinel, not a
+                measurement — the same shape as a feed failing 6,259 times at
+                debug level and surfacing as zero. Reported as `check_failed`,
+                never as "no hits".
+
+                The cause was ours: a wrong header name and no key. Since the
+                Auth-Key landed, a 0 from this feed can also be a *real*
+                negative — abuse.ch answers `no_result` for an address it does
+                not hold, and that is now recorded as no hits rather than as a
+                failure. So the two meanings coexist in this table and are
+                told apart by `threatfox_status` and `errors`, never by the
+                count. Nothing infers "clean" from a zero.
 
     AbuseIPDB   failed on 1,096 rows and stored **NULL**, not 0. So a 0 here
                 is a real "not abusive", and 3,117 rows say it. This one got it

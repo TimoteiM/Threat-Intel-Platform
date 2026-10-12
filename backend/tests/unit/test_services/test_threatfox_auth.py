@@ -116,16 +116,28 @@ def test_the_key_never_reaches_the_log_or_the_error_list(
     assert not any(SECRET in e for e in result["errors"])
 
 
-def test_a_declined_query_stays_distinct_from_a_failed_one(no_abuseipdb) -> None:
-    """abuse.ch answering 'no_result' is a different fact from not answering."""
+def test_a_refusal_and_an_exception_are_both_failures_but_not_the_same_one(
+    no_abuseipdb,
+) -> None:
+    """abuse.ch refusing a query and the request never completing are both
+    `check_failed`, and `raw` has to keep them apart — one is a thing the feed
+    said, the other is a thing that happened to us."""
     with patch.object(ip_lookup_service, "get_settings",
                       return_value=_settings(SECRET)), \
          patch.object(ip_lookup_service, "requests") as req:
-        req.post.return_value = _Resp({"query_status": "no_result"})
-        result = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+        req.post.return_value = _Resp({"query_status": "unknown_operation"})
+        refused = ip_lookup_service.perform_ip_lookup("8.8.8.8")
 
-    assert result["threatfox_status"]["raw"] == "no_result"
-    assert "declined" in result["threatfox_status"]["reason"]
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req:
+        req.post.side_effect = RuntimeError("connection reset")
+        threw = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert refused["threatfox_status"]["kind"] == "check_failed"
+    assert threw["threatfox_status"]["kind"] == "check_failed"
+    assert refused["threatfox_status"]["raw"] == "unknown_operation"
+    assert threw["threatfox_status"]["raw"] == "RuntimeError"
 
 
 def test_the_panel_prefers_the_stored_reason(no_abuseipdb) -> None:
@@ -151,3 +163,67 @@ def test_an_old_row_still_reports_an_absence(no_abuseipdb) -> None:
     shown = _threatfox({"errors": ["ThreatFox: HTTPError"], "threatfox": []})
     assert shown.kind == "check_failed"
     assert shown.raw == "ThreatFox: HTTPError"
+
+
+# --- the status vocabulary, measured against the live API 2026-10-12 --------
+#
+# abuse.ch does not document these. Probed deliberately: a listed tag gave
+# `ok`; an unlisted address and a malformed term both gave `no_result` at 200;
+# a bad query verb gave `unknown_operation`; a wrong key gave 403
+# `unknown_auth_key`; an empty key gave a bare 401, which is the HTTPError
+# every one of the 6,376 historical rows recorded.
+
+
+def test_not_listed_is_a_real_negative_not_a_failed_check(no_abuseipdb) -> None:
+    """The bug this module exists to prevent, running the other way.
+
+    `no_result` was being reported as "declined the query", so once
+    authentication started working every unlisted address — which is most of
+    them — would have shown an analyst a failed check instead of "no hits".
+    """
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req:
+        req.post.return_value = _Resp({"query_status": "no_result"})
+        result = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert "threatfox_status" not in result
+    assert result["threatfox"] == []
+    assert not any("threatfox" in e.lower() for e in result["errors"])
+
+
+def test_not_listed_counts_as_the_feed_working(no_abuseipdb) -> None:
+    """Otherwise the health monitor reads 'broken' from correct answers."""
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req, \
+         patch.object(ip_lookup_service.health, "record") as rec:
+        req.post.return_value = _Resp({"query_status": "no_result"})
+        ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert rec.call_args.kwargs["ok"] is True
+
+
+@pytest.mark.parametrize("status", ["unknown_operation", "unknown_auth_key"])
+def test_a_refused_query_is_still_a_failed_check(no_abuseipdb, status) -> None:
+    """Nothing was checked, so nothing is known — and it is not 'no hits'."""
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings(SECRET)), \
+         patch.object(ip_lookup_service, "requests") as req:
+        req.post.return_value = _Resp({"query_status": status})
+        result = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert result["threatfox_status"]["kind"] == "check_failed"
+    assert result["threatfox_status"]["raw"] == status
+    assert "not a 'no hits' result" in result["threatfox_status"]["reason"]
+
+
+def test_a_real_negative_and_a_sentinel_zero_are_distinguishable() -> None:
+    """Both live in `ip_lookups` now, and the count cannot tell them apart."""
+    from app.services.indicator_enrichment_service import _threatfox
+
+    real_negative = _threatfox({"errors": [], "threatfox": []})
+    assert real_negative == []
+
+    sentinel = _threatfox({"errors": ["ThreatFox: HTTPError"], "threatfox": []})
+    assert sentinel.kind == "check_failed"
