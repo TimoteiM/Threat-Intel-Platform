@@ -1212,6 +1212,16 @@ async def correlate_alerts(
                             # alert is about and the rule is what a tuning
                             # change acts on.
                             "detection_name": m.detection_name,
+                            # The Wazuh rule's own DESCRIPTION, not the
+                            # rule's name and not what this alert is about. It
+                            # differs from `detection_name` on 15,459 of
+                            # 16,611 rows (93%), it is partly caller-supplied
+                            # through the investigations API, and reading it as
+                            # the detection made four distinct alerts display
+                            # as one string. Emitted under a name that says
+                            # what it is; the old key rides along for one
+                            # release so a deploy cannot break mid-flight.
+                            "wazuh_rule_description": m.detection_rule_name,
                             "detection_rule_name": m.detection_rule_name,
                             # Who ran it. The case is per-device, so the
                             # account is the one thing that distinguishes one

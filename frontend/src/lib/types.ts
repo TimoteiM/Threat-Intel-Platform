@@ -1646,6 +1646,13 @@ export interface TacticAlert {
   overall_verdict: string | null;
   highest_risk_score: number | null;
   detection_rule_id: string | null;
+  /** The Wazuh rule's own DESCRIPTION — not the rule's name, and not
+   *  what this alert is about. It differs from `detection_name` on 93%
+   *  of rows and is partly caller-supplied. Prefer `detection_name`;
+   *  this is the carrier rule, useful for tuning and nothing else. */
+  wazuh_rule_description?: string | null;
+  /** @deprecated Reads as the rule's name and is not. Use
+   *  `wazuh_rule_description`. */
   detection_rule_name: string | null;
   techniques: Array<{
     id: string;
@@ -2128,7 +2135,14 @@ export interface MismatchAlertsResponse {
     overall_verdict: string | null;
     highest_risk_score: number | null;
     detection_rule_id: string | null;
-    detection_rule_name: string | null;
+    /** The Wazuh rule's own DESCRIPTION — not the rule's name, and not
+   *  what this alert is about. It differs from `detection_name` on 93%
+   *  of rows and is partly caller-supplied. Prefer `detection_name`;
+   *  this is the carrier rule, useful for tuning and nothing else. */
+  wazuh_rule_description?: string | null;
+  /** @deprecated Reads as the rule's name and is not. Use
+   *  `wazuh_rule_description`. */
+  detection_rule_name: string | null;
     claimed: Array<{ id: string; name: string | null; status: string | null }>;
     evidenced: {
       id: string;
@@ -2256,7 +2270,14 @@ export interface CorrelatedCase {
     detection_name: string | null;
     /** The Wazuh rule's own description. Not what the alert is about, but it
      *  is what a tuning change acts on. */
-    detection_rule_name: string | null;
+    /** The Wazuh rule's own DESCRIPTION — not the rule's name, and not
+   *  what this alert is about. It differs from `detection_name` on 93%
+   *  of rows and is partly caller-supplied. Prefer `detection_name`;
+   *  this is the carrier rule, useful for tuning and nothing else. */
+  wazuh_rule_description?: string | null;
+  /** @deprecated Reads as the rule's name and is not. Use
+   *  `wazuh_rule_description`. */
+  detection_rule_name: string | null;
     /** Who ran it. */
     entity_user: string | null;
     overall_verdict: string | null;

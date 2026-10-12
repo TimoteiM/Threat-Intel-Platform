@@ -176,6 +176,7 @@ async def tactic_alerts(
                 "overall_verdict": run.overall_verdict,
                 "highest_risk_score": run.indicator_risk_score,
                 "detection_rule_id": run.detection_rule_id,
+                "wazuh_rule_description": run.detection_rule_name,
                 "detection_rule_name": run.detection_rule_name,
                 "techniques": matched,
                 "confirmed": sum(1 for item in matched if item["status"] == "confirmed"),
@@ -496,6 +497,7 @@ async def mismatch_alerts(
                 "overall_verdict": run.overall_verdict,
                 "highest_risk_score": run.indicator_risk_score,
                 "detection_rule_id": run.detection_rule_id,
+                "wazuh_rule_description": run.detection_rule_name,
                 "detection_rule_name": run.detection_rule_name,
                 "claimed": [
                     {"id": str(c.get("id") or ""), "name": c.get("name"), "status": c.get("status")}
