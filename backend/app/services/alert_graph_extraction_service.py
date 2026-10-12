@@ -278,7 +278,12 @@ _INDEXED = re.compile(r"\d+\s*=\s*([^,}]+)")
 #: Split on the separators a human uses to mean "and" inside one slot. The
 #: twelfth delimiter-boundary instance in this codebase, and the second caught
 #: by reading output rather than by a complaint.
-_ID_SEPARATORS = re.compile(r"[\s/;|]+")
+#: What separates two ATT&CK ids inside one field. `,` and the `{`/`}`/`=` of
+#: a serialised map are here because 9,188 alert bodies carry the technique
+#: list as a Java map rendered to a string — `{0=T1055.001, 1=T1106}`, up to
+#: three ids — and without them this function matched none of it. Tenth
+#: instance of a delimiter the corpus contained and this pattern did not.
+_ID_SEPARATORS = re.compile(r"[\s/;|,{}=]+")
 
 
 def _technique_ids(raw: str) -> list[str]:
@@ -969,14 +974,28 @@ def _populate(
     #
     # `model_only` is INFERRED, never OBSERVED. It is a finding, not a
     # corroboration, and the word keeps one meaning.
-    confirmed = {str(t).upper() for t in confirmed_techniques}
+    # Every id that becomes a node goes through `_technique_ids`, whichever
+    # field it arrived in. It used to be true of the field-map path only: the
+    # label branches above parsed and validated, while `rule.mitre.id` was
+    # taken straight to a node id with no shape check, so two runs drew a
+    # node labelled `{0=T1489}` and `{0=T1098}` and lost the technique inside
+    # it. Two paths and one validated, the same shape as the nine membership
+    # consumers and the two corroboration consumers, with the same answer:
+    # one chokepoint, and nothing reaches a node without passing it.
+    #
+    # On the assessment side this is a guard rather than a repair — all 32,770
+    # stored assessment technique entries are already well formed, measured
+    # 2026-10-12 — which is why adding it changes no count today.
+    confirmed = {t for raw in confirmed_techniques for t in _technique_ids(str(raw))}
     model_only = {
-        str(t).upper() for t in model_only_techniques
+        t for raw in model_only_techniques for t in _technique_ids(str(raw))
     } - confirmed
     raw_ids = get("rule.mitre.id")
     ids = raw_ids if isinstance(raw_ids, list) else ([raw_ids] if raw_ids else [])
     anchor = subject or source_proc or (f"host:{local}" if local else None)
-    rule_ids = dict.fromkeys(str(i).strip().upper() for i in ids if str(i).strip())
+    rule_ids = dict.fromkeys(
+        tid for i in ids for tid in _technique_ids(str(i))
+    )
     for tid in rule_ids:
         named = BOTH if tid in confirmed else RULE_ONLY
         technique = b.node(

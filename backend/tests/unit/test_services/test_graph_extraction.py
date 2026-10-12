@@ -813,3 +813,61 @@ def test_a_collapse_group_is_named_in_english():
         base = kind.replace("_", " ")
         noun = f"{base}es" if base.endswith(("s", "x", "z", "ch", "sh")) else f"{base}s"
         assert noun == want, f"{kind} -> {noun}"
+
+
+# --- one validated path for technique ids ----------------------------------
+#
+# 9,188 alert bodies carry the technique list as a serialised Java map,
+# `{0=T1055.001, 1=T1106}`. `_ID_SEPARATORS` had no `,`, `{`, `}` or `=`, so
+# `_technique_ids` matched none of it; the clean nodes came from elsewhere and
+# `rule.mitre.id` reached a node id unvalidated, which drew two nodes labelled
+# `{0=T1489}` and `{0=T1098}` and lost the technique inside each.
+
+from app.services.alert_graph_extraction_service import _technique_ids
+
+
+def test_a_serialised_map_yields_every_id_in_it():
+    assert _technique_ids("{0=T1055.001, 1=T1106}") == ["T1055.001", "T1106"]
+    assert _technique_ids("{0=T1098, 1=T1136, 2=T1531}") == [
+        "T1098", "T1136", "T1531",
+    ]
+
+
+def test_a_single_entry_map_is_not_mistaken_for_an_id():
+    """The exact two values that reached the graph verbatim."""
+    assert _technique_ids("{0=T1489}") == ["T1489"]
+    assert _technique_ids("{0=T1098}") == ["T1098"]
+
+
+def test_the_separators_already_relied_on_still_work():
+    assert _technique_ids("T1082/T1046") == ["T1082", "T1046"]
+    assert _technique_ids("T1059 T1105") == ["T1059", "T1105"]
+    assert _technique_ids("T1059;T1105|T1106") == ["T1059", "T1105", "T1106"]
+
+
+def test_a_comma_separated_list_is_split():
+    assert _technique_ids("T1059, T1105") == ["T1059", "T1105"]
+
+
+def test_the_map_index_is_not_read_as_a_technique():
+    """`0=` and `1=` are positions, not ids, and must not survive the split."""
+    assert "0" not in _technique_ids("{0=T1055.001, 1=T1106}")
+    assert all(t.startswith("T") for t in _technique_ids("{0=T1055.001, 1=T1106}"))
+
+
+def test_malformed_remains_rejected_rather_than_guessed():
+    assert _technique_ids("{0=T149}") == []
+    assert _technique_ids("TA0002") == []
+    assert _technique_ids("not a technique") == []
+    assert _technique_ids("") == []
+
+
+def test_case_is_normalised_on_input():
+    assert _technique_ids("t1098") == ["T1098"]
+    assert _technique_ids("{0=t1059.001}") == ["T1059.001"]
+
+
+def test_duplicates_collapse_and_order_is_kept():
+    assert _technique_ids("{0=T1106, 1=T1055.001, 2=T1106}") == [
+        "T1106", "T1055.001",
+    ]
