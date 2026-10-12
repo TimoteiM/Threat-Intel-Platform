@@ -39,6 +39,14 @@ async def _pipeline() -> dict[str, Any]:
         return (await check(db)).as_json()
 
 
+async def _materialise() -> dict[str, Any]:
+    from app.db.session import AsyncSessionLocal
+    from app.services.graph_materialisation_service import sweep
+
+    async with AsyncSessionLocal() as db:
+        return (await sweep(db)).as_json()
+
+
 async def _ingest() -> dict[str, Any]:
     from app.db.session import AsyncSessionLocal
     from app.services.ingest_freshness_service import check
@@ -92,4 +100,19 @@ def watch_ingest() -> dict[str, Any]:
         return asyncio.run(_ingest())
     except Exception as exc:
         logger.error("ingest_watch_failed error=%s", type(exc).__name__)
+        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@celery_app.task(name="app.tasks.pipeline_watch_task.materialise_graphs")
+def materialise_graphs() -> dict[str, Any]:
+    """Write graph rows for runs that have none.
+
+    The graph tables are a cache whose only writer was a CLI somebody had to
+    remember to run. This is what keeps them warm, and `remaining` in the
+    result is the backlog.
+    """
+    try:
+        return asyncio.run(_materialise())
+    except Exception as exc:
+        logger.error("graph_materialise_sweep_failed error=%s", type(exc).__name__)
         return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}

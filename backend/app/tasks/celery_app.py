@@ -80,6 +80,16 @@ celery_app.conf.update(
         # 17.7% and 16.6% of alert volume, went silent for 17 and 22 days with
         # nothing to show it. Twice a day: the measurement reads a few hundred
         # bodies, and the unit of this fault is days rather than minutes.
+        # The graph tables are a cache, and until 2026-10-12 their only writer
+        # was a CLI run by hand — so every figure drawn from them was as of
+        # whenever somebody last remembered. Two alerts carrying a corroborated
+        # ATT&CK technique had no graph rows at all. Every two minutes, because
+        # the cost of a stale graph is a case page that understates what is
+        # known about an incident.
+        "graph-materialisation-sweep": {
+            "task": "app.tasks.pipeline_watch_task.materialise_graphs",
+            "schedule": crontab(minute="*/2"),
+        },
         "ingest-freshness-watch": {
             "task": "app.tasks.pipeline_watch_task.watch_ingest",
             "schedule": crontab(hour="6,18", minute=11),

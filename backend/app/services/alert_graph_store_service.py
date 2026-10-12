@@ -14,7 +14,7 @@ backfill runs again over the same alerts.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 from sqlalchemy import delete, func, select, update
@@ -92,6 +92,9 @@ async def materialise_run(
         .where(AlertBodyInvestigationRun.id == run_id)
         .values(
             graph_source_type=found.source_type[:64],
+            # Stamped every time, so the sweep can tell never-done from
+            # done-and-empty, and a reader can be told how old this is.
+            graph_materialised_at=datetime.now(timezone.utc),
             # The alert's own severity, so a bounded read can rank on severity
             # rather than on indicator reputation.
             source_severity=found.source_severity,

@@ -730,6 +730,12 @@ class AlertBodyInvestigationRun(Base):
     #: during extraction so an empty graph can say *which* source it could not
     #: read, instead of rendering a blank canvas that reads as "no attack".
     graph_source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: When this run's graph rows were last written. NULL means never.
+    #: The graph tables are a cache, and before this column nothing
+    #: recorded how old any figure drawn from them was.
+    graph_materialised_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     #: The alert's severity as its own source states it, normalised to 0-100.
     #: Null where the source states none — never 0, because a blank encoded as
     #: a measurement is the bug this column exists to replace.
