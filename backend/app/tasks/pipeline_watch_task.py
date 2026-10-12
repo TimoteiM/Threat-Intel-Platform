@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any
 
 from app.tasks.celery_app import celery_app
@@ -37,6 +38,21 @@ async def _pipeline() -> dict[str, Any]:
 
     async with AsyncSessionLocal() as db:
         return (await check(db)).as_json()
+
+
+#: The ten-day estate collapse. Declared here rather than derived, because a
+#: baseline must not treat it as a normal fortnight — and because the cause is
+#: still unknown, so it cannot be identified by any rule the code could apply.
+COLLAPSE = (date(2026, 9, 25), date(2026, 10, 5))
+
+
+async def _freshness_shadow() -> dict[str, Any]:
+    from app.db.session import AsyncSessionLocal
+    from app.services.emitter_freshness_service import check
+
+    async with AsyncSessionLocal() as db:
+        reports = await check(db, excluded_ranges=[COLLAPSE])
+        return {k: v.as_json() for k, v in reports.items()}
 
 
 async def _materialise() -> dict[str, Any]:
@@ -115,4 +131,20 @@ def materialise_graphs() -> dict[str, Any]:
         return asyncio.run(_materialise())
     except Exception as exc:
         logger.error("graph_materialise_sweep_failed error=%s", type(exc).__name__)
+        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@celery_app.task(name="app.tasks.pipeline_watch_task.emitter_freshness_shadow")
+def emitter_freshness_shadow() -> dict[str, Any]:
+    """Volume against each emitter's own baseline — SHADOW, never alarms.
+
+    Computes and logs so a week of output can set the threshold, which is the
+    monitor rule applied before shipping rather than after: the first ingest
+    alarm passed 21 tests and then reported 2.5 days of silence for a source
+    delivering 97 alerts in 12 hours.
+    """
+    try:
+        return asyncio.run(_freshness_shadow())
+    except Exception as exc:
+        logger.error("emitter_freshness_shadow_failed error=%s", type(exc).__name__)
         return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}

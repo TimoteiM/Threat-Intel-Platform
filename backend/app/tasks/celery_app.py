@@ -90,6 +90,16 @@ celery_app.conf.update(
             "task": "app.tasks.pipeline_watch_task.materialise_graphs",
             "schedule": crontab(minute="*/2"),
         },
+        # Volume against each emitter's own baseline, by source AND by host.
+        # SHADOW: it computes and logs and alarms on nothing, because the
+        # threshold has to come from a week of its own output rather than from
+        # a number somebody picked. Four times a day is enough to accumulate
+        # that evidence without re-reading 60 days of history every few
+        # minutes.
+        "emitter-freshness-shadow": {
+            "task": "app.tasks.pipeline_watch_task.emitter_freshness_shadow",
+            "schedule": crontab(hour="2,8,14,20", minute=17),
+        },
         "ingest-freshness-watch": {
             "task": "app.tasks.pipeline_watch_task.watch_ingest",
             "schedule": crontab(hour="6,18", minute=11),
