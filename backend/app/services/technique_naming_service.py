@@ -177,6 +177,24 @@ def annotate(graph: dict[str, Any]) -> dict[str, Any]:
     # Surfaced wherever coverage is reported: names change and ids get revoked
     # between versions, so "which ATT&CK" is part of the answer.
     attack["version"] = ATTACK_VERSION
+    #
+    # `attack_version` is also on every technique node. That is redundant and
+    # safe *only* because resolution happens at read time: one call, one
+    # constant, so every node in a payload was named by one catalogue.
+    #
+    # The optimisation that breaks it is a reasonable one. Moving resolution
+    # to materialise time — stamping names onto `alert_graph_entity` when the
+    # sweep runs, to save this pass — would make the two versions different
+    # facts rather than one fact twice: a node materialised under 19.2 inside
+    # a payload assembled under 20.0. That is information, not a bug, but only
+    # for a reader who has been told which one wins.
+    #
+    # If that move is ever made, decide and write down: the node's version is
+    # when its name was resolved, the payload's is the catalogue currently
+    # bundled, and a node whose version is older than the payload's should say
+    # so rather than being silently re-read as current. Until then this
+    # invariant holds and the redundancy is a convenience for a consumer
+    # slicing out a single node.
     attack["retired_drawn"] = retired
     attack["unnameable_drawn"] = unresolved
     # The tactics this ATT&CK release actually has, in its own matrix order.

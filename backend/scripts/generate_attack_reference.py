@@ -76,6 +76,11 @@ from __future__ import annotations
 #: Defense Impairment, which is what the copies got wrong.
 TACTIC_ORDER: list[str] = {tactic_order!r}
 
+#: Read at request time by `technique_naming_service`, which stamps it both
+#: on each technique node and on the payload. Those two are one fact today
+#: because a single call resolves a whole graph; they become two facts if
+#: resolution ever moves to materialise time. See the note in that module.
+#:
 #: The ATT&CK release this file was generated from. Surfaced wherever
 #: technique coverage is reported: names change and ids get revoked between
 #: versions, so "which ATT&CK" is part of the answer rather than a footnote.
