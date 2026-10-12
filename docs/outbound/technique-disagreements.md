@@ -1,11 +1,17 @@
-# Where our telemetry disagrees with the rule's ATT&CK mapping
+# ATT&CK mappings: one question and one maintenance item
 
 **To:** the detection-engineering owners of the Wazuh ruleset
 **From:** Threat Intel Platform, measured 2026-10-12
-**Ask:** a verdict on the twenty shapes below — for each, is the rule's
+**Two things, deliberately separate.** Part one is a question about mappings that conflict with telemetry. Part two is a small maintenance item about ATT&CK versions — different problem, different fix, and it is not evidence for part one.
+
+**Ask (part one):** a verdict on the twenty shapes below — for each, is the rule's
 mapping right, is ours, or is neither? We are not proposing to change
 anything on your side. We need to know which of the two answers to believe
 before we decide what our platform shows.
+
+---
+
+# Part one — where our telemetry disagrees with the rule's mapping
 
 ## What this is
 
@@ -115,3 +121,81 @@ what — we are not going to overwrite your mapping with ours. What your answer
 changes is which one we present first and what we tell an analyst to trust.
 If the answer is that our reading is wrong, that is the more useful result,
 because it tells us our attribution needs work before anyone leans on it.
+
+
+---
+
+# Part two — four ATT&CK ids that 19.2 has retired
+
+**This is a maintenance item, not an error, and it is much smaller than part
+one.** It is in the same document only because it reaches the same people. If
+part one is the one you have time for, do that one.
+
+## What changed, and why nothing was wrong before
+
+ATT&CK 19 reorganised Impair Defenses into a new T1685 family. Four ids your
+rules map to were retired in that reorganisation. **A rule that mapped to
+T1562.001 mapped correctly for the ATT&CK of its day** — this is a catalogue
+moving underneath a correct mapping, which is the normal cost of ATT&CK
+versioning and happens to everyone on every major release.
+
+We only noticed because we pinned a current catalogue. Before that our
+platform agreed with your ruleset perfectly, because neither of us had a
+versioned reference to disagree with.
+
+## The four, and what replaced them
+
+| retired id | name at the time | current equivalent |
+|---|---|---|
+| T1562.001 | Impair Defenses: Disable or Modify Tools | **T1685** |
+| T1562.002 | Impair Defenses: Disable Windows Event Logging | **T1685.001** |
+| T1562 | Impair Defenses | **T1685** |
+| T1070.001 | Indicator Removal: Clear Windows Event Logs | **T1685.005** |
+
+## How much of this is actually yours
+
+488 technique nodes in this estate carry one of those four ids. Of those:
+
+- **371 come from a rule's mapping** — the part below
+- **117 come from our own analysis**, and are ours to deal with, not yours.
+  Our attribution has an ATT&CK knowledge cutoff like any other model, so it
+  names ids from a pre-19 matrix too. We are not asking you about those and we
+  mention them so the 488 is not read as 488 of your problems.
+
+Of the 371, **one rule is 84% of it**:
+
+| rule | nodes | claims |
+|---:|---:|---|
+| **103026** | **312** | T1562.001, T1562.002 |
+| 62123 | 23 | T1562 |
+| 103016 | 16 | T1562.002 |
+| 102250 | 8 | T1562.001, T1562.002 |
+| 61112 | 8 | T1562 |
+| 62152 | 2 | T1562.001 |
+| 100420 | 1 | T1562.001 |
+| 60602 | 1 | T1562 |
+
+337 of the 371 are on local rules (id >= 100000) and 34 on the stock ruleset.
+So this is almost entirely local content, and almost entirely one rule.
+
+## The ask
+
+Nothing urgent. When rule 103026 is next touched, consider remapping
+T1562.001 to T1685 and T1562.002 to T1685.001. That one change covers 84% of
+this. The other seven are a handful of alerts between them.
+
+Nothing breaks if this is never done — the rules fire identically either way,
+and our platform displays the retired id with its current equivalent beside
+it, so an analyst can always search the current matrix. The only cost of
+leaving it is that the mapping drifts further from ATT&CK with each release.
+
+## What we display in the meantime
+
+Every one of those ids renders with its own name and this note:
+
+> Retired in ATT&CK 19.2. Current equivalent T1685 (Disable or Modify Tools).
+> A detection that mapped to this id mapped correctly for the ATT&CK of its
+> day.
+
+We do not show the successor's name in place of the id's own, and we do not
+present the retirement as a detection being wrong, because it is not one.
