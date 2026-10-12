@@ -33,6 +33,12 @@ Four rules that were learned expensively and are not obvious from the code:
   tests asserted the behaviour the code was written for rather than the
   behaviour the data produces.
 
+- **[Every ATT&CK mapping we show is an assertion](docs/problems/attack-corroboration.md)**
+  — 42 of 32,574 technique entries are corroborated, and 38 of those 42 are on
+  one test machine. Four confirmations exist in the whole production estate.
+  Say "assertions" rather than "mappings" when describing what this platform
+  produces.
+
 Open problems with the evidence behind them live in
 [`docs/problems/`](docs/problems/); the incident notes live in
 [`docs/incidents/`](docs/incidents/).
