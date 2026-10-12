@@ -6,8 +6,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Three rules that were learned expensively on 2026-10-09 and are not obvious
-from the code:
+Four rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -25,6 +24,14 @@ from the code:
   never arrived, so two sources worth 34% of all alerts went silent for 17 and
   23 days unnoticed. A new alarm needs to say which of the two it can tell
   apart.
+- **A monitor is not done until it has run against live data and had its
+  output checked against reality.** A green test proves the code does what it
+  says; only live data proves it says the right thing. The ingest alarm passed
+  21 tests and then, on its first live run, reported 2.5 days of silence for a
+  source delivering 97 alerts in 12 hours, and cleared a 26-day outage on the
+  strength of one alert. Both defects were invisible to every test, because the
+  tests asserted the behaviour the code was written for rather than the
+  behaviour the data produces.
 
 Open problems with the evidence behind them live in
 [`docs/problems/`](docs/problems/); the incident notes live in
