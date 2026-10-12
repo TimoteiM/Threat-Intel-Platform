@@ -6,7 +6,7 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ## Read these before changing anything
 
-Four rules that were learned expensively and are not obvious from the code:
+Five rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -24,6 +24,12 @@ Four rules that were learned expensively and are not obvious from the code:
   never arrived, so two sources worth 34% of all alerts went silent for 17 and
   23 days unnoticed. A new alarm needs to say which of the two it can tell
   apart.
+- **When comparing two periods, state both lengths.** The specific form of
+  compare-like-with-like that keeps recurring here: `alerts_at_close` counted
+  at one window against a re-derivation at another, and a host reported at
+  "21.1% of prior" from 194 alerts over 24 days against 41 over 18 — on equal
+  windows it was 37%, a decline rather than a collapse. Two weeks apart, same
+  shape, both caught only by someone re-reading their own figure.
 - **A monitor is not done until it has run against live data and had its
   output checked against reality.** A green test proves the code does what it
   says; only live data proves it says the right thing. The ingest alarm passed

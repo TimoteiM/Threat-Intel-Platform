@@ -354,6 +354,20 @@ async def check(
 #                                    is better answered by a last-seen list
 #                                    than by a rate
 #
+# Which direction THIS one fails in, stated before the shadow week rather
+# than after it:
+#
+#   the median failed toward REASSURANCE — a ramp-up in the history pulled the
+#   baseline down until a degraded host read healthy.
+#   the max fails toward ALARM — an emitter with one freak week reads
+#   permanently degraded against a peak it will never repeat.
+#
+# For a monitor whose job is catching dark domain controllers that is the
+# correct trade: a false alarm costs a minute and a false reassurance cost
+# three weeks. But it will be noisy, so the thing to read out of the shadow
+# week is **how many healthy emitters it would have woken someone about**, not
+# only whether it caught the bad ones.
+#
 # The direction of failure is the thing to check before shipping any monitor
 # here, because this is the third one that broke toward reassurance: "one
 # alert clears any outage", "zero means never scored", and "a dark host has
