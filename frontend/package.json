@@ -6,7 +6,9 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
@@ -23,12 +25,16 @@
     "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.1.0",
     "@types/cytoscape": "^3.21.9",
     "@types/dagre": "^0.7.54",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "typescript": "^5.6.0"
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
   }
 }

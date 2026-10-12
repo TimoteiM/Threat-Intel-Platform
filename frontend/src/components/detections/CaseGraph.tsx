@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import fcose from "cytoscape-fcose";
 import dagre from "cytoscape-dagre";
+import { EXTERNAL_BAND, planBands } from "./bands";
 import {
   getCaseGraph,
   type CaseGraph as CaseGraphData,
@@ -36,6 +37,11 @@ function register() {
 }
 
 type Mode = "narrative" | "topology" | "timeline";
+
+/** One zoom-button step. The factor ReactFlow's own controls used, which is
+ *  what v1 of this graph shipped with before the move to Cytoscape dropped
+ *  the controls altogether. */
+const ZOOM_STEP = 1.2;
 
 /** ATT&CK tactics in kill-chain order. A node sits in the column of the
  *  earliest technique that touched it, so an attack walks rightward. */
@@ -139,8 +145,14 @@ export default function CaseGraph({
   const [mode, setMode] = useState<Mode>("narrative");
   const [selected, setSelected] = useState<CaseGraphNode | null>(null);
   const [pathOnly, setPathOnly] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const container = useRef<HTMLDivElement | null>(null);
+  const frame = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
+  // Read inside the fullscreen transition, which must not depend on the
+  // render that triggered it.
+  const selectedRef = useRef<CaseGraphNode | null>(null);
+  selectedRef.current = selected;
 
   useEffect(() => {
     let cancelled = false;
@@ -236,49 +248,19 @@ export default function CaseGraph({
     );
 
     // Which band each visible node sits in, decided before any band is drawn.
-    //
-    // A band is a compound parent and Cytoscape sizes it to its children, so a
-    // node drawn beside a band rather than inside it is a node that was never
-    // made its child. Two kinds were: the host node itself, which sat outside
-    // the band named after it, and every host-local entity whose host the
-    // extractor did not record (71,279 registry values). And a band with no
-    // children is not a band: it renders as a bare node-sized rectangle on top
-    // of whatever the layout put there — seven of eight cases sampled drew one.
-    const parentOf = new Map<string, string>();
-    if (mode === "narrative") {
-      const hostBand = new Map(
-        data.nodes.filter((n) => n.kind === "host").map((n) => [n.label, `band:${n.id}`]),
-      );
-      data.nodes.forEach((node) => {
-        if (!visible.has(node.id)) return;
-        if (["domain", "ip", "url"].includes(node.kind)) {
-          parentOf.set(node.id, "band:external");
-        } else if (node.kind === "host") {
-          parentOf.set(node.id, `band:${node.id}`);
-        } else {
-          // Only the host the node names. Never inferred from a neighbour:
-          // a domain account or a technique belongs to no one machine.
-          const band = hostBand.get(node.attrs?.host as string);
-          if (band) parentOf.set(node.id, band);
-        }
+    // The rules, and why each exists, are in `bands.ts` — extracted so they
+    // can be tested without a browser.
+    const bands =
+      mode === "narrative"
+        ? planBands(data.nodes, visible)
+        : { parentOf: new Map<string, string>(), drawn: [], labelOf: new Map<string, string>() };
+    const parentOf = bands.parentOf;
+    bands.drawn.forEach((bandId) => {
+      out.push({
+        data: { id: bandId, label: bands.labelOf.get(bandId), band: true },
+        classes: bandId === EXTERNAL_BAND ? "band band-external" : "band",
       });
-      const used = new Set(parentOf.values());
-      data.nodes
-        .filter((n) => n.kind === "host" && used.has(`band:${n.id}`))
-        .forEach((host) => {
-          out.push({
-            data: { id: `band:${host.id}`, label: host.label, band: true },
-            classes: "band",
-          });
-        });
-      if (used.has("band:external")) {
-        // Attacker infrastructure, which does not belong to any machine we own.
-        out.push({
-          data: { id: "band:external", label: "attacker infrastructure", band: true },
-          classes: "band band-external",
-        });
-      }
-    }
+    });
 
     data.nodes.forEach((node) => {
       if (!visible.has(node.id)) return;
@@ -481,6 +463,109 @@ export default function CaseGraph({
     };
   }, [elements, mode, data, byId]);
 
+  /** Zoom about the centre of what is on screen, as the buttons always did. */
+  const zoomBy = useCallback((factor: number) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.zoom({
+      level: cy.zoom() * factor,
+      renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 },
+    });
+  }, []);
+
+  const fitToView = useCallback(() => {
+    cyRef.current?.fit(undefined, 40);
+  }, []);
+
+  /** Resize the canvas to its frame without moving the drawing.
+   *
+   *  The layout is never re-run here — positions, the selection and the mode
+   *  all live on the one Cytoscape instance, which neither fullscreen nor the
+   *  side panel recreates. What a resize would otherwise change is which part
+   *  of the graph is under the middle of the screen, so the model point at the
+   *  centre is pinned through it. Cytoscape notices a window resize but not
+   *  its container changing size, so opening the side panel used to leave the
+   *  canvas at its old width.
+   *
+   *  The one exception is entering fullscreen with nothing selected: a bigger
+   *  frame showing the same small window is not what anyone pressed `f` for,
+   *  so the graph is fitted. With a selection, the analyst's place is kept. */
+  const fitOnNextResize = useRef(false);
+  useEffect(() => {
+    const el = container.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const cy = cyRef.current;
+      if (!cy) return;
+      const zoom = cy.zoom();
+      const pan = cy.pan();
+      // cy.width()/height() are the size it last knew, i.e. before this one.
+      const centre = {
+        x: (cy.width() / 2 - pan.x) / zoom,
+        y: (cy.height() / 2 - pan.y) / zoom,
+      };
+      cy.resize();
+      if (fitOnNextResize.current) {
+        fitOnNextResize.current = false;
+        if (!selectedRef.current) {
+          cy.fit(undefined, 40);
+          return;
+        }
+      }
+      cy.viewport({
+        zoom,
+        pan: { x: cy.width() / 2 - centre.x * zoom, y: cy.height() / 2 - centre.y * zoom },
+      });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [data]);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = frame.current;
+    if (!el) return;
+    const entering = !fullscreen;
+    fitOnNextResize.current = entering;
+    if (typeof document !== "undefined" && document.fullscreenEnabled) {
+      // The browser owns Esc in native fullscreen; `fullscreenchange` below
+      // keeps this component's state honest whichever way it was left.
+      if (entering) void el.requestFullscreen().catch(() => setFullscreen(true));
+      else if (document.fullscreenElement) void document.exitFullscreen();
+      else setFullscreen(false);
+    } else {
+      // No Fullscreen API (an embedded frame, a locked-down browser): the
+      // same frame fills the window instead, and Esc is handled below.
+      setFullscreen(entering);
+    }
+  }, [fullscreen]);
+
+  useEffect(() => {
+    const sync = () => setFullscreen(document.fullscreenElement === frame.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+      ) {
+        return;
+      }
+      if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        toggleFullscreen();
+      } else if (event.key === "Escape" && fullscreen && !document.fullscreenElement) {
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleFullscreen, fullscreen]);
+
   const exportAs = useCallback(
     (what: "png" | "json") => {
       const cy = cyRef.current;
@@ -602,62 +687,108 @@ export default function CaseGraph({
     <div style={{ display: "grid", gap: 10 }}>
       <Banners data={data} />
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        {(["narrative", "topology", "timeline"] as Mode[]).map((m) => (
+      {/* The frame that goes fullscreen: controls, canvas, side panel and
+          legend together, so nothing an analyst was using disappears. */}
+      <div
+        ref={frame}
+        style={
+          fullscreen
+            ? {
+                position: "fixed",
+                inset: 0,
+                zIndex: 1000,
+                display: "grid",
+                gridTemplateRows: "auto minmax(0, 1fr) auto",
+                gap: 10,
+                padding: 12,
+                background: "var(--surface, #1a1b1e)",
+              }
+            : { display: "grid", gap: 10 }
+        }
+      >
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {(["narrative", "topology", "timeline"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              style={{
+                ...chip,
+                background: mode === m ? "var(--accent)" : "transparent",
+                color: mode === m ? "#fff" : "var(--text-muted)",
+                textTransform: "capitalize",
+              }}
+            >
+              {m}
+            </button>
+          ))}
+          <span style={{ width: 12 }} />
           <button
-            key={m}
-            onClick={() => setMode(m)}
+            onClick={() => setPathOnly((v) => !v)}
+            disabled={!highlighted.size}
             style={{
               ...chip,
-              background: mode === m ? "var(--accent)" : "transparent",
-              color: mode === m ? "#fff" : "var(--text-muted)",
-              textTransform: "capitalize",
+              opacity: highlighted.size ? 1 : 0.45,
+              background: pathOnly ? "#FFD43B" : "transparent",
+              color: pathOnly ? "#000" : "var(--text-muted)",
             }}
+            title={
+              highlighted.size
+                ? "Show only the causal path to the highest-value asset touched"
+                : "No path to a classified asset was found in this case"
+            }
           >
-            {m}
+            path only {highlighted.size ? `(${highlighted.size})` : ""}
           </button>
-        ))}
-        <span style={{ width: 12 }} />
-        <button
-          onClick={() => setPathOnly((v) => !v)}
-          disabled={!highlighted.size}
-          style={{
-            ...chip,
-            opacity: highlighted.size ? 1 : 0.45,
-            background: pathOnly ? "#FFD43B" : "transparent",
-            color: pathOnly ? "#000" : "var(--text-muted)",
-          }}
-          title={
-            highlighted.size
-              ? "Show only the causal path to the highest-value asset touched"
-              : "No path to a classified asset was found in this case"
-          }
-        >
-          path only {highlighted.size ? `(${highlighted.size})` : ""}
-        </button>
-        <span style={{ flex: 1 }} />
-        <button onClick={() => exportAs("png")} style={chip}>
-          PNG
-        </button>
-        <button onClick={() => exportAs("json")} style={chip}>
-          JSON
-        </button>
-      </div>
+          <span style={{ flex: 1 }} />
+          <button onClick={() => zoomBy(ZOOM_STEP)} style={chip} title="Zoom in" aria-label="Zoom in">
+            +
+          </button>
+          <button onClick={() => zoomBy(1 / ZOOM_STEP)} style={chip} title="Zoom out" aria-label="Zoom out">
+            −
+          </button>
+          <button onClick={fitToView} style={chip} title="Fit the whole graph in view">
+            fit
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            style={{ ...chip, background: fullscreen ? "var(--accent)" : "transparent", color: fullscreen ? "#fff" : undefined }}
+            title={fullscreen ? "Leave fullscreen (Esc or f)" : "Fullscreen (f)"}
+            aria-pressed={fullscreen}
+          >
+            {fullscreen ? "exit fullscreen" : "fullscreen"}
+          </button>
+          <button onClick={() => exportAs("png")} style={chip}>
+            PNG
+          </button>
+          <button onClick={() => exportAs("json")} style={chip}>
+            JSON
+          </button>
+        </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 320px" : "1fr", gap: 10 }}>
         <div
-          ref={container}
           style={{
-            height: 560,
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            background: "var(--surface-sunken, #101113)",
+            display: "grid",
+            gridTemplateColumns: selected ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)",
+            gap: 10,
+            minHeight: 0,
           }}
-        />
-        {selected ? <Detail node={selected} onClose={() => setSelected(null)} /> : null}
-      </div>
+        >
+          <div
+            ref={container}
+            style={{
+              height: fullscreen ? "100%" : 560,
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              background: "var(--surface-sunken, #101113)",
+            }}
+          />
+          {selected ? (
+            <Detail node={selected} onClose={() => setSelected(null)} fill={fullscreen} />
+          ) : null}
+        </div>
 
-      <Legend counts={data.counts} mode={mode} />
+        <Legend counts={data.counts} mode={mode} />
+      </div>
 
       {narrative ? (
         <div
@@ -776,7 +907,16 @@ function Legend({ counts, mode }: { counts: Record<string, number>; mode: Mode }
   );
 }
 
-function Detail({ node, onClose }: { node: CaseGraphNode; onClose: () => void }) {
+function Detail({
+  node,
+  onClose,
+  fill = false,
+}: {
+  node: CaseGraphNode;
+  onClose: () => void;
+  /** Fullscreen: as tall as the canvas beside it, not the inline 560. */
+  fill?: boolean;
+}) {
   const attrs = Object.entries(node.attrs || {}).filter(
     ([k, v]) => v != null && v !== "" && k !== "members",
   );
@@ -788,7 +928,7 @@ function Detail({ node, onClose }: { node: CaseGraphNode; onClose: () => void })
         borderRadius: 8,
         padding: 12,
         fontSize: 12,
-        maxHeight: 560,
+        maxHeight: fill ? "100%" : 560,
         overflow: "auto",
       }}
     >
