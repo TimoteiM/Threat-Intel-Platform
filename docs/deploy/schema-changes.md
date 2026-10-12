@@ -142,3 +142,78 @@ consistent and the join between them is wrong. A migrated database with
 un-rebuilt code; an updated `.env` with un-recreated containers. Nothing
 raises, every component reports health, and the only evidence is a behaviour
 nobody is watching.
+
+
+---
+
+## A code change is not a running process
+
+**The third of this family, and the one that hides best.** The other two leave
+something on disk out of date. This one leaves everything on disk correct and
+the *process* stale, so every check you would naturally make says "deployed".
+
+`backend/` is bind-mounted at `/app`. The files inside the container are
+always current — `ls`, `grep`, `git log`, a fresh `docker compose exec api
+python` all agree. But a running Python process keeps the modules it imported
+at startup, and `uvicorn` was started without `--reload`.
+
+### What this cost on 2026-10-12
+
+Seven backend commits, written, tested, committed and pushed, were absent from
+the live API for the rest of the afternoon — including the ATT&CK technique
+resolver. The symptom was that the case page kept showing bare technique ids
+after a day's work on naming them. The API process had been serving code from
+12:59; `worker` and `beat` from 12:38, which also meant the nightly IP refresh
+would have run the ThreatFox `no_result` bug that was fixed at 12:48.
+
+The diagnosis was slowed by a check that could not have failed:
+
+    docker compose exec api python /tmp/probe.py
+
+That spawns a **new interpreter** which re-imports from the mount, so it
+reports what the source says, never what the server is running. It is the
+acceptance-CLI problem — measuring a path no user is on — reproduced inside
+the diagnosis of a deployment fault.
+
+### How to ask the process that is actually serving
+
+| service | how to reach the live process |
+|---|---|
+| `api` | an HTTP request. `GET /health` is unauthenticated. |
+| `worker` | enqueue through the broker (`celery_app.send_task(...)`) and read the result — the live worker executes it. |
+| `beat` | its scheduled task landing in `worker`. |
+
+Never `exec ... python`, for any of them, when the question is "what is
+running".
+
+### What makes a backend change live
+
+| change | what makes it live |
+|---|---|
+| migration | rebuild **every** container running the code |
+| `.env` | `up -d --force-recreate` — `restart` reuses the old environment |
+| **mounted Python source** | **`restart`** — the files are already current, only the process is stale |
+
+Note the inversion. For `.env` the files are stale and `restart` is useless.
+Here the files are fine and `restart` is the whole fix. Reaching for
+`--force-recreate` reflexively is harmless but hides which of the two you are
+in.
+
+### The structural fix, and what it does not cover
+
+`api` now runs with `--reload --reload-dir /app/app`, verified: WatchFiles
+reports *"detected changes in 'app/services/technique_naming_service.py'.
+Reloading..."* across the bind mount.
+
+**It covers the API only.** Celery dropped worker autoreload, so `worker` and
+`beat` still need `docker compose restart worker beat` after a backend change.
+That asymmetry is its own hazard — the API can now be hours ahead of the
+worker. If a graph reads correctly on the page and wrongly after
+materialisation, suspect that before suspecting the code.
+
+### What would have caught it sooner
+
+Nothing in the repository reports which commit a running process loaded. A
+`/health` that returned the git SHA of the code the process imported would
+have turned a two-hour invisible condition into one HTTP call — and would
+make the api/worker asymmetry visible rather than inferred. Not built.

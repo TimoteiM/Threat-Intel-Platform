@@ -166,7 +166,22 @@ services:
     # connect, and a failed preflight means a batch of alerts is not sent at
     # all. Five seconds is ample for real HTTP requests here: the long work
     # runs in Celery, and an EventSource reconnects on its own.
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
+    # `--reload` because `backend/` is bind-mounted at /app: the files in the
+    # container are always current, but a running Python process keeps the
+    # modules it imported at startup. On 2026-10-12 that meant seven backend
+    # commits — including the ATT&CK resolver — were on disk, committed and
+    # pushed while the live API had been serving code from 12:59 all
+    # afternoon. Every filesystem check said "deployed"; only the process was
+    # stale, and `docker compose exec api python` could not see it because it
+    # spawns a *new* interpreter that re-imports from the mount.
+    #
+    # This fixes the API only. Celery dropped worker autoreload, so `worker`
+    # and `beat` still need an explicit `docker compose restart` after a
+    # backend change — and the asymmetry is its own hazard: the API can now
+    # be two hours ahead of the worker. If a graph looks right on the page
+    # and wrong after materialisation, suspect that before suspecting the
+    # code. See docs/deploy/schema-changes.md.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5 --reload --reload-dir /app/app
 
   # ── Celery Worker ──
   worker:
