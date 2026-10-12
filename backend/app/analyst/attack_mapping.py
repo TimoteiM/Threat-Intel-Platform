@@ -491,6 +491,11 @@ def describe_technique(technique_id: str) -> Optional[dict[str, Any]]:
             "url": whitelisted["url"],
             "description": whitelisted.get("description"),
             "deprecated": False,
+            "revoked": False,
+            "revoked_by": None,
+            "current_equivalent": None,
+            "retired": False,
+            "short_name": whitelisted["name"],
             "evidenceable": True,
         }
 
@@ -502,7 +507,25 @@ def describe_technique(technique_id: str) -> Optional[dict[str, Any]]:
         # The whitelist description is written for this platform's evidence and
         # is more use than ATT&CK's prose, so it wins where we have one.
         "description": (whitelisted or {}).get("description"),
-        "deprecated": bool(reference.get("deprecated")),
+        # Wired to the UNION, which is what this key has always meant here and
+        # what both readers document it as ("ATT&CK retired it"). The catalogue
+        # now also carries a precise `deprecated` of 12 entries beside a
+        # `retired` of 161; pointing this at the precise one would drop the
+        # number by an order of magnitude and break nothing loudly. Pinned by
+        # test_attack_reference.py rather than left to whoever edits next —
+        # the `rule_level` lesson applied before instead of after.
+        "deprecated": bool(reference.get("retired")),
+        # The precise pair, so a caller can say *which* kind of retirement and
+        # name the current equivalent instead of only that something is old.
+        "revoked": bool(reference.get("revoked")),
+        # The hop ATT&CK states, and the end of the chain. They differ on
+        # three techniques in 19.2; a label telling an analyst what to search
+        # for wants `current_equivalent`.
+        "revoked_by": reference.get("revoked_by"),
+        "current_equivalent": reference.get("current_equivalent"),
+        "retired": bool(reference.get("retired")),
+        # The leaf alone, for places too narrow for "Parent: Sub".
+        "short_name": reference.get("short_name") or reference.get("name"),
         "evidenceable": whitelisted is not None,
     }
 

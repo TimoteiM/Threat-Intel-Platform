@@ -45,11 +45,37 @@ each. `tactics` holds them all in ATT&CK's kill-chain order and `tactic` is the
 first, used wherever a single label is needed.
 
 Source: MITRE ATT&CK Enterprise {version} (STIX 2.1 bundle).
+
+Three retirement flags, because ATT&CK distinguishes two kinds of retirement
+and the difference is what an analyst needs:
+
+    revoked     ATT&CK replaced this technique with another one, named in
+                `revoked_by`. 19.2 revokes 149, every one with a successor.
+                Revocation chains: `revoked_by` is the single hop ATT&CK
+                states, `current_equivalent` is the end of the chain. They
+                differ on three techniques in 19.2 and a label that wants to
+                tell an analyst what to search for wants the latter.
+    deprecated  ATT&CK retired it with no replacement. 12 of them.
+    retired     either of the above. This is the union the platform's older
+                `deprecated` key always meant, and the one UI payloads keep
+                carrying under that name — see `test_attack_reference.py`,
+                which asserts the outbound key is wired to the union and not
+                to the 12-entry precise field.
+
+`name` is ATT&CK's own page title — `Phishing: Spearphishing Link`.
+`short_name` is the leaf alone — `Spearphishing Link` — for places too narrow
+for the full form, such as a graph node label.
 """
 
 from __future__ import annotations
 
-# id -> {{name, tactic, tactics, url, deprecated}}
+#: The ATT&CK release this file was generated from. Surfaced wherever
+#: technique coverage is reported: names change and ids get revoked between
+#: versions, so "which ATT&CK" is part of the answer rather than a footnote.
+ATTACK_VERSION = "{version}"
+
+# id -> {{name, short_name, tactic, tactics, url, revoked, revoked_by,
+#         current_equivalent, deprecated, retired}}
 TECHNIQUE_REFERENCE: dict[str, dict] = {{
 '''
 
@@ -94,10 +120,17 @@ def main() -> int:
     lines.append("}\n")
 
     args.out.write_text("".join(lines))
-    deprecated = sum(1 for entry in techniques.values() if entry["deprecated"])
+    revoked = sum(1 for e in techniques.values() if e["revoked"])
+    deprecated = sum(1 for e in techniques.values() if e["deprecated"])
+    retired = sum(1 for e in techniques.values() if e["retired"])
+    successor = sum(1 for e in techniques.values() if e["revoked_by"])
+    chained = sum(1 for e in techniques.values()
+                  if e["current_equivalent"] and e["current_equivalent"] != e["revoked_by"])
     print(
-        f"wrote {args.out} — {len(techniques)} techniques "
-        f"({deprecated} deprecated/revoked), ATT&CK {version}"
+        f"wrote {args.out} — {len(techniques)} techniques, ATT&CK {version}\n"
+        f"  chains resolved past an intermediate: {chained}\n"
+        f"  revoked {revoked} ({successor} with a successor recorded), "
+        f"deprecated {deprecated}, retired (union) {retired}"
     )
     return 0
 
@@ -140,9 +173,19 @@ def _techniques(
         tactics = [tactic_names.get(phase) or _titleise(phase) for phase in ordered]
         techniques[technique_id] = {
             "name": str(obj.get("name") or ""),
+            # Before the parent prefix is composed below, so the leaf survives.
+            "short_name": str(obj.get("name") or ""),
             "tactics": tactics,
             "url": _url(obj),
-            "deprecated": bool(obj.get("revoked") or obj.get("x_mitre_deprecated")),
+            # Kept apart. The old single `deprecated` flag was the union of
+            # these, which meant the catalogue could say a technique had been
+            # retired but never which technique replaced it — and "retired,
+            # current equivalent T1685" is the whole of what an analyst needs
+            # in order to search current ATT&CK.
+            "revoked": bool(obj.get("revoked")),
+            "revoked_by": None,
+            "deprecated": bool(obj.get("x_mitre_deprecated")),
+            "stix_id": str(obj.get("id") or ""),
         }
 
     # STIX names a sub-technique by its leaf alone — "Spearphishing Link" — which
@@ -153,8 +196,48 @@ def _techniques(
         if "." not in technique_id:
             continue
         parent = techniques.get(technique_id.split(".", 1)[0])
-        if parent and not entry["name"].startswith(f"{parent['name']}:"):
-            entry["name"] = f"{parent['name']}: {entry['name']}"
+        if parent and not entry["name"].startswith(f"{parent['short_name']}:"):
+            entry["name"] = f"{parent['short_name']}: {entry['name']}"
+
+    # Which technique superseded a revoked one. ATT&CK states this as a
+    # `revoked-by` relationship between STIX objects, so it needs a second
+    # pass over the bundle and a map back to ATT&CK ids.
+    by_stix = {e["stix_id"]: tid for tid, e in techniques.items() if e["stix_id"]}
+    for obj in objects:
+        if obj.get("type") != "relationship":
+            continue
+        if obj.get("relationship_type") != "revoked-by":
+            continue
+        old = by_stix.get(str(obj.get("source_ref") or ""))
+        new = by_stix.get(str(obj.get("target_ref") or ""))
+        if old and new:
+            techniques[old]["revoked_by"] = new
+
+    # ATT&CK revocation can chain: T1073 -> T1574.002 -> T1574.001, and
+    # T1150 and T1162 both run through T1547.011 to T1647. Three cases in
+    # 19.2, no cycles. `revoked_by` stays faithful to the single relationship
+    # ATT&CK states; `current_equivalent` walks to the end of the chain,
+    # because naming a successor that is itself revoked would give an analyst
+    # the equivalent as of some intermediate release rather than as of this
+    # one. The `seen` guard is for a future release that does form a cycle —
+    # it would otherwise be an infinite loop inside a build script.
+    for technique_id, entry in techniques.items():
+        current, seen = technique_id, {technique_id}
+        while techniques[current].get("revoked_by"):
+            nxt = techniques[current]["revoked_by"]
+            if nxt in seen:
+                current = technique_id      # cyclic: claim no equivalent
+                break
+            seen.add(nxt)
+            current = nxt
+        entry["current_equivalent"] = None if current == technique_id else current
+
+    for entry in techniques.values():
+        entry.pop("stix_id", None)
+        # The union, named for what it is. Every consumer that wants "has
+        # ATT&CK retired this" reads here; nothing has to remember to OR two
+        # flags together, which is how the two would drift apart.
+        entry["retired"] = bool(entry["revoked"] or entry["deprecated"])
     return techniques
 
 
@@ -189,7 +272,12 @@ def _render(entry: dict[str, Any]) -> str:
         f"'tactic': {(entry['tactics'][0] if entry['tactics'] else 'Unmapped')!r}, "
         f"'tactics': [{tactics}], "
         f"'url': {entry['url']!r}, "
-        f"'deprecated': {entry['deprecated']!r}"
+        f"'short_name': {entry['short_name']!r}, "
+        f"'revoked': {entry['revoked']!r}, "
+        f"'revoked_by': {entry['revoked_by']!r}, "
+        f"'current_equivalent': {entry['current_equivalent']!r}, "
+        f"'deprecated': {entry['deprecated']!r}, "
+        f"'retired': {entry['retired']!r}"
         "}"
     )
 
