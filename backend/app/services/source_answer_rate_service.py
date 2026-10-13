@@ -77,8 +77,16 @@ WINDOW_DAYS = 90
 #: returned something". Declared rather than discovered: a source that stops
 #: appearing in the evidence at all is a different fault, and a check that
 #: silently stopped covering it would be the hand-maintained-list failure
-#: this codebase has had seven times — so `test_source_answer_rate` asserts
-#: every key here still exists in the stored evidence.
+#: this codebase has had seven times.
+#:
+#: `test_source_answer_rate` checks that each path is **well formed** — rooted
+#: in `evidence_json` and quoted. It does not and cannot check that a path
+#: resolves, because that needs the corpus. An earlier version of this comment
+#: claimed it asserted "every key here still exists in the stored evidence",
+#: which was a doc comment describing a test that did something weaker. The
+#: existence check lives in `answer_rates` instead, where the data is: a path
+#: that appeared in **none** of the rows in the window is reported as
+#: `check_failed`, not as a 0% rate and not as too little history.
 SOURCES: dict[str, str] = {
     "threatfox": "evidence_json->'threat_feeds'->'threatfox_matches'",
     "abuseipdb": "evidence_json->'threat_feeds'->'abuseipdb'",
@@ -96,13 +104,16 @@ SOURCES: dict[str, str] = {
 #: the eighth hand-maintained list in this codebase and the previous seven
 #: each swallowed a new entry silently.
 COLLECTOR_OF: dict[str, str] = {
+    # Subdomain enumeration takes its input from the intel collector's crt.sh
+    # output, so intel's status gates it too — a dependency, not a collector
+    # of its own.
+    "subdomains": "intel",
     "threatfox": "threat_feeds",
     "abuseipdb": "threat_feeds",
     "phishtank": "threat_feeds",
     "virustotal": "vt",
     "urlscan": "urlscan",
     "intel_blocklists": "intel",
-    "subdomains": "subdomains",
 }
 
 
@@ -122,6 +133,31 @@ class SourceAnswers:
         return self.answered / self.observations
 
     def as_json(self) -> dict[str, Any]:
+        if self.observations == 0:
+            # The path appeared in no row at all. Either the feature stopped
+            # running or the declared path is wrong, and both are faults —
+            # neither is a rate, and neither is a young source.
+            #
+            # `subdomains` is here as of 2026-10-13, and it is the first
+            # kind: subdomain enumeration only runs when
+            # `intel.related_subdomains` is non-empty, and that has been
+            # empty on every run since the intel collector began failing on
+            # 2026-07-07. A second feature lost to the same 401, found only
+            # because this branch stopped calling it "too little history".
+            return {
+                "source": self.source,
+                "observations": 0,
+                "answered": 0,
+                "collector_failed": self.collector_failed,
+                "rate": absent(
+                    CHECK_FAILED,
+                    "This source's path did not appear in a single evidence "
+                    "row in the window. Either the feature stopped running or "
+                    "the declared path is wrong; both are faults, and neither "
+                    "is a rate.",
+                    raw=SOURCES.get(self.source),
+                ).as_json(),
+            }
         if self.observations and self.collector_failed >= self.observations:
             # Every row in the window came from a collector that did not
             # complete. There is no rate here, and reporting 0% would say
@@ -231,12 +267,17 @@ async def answer_rates(
         r.source for r in reports
         if r.observations and r.collector_failed >= r.observations
     ]
+    #: A declared source that produced no row at all. Reported separately
+    #: again, because the work is different a third time: not a provider to
+    #: chase and not an exception to find, but a feature or a path to check.
+    never_present = [r.source for r in reports if r.observations == 0]
     return {
         "window_days": days,
         "sources": [r.as_json() for r in reports],
         # The finding, named rather than left to a reader to spot in a table.
         "never_answered": sorted(silent),
         "never_asked": sorted(never_asked),
+        "never_present": sorted(never_present),
         "note": (
             "A source at 0% over a meaningful window is broken, whatever it "
             "claims. This reports and does not alarm: the threshold for "
