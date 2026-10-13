@@ -60,7 +60,9 @@ The unscoped consumers that decide things:
 | `investigation_intelligence.py:576` | `tf_count` |
 
 Patching 28 sites is not a fix; the next consumer would be written unscoped.
-So **the scoped list takes the name every consumer reads**:
+**You cannot make 28 consumers remember to scope. You can remove the thing
+they would have to remember.** So **the scoped list takes the name every
+consumer reads**:
 
 * `threatfox_matches` — scoped to the observable. Every one of the 28
   unscoped readers is now correct without being edited.
@@ -86,8 +88,45 @@ analysis path. The 11 IOCs recorded against `live.com` are all
 `confidence = low` and correctly described as Microsoft infrastructure, so
 nothing propagated.
 
-`office.com` was deleted through the UI at 13:55
-(`DELETE /api/investigations/a31bf41b-... 204`), evidence cascaded.
+### `office.com` is recorded here because the database no longer holds it
+
+It was deleted through the UI at 13:55 today —
+`DELETE /api/investigations/a31bf41b-e95a-45dd-a3f5-832025cd96b5 → 204`, from
+the frontend container, and `evidence` cascaded to zero rows. Two cases,
+handled two ways, and one of them left no trace; without this section the
+record implies a single occurrence. So the first instance, transcribed from
+the measurement taken while it still existed:
+
+| | |
+|---|---|
+| investigation | `a31bf41b-e95a-45dd-a3f5-832025cd96b5` |
+| observable | `office.com` (observable_type `domain`) |
+| created | 2026-10-13 12:39 UTC |
+| verdict | **malicious / high / risk 90 / action `block`**, state `concluded` |
+| client_domain | none |
+| batch_id | none |
+| `client_alerts` | 0 |
+| ThreatFox matches | 2 |
+| matches about the observable | **0** |
+
+The two matches, both `observable is a substring of the IOC host`:
+
+```
+http://sdoffice.com.br/wp-content/plugins/verify/proxy.php   (ioc_type url,  confidence 100)
+nlahtc.theluxehomeoffice.com                                 (ioc_type domain, confidence 100)
+```
+
+Note the second: the indicator that falsely condemned `office.com` is the one
+host in this whole episode that *is* genuinely listed. A substring search made
+one true positive into a false positive on a Microsoft apex.
+
+Deleting it was a defensible call in the moment and it is the reason this
+section exists. On a SOC platform the audit trail of a wrong verdict is itself
+evidence, which is why `live.com` is being **corrected** rather than removed.
+
+`http://ecs.office.com/`, investigated at 12:39:21 the same minute, is a
+different observable and was correctly judged benign/high/monitor. It is easy
+to mistake for the deleted row when reading the table by timestamp.
 
 `nlahtc.theluxehomeoffice.com` stays malicious with `threatfox_matches`
 emptied entirely, so it is not ThreatFox's verdict and must not be unwound.

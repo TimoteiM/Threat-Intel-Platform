@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Eleven rules that were learned expensively and are not obvious from the code:
+Twelve rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -152,6 +152,24 @@ Eleven rules that were learned expensively and are not obvious from the code:
   *lowers* risk toward benign, and not where it would raise risk toward a
   block: requiring a feed to have answered before the platform will decline
   to auto-block makes an outage cause blocks.
+
+- **Write the test for the bad direction before the branch that could take
+  it.** Not a habit — the practice. **Six** defects went inside their own
+  fixes on 2026-10-12/13, and the three that were caught were caught this
+  way: SURBL's refusal code `127.0.0.254` would have marked the whole estate
+  listed the moment the intel collector stopped crashing;
+  `about_observable` dropped matches for an unknown observable and unlocked
+  benign; and the ThreatFox kill switch assigned `threatfox_status` to a bare
+  local, so a *disabled* feed recorded nothing and would have read as "asked,
+  nothing listed" — the exact defect being switched off.
+
+  The reason it recurs is mechanical: fixing an absence bug puts you in a
+  filtering mindset, and filtering is the operation that creates absences. So
+  the fix's own logic is the highest-risk site for the defect it is fixing.
+  Write the assertion against the direction that does damage, watch it fail,
+  then write the branch. And pair it with a control that fails if the guard
+  becomes too aggressive — a filter that rejects everything passes every
+  dangerous-direction test and detects nothing.
 
 - **[Recording a failure is not reading it](docs/problems/per-verdict-source-coverage.md)**
   — every multi-month outage found on 2026-10-13 was already written down, on
