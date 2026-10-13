@@ -32,3 +32,52 @@ What a fix has to decide
 
 Fullscreen now exists, so the symptom is reviewable; it is not a reason to
 leave it.
+
+---
+
+## A claim drawn twice: 2,783 technique nodes that could go
+
+Measured 2026-10-13, while adding the `refines` edge. **8.7% of all technique
+nodes are a parent whose own sub-technique is drawn beside it** — 2,964 of
+33,909. The `refines` edge makes the relation legible but adds a third
+element, so one claim now occupies two nodes and an edge. That is worse for
+density than before, not better.
+
+The pairs split cleanly, and the split decides what may be done:
+
+| parent / child provenance | pairs | what a collapse would merge |
+|---|---:|---|
+| `rule_only` / `rule_only` | 2,603 | nothing |
+| `model_only` / `model_only` | 180 | nothing |
+| **same on both sides** | **2,783 (92.9%)** | **nothing — pure redundancy** |
+| `rule_only` / `model_only` | 202 | two different namers |
+| `rule_confirmed` / `model_only` | 10 | two different namers |
+
+### The proposed rule
+
+**Collapse the parent into the child when both carry the same `named_by`;
+keep both nodes and the edge when they differ.**
+
+In the 2,783 same-provenance pairs one namer asserted the same thing at two
+depths. The parent node carries no information the child does not, so folding
+it removes a duplicate rather than a claim — and the existing absorb machinery
+in `alert_graph_assembly_service` already records what was folded in
+`absorbed`, merges witnesses and redirects edges, so nothing is lost and the
+fold is inspectable.
+
+In the 212 mixed pairs the two nodes are two namers. Collapsing them would
+put one `named_by` on a node that two different sources named at two
+different depths — the collapse of two statements into one that this codebase
+removes everywhere else. Those keep both nodes, and the `refines` edge is
+exactly what makes them readable.
+
+### Why this is not built yet
+
+It changes what an analyst sees on a large number of cases, and the rule —
+collapse iff the provenance matches — is a product judgement rather than a
+correctness fix. The measurement is here so the decision is cheap; the
+machinery exists; the work is an hour.
+
+Expected effect: **2,783 fewer nodes across the estate, 8.2% of all technique
+nodes**, concentrated in exactly the graphs that have the most techniques and
+are therefore the densest.

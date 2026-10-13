@@ -31,6 +31,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+# The convention is enforced here and absent from every diagnostic script
+# anyone writes, which is backwards. Product code is reviewed and tested;
+# a check script is written in ninety seconds and trusted on its first run,
+# and it is the one making the claim you act on.
+#
+# Four instrument errors on 2026-10-12/13, all the same defect — an absence
+# read as a value:
+#
+#   res.get("remaining")        a missing key read as "the sweep finished"
+#   /proc/$(pgrep -f ...)       an empty expansion read as a valid path, so a
+#                               directory's timestamp was compared to itself
+#                               and reported as "the process did not restart"
+#   grep uvicorn /proc/*/cmdline   a child whose cmdline lacks the string read
+#                               as "no reloader is running", nearly reverting
+#                               a working fix
+#   an inline <script> in the HTML   read as independent agreement with the
+#                               meta tag it was copied from
+#
+# None could have returned the bad answer. In a check script:
+#
+#   * index, do not `.get()`. `result["remaining"]` fails loudly on a missing
+#     key; `.get("remaining")` turns it into None and then into "done".
+#   * guard every shell interpolation that can expand to empty — `[ -n "$x" ]`
+#     before using it, never `/proc/$(cmd)`.
+#   * when a check reports the good answer, ask what it would have printed if
+#     the answer were bad. If there is no such output, the check is decoration.
+#
 #: Why a value is missing. Each one is a distinct claim about what happened,
 #: and none of them means "the measured value is zero".
 NO_FIELD_MAP = "no_field_map"          # this platform cannot read this source

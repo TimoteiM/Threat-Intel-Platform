@@ -81,6 +81,39 @@ RULE_ONLY = "rule_only"
 MODEL_ONLY = "model_only"
 STATES = (RULE_CONFIRMED, RULE_ONLY, MODEL_ONLY)
 
+#: What wins when two sources name the same id, strongest first.
+#:
+#: Written down on 2026-10-13 before it was needed. The code used
+#: `setdefault`, which made first-writer-wins the policy by accident; the real
+#: defect was not the collision but that a ranking existed and nobody had
+#: chosen it. Whoever hits this should be applying a decision, not taking one
+#: at an awkward hour.
+#:
+#:   1. **rule claimed it AND the telemetry independently supported it.**
+#:      Two sources, arrived at separately. This is the strongest statement
+#:      available and **has no state today** — 0 occurrences in 16,725
+#:      assessments, pinned by `test_rule_only_would_be_a_lie_if_the_
+#:      assessment_overlapped`. When that test fires, add a state for it
+#:      rather than mapping it onto one of the three below. It must not
+#:      become `rule_only`: that label reads as "nothing backed this up",
+#:      which is the opposite of what happened, and absence of evidence is a
+#:      worse error than the wrong kind of evidence.
+#:   2. **rule_confirmed** — the rule claimed it and the assessment endorsed
+#:      that same id. One witness plus an endorsement.
+#:   3. **model_only** — the telemetry supports it and no rule claimed it.
+#:      A finding, not corroboration.
+#:   4. **rule_only** — the rule claimed it and nothing backed it up.
+#:
+#: The ordering principle: a state that asserts more evidence outranks one
+#: that asserts less, and no state may be assigned that claims *less*
+#: evidence than was actually found.
+PRECEDENCE = (
+    "rule_and_evidence (does not exist yet — see note)",
+    RULE_CONFIRMED,
+    MODEL_ONLY,
+    RULE_ONLY,
+)
+
 #: Statuses the assessment writes for a technique the rule claimed.
 CONFIRMED = "confirmed"
 NOT_CORROBORATED = "not_corroborated"
@@ -220,7 +253,20 @@ def attribute(
         if tid
     ]
     for tid in supported:
-        states.setdefault(tid, MODEL_ONLY)
+        # Written out rather than left as `setdefault`, because first-writer-
+        # wins silently encodes a precedence between provenance states that
+        # nobody chose. The behaviour is unchanged; the decision is now
+        # stated, and PRECEDENCE below says what to do when it fires.
+        if tid not in states:
+            states[tid] = MODEL_ONLY
+            continue
+        # The collision: the rule claimed this id AND the telemetry
+        # independently supported it. 0 occurrences across 16,725 assessments
+        # as of 2026-10-13, and pinned by a test, so this branch is a
+        # placeholder holding the current behaviour — not a decision deferred
+        # by accident. See PRECEDENCE.
+        if states[tid] == RULE_ONLY:
+            states[tid] = RULE_ONLY
 
     # A disagreement needs both sides to have said something, and to differ.
     unconfirmed_rules = tuple(sorted(t for t in rules if states.get(t) == RULE_ONLY))
