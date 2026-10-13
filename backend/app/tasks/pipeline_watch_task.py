@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _pipeline() -> dict[str, Any]:
-    from app.db.session import AsyncSessionLocal
+    from app.db.session import CeleryAsyncSessionLocal as AsyncSessionLocal
     from app.services.pipeline_health_service import check
 
     async with AsyncSessionLocal() as db:
@@ -47,7 +47,7 @@ COLLAPSE = (date(2026, 9, 25), date(2026, 10, 5))
 
 
 async def _freshness_shadow() -> dict[str, Any]:
-    from app.db.session import AsyncSessionLocal
+    from app.db.session import CeleryAsyncSessionLocal as AsyncSessionLocal
     from app.services.emitter_freshness_service import check
 
     async with AsyncSessionLocal() as db:
@@ -56,7 +56,7 @@ async def _freshness_shadow() -> dict[str, Any]:
 
 
 async def _materialise() -> dict[str, Any]:
-    from app.db.session import AsyncSessionLocal
+    from app.db.session import CeleryAsyncSessionLocal as AsyncSessionLocal
     from app.services.graph_materialisation_service import sweep
 
     async with AsyncSessionLocal() as db:
@@ -64,7 +64,7 @@ async def _materialise() -> dict[str, Any]:
 
 
 async def _ingest() -> dict[str, Any]:
-    from app.db.session import AsyncSessionLocal
+    from app.db.session import CeleryAsyncSessionLocal as AsyncSessionLocal
     from app.services.ingest_freshness_service import check
 
     async with AsyncSessionLocal() as db:
@@ -72,11 +72,66 @@ async def _ingest() -> dict[str, Any]:
 
 
 async def _schema() -> dict[str, Any]:
-    from app.db.session import AsyncSessionLocal
+    from app.db.session import CeleryAsyncSessionLocal as AsyncSessionLocal
     from app.services.schema_drift_service import check
 
     async with AsyncSessionLocal() as db:
         return await check(db)
+
+
+#: Returned by every watch task that could not run.
+#:
+#: Structurally distinguishable from a successful result, because the failure
+#: shapes these tasks used to return were not. `{"ran": False, "error": ...}`
+#: carries no `materialised`, no `remaining`, no `ok` — so a caller reading
+#: `result.get("materialised", 0)` saw 0 done and `result.get("remaining")`
+#: None, which reads as "the sweep finished with nothing to do". A drain loop
+#: read exactly that on 2026-10-13 and reported success while 36 sweeps an
+#: hour were failing, and had been for a month.
+#:
+#: So the failure now announces itself. `app/services/absence.py` has said how
+#: to do this since the first honest-absence work: a value that is not there
+#: carries the reason it is not there, in a shape a renderer cannot mistake
+#: for a value. Same idea, one layer out.
+FAILED = "failed"
+
+
+def _failure(name: str, exc: BaseException) -> dict[str, Any]:
+    """Log the message, not just the type, and return an unmistakable shape.
+
+    A month of bare `RuntimeError` in this log is half the reason the event
+    loop fault took a month to surface: the exception text said *which* loop
+    conflict it was and only the discarded return value ever carried it.
+    """
+    logger.error(
+        "%s_failed error=%s message=%s", name, type(exc).__name__, exc,
+        exc_info=True,
+    )
+    return {
+        FAILED: True,
+        "ran": False,
+        "error": f"{type(exc).__name__}: {exc}",
+        "task": name,
+    }
+
+
+def succeeded(result: Any) -> bool:
+    """Whether a watch result is a result at all.
+
+    Every caller should ask this before reading any field. Written here rather
+    than left to each caller, because nothing read these results at all — the
+    tasks are beat-scheduled and their returns discarded, so the only evidence
+    of failure was a log line carrying the exception *type*.
+
+    `ran is False` is treated as failure as well as the explicit marker. That
+    is the shape these tasks used to return, and a caller that cannot
+    recognise the shape responsible for the incident is not much of a guard.
+    """
+    if not isinstance(result, dict):
+        return False
+    if result.get(FAILED):
+        return False
+    return result.get("ran") is not False
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_pipeline")
@@ -90,8 +145,7 @@ def watch_pipeline() -> dict[str, Any]:
     try:
         return asyncio.run(_pipeline())
     except Exception as exc:  # a watchdog that dies silently is worse than none
-        logger.error("pipeline_watch_failed error=%s", type(exc).__name__)
-        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+        return _failure("pipeline_watch", exc)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_schema")
@@ -100,8 +154,7 @@ def watch_schema() -> dict[str, Any]:
     try:
         return asyncio.run(_schema())
     except Exception as exc:
-        logger.error("schema_watch_failed error=%s", type(exc).__name__)
-        return {"ok": None, "error": f"{type(exc).__name__}: {exc}"}
+        return _failure("schema_watch", exc)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_ingest")
@@ -115,8 +168,7 @@ def watch_ingest() -> dict[str, Any]:
     try:
         return asyncio.run(_ingest())
     except Exception as exc:
-        logger.error("ingest_watch_failed error=%s", type(exc).__name__)
-        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+        return _failure("ingest_watch", exc)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.materialise_graphs")
@@ -130,8 +182,7 @@ def materialise_graphs() -> dict[str, Any]:
     try:
         return asyncio.run(_materialise())
     except Exception as exc:
-        logger.error("graph_materialise_sweep_failed error=%s", type(exc).__name__)
-        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+        return _failure("graph_materialise_sweep", exc)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.emitter_freshness_shadow")
@@ -146,8 +197,7 @@ def emitter_freshness_shadow() -> dict[str, Any]:
     try:
         return asyncio.run(_freshness_shadow())
     except Exception as exc:
-        logger.error("emitter_freshness_shadow_failed error=%s", type(exc).__name__)
-        return {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
+        return _failure("emitter_freshness_shadow", exc)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.code_version")
