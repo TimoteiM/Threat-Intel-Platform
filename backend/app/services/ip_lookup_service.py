@@ -183,6 +183,28 @@ def perform_ip_lookup(ip: str, *, timeout: int = 15) -> dict[str, Any]:
             raw="no_auth_key",
         ).as_json()
         # Fall through to the shared return; the request below is skipped.
+    elif not settings.threatfox_enabled:
+        # Switched off 2026-10-13. `search_ioc` is a substring search, so a
+        # lookup for an observable returns every IOC containing that string —
+        # which produced malicious/high on `office.com` from
+        # `nlahtc.theluxehomeoffice.com`. Recorded as an absence, never as a
+        # clean result: this is "not asked", and the whole point of the
+        # convention is that it must not read as "asked and found nothing".
+        # `result["threatfox_status"]`, not a bare local. The first version of
+        # this branch assigned to a local and the switched-off feed recorded
+        # nothing at all — an absence bug inside the fix for an absence bug,
+        # and the only reason it was caught is that the test for the
+        # dangerous direction was written before the branch.
+        health.record("threatfox", ok=False, error="disabled")
+        result["errors"].append("ThreatFox: switched off (THREATFOX_ENABLED)")
+        result["threatfox_status"] = absent(
+            CHECK_FAILED,
+            "ThreatFox is switched off (THREATFOX_ENABLED). Its search "
+            "endpoint matches substrings, so a lookup returns indicators "
+            "belonging to unrelated hosts that merely contain this one's "
+            "name. No result here is an absence, not a negative.",
+            raw="disabled",
+        ).as_json()
     else:
         try:
             resp = requests.post(

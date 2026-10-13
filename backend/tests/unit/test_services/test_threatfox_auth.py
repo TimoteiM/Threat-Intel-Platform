@@ -34,8 +34,15 @@ class _Resp:
         return self._payload
 
 
-def _settings(key: str = "") -> SimpleNamespace:
-    return SimpleNamespace(abusech_auth_key=key)
+def _settings(key: str = "", *, enabled: bool = True) -> SimpleNamespace:
+    """Settings for the ThreatFox request path.
+
+    `threatfox_enabled=True` by default here, and the platform default is
+    False as of 2026-10-13 — these tests assert how the *request* behaves,
+    which is still the required behaviour and the thing that has to be right
+    before the feed can be turned back on. The switch has its own tests.
+    """
+    return SimpleNamespace(abusech_auth_key=key, threatfox_enabled=enabled)
 
 
 @pytest.fixture
@@ -323,8 +330,10 @@ def test_the_collector_distinguishes_no_result_from_not_asked(monkeypatch) -> No
     # from app.config at call time — patch there, not on the module.
     import app.config as config_mod
 
+    # `threatfox_enabled=True`: this test is about the request path, which
+    # still has to be right before the feed can be turned back on.
     monkeypatch.setattr(config_mod, "get_settings",
-                        lambda: SimpleNamespace(abusech_auth_key=SECRET))
+                        lambda: _settings(SECRET))
     monkeypatch.setattr(mod, "record_provider_request", lambda *_: None)
 
     monkeypatch.setattr(mod, "requests", type("R", (), {
@@ -350,3 +359,41 @@ def test_the_collector_refuses_to_query_without_a_key(monkeypatch) -> None:
                         lambda: SimpleNamespace(abusech_auth_key=""))
     with pytest.raises(RuntimeError, match="missing credential"):
         collector._query_threatfox("example.com")
+
+
+# ─── the switch itself ────────────────────────────────────────────────────
+
+def test_the_switch_stops_the_request_without_faking_a_clean_result():
+    """Off by default platform-wide as of 2026-10-13. The dangerous direction
+    is a disabled feed reading as a feed that answered and found nothing, so
+    the absence is what is asserted — not merely that no request was made."""
+    from app.services.absence import is_absent
+
+    with patch.object(ip_lookup_service, "get_settings",
+                      return_value=_settings("a-key", enabled=False)), \
+         patch.object(ip_lookup_service.requests, "post") as post:
+        result = ip_lookup_service.perform_ip_lookup("8.8.8.8")
+
+    assert not post.called, "a request was sent while the feed is switched off"
+    status = result.get("threatfox_status") if isinstance(result, dict) else None
+    assert is_absent(status), (
+        "a switched-off feed did not record an absence, so an empty match "
+        "list reads as 'asked and nothing listed'"
+    )
+
+
+def test_the_collector_refuses_rather_than_returning_empty():
+    """`threat_feeds_collector` raises, so the caller records a feed that did
+    not answer. Returning `[]` would be the seven-month ThreatFox shape."""
+    from app.collectors.threat_feeds_collector import ThreatFeedsCollector
+
+    c = ThreatFeedsCollector(
+        domain="office.com",
+        investigation_id="00000000-0000-0000-0000-000000000000",
+        observable_type="domain",
+        timeout=10,
+    )
+    with patch("app.collectors.threat_feeds_collector.get_settings",
+               return_value=_settings("a-key", enabled=False)):
+        with pytest.raises(RuntimeError, match="switched off"):
+            c._query_threatfox("office.com")

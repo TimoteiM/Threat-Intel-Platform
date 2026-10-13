@@ -460,7 +460,22 @@ class ThreatFeedEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="threat_feeds"))
     abuseipdb: Optional[AbuseIPDBResult] = None
     phishtank: Optional[PhishTankResult] = None
+    #: **Scoped to the observable.** ThreatFox's `search_ioc` is a substring
+    #: search, so the raw answer for `live.com` includes `saganlive.com` and
+    #: `www82live.com`, and for `office.com` it includes
+    #: `nlahtc.theluxehomeoffice.com`. On 2026-10-13 that produced
+    #: malicious/high/risk-90/block verdicts on two Microsoft apexes.
+    #:
+    #: The scoping lives here, at the source, rather than at each consumer:
+    #: 30 places read this field and only 2 scoped it, so a correct-by-
+    #: default name is the only version that stays correct. The unfiltered
+    #: answer is kept beside it under a name that says what it is.
     threatfox_matches: list[ThreatFoxResult] = []
+    #: Everything the feed returned, including indicators belonging to other
+    #: hosts that merely contain this observable's name. Context an analyst
+    #: may want — "malware is hosted on this platform" is a real fact — and
+    #: deliberately **not** the name any decision reads.
+    threatfox_matches_all_hosts: list[ThreatFoxResult] = []
     # True only when the feed carries this exact hostname. A phishing URL that
     # merely *mentions* the host — in a redirect parameter, or as a page hosted
     # on a shared subdomain — is recorded below instead, because it says nothing

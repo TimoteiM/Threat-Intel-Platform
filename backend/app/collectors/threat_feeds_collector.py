@@ -103,7 +103,7 @@ class ThreatFeedsCollector(BaseCollector):
                     try:
                         result = future.result()
                         if feed_name == "threatfox":
-                            evidence.threatfox_matches = result
+                            self._record_threatfox(evidence, result)
                             evidence.feeds_checked.append("threatfox")
                         elif feed_name == "otx":
                             evidence.otx = result
@@ -190,7 +190,7 @@ class ThreatFeedsCollector(BaseCollector):
                         evidence.phishtank = result
                         evidence.feeds_checked.append("phishtank")
                     elif feed_name == "threatfox":
-                        evidence.threatfox_matches = result
+                        self._record_threatfox(evidence, result)
                         evidence.feeds_checked.append("threatfox")
                     elif feed_name == "openphish":
                         evidence.openphish_listed = bool(result.get("listed"))
@@ -289,6 +289,33 @@ class ThreatFeedsCollector(BaseCollector):
             logger.debug(f"[{self.name}] PhishTank query failed: {e}")
             return PhishTankResult(in_database=False)
 
+    def _record_threatfox(self, evidence, result) -> None:
+        """Store the scoped matches under the name every consumer reads.
+
+        `search_ioc` is a substring search. Scoping at each consumer was
+        tried and did not hold: 30 sites read `threatfox_matches` and 2
+        scoped it, so `analysis_task` produced malicious/high/block on
+        `live.com` from 25 indicators belonging to `saganlive.com` and
+        `www82live.com`. The safe list therefore takes the name, and the
+        unfiltered answer is kept under `threatfox_matches_all_hosts`.
+
+        Both assignment sites call this, so the two paths cannot diverge —
+        which is the defect that let one ThreatFox caller be fixed and the
+        other not, twice in one day.
+        """
+        from app.services.threatfox_match_scope import about_observable
+
+        raw = list(result or [])
+        evidence.threatfox_matches_all_hosts = raw
+        evidence.threatfox_matches = about_observable(self.target_domain, raw)
+        dropped = len(raw) - len(evidence.threatfox_matches)
+        if dropped:
+            logger.info(
+                "[%s] threatfox: %d of %d indicators are about other hosts "
+                "and were not scoped to %s",
+                self.name, dropped, len(raw), self.target_domain,
+            )
+
     def _query_threatfox(self, domain: str) -> list[ThreatFoxResult]:
         """Search ThreatFox IOC database for domain/subdomain hits.
 
@@ -319,6 +346,19 @@ class ThreatFeedsCollector(BaseCollector):
                 "ThreatFox was not queried: no abuse.ch Auth-Key configured "
                 "(ABUSECH_AUTH_KEY). This is a missing credential, not a "
                 "domain with no hits."
+            )
+
+        if not get_settings().threatfox_enabled:
+            # Switched off 2026-10-13 — see `Settings.threatfox_enabled`.
+            # Raised rather than returned empty, for the same reason the
+            # missing-credential path raises: the caller records a feed that
+            # did not answer, and an empty match list would read as "asked
+            # and nothing listed" to every consumer downstream.
+            raise RuntimeError(
+                "ThreatFox was not queried: switched off "
+                "(THREATFOX_ENABLED=false) because its search endpoint "
+                "matches substrings, which produced a malicious verdict on "
+                "office.com from an unrelated host containing that string."
             )
 
         payload = {

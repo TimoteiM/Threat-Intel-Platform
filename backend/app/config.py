@@ -102,6 +102,27 @@ class Settings(BaseSettings):
             "ABUSECH_AUTH_KEY", "ABUSE_CH_AUTH_KEY", "THREATFOX_AUTH_KEY"
         ),
     )
+    # ThreatFox, off by default as of 2026-10-13.
+    #
+    # Not a judgement call any more. Measured benefit over seven months of
+    # silence: **zero verdicts changed** — 25 of 25 knowable positives were
+    # already reached as malicious/high by other sources, and the single
+    # non-redundant listing postdates its own verdict. Measured cost within
+    # two days of the credential being restored: a malicious/high verdict on
+    # `office.com`, because the API's `search_ioc` is a **substring** search
+    # and `nlahtc.theluxehomeoffice.com` contains the string "office.com".
+    #
+    # An expected cost above zero against a benefit measured at zero is not a
+    # trade-off. The query granularity is the real defect and is fixed
+    # separately; this switch is what stops the platform acting on it in the
+    # meantime, and it stays off until the three relation shapes are tested.
+    #
+    # Deliberately its own flag rather than clearing ABUSECH_AUTH_KEY: that
+    # key is now also URLhaus's, and URLhaus answers correctly.
+    threatfox_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("THREATFOX_ENABLED"),
+    )
     # The case-graph debug route (app/api/graph_debug.py). Off unless both
     # are set: a flag that defaults to off, and a secret compared in constant
     # time. It exists because the real endpoint is behind the session and
