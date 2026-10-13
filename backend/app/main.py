@@ -261,7 +261,15 @@ async def health(x_graph_debug: str | None = Header(default=None)):
     if authorised(x_graph_debug):
         payload["diagnostics"] = {
             "code": code_version(),
+            # Did the task run?
             "scheduled_watches": await _watch_liveness(),
+            # "Did the source answer?" is deliberately NOT here. It is a
+            # 90-day aggregate over large JSONB documents and takes ~98
+            # seconds — the cost is per-row extraction, not the number of
+            # scans, so collapsing seven queries into one changed nothing.
+            # It belongs on a schedule with its result stored, the way the
+            # watch heartbeat works. Until then: `python -m
+            # app.cli.source_answers`. See source_answer_rate_service.
         }
     return payload
 

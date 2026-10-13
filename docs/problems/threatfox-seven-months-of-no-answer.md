@@ -84,3 +84,63 @@ Fourth instance this week of a check that could not return the bad answer,
 and the one with the worst failure direction. The fix was to construct the
 object properly rather than to read the error message, which named the
 missing attribute and not the lost result.
+
+---
+
+## The invariant, which matters more than the bug
+
+**Any enrichment source returning 100% empty over a meaningful window is
+broken, whatever it claims about itself.** Zero non-empty results in 2,400
+rows over seven months is not a quiet estate; it is a signature, and nothing
+was watching for it.
+
+That generalises past ThreatFox, so it is now a check —
+`source_answer_rate_service`, run by `python -m app.cli.source_answers`. It is
+the companion to the watch heartbeat: that answers *did the task run*, this
+answers *did the source answer*. A collector can run on schedule, succeed, and
+record nothing from a provider that refused every request.
+
+### It found a second one on its first run
+
+    source                 answered       of   rate
+    threatfox                     0     2174     0.0%   NEVER ANSWERED
+    abuseipdb                  1961     2174    90.2%
+    phishtank                  2168     2174    99.7%
+    virustotal                 2203     2203   100.0%
+    urlscan                    2168     2168   100.0%
+    intel_blocklists              0     2168     0.0%   NEVER ANSWERED
+
+`intel_blocklists` is not a feed that is merely quiet. It worked and stopped:
+
+    2026-03    107 rows    23 with a blocklist hit   (21.5%)
+    2026-04     87 rows     0
+    2026-05      1 row      0
+    2026-07     81 rows     0
+    2026-08    426 rows     0
+    2026-09   1398 rows     0
+    2026-10    293 rows     0
+
+23 hits in March, then **0 across 2,286 rows over seven months** — the same
+window as ThreatFox. The worker log names a likely cause, 15 times in 24
+hours: `Collector [intel] failed: Spamhaus SIA login failed: HTTP 401`.
+Another credential, another feed reporting an empty list rather than a
+failure. Not investigated further here; it is a finding, not a fix.
+
+### Design notes
+
+The rate carries its denominator, always: "0%" and "0 of 2,174" are different
+claims when the denominator might be 3. Below 50 observations it reports
+`too_little_history` rather than 0%, which is why `subdomains` shows an
+absence instead of a damning zero.
+
+It reports and does not alarm. A source legitimately at 0% over a short window
+is ordinary — most domains are in no blocklist — so the threshold for anything
+short of total silence has to come from a week of this check's own output,
+under the same shadow-first rule as the emitter freshness work.
+
+**It is a CLI, not an endpoint.** It takes about 98 seconds: a 90-day
+aggregate extracting nested paths from large JSONB documents. Collapsing seven
+queries into one changed the runtime by nothing, because the cost is per-row
+extraction rather than per-scan — a hypothesis worth recording as refuted. The
+right home is a scheduled task storing its result, exactly as `watch_heartbeat`
+does. Not built.
