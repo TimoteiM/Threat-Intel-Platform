@@ -97,14 +97,52 @@ analysis path. The 11 IOCs recorded against `live.com` are all
 `confidence = low` and correctly described as Microsoft infrastructure, so
 nothing propagated.
 
-### `office.com` is recorded here because the database no longer holds it
+### `office.com`: its investigation was deleted, but the record survives
 
-It was deleted through the UI at 13:55 today —
-`DELETE /api/investigations/a31bf41b-e95a-45dd-a3f5-832025cd96b5 → 204`, from
-the frontend container, and `evidence` cascaded to zero rows. Two cases,
-handled two ways, and one of them left no trace; without this section the
-record implies a single occurrence. So the first instance, transcribed from
-the measurement taken while it still existed:
+**Correction to an earlier claim of mine.** I wrote that the database no
+longer held the first instance. It does. The *investigation* was deleted
+through the UI at 13:55 today —
+`DELETE /api/investigations/a31bf41b-e95a-45dd-a3f5-832025cd96b5 → 204` from
+the frontend container, with `evidence` cascading to zero rows — but the
+**alert run** that spawned it was untouched:
+
+| | |
+|---|---|
+| alert run | `154323c9-70f1-48ad-bbf3-030360547346` |
+| created | 2026-10-13 12:39:21 UTC |
+| `overall_verdict` | **malicious** |
+| `indicator_risk_score` | **90** |
+| `summary.malicious_indicators` | `["office.com"]` |
+| reasons | carry `ThreatFox matches: 2` |
+
+`alert_body_investigation_runs` has no cascade from `investigations`, so the
+wrong verdict outlived the row it was derived from — and that is the only
+reason the first instance is still inspectable. The transcription below was
+taken from the investigation while it existed, and it now has a surviving
+source to check against.
+
+**Two alert runs still read malicious/90 and have not been corrected:**
+
+| run | indicator | ThreatFox count | verdict |
+|---|---|---|---|
+| `0703a5f1-0dd1-4ac1-8d6e-d93cae6f8984` | `live.com` | 25 | malicious / 90 |
+| `154323c9-70f1-48ad-bbf3-030360547346` | `office.com` | 2 | malicious / 90 |
+
+So correcting the investigation alone would have satisfied the condition in
+one direction and broken it in the other: the investigation would read
+corrected while the alert run still said malicious.
+
+The search behind that table, stated because the claim quantifies: every row
+of `alert_body_investigation_runs` whose `result_json` matches
+`ThreatFox matches: [1-9]` — two rows, both today. A looser first search on
+the literal `ThreatFox matches` returned twelve, including a
+malicious/85 run on the IP `136.243.220.212` from 2026-09-10 that I nearly
+reported as a third case. Its text reads *"no ThreatFox matches, and no
+OpenCTI record"* — the negative phrasing. My own completeness search had a
+false positive, found by reading the matched text instead of trusting the
+match.
+
+### The first instance, as measured while the investigation existed
 
 | | |
 |---|---|
@@ -129,9 +167,27 @@ Note the second: the indicator that falsely condemned `office.com` is the one
 host in this whole episode that *is* genuinely listed. A substring search made
 one true positive into a false positive on a Microsoft apex.
 
-Deleting it was a defensible call in the moment and it is the reason this
-section exists. On a SOC platform the audit trail of a wrong verdict is itself
-evidence, which is why `live.com` is being **corrected** rather than removed.
+Deleting it was a defensible call in the moment. On a SOC platform the audit
+trail of a wrong verdict is itself evidence, which is why `live.com` was
+**corrected** rather than removed — and the office.com case shows the trail
+surviving by accident rather than by design, in a table that happens not to
+cascade.
+
+### The IP side is clean, measured
+
+The IP relation is the worse one in principle — `1.2.3.4` is a substring of
+`11.2.3.40` with no label structure to anchor equality on — but nothing was
+hit by it:
+
+| | |
+|---|---|
+| `ip_lookups` rows | 6,616 |
+| ...that ever recorded a ThreatFox IOC | **0** |
+| `ip`-type investigations | **0** (1,680 url, 800 domain, 65 hash) |
+
+So `analysis_task.py:1366`, the unscoped IP consumer, never fired, and the
+seven-month 401 is why `ip_lookups` holds no matches to be wrong about. The
+parsed-address rule is **preventive**, not remedial.
 
 `http://ecs.office.com/`, investigated at 12:39:21 the same minute, is a
 different observable and was correctly judged benign/high/monitor. It is easy
