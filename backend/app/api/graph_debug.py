@@ -58,9 +58,12 @@ GRAPH_PATH = "/api/debug/case-graph"
 
 
 def _enabled() -> bool:
-    settings = get_settings()
-    flag = str(getattr(settings, "graph_debug_route", "") or "").strip().lower()
-    return flag in {"1", "true", "yes", "on"}
+    """Kept as a thin alias: the gate itself now lives in
+    `app/security/diagnostics_gate`, shared with `/health`'s diagnostics
+    block so there is one place to switch off and one token to rotate."""
+    from app.security.diagnostics_gate import enabled
+
+    return enabled()
 
 
 def _authorise(presented: str | None) -> None:
@@ -69,13 +72,15 @@ def _authorise(presented: str | None) -> None:
     Not 401: a 401 tells an unauthenticated caller that the route exists here,
     which is information a debug surface should not volunteer.
     """
-    if not _enabled():
-        raise HTTPException(status_code=404, detail="Not Found")
-    expected = str(getattr(get_settings(), "graph_debug_token", "") or "")
-    if not expected:
-        # An unset token would otherwise match an unset header.
-        raise HTTPException(status_code=404, detail="Not Found")
-    if not presented or not secrets.compare_digest(presented, expected):
+    from app.security.diagnostics_gate import authorised
+
+    # This surface *denies*: 404 on every failure, including "switched off",
+    # so a caller cannot learn whether the route exists here. `/health` uses
+    # the same gate to *omit* instead, because it must stay 200 for TraceCat.
+    # Both: the shared credential, *and* this surface's own kill switch.
+    # `/health`'s diagnostics need only the credential — see the gate module
+    # for why the two differ.
+    if not _enabled() or not authorised(presented):
         raise HTTPException(status_code=404, detail="Not Found")
 
 

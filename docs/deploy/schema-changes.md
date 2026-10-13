@@ -354,16 +354,41 @@ justifies the lack of authentication on the grounds that it reports liveness
 "and nothing else — no data, no configuration". Code fingerprints, internal
 task names and their schedules are configuration.
 
-So the default response is byte-for-byte what it was, and everything added
-lives under one nested key behind `?diagnostics=1`:
+So the default response is byte-for-byte what it was, and the diagnostics
+need the same secret header as the case-graph debug route:
 
-    curl -s localhost:8000/health                  # 85 bytes, 3 keys, as before
-    curl -s 'localhost:8000/health?diagnostics=1'  # adds `diagnostics` only
+    curl -s localhost:8000/health                        # 85 bytes, 3 keys
+    curl -s -H "X-Graph-Debug: $TOKEN" localhost:8000/health   # adds `diagnostics`
 
-One key rather than one per feature, so the top level cannot grow a field at
-a time. Whether the diagnostics should be reachable unauthenticated at all is
-a question for whoever owns the deployment; behind a flag they are at least
-not volunteered to every caller.
+**A query parameter was the first gate and is not a credential.** It is
+discoverable in source, guessable, and ends up in access logs, proxy logs and
+bookmarks — anyone who could reach `/health` could reach the diagnostics one
+query string away.
+
+**The cron periods are the sensitive half**, more than the fingerprint. A
+fingerprint says which version is deployed. The periods say the width of the
+unobservation windows: how long ingestion can stop before anything notices,
+how long a sweep can fail before a backlog becomes visible. For a platform
+whose job is watching whether security telemetry flows, the schedule of the
+watchers is a map of its blind spots.
+
+The credential and the kill switch are separate. `GRAPH_DEBUG_TOKEN`
+authorises; `GRAPH_DEBUG_ROUTE` additionally gates the case-graph route,
+which returns case contents. Coupling them would have meant enabling the
+case-data route in order to ask whether ingestion monitoring is alive. (Both
+env vars are now misnamed — they gate diagnostics generally. Flagged, not
+renamed: a rename is not a deployment.)
+
+**And the invariant is a test now, not a comment.** `test_health_contract`
+freezes the unauthenticated payload at exactly `status`, `timestamp`,
+`version`. The comment beside the endpoint stated that invariant, the code
+drifted from it, and the comment went on being quoted as justification while
+false — an unenforced invariant in a comment is worse than none, because it
+is load-bearing in reasoning and nothing checks it. It is also the only real
+defence against accretion: 85 bytes to 3,782 in a day happened because every
+addition was individually reasonable, and an endpoint whose contract is
+"small and dumb" has no natural resistance to growth unless something
+enforces the size.
 
 ### Container start time no longer answers anything
 

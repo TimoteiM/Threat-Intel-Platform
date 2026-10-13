@@ -23,7 +23,12 @@ class _Settings:
 
 
 def _patch(monkeypatch, flag: str, token: str) -> None:
-    monkeypatch.setattr(graph_debug, "get_settings", lambda: _Settings(flag, token))
+    # Patch the gate, not the route: the check moved to
+    # `app/security/diagnostics_gate` so `/health` could share one
+    # implementation, one switch and one token to rotate.
+    from app.security import diagnostics_gate
+
+    monkeypatch.setattr(diagnostics_gate, "get_settings", lambda: _Settings(flag, token))
 
 
 def test_off_by_default(monkeypatch) -> None:

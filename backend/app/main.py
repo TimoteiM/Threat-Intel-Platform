@@ -11,7 +11,7 @@ import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -230,30 +230,35 @@ async def _watch_liveness() -> dict:
 
 
 @app.get("/api/health")
-async def health(diagnostics: bool = False):
+async def health(x_graph_debug: str | None = Header(default=None)):
     """Liveness. By default, exactly what it has always returned.
 
-    `?diagnostics=1` adds one nested key. Two reasons it is opt-in rather
-    than always on, and both were nearly got wrong:
+    Diagnostics are added only for a caller presenting the secret header —
+    not a query parameter, which is a guess rather than a credential:
+    discoverable in source, and it ends up in access logs, proxy logs and
+    bookmarks. Two reasons it is gated rather than always on:
 
     **TraceCat polls this before every delivery.** It is a contract with a
     consumer outside this repository, and a strict parser breaks on an
-    enriched payload as readily as on a missing field. The default response
-    is byte-for-byte what it was before the code fingerprint and the watch
-    heartbeats were added.
+    enriched payload as readily as on a missing field. The unauthenticated
+    response is byte-for-byte what it was before the code fingerprint and the
+    watch heartbeats were added, and `test_health_contract` freezes that.
 
-    **It is unauthenticated.** The comment below justifies that on the
-    grounds that it reports liveness "and nothing else — no data, no
-    configuration". Code fingerprints, internal task names and their
-    schedules are configuration. Behind a flag they are at least not
-    volunteered to every caller; whether they should be public at all is a
-    question for whoever owns the deployment.
+    **The cron periods are the sensitive part**, more than the fingerprint. A
+    fingerprint says which version is deployed; the periods say the width of
+    the unobservation windows — how long ingestion can stop before anything
+    notices. For a platform whose job is watching whether security telemetry
+    flows, the schedule of the watchers is a map of its blind spots.
 
-    Everything new goes under `diagnostics`, so the top level cannot keep
-    growing a key at a time.
+    Note this *omits* rather than denies. The debug route 404s on a bad
+    header so a caller cannot learn it exists; here the liveness answer must
+    be returned whatever happens, or the gate would break the probe it is
+    attached to.
     """
     payload = _health_payload()
-    if diagnostics:
+    from app.security.diagnostics_gate import authorised
+
+    if authorised(x_graph_debug):
         payload["diagnostics"] = {
             "code": code_version(),
             "scheduled_watches": await _watch_liveness(),
@@ -262,7 +267,7 @@ async def health(diagnostics: bool = False):
 
 
 @app.get("/health")
-async def health_alias(diagnostics: bool = False):
+async def health_alias(x_graph_debug: str | None = Header(default=None)):
     """The same answer, without the /api prefix.
 
     TraceCat's delivery template runs a preflight against /health before it
@@ -281,4 +286,4 @@ async def health_alias(diagnostics: bool = False):
     # the bare payload, so the same path answered two different things
     # depending on the prefix — and the prefixless one is what TraceCat and
     # every operator curl actually calls.
-    return await health(diagnostics=diagnostics)
+    return await health(x_graph_debug=x_graph_debug)
