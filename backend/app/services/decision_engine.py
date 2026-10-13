@@ -9,6 +9,12 @@ source of truth for classification, risk score, or action.
 from __future__ import annotations
 
 from app.services import hosting_platform_service as platform
+# Narrower and complementary: `platform.is_platform_apex` asks whether a name
+# is a public suffix (github.io, pages.dev), which is true for two of the 45
+# audited hits and false for discord.com, cloudflare.com and live.com —
+# registrable domains that are shared providers all the same. The match scope
+# below reads the IOC rather than the domain, so it covers both.
+from app.services.threatfox_match_scope import about_observable
 
 from typing import Any
 
@@ -249,7 +255,22 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
         abuseipdb = threat_feeds.get("abuseipdb") or {}
         abuse_score = int(abuseipdb.get("abuse_confidence_score") or 0)
         abuse_reports = int(abuseipdb.get("total_reports") or 0)
-        tf_matches = threat_feeds.get("threatfox_matches") or []
+        # Only the hits that are about this observable itself. ThreatFox
+        # search is substring-based, so an apex domain of a shared provider
+        # comes back carrying other people's payloads — discord.com returns
+        # ten webhook URLs, cloudflare.com returns twenty trycloudflare.com
+        # subdomains that are not even under it. 44 of the 45 ThreatFox-
+        # positive domains in the 2026-10-13 audit were exactly that.
+        #
+        # It matters here because `tf_matches` is read below as
+        # `and not tf_matches` — a precondition for a benign verdict. Taking
+        # the raw list would stop that branch firing for every case touching
+        # Microsoft, Cloudflare or Discord, which is most cases. The raw
+        # matches stay in the evidence; the decision uses what is about the
+        # observable. See threatfox_match_scope.
+        tf_matches = about_observable(
+            domain, threat_feeds.get("threatfox_matches") or []
+        )
 
         if vt_malicious >= 5 or abuse_score >= 80 or tf_matches:
             classification = "malicious"
@@ -512,7 +533,10 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         hit for hit in (intel.get("blocklist_hits") or [])
         if str((hit or {}).get("source") or "").strip().lower() != "uribl"
     ]
-    tf_matches = threat_feeds.get("threatfox_matches") or []
+    # Scoped to this observable — see the note at the other call site.
+    tf_matches = about_observable(
+        domain, threat_feeds.get("threatfox_matches") or []
+    )
     openphish_listed = bool(threat_feeds.get("openphish_listed"))
     phishtank = threat_feeds.get("phishtank") or {}
     phishtank_positive = bool(phishtank.get("in_database"))
