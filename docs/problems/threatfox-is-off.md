@@ -2,6 +2,15 @@
 
 2026-10-13. `Settings.threatfox_enabled`, default `False`.
 
+> **The feed's data was right. The query semantics made it produce the
+> opposite conclusion.** `nlahtc.theluxehomeoffice.com` is correctly listed
+> in ThreatFox — a real malicious host, accurately reported. Matching that
+> indicator against `office.com`, because `search_ioc` is a substring search,
+> is what condemned a Microsoft apex as malicious/high/`block`. A substring
+> query turned a true positive into a false positive. **Data quality and
+> query semantics are separate problems, and only one of them was ever being
+> discussed.**
+
 Not a judgement call. **Measured benefit over seven months: zero verdicts
 changed** — 25 of 25 knowable positives were already reached as
 malicious/high by other sources, and the single non-redundant listing
@@ -130,6 +139,69 @@ to mistake for the deleted row when reading the table by timestamp.
 
 `nlahtc.theluxehomeoffice.com` stays malicious with `threatfox_matches`
 emptied entirely, so it is not ThreatFox's verdict and must not be unwound.
+
+## The authority question, settled
+
+Before correcting `live.com`, the test that could have invalidated the whole
+thing: **does `analysis_task` delegate the verdict, or classify on its own?**
+If it has its own path, recomputing with `decision_engine` substitutes one
+function's opinion for another's and proves only that the two disagree.
+
+It delegates. Three pieces of evidence:
+
+1. **The ladder at `analysis_task.py:1414` is not the authority.** It sits
+   inside `_generate_automated_report`, the rule-based fallback.
+   `apply_decision_to_report` then overlays the engine's
+   `classification`/`confidence`/`risk_score`/`recommended_action` over
+   whatever the report said — unconditionally, except when the collectors
+   reached `inconclusive` with no risk score, in which case the analyst's
+   reading is adopted and *labelled* `analyst_fallback`.
+2. **The stored report says which happened.** Its `decision_engine` block
+   reads `{"source": "deterministic", "version": 1, "canonical_fields":
+   [classification, confidence, risk_score, recommended_action]}` — the
+   engine decided, not the model, even though `ai_model` is
+   `gpt-5.6-luna` and the narrative is the model's.
+3. **The stored artefact proves the running code was unscoped.**
+   `decision_engine` builds that line as
+   `key_evidence.append(f"ThreatFox matches: {len(tf_matches)}")` from the
+   **scoped** variable. The stored report says `ThreatFox matches: 25`. With
+   scoping, `tf_matches` is 0 for `live.com` and the line would not appear at
+   all. So the function that ran had all 25.
+
+The recomputation is therefore a **replay of the producing function with the
+fix loaded**, not a second opinion. The correction stands.
+
+## Why a fix committed at 10:53 produced a false verdict at 12:05
+
+Because `analysis_task` runs in the **worker**, and the worker does not
+reload.
+
+| | |
+|---|---|
+| scoping committed | 2026-10-13 **10:53** |
+| worker process started | 2026-10-13 **09:21:06** |
+| `live.com` analysed | 2026-10-13 **12:03–12:05** |
+| worker next restarted | 2026-10-13 **13:53:43** |
+
+The worker was 1h12m stale when it produced the verdict, and stayed stale for
+three hours after the fix existed. `uvicorn --reload` covers the api; Celery
+has no equivalent, so between 10:53 and 13:53 the api was running today's
+code and the worker was running this morning's — the api-new/worker-old skew
+this platform already has a `code_version` task for.
+
+**15 investigations ran in that window.** 2 malicious (`live.com`, false;
+`nlahtc.theluxehomeoffice.com`, a true positive that is malicious with or
+without ThreatFox), 9 suspicious, 4 benign. None of the 13 non-malicious rows
+carries a ThreatFox match — only 3 rows in the entire corpus ever did — so
+the material impact is the one false verdict.
+
+The honest version of this morning's claim is narrower than it was made:
+"scoped at the call site" was true of the source and false of the running
+system, which is the distinction the `code_version` task was built for
+earlier the same day and then not used after the commit that needed it.
+Restarting `worker` and `beat` after a change to worker-executed code is the
+missing step, and `docs/deploy/schema-changes.md` already says so for
+migrations.
 
 ### `live.com` still needs correcting
 
