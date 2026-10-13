@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from app.tasks.celery_app import celery_app
@@ -134,6 +134,91 @@ def succeeded(result: Any) -> bool:
     return result.get("ran") is not False
 
 
+async def _record_heartbeat(name: str, result: dict[str, Any]) -> None:
+    """Write that this watch finished. Success path only.
+
+    Not in a `finally`, and not before the work: a heartbeat that survives the
+    failure it exists to expose is worse than none, because it actively
+    asserts health. `failures_since` resets here, so a fresh `last_ok_at`
+    beside a non-zero count is a task that is flapping — which neither field
+    reports alone.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.db.session import CeleryAsyncSessionLocal
+    from app.models.database import WatchHeartbeat
+
+    async with CeleryAsyncSessionLocal() as db:
+        await db.execute(
+            insert(WatchHeartbeat)
+            .values(
+                task=name,
+                last_ok_at=datetime.now(timezone.utc),
+                last_result=result,
+                failures_since=0,
+            )
+            .on_conflict_do_update(
+                index_elements=["task"],
+                set_={
+                    "last_ok_at": datetime.now(timezone.utc),
+                    "last_result": result,
+                    "failures_since": 0,
+                },
+            )
+        )
+        await db.commit()
+
+
+async def _count_failure(name: str) -> None:
+    """Bump the failure counter without touching `last_ok_at`.
+
+    The age of the last success is the signal; this only says how many times
+    it has been attempted since. Best effort — if the database is what broke,
+    this cannot work either, and the stale `last_ok_at` still carries the
+    answer.
+    """
+    from sqlalchemy import text as _text
+
+    from app.db.session import CeleryAsyncSessionLocal
+
+    async with CeleryAsyncSessionLocal() as db:
+        await db.execute(
+            _text(
+                "update watch_heartbeat set failures_since = failures_since + 1 "
+                "where task = :t"
+            ),
+            {"t": name},
+        )
+        await db.commit()
+
+
+def _run_watch(name: str, work: Any) -> dict[str, Any]:
+    """Run one watch, record that it finished, and report failure unmistakably.
+
+    Every watch goes through here so none can quietly acquire its own error
+    handling again. `asyncio.run` stays — the engine behind
+    `CeleryAsyncSessionLocal` is unpooled precisely so a per-call loop is safe.
+    """
+    try:
+        result = asyncio.run(work())
+    except Exception as exc:
+        try:
+            asyncio.run(_count_failure(name))
+        except Exception:  # noqa: BLE001 - the real error is the one above
+            pass
+        return _failure(name, exc)
+    try:
+        asyncio.run(_record_heartbeat(name, result))
+    except Exception as exc:  # noqa: BLE001
+        # The work succeeded; only the record of it failed. Say so rather than
+        # reporting the watch as failed, which would be a different lie.
+        logger.error(
+            "watch_heartbeat_write_failed task=%s error=%s message=%s",
+            name, type(exc).__name__, exc, exc_info=True,
+        )
+    return result
+
+
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_pipeline")
 def watch_pipeline() -> dict[str, Any]:
     """Queue depth and time since the last verdict.
@@ -142,19 +227,13 @@ def watch_pipeline() -> dict[str, Any]:
     the task result even when nobody is reading logs — which was the condition
     during the outage.
     """
-    try:
-        return asyncio.run(_pipeline())
-    except Exception as exc:  # a watchdog that dies silently is worse than none
-        return _failure("pipeline_watch", exc)
+    return _run_watch("pipeline_watch", _pipeline)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_schema")
 def watch_schema() -> dict[str, Any]:
     """Whether this container's code matches the database it is talking to."""
-    try:
-        return asyncio.run(_schema())
-    except Exception as exc:
-        return _failure("schema_watch", exc)
+    return _run_watch("schema_watch", _schema)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.watch_ingest")
@@ -165,10 +244,7 @@ def watch_ingest() -> dict[str, Any]:
     reason the pipeline watchdog does: during the outage this family of bugs
     produced, nobody was reading logs.
     """
-    try:
-        return asyncio.run(_ingest())
-    except Exception as exc:
-        return _failure("ingest_watch", exc)
+    return _run_watch("ingest_watch", _ingest)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.materialise_graphs")
@@ -179,10 +255,7 @@ def materialise_graphs() -> dict[str, Any]:
     remember to run. This is what keeps them warm, and `remaining` in the
     result is the backlog.
     """
-    try:
-        return asyncio.run(_materialise())
-    except Exception as exc:
-        return _failure("graph_materialise_sweep", exc)
+    return _run_watch("graph_materialise_sweep", _materialise)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.emitter_freshness_shadow")
@@ -194,10 +267,7 @@ def emitter_freshness_shadow() -> dict[str, Any]:
     alarm passed 21 tests and then reported 2.5 days of silence for a source
     delivering 97 alerts in 12 hours.
     """
-    try:
-        return asyncio.run(_freshness_shadow())
-    except Exception as exc:
-        return _failure("emitter_freshness_shadow", exc)
+    return _run_watch("emitter_freshness_shadow", _freshness_shadow)
 
 
 @celery_app.task(name="app.tasks.pipeline_watch_task.code_version")

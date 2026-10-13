@@ -206,9 +206,40 @@ def _health_payload() -> dict:
     }
 
 
+async def _watch_liveness() -> dict:
+    """Whether each scheduled watch is still running.
+
+    Best effort, and deliberately so. `/health` is what the container
+    healthcheck calls and what TraceCat probes before delivering, so it must
+    not start failing because a reporting query did. A database that cannot
+    answer is itself reported, as an absence with its reason, rather than
+    turned into a 500 that would restart the container.
+    """
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.watch_liveness_service import liveness
+
+        async with AsyncSessionLocal() as db:
+            return await liveness(db)
+    except Exception as exc:  # noqa: BLE001
+        from app.services.absence import CHECK_FAILED, absent
+
+        return {
+            "watches": absent(
+                CHECK_FAILED,
+                "Watch liveness could not be read, so this says nothing about "
+                "whether the scheduled watches are running. It is not a "
+                "statement that they are fine.",
+                raw=type(exc).__name__,
+            ).as_json(),
+        }
+
+
 @app.get("/api/health")
 async def health():
-    return _health_payload()
+    payload = _health_payload()
+    payload["scheduled_watches"] = await _watch_liveness()
+    return payload
 
 
 @app.get("/health")
@@ -226,4 +257,9 @@ async def health_alias():
     liveness probe is the one thing that has to answer before a caller has
     established anything at all.
     """
-    return _health_payload()
+    # Delegates rather than rebuilding the payload. The first version of the
+    # watch-liveness change edited `/api/health` and left this one returning
+    # the bare payload, so the same path answered two different things
+    # depending on the prefix — and the prefixless one is what TraceCat and
+    # every operator curl actually calls.
+    return await health()

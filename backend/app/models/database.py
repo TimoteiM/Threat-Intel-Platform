@@ -1474,3 +1474,38 @@ class CaseReadSet(Base):
         Index("ix_case_read_set_case", "case_key"),
         Index("ix_case_read_set_read_at", "read_at"),
     )
+
+
+class WatchHeartbeat(Base):
+    """When each scheduled watch last *finished*, as distinct from last alarmed.
+
+    Five watch tasks ran on a schedule, returned a result, and the result was
+    dropped — beat discards it and nothing else reads it. The only channel out
+    was a log line, and when the tasks began failing in 2026-09 the line
+    recorded `type(exc).__name__` and threw the message away. 36 graph sweeps
+    and 21 stall-watch runs failed in one 89-minute window before anybody
+    looked.
+
+    A silent alarm and a quiet estate are indistinguishable. That is the exact
+    condition `watch_pipeline` exists to detect, reproduced one level up by
+    `watch_pipeline` itself, and no amount of fixing the return shape removes
+    it while the outcome has nowhere to go.
+
+    So the outcome gets a sink. Written **only on success** — a row updated in
+    a `finally` would survive the failure it exists to expose — and read by
+    `/health`, which runs in the API process, because a worker cannot report
+    its own death.
+    """
+
+    __tablename__ = "watch_heartbeat"
+
+    task: Mapped[str] = mapped_column(String(120), primary_key=True)
+    last_ok_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: The result itself, so "it ran" and "what it found" are one read.
+    last_result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    #: Consecutive failures since the last success. Reset on success, so a
+    #: fresh `last_ok_at` with a non-zero count is a flapping task — which
+    #: neither field says on its own.
+    failures_since: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
