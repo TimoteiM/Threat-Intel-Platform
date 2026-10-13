@@ -211,3 +211,27 @@ describe("when the retired id is all the analyst has", () => {
     expect(queryByTestId("technique-equivalent")).toBeNull();
   });
 });
+
+describe("a technique that absorbed its parent", () => {
+  const folded = { ...POWERSHELL, absorbed_parent: "T1059" };
+
+  it("names what was folded in", () => {
+    const { getByTestId } = render(<TechniquePanel attrs={folded} />);
+    expect(getByTestId("technique-folded").textContent).toContain("T1059");
+  });
+
+  it("accounts for the node count differing between cases", () => {
+    // Two otherwise identical cases can draw different counts because their
+    // provenance differs. That is the graph doing its job — but only if the
+    // node says so. An unexplained difference is worse than a duplicate.
+    const { getByTestId } = render(<TechniquePanel attrs={folded} />);
+    const text = getByTestId("technique-folded").textContent || "";
+    expect(text).toContain("same");
+    expect(text).toContain("node count");
+  });
+
+  it("says nothing when nothing was folded", () => {
+    const { queryByTestId } = render(<TechniquePanel attrs={POWERSHELL} />);
+    expect(queryByTestId("technique-folded")).toBeNull();
+  });
+});

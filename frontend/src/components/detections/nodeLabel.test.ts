@@ -117,3 +117,21 @@ describe("the measurers", () => {
     expect(fitted.endsWith(ELLIPSIS)).toBe(true);
   });
 });
+
+describe("the folded-parent badge on a node label", () => {
+  // Exercised through the real labelOf in the render check; this pins the
+  // width budget the badge has to live inside. The caption line already
+  // carries "retired" on some nodes and cannot take a second word at 96px,
+  // so the count goes on the id line, which has room.
+  it("leaves room on the id line for a +1", () => {
+    const measure = approximateMeasurer();
+    expect(measure("✶ T1562.001 +1")).toBeLessThanOrEqual(LABEL_MAX_PX);
+    expect(measure("✶ T1218.011 +1")).toBeLessThanOrEqual(LABEL_MAX_PX);
+  });
+
+  it("would not have room for a second caption word", () => {
+    // Why the badge is not "retired technique +parent".
+    const measure = approximateMeasurer();
+    expect(measure("retired technique +parent")).toBeGreaterThan(LABEL_MAX_PX);
+  });
+});

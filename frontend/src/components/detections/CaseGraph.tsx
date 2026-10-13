@@ -139,10 +139,18 @@ export function labelOf(node: CaseGraphNode, measure: Measure): string {
   const name = String(attrs.short_name || "");
   const retired = attrs.retired === true;
   const foot = retired ? `retired ${caption}` : caption;
+  // A technique that absorbed its own parent stands for two ATT&CK ids. Two
+  // otherwise identical cases can now draw different node counts — because
+  // their provenance differs, which is the point — and that is only readable
+  // if the surviving node says so. The count goes on the id line, which has
+  // room; the caption line is already carrying "retired" on some nodes and
+  // cannot take a second word at 96px.
+  const folded = typeof attrs.absorbed_parent === "string" ? attrs.absorbed_parent : null;
+  const headLine = folded ? `${head} +1` : head;
   // No name to show means the id is not ATT&CK's: the id stands alone rather
   // than borrowing a name from anywhere, and the panel carries the absence.
-  if (!name) return `${head}\n${foot}`;
-  return `${head}\n${fitToWidth(name, LABEL_MAX_PX, measure)}\n${foot}`;
+  if (!name) return `${headLine}\n${foot}`;
+  return `${headLine}\n${fitToWidth(name, LABEL_MAX_PX, measure)}\n${foot}`;
 }
 
 /** Ticks, lane labels and the untimed gutter, drawn over the canvas.

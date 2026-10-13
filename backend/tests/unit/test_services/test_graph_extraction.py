@@ -939,3 +939,74 @@ def test_both_nodes_keep_their_own_provenance():
     by_key = {n.merge_key: n for n in ex.entities if n.kind == "technique"}
     assert by_key["technique:T1071"].attrs["named_by"] == "rule_only"
     assert by_key["technique:T1071.001"].attrs["named_by"] == "model_only"
+
+
+# --- a parent folds into its child only when one source named both ---------
+
+from app.services.alert_graph_assembly_service import AlertEvidence, assemble
+
+
+def _assembled(rule_ids, model_only):
+    ex = _extracted(rule_ids, model_only)
+    return assemble([AlertEvidence(
+        run_id="r1", rule_id="1", detection="x", event_time=None,
+        source_severity=None, extracted=ex,
+    )])
+
+
+def _techniques(graph):
+    return {
+        n["attrs"].get("id"): n["attrs"]
+        for n in graph["nodes"] if n["kind"] == "technique"
+    }
+
+
+def test_same_provenance_folds_the_parent_into_the_child():
+    """2,603 rule_only/rule_only pairs and 180 model_only/model_only ones:
+    one namer asserting the same thing at two depths, so the parent carries
+    nothing the child does not."""
+    t = _techniques(_assembled(["T1218", "T1218.011"], []))
+    assert set(t) == {"T1218.011"}
+    assert t["T1218.011"]["absorbed_parent"] == "T1218"
+
+
+def test_different_provenance_keeps_both_nodes():
+    """202 rule_only/model_only pairs. Folding would put one named_by on a
+    node two different sources named at two different depths."""
+    t = _techniques(_assembled(["T1071"], ["T1071.001"]))
+    assert set(t) == {"T1071", "T1071.001"}
+    assert "absorbed_parent" not in t["T1071.001"]
+
+
+def test_the_refines_edge_survives_only_where_both_nodes_do():
+    folded = _assembled(["T1218", "T1218.011"], [])
+    kept = _assembled(["T1071"], ["T1071.001"])
+    assert not [e for e in folded["edges"] if e["kind"] == "refines"]
+    assert len([e for e in kept["edges"] if e["kind"] == "refines"]) == 1
+
+
+def test_the_fold_is_recorded_not_silent():
+    """The surviving node must be able to say what it absorbed. Without that
+    an analyst sees two cases with different node counts and no account of
+    why — an unexplained difference, which is worse than the duplicate."""
+    graph = _assembled(["T1218", "T1218.011"], [])
+    node = next(n for n in graph["nodes"] if n["kind"] == "technique")
+    assert "technique:T1218" in node["absorbed"]
+    assert node["attrs"]["absorbed_parent"] == "T1218"
+
+
+def test_the_child_keeps_its_own_identity_after_absorbing():
+    t = _techniques(_assembled(["T1218", "T1218.011"], []))
+    assert t["T1218.011"]["id"] == "T1218.011"
+    assert t["T1218.011"]["named_by"] == "rule_only"
+
+
+def test_an_unrelated_technique_is_never_folded():
+    t = _techniques(_assembled(["T1071", "T1059"], []))
+    assert set(t) == {"T1071", "T1059"}
+
+
+def test_a_lone_sub_technique_is_untouched():
+    t = _techniques(_assembled(["T1218.011"], []))
+    assert set(t) == {"T1218.011"}
+    assert "absorbed_parent" not in t["T1218.011"]

@@ -154,6 +154,18 @@ export function TechniquePanel({ attrs }: { attrs: Record<string, unknown> }) {
         </div>
       ) : null}
 
+      {typeof attrs.absorbed_parent === "string" ? (
+        <div style={line} data-testid="technique-folded">
+          <span style={key}>includes</span>
+          <span>
+            <strong>{attrs.absorbed_parent}</strong>
+            {" — the parent technique, drawn as one node because the same "}
+            source named both. Two cases with the same techniques can differ
+            in node count for this reason.
+          </span>
+        </div>
+      ) : null}
+
       <div style={{ ...line, color: "var(--text-subtle)", marginTop: 8 }}>
         <span>
           {version ? `ATT&CK ${version}` : "ATT&CK"}
@@ -188,6 +200,7 @@ export const TECHNIQUE_PANEL_KEYS = new Set([
   "current_equivalent",
   "current_equivalent_name",
   "current_equivalent_url",
+  "absorbed_parent",
   "deprecated_without_replacement",
   "retirement",
   "attack_version",

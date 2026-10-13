@@ -164,6 +164,7 @@ def assemble(evidence: Iterable[AlertEvidence]) -> dict[str, Any]:
                     found.attrs[k] = v
 
     _merge_same_binary(nodes, edges)
+    _collapse_refined_techniques(nodes, edges)
     _flag_reused_infrastructure(nodes, edges)
     _close_broken_chains(nodes, edges)
     collapsed = _collapse_siblings(nodes, edges)
@@ -235,7 +236,15 @@ def _merge_same_binary(
     nodes: dict[str, AssembledNode],
     edges: dict[tuple[str, str, str], AssembledEdge],
 ) -> None:
-    redirect = _canonical_for(nodes)
+    _apply_redirect(nodes, edges, _canonical_for(nodes))
+
+
+def _apply_redirect(
+    nodes: dict[str, AssembledNode],
+    edges: dict[tuple[str, str, str], AssembledEdge],
+    redirect: dict[str, str],
+) -> None:
+    """Fold every key in `redirect` into its winner, and repoint the edges."""
     if not redirect:
         return
     for key in redirect:
@@ -259,6 +268,74 @@ def _merge_same_binary(
                 found.attrs[k] = v
     edges.clear()
     edges.update(rebuilt)
+
+
+def _collapse_refined_techniques(
+    nodes: dict[str, AssembledNode],
+    edges: dict[tuple[str, str, str], AssembledEdge],
+) -> None:
+    """Fold a parent technique into its own sub-technique — but only when the
+    same source named both.
+
+    8.7% of technique nodes are a parent whose child is drawn beside it: one
+    claim occupying two nodes, and since the `refines` edge was added, two
+    nodes and an edge. Measured 2026-10-13 across 2,995 such pairs:
+
+        2,603  rule_only  / rule_only
+          180  model_only / model_only
+        ---- 2,783 (92.9%) same on both sides
+          202  rule_only  / model_only
+           10  rule_confirmed / model_only
+
+    **Same provenance folds; different provenance does not.** Where one namer
+    asserted the same thing at two depths, the parent carries nothing the
+    child does not and removing it removes a duplicate rather than a claim.
+    Where two namers are involved — the rule claimed the parent, the telemetry
+    supported the child — folding would put one `named_by` on a node that two
+    different sources named at two different depths, which is the collapse of
+    two statements into one that this codebase removes everywhere else. Those
+    keep both nodes, and the `refines` edge is what makes them readable.
+
+    Consequence worth stating: two otherwise identical cases can now draw
+    different node counts, because their provenance differs. That is the
+    graph doing its job — the counts differ for the reason the provenance
+    differs — and it is only legible because the surviving node says what it
+    absorbed. `absorbed_parent` carries that to the renderer; without it the
+    reader sees a difference with no account of why, which is worse than the
+    duplicate it replaced.
+
+    Not generalised to folding every pair and carrying both namers on the
+    survivor: that needs a provenance state for "two sources independently
+    named this", and inventing a state so a layout can draw fewer nodes is
+    backwards. The state should exist because the evidence has that shape.
+    See `technique_attribution_service.PRECEDENCE`.
+    """
+    by_id: dict[str, AssembledNode] = {}
+    for node in nodes.values():
+        if node.kind != "technique":
+            continue
+        tid = str(node.attrs.get("id") or node.label or "").strip().upper()
+        if tid:
+            by_id[tid] = node
+
+    redirect: dict[str, str] = {}
+    for tid, child in by_id.items():
+        if "." not in tid:
+            continue
+        parent = by_id.get(tid.split(".", 1)[0])
+        if parent is None or parent.merge_key == child.merge_key:
+            continue
+        if parent.attrs.get("named_by") != child.attrs.get("named_by"):
+            continue
+        redirect[parent.merge_key] = child.merge_key
+        child.absorbed.append(parent.merge_key)
+        child.witnesses.extend(parent.witnesses)
+        for key, value in parent.attrs.items():
+            if value not in (None, "") and key not in child.attrs:
+                child.attrs[key] = value
+        # What the node must be able to say on its own face.
+        child.attrs["absorbed_parent"] = str(parent.attrs.get("id") or parent.label)
+    _apply_redirect(nodes, edges, redirect)
 
 
 # --- reused infrastructure -------------------------------------------------
