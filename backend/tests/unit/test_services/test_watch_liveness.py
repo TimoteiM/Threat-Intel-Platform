@@ -145,3 +145,26 @@ def test_every_instrumented_name_is_actually_on_the_schedule():
     scheduled = set(mod.scheduled_watches())
     reporting = {mod._ALIASES.get(n, n) for n in scheduled}
     assert mod.INSTRUMENTED <= reporting
+
+
+def test_the_uninstrumented_tasks_are_named_not_counted():
+    """"not instrumented: 9" beside "late: []" reads as benign, and the
+    number drifts upward silently when someone adds a task. Enumerated, the
+    check is a diff — and this fails in either direction, so a task that
+    gains a heartbeat has to be removed from the list deliberately.
+    """
+    scheduled = set(mod.scheduled_watches())
+    reporting = {mod._ALIASES.get(n, n) for n in scheduled}
+    uninstrumented = reporting - mod.INSTRUMENTED
+    assert uninstrumented == set(mod.NOT_INSTRUMENTED), (
+        "the set of scheduled tasks without a heartbeat has changed; update "
+        "NOT_INSTRUMENTED deliberately rather than letting the count drift"
+    )
+
+
+def test_every_scheduled_task_is_accounted_for():
+    """No task may be in neither set: that is how one goes unwatched without
+    anyone choosing it."""
+    scheduled = set(mod.scheduled_watches())
+    reporting = {mod._ALIASES.get(n, n) for n in scheduled}
+    assert reporting == mod.INSTRUMENTED | set(mod.NOT_INSTRUMENTED)

@@ -197,12 +197,6 @@ def _health_payload() -> dict:
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
-        # Which code this *process* loaded, not which code is on disk. The
-        # difference is two hours of an afternoon: `backend/` is bind-mounted,
-        # so every filesystem check reported seven commits as deployed while
-        # the running API had never imported them. Unauthenticated, because a
-        # question you cannot ask without a session is one nobody asks.
-        "code": code_version(),
     }
 
 
@@ -236,14 +230,39 @@ async def _watch_liveness() -> dict:
 
 
 @app.get("/api/health")
-async def health():
+async def health(diagnostics: bool = False):
+    """Liveness. By default, exactly what it has always returned.
+
+    `?diagnostics=1` adds one nested key. Two reasons it is opt-in rather
+    than always on, and both were nearly got wrong:
+
+    **TraceCat polls this before every delivery.** It is a contract with a
+    consumer outside this repository, and a strict parser breaks on an
+    enriched payload as readily as on a missing field. The default response
+    is byte-for-byte what it was before the code fingerprint and the watch
+    heartbeats were added.
+
+    **It is unauthenticated.** The comment below justifies that on the
+    grounds that it reports liveness "and nothing else — no data, no
+    configuration". Code fingerprints, internal task names and their
+    schedules are configuration. Behind a flag they are at least not
+    volunteered to every caller; whether they should be public at all is a
+    question for whoever owns the deployment.
+
+    Everything new goes under `diagnostics`, so the top level cannot keep
+    growing a key at a time.
+    """
     payload = _health_payload()
-    payload["scheduled_watches"] = await _watch_liveness()
+    if diagnostics:
+        payload["diagnostics"] = {
+            "code": code_version(),
+            "scheduled_watches": await _watch_liveness(),
+        }
     return payload
 
 
 @app.get("/health")
-async def health_alias():
+async def health_alias(diagnostics: bool = False):
     """The same answer, without the /api prefix.
 
     TraceCat's delivery template runs a preflight against /health before it
@@ -262,4 +281,4 @@ async def health_alias():
     # the bare payload, so the same path answered two different things
     # depending on the prefix — and the prefixless one is what TraceCat and
     # every operator curl actually calls.
-    return await health()
+    return await health(diagnostics=diagnostics)

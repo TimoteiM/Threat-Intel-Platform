@@ -341,6 +341,30 @@ A credential would add one thing the list above does not: the three composed
 together in the real page, under real interaction. That is worth having, and
 it is not what was blocking any of these.
 
+### `/health` is a contract with something outside this repository
+
+TraceCat polls it before every delivery. On 2026-10-13 a code fingerprint and
+then watch liveness were added straight to the top level, taking the payload
+from 85 bytes to 3,782 and from three keys to five — an enriched payload
+breaks a strict parser as readily as a missing field, and nobody outside this
+repo was asked.
+
+It also undid the reason the endpoint is public. The comment beside it
+justifies the lack of authentication on the grounds that it reports liveness
+"and nothing else — no data, no configuration". Code fingerprints, internal
+task names and their schedules are configuration.
+
+So the default response is byte-for-byte what it was, and everything added
+lives under one nested key behind `?diagnostics=1`:
+
+    curl -s localhost:8000/health                  # 85 bytes, 3 keys, as before
+    curl -s 'localhost:8000/health?diagnostics=1'  # adds `diagnostics` only
+
+One key rather than one per feature, so the top level cannot grow a field at
+a time. Whether the diagnostics should be reachable unauthenticated at all is
+a question for whoever owns the deployment; behind a flag they are at least
+not volunteered to every caller.
+
 ### Container start time no longer answers anything
 
 **Fixing this invalidated the instrument that found it.** The staleness above

@@ -10,9 +10,22 @@ recording `type(exc).__name__`.
 Read in the API process, because a worker cannot report its own death.
 
 Lateness is measured against each task's **own** crontab period, taken from
-the beat schedule rather than configured here: the graph sweep runs every two
-minutes and the emitter shadow four times a day, and a single threshold for
-both is either deaf or noisy. The multiple is deliberately loose — this
+the beat schedule rather than configured here — and the reason is sharper
+than "one threshold would be deaf or noisy".
+
+**Frequency and detectability move together; importance does not.** This
+fault needed two tasks to overlap, so exposure scaled with how often a task
+ran: the two-minute graph sweep failed 36 times in 89 minutes, the six-hourly
+emitter shadow once in 48 hours. That looks like the shadow got off lightly,
+and it is the wrong way round. A frequent task failing builds a *visible
+backlog* — unmaterialised runs pile up and someone notices. An infrequent one
+silently drops a sample, and a time series with holes is not recoverable by
+catching up, because the sample was of a moment that has passed.
+
+So the tasks least damaged by a fault are the ones whose damage is hardest to
+see, and a shared threshold would be calibrated by the noisy frequent tasks
+and deaf to exactly the quiet ones that cannot self-heal. Each task is judged
+against its own cadence for that reason, not for tidiness. The multiple is deliberately loose — this
 reports, it does not alarm, and this platform's rule is that a monitor runs
 in shadow until its own output has set a threshold.
 """
@@ -166,6 +179,33 @@ INSTRUMENTED = frozenset({
     "ingest_watch",
     "graph_materialise_sweep",
     "emitter_freshness_shadow",
+})
+
+#: Scheduled tasks that record no heartbeat, named rather than counted.
+#:
+#: `not instrumented: 9` beside `late: []` reads as benign, and in six months
+#: someone adds a task, the number becomes 10, and nothing happens. That is
+#: how "the same 14 baseline failures" became a constant of this project
+#: before being enumerated into docs/testing/tolerated-failures.md on the same
+#: day as this. So the check is "these nine, and no others" — a diff, not a
+#: number that can drift upward unnoticed. `test_watch_liveness` fails when
+#: the set changes, in either direction.
+#:
+#: Instrumenting them is not obviously right: these do work rather than watch
+#: for conditions, so their failure is visible in what they did not do —
+#: cases left open, videos not purged, pending VT scans unclaimed. The five
+#: that are instrumented are the ones whose only output is an observation,
+#: where silence and health are indistinguishable.
+NOT_INSTRUMENTED = frozenset({
+    "close_quiet_cases",          # every 60s
+    "correlate_and_notify",       # every 3600s
+    "purge_anyrun_videos",        # every 3600s
+    "recover_stuck_alert_runs",   # every 180s
+    "refresh_stale_ip_lookups",   # every 86400s
+    "resume_sandbox_analyses",    # every 300s
+    "sweep_alert_log_context",    # every 60s
+    "vt_collect_pending",         # every 900s
+    "watchlist_check",            # every 3600s
 })
 
 #: Where the beat entry's function name and the task's own reporting name
