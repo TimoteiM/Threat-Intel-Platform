@@ -35,6 +35,12 @@ from app.api.auth_oidc import router as auth_oidc_router
 api_router = APIRouter()
 
 # First, so the sign-in route is registered before anything that needs it.
+# Self-gating: the module returns 404 unless GRAPH_DEBUG_ROUTE is on and
+# the secret matches, so registering it unconditionally is safe and means
+# the route cannot be missing on the one deployment someone needs it on.
+from app.api.graph_debug import router as graph_debug_router
+
+api_router.include_router(graph_debug_router)
 api_router.include_router(auth_router)
 api_router.include_router(auth_oidc_router)
 api_router.include_router(investigations_router)

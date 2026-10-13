@@ -67,6 +67,12 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
         # signed in yet has no credential to present, so requiring one here
         # would make single sign-on unreachable. They defend themselves with a
         # signed, single-use flow cookie instead — app/security/oidc.py.
+        # The case-graph debug route. It bypasses the session on purpose —
+        # being unable to ask the real endpoint anything without a credential
+        # is the problem it exists to solve — and defends itself with its own
+        # secret header plus a flag that defaults to off, returning 404 for
+        # every failure including "switched off". See app/api/graph_debug.py.
+        "/api/debug/case-graph",
         "/api/auth/oidc/start",
         "/api/auth/oidc/callback",
     }

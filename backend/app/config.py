@@ -102,6 +102,13 @@ class Settings(BaseSettings):
             "ABUSECH_AUTH_KEY", "ABUSE_CH_AUTH_KEY", "THREATFOX_AUTH_KEY"
         ),
     )
+    # The case-graph debug route (app/api/graph_debug.py). Off unless both
+    # are set: a flag that defaults to off, and a secret compared in constant
+    # time. It exists because the real endpoint is behind the session and
+    # there is no dev account, which left the payload layer uncheckable for
+    # four days.
+    graph_debug_route: str = ""
+    graph_debug_token: str = ""
     phishtank_api_key: str = ""
     otx_api_key: str = Field(
         default="",

@@ -256,6 +256,66 @@ Not decided, and deliberately not changed while unresolved. Whoever decides
 should also note that `--reload` is currently the only reason the API and the
 worker can diverge at all.
 
+### Named non-instruments: TestClient and `exec ... python`
+
+Both construct the application in a **new interpreter** that imports current
+source from the bind mount. They answer *"what does this code do"*, which is a
+question about source and was never in doubt. Neither can answer *"what is the
+running server doing"*, and they report success either way.
+
+That is not hypothetical. On 2026-10-12 the first step of diagnosing the stale
+API was `docker compose exec api python`, printing a technique node with its
+resolved name — while the live server had been returning bare ids for hours.
+The check could not have failed. It is the acceptance-CLI problem again:
+measuring a path no user is on, this time inside the diagnosis of a
+deployment fault.
+
+| question | instrument |
+|---|---|
+| what does this code do | `pytest`, `TestClient`, `exec ... python` |
+| what is the API serving | a request to the **published port** from the host |
+| what is the worker running | a task enqueued through the **broker** |
+| what is the browser running | the `x-build-fingerprint` pair |
+
+Tests may use TestClient freely — including the tests for the debug route's
+own gates. The rule is about which question is being asked, not about the
+tool.
+
+### The payload layer is checkable without a credential
+
+`GET /api/debug/case-graph?case_key=…` returns exactly what
+`detections.get_case_graph` returns — it calls that function rather than
+reassembling anything, because a debug route with its own payload builder
+would be a second implementation of the thing being checked and could pass
+while the real endpoint failed.
+
+Two gates, both required: `GRAPH_DEBUG_ROUTE` (defaults to off) and an
+`X-Graph-Debug` header matching `GRAPH_DEBUG_TOKEN`, compared in constant
+time. Every failure — including "switched off" and "no token set" — returns
+404 rather than 401, so a caller cannot learn whether the feature exists here.
+There is deliberately **no client-IP check**: under Docker's userland proxy a
+request from this host and one from another machine both arrive as the bridge
+gateway address, so an app-layer "loopback only" rule would be a boundary in
+name only.
+
+    TOKEN=$(awk -F= '/^GRAPH_DEBUG_TOKEN=/{print substr($0, index($0,"=")+1)}' .env)
+    curl -s -H "X-Graph-Debug: $TOKEN" \
+      "http://localhost:8000/api/debug/case-graph?case_key=<key>" | jq ._debug
+
+**The gap was never external.** For four days the case page's behaviour was
+treated as blocked on a dev login, and nothing external was involved. Each
+layer is independently observable from this box:
+
+| layer | how it is observed | result on 2026-10-13 |
+|---|---|---|
+| payload | this route, over the published port | 14 of 14 technique nodes carry a resolved name |
+| bundle | `x-build-fingerprint`, html against bundle | matches the working tree |
+| component | the real `labelOf` rendered against real endpoint JSON in a browser (`frontend/.render-check/`) | 75 of 75 labels fit, 0 overflow |
+
+A credential would add one thing the list above does not: the three composed
+together in the real page, under real interaction. That is worth having, and
+it is not what was blocking any of these.
+
 ### Container start time no longer answers anything
 
 **Fixing this invalidated the instrument that found it.** The staleness above
