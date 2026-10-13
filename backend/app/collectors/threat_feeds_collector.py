@@ -290,7 +290,37 @@ class ThreatFeedsCollector(BaseCollector):
             return PhishTankResult(in_database=False)
 
     def _query_threatfox(self, domain: str) -> list[ThreatFoxResult]:
-        """Search ThreatFox IOC database for domain/subdomain hits."""
+        """Search ThreatFox IOC database for domain/subdomain hits.
+
+        The second caller of this API, and it carried the same two defects
+        that made the first one fail on every request for a month. They were
+        fixed in `ip_lookup_service` on 2026-10-12 and this was missed —
+        "found the bug" and "found every instance of the bug" are different
+        claims, and only the first was made good on. It went on 401ing in the
+        collector log for another day.
+
+        One: the header is `Auth-Key`, which abuse.ch documents and marks
+        required. This sent `API-KEY`, empty, from a literal.
+
+        Two: `query_status != "ok"` returned `[]`, which reads downstream as
+        "this domain is not in ThreatFox". `no_result` means exactly that and
+        is a real negative; every other status means the question was never
+        answered, and returning an empty list for both is the sentinel bug the
+        absence convention exists to prevent.
+        """
+        from app.config import get_settings
+
+        auth_key = str(getattr(get_settings(), "abusech_auth_key", "") or "").strip()
+        if not auth_key:
+            # Not asked, rather than asked and found nothing. Raising keeps
+            # this out of the "no hits" path; the caller already records a
+            # feed failure, which is the truthful outcome.
+            raise RuntimeError(
+                "ThreatFox was not queried: no abuse.ch Auth-Key configured "
+                "(ABUSECH_AUTH_KEY). This is a missing credential, not a "
+                "domain with no hits."
+            )
+
         payload = {
             "query": "search_ioc",
             "search_term": domain,
@@ -299,14 +329,21 @@ class ThreatFeedsCollector(BaseCollector):
         resp = requests.post(
             "https://threatfox-api.abuse.ch/api/v1/",
             json=payload,
-            headers={"API-KEY": ""},
+            headers={"Auth-Key": auth_key},
             timeout=self.timeout,
         )
         resp.raise_for_status()
         data = resp.json()
 
-        if data.get("query_status") != "ok":
+        status = str(data.get("query_status") or "")
+        if status == "no_result":
+            # A real negative: abuse.ch holds nothing for this domain.
             return []
+        if status != "ok":
+            raise RuntimeError(
+                f"ThreatFox would not answer: query_status={status!r}. "
+                "Nothing was checked, so this is not a 'no hits' result."
+            )
 
         matches = []
         for ioc in data.get("data", []) or []:

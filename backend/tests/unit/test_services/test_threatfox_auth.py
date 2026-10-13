@@ -285,3 +285,68 @@ def test_the_panel_shows_an_unrecognised_status_as_an_absence() -> None:
         },
     })
     assert shown["kind"] == "unrecognised_absence"
+
+
+# --- the second caller, missed for a day -----------------------------------
+#
+# `threat_feeds_collector._query_threatfox` carried the identical two defects
+# and was not fixed when `ip_lookup_service` was. "Found the bug" and "found
+# every instance of the bug" are different claims; only the first was made
+# good on, and the collector went on 401ing in the log for another day.
+
+def test_both_threatfox_callers_send_the_documented_header() -> None:
+    """A grep assertion on purpose: the defect was a second call site, so the
+    guard has to be about call sites rather than about one function."""
+    import pathlib
+
+    root = pathlib.Path(ip_lookup_service.__file__).resolve().parents[1]
+    callers = [
+        p for p in root.rglob("*.py")
+        if "threatfox-api.abuse.ch" in p.read_text(encoding="utf-8")
+    ]
+    assert len(callers) >= 2, "expected both known callers to be found"
+    for path in callers:
+        body = path.read_text(encoding="utf-8")
+        assert '"API-KEY"' not in body, f"{path.name} still sends the wrong header"
+        assert "Auth-Key" in body, f"{path.name} does not send Auth-Key"
+
+
+def test_the_collector_distinguishes_no_result_from_not_asked(monkeypatch) -> None:
+    """`query_status != "ok" -> []` reads downstream as "not in ThreatFox".
+    That is true for `no_result` and false for every other status."""
+    from app.collectors import threat_feeds_collector as mod
+
+    collector = mod.ThreatFeedsCollector.__new__(mod.ThreatFeedsCollector)
+    collector.timeout = 5
+
+    # The collector imports get_settings inside the function, so it resolves
+    # from app.config at call time — patch there, not on the module.
+    import app.config as config_mod
+
+    monkeypatch.setattr(config_mod, "get_settings",
+                        lambda: SimpleNamespace(abusech_auth_key=SECRET))
+    monkeypatch.setattr(mod, "record_provider_request", lambda *_: None)
+
+    monkeypatch.setattr(mod, "requests", type("R", (), {
+        "post": staticmethod(lambda *a, **k: _Resp({"query_status": "no_result"}))
+    }))
+    assert collector._query_threatfox("example.com") == []
+
+    monkeypatch.setattr(mod, "requests", type("R", (), {
+        "post": staticmethod(lambda *a, **k: _Resp({"query_status": "unknown_auth_key"}))
+    }))
+    with pytest.raises(RuntimeError, match="not a 'no hits' result"):
+        collector._query_threatfox("example.com")
+
+
+def test_the_collector_refuses_to_query_without_a_key(monkeypatch) -> None:
+    from app.collectors import threat_feeds_collector as mod
+
+    collector = mod.ThreatFeedsCollector.__new__(mod.ThreatFeedsCollector)
+    collector.timeout = 5
+    import app.config as config_mod
+
+    monkeypatch.setattr(config_mod, "get_settings",
+                        lambda: SimpleNamespace(abusech_auth_key=""))
+    with pytest.raises(RuntimeError, match="missing credential"):
+        collector._query_threatfox("example.com")
