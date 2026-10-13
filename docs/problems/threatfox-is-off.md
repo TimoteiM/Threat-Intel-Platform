@@ -171,6 +171,55 @@ It delegates. Three pieces of evidence:
 The recomputation is therefore a **replay of the producing function with the
 fix loaded**, not a second opinion. The correction stands.
 
+### The proof I first offered was tautological
+
+I presented this as the evidence:
+
+```
+engine, evidence as stored      suspicious/low  risk=40  monitor
+engine, threatfox emptied       suspicious/low  risk=40  monitor
+```
+
+"Both runs agree, therefore the malicious verdict came from ThreatFox and
+nothing else." That does not follow. The two runs agree **because the engine
+already scopes** — `decision_engine.py:274` and `:569` call
+`about_observable`, all 25 matches scope to `elsewhere`, so *both* runs read
+an empty list. The invariance cannot distinguish "no other signal justifies
+malicious" from "ThreatFox is being ignored". It is a check that could not
+have returned the other answer, which is the defect this codebase has a
+README rule about, committed inside the argument for a correction.
+
+The control that does discriminate replaces `about_observable` with the
+identity function — exactly the pre-`b83772e` line
+`tf_matches = threat_feeds.get("threatfox_matches") or []`:
+
+```
+pre-fix engine, unscoped tf     malicious/high  risk=90  block   <- reproduces the stored verdict
+pre-fix engine, tf emptied      suspicious/low  risk=40  monitor
+```
+
+That pair isolates causation. It would have printed malicious in both rows
+had another signal been responsible. And the full production chain was
+replayed step by step — `apply_decision_to_report`,
+`_inject_lexical_contribution`, `_apply_phishing_redirect_risk_floor`,
+`_ensure_report_completeness` — all returning suspicious/low/40/monitor,
+with `_trusted_external_risk_floor` returning `(0, [])`, which kills the one
+path that could have forced malicious independently of ThreatFox.
+
+### And the corrected verdict is not a correct verdict
+
+`suspicious/low/40/monitor` is what production returns and it is
+non-actionable, but it is not positively right for `live.com`. Its
+`risk_rationale` rests on an **unverified PhishTank row from 2010** and a
+"third-party brand reference: 'microsoft' on non-microsoft domain" signal
+that is itself a false positive — `live.com` *is* Microsoft.
+`benign/high/15/monitor` was blocked only because the weak-signal-cluster
+branch fires first. The correction removes a false block; it does not make
+the row right.
+
+The evidence it rests on also has `intel.meta.status = "failed"`
+(Spamhaus 401, empty `blocklist_hits`) — an absence, not a clean result.
+
 ## Why a fix committed at 10:53 produced a false verdict at 12:05
 
 Because `analysis_task` runs in the **worker**, and the worker does not
@@ -214,12 +263,84 @@ engine, same evidence            suspicious/low  risk=40  monitor
 engine, threatfox emptied        suspicious/low  risk=40  monitor
 ```
 
-The correction was written and **refused by the permission layer** as a
-shared-resource write, so investigation
-`ba1666cb-3148-4766-a3af-8db897f365b4` still reads malicious/block. The
-script is at `scratchpad/unwind.py`; it refuses to downgrade if the
-recomputation is still malicious, leaves the report row in place as the
-record of the error, and appends its reason to `context`.
+**The write is on hold, and the reason is stronger than the permission
+refusal.** It would produce an *inconsistent* record, which is worse than
+the current wrong one.
+
+`investigations.classification` is not where the investigation page gets its
+verdict. The detail page reads `reports.report_json` and the read-time
+`confidence_engine`; measured against the real stored row, that pipeline
+returns `verdict=malicious score=90` **byte-identically before and after**
+the proposed write. The instrument is not dead — perturbing the inputs it
+actually reads moves it (report corrected → malicious/74; threatfox emptied
+→ malicious/90; both plus `final_risk` → suspicious/40) — so the identical
+pre/post result is a finding.
+
+What *would* flip to suspicious: the investigations **list** page, the
+dashboard's `classification_breakdown` and `recent_malicious` panels
+(`dashboard.py:31-42`, `:105-118`), and similar-investigations
+(`investigations.py:505,543`). What would **not**: the detail page, the
+case-story tab, and the PDF/Markdown/JSON exports — all three export
+`detail_dict`s omit `context` entirely and `export_service` takes its verdict
+from `confidence_engine`. A client-facing PDF exported after the write would
+still read MALICIOUS / BLOCK.
+
+And the note itself would be invisible. `investigations.context` is
+**input-only**: present on `InvestigationCreate`, absent from
+`InvestigationResponse`, `InvestigationListItem` and
+`InvestigationCreatedResponse`, and read by no frontend component.
+`get_investigation` returns neither `context` nor `updated_at`, so even the
+*when* of a correction is absent from the payload.
+
+### There is already a home for this record
+
+`analyst_feedback` — built, API-backed, and rendered by a component that
+already exists:
+
+| | |
+|---|---|
+| columns | `subject_type`, `subject_id`, `verdict`, `platform_classification`, `platform_risk_score`, `note`, `analyst`, `created_at` |
+| constraint | `UNIQUE (subject_type, subject_id)` |
+| foreign keys | **none** — so the row survives a UI delete, which is exactly what `office.com` lacked |
+| contents today | 5 rows, all `subject_type = 'alert_run'`; zero for `investigation` |
+| API | `POST`/`GET /api/detections/feedback` |
+| renderer | `AnalystFeedbackControl.tsx:173-181` — "Recorded <when> · the platform said <classification> · "<note>"" |
+
+Two traps in using it, both measured:
+
+1. **Ordering.** `_subject_snapshot` (`detections.py:767-784`) copies
+   `investigation.classification` and `.risk_score` onto the feedback row
+   **at insert time** — its docstring says so deliberately: "the feedback is
+   about the answer as it was given, not as it now stands." A row inserted
+   *after* the UPDATE records `suspicious`/`40` and destroys the only
+   surviving copy of the prior verdict. `create_feedback` updates only
+   `verdict`/`note`/`analyst` on an existing row and never re-snapshots, so
+   it cannot be repaired through the API. **Snapshot first, guard on
+   `platform_classification == "malicious"`, then update.**
+2. **The control is mounted in dead code.**
+   `page.tsx:1041-1043` mounts `<AnalystFeedbackControl
+   subjectType="investigation" .../>` — inside a block opened
+   `{false && <div ...>` at `:934` and closed at `:1052`. That block holds
+   the *entire* lower page, tabs and content included, so it is a stale
+   second copy of the body rather than a hidden feature. Un-deadening it
+   would duplicate the page; the control has to be mounted in the live
+   render instead.
+
+### The decision that is not mine
+
+The corrected value and the audit path are settled. What the **verdict
+surface** should say is not:
+
+* **(a)** correct `investigations.*` and accept that the detail page and the
+  PDF keep showing malicious, with the correction notice beside it; or
+* **(b)** also set `report_json.classification/confidence/risk_score/
+  recommended_action` and add `report_json.superseded = {prior verdict,
+  reason, when}`, keeping the narratives untouched as the withdrawn account.
+
+(b) makes the surfaces agree; (a) is the smaller change. Either way this
+historical row keeps feeding `final_risk = 90/high` and 25 unscoped matches
+to every read-time consumer — the collector rename only affects new runs — so
+a note on the page is required in both cases, not optional.
 
 ## The rule
 

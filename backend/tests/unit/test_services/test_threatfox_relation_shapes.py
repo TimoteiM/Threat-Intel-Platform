@@ -208,3 +208,75 @@ def test_both_assignment_sites_go_through_one_helper():
     assert "evidence.threatfox_matches = result" not in src, (
         "an assignment site bypasses the scoping helper"
     )
+
+
+# ─── IP observables need their own rule, and a stricter one ──────────────
+#
+# A domain has label structure to anchor equality on. An IP is a bare token:
+# `1.2.3.4` is a substring of `11.2.3.40` and nothing in the string says they
+# are different addresses. ThreatFox's `search_ioc` is a substring search and
+# writes network IOCs as `ip:port`, so the comparison has to be parsed-address
+# equality — which makes a substring match *impossible* rather than filtered
+# afterwards.
+
+@pytest.mark.parametrize("observable,ioc", [
+    # The containment cases, in all three positions.
+    ("1.2.3.4", "11.2.3.40"),     # observable inside the IOC
+    ("1.2.3.4", "1.2.3.40"),      # extended on the right
+    ("1.2.3.4", "201.2.3.4"),     # extended on the left
+    ("1.2.3.4", "11.2.3.4"),
+    ("10.0.0.1", "110.0.0.1"),
+    # Different family / different address entirely.
+    ("2001:db8::1", "2001:db8::10"),
+    # A domain IOC is not evidence about an IP, and vice versa.
+    ("1.2.3.4", "evil.example"),
+    ("example.com", "1.2.3.4"),
+    # `example.com` must not match an IOC that merely contains it as text.
+    ("1.1.1.1", "1.1.1.10:8080"),
+])
+def test_an_ip_never_matches_by_containment(observable, ioc):
+    assert scope_of(observable, ioc) == ELSEWHERE, (
+        f"{ioc!r} was read as evidence about {observable!r} — a substring "
+        "match on an address"
+    )
+    assert about_observable(observable, [_match(ioc, "ip:port")]) == []
+
+
+@pytest.mark.parametrize("observable,ioc", [
+    ("1.2.3.4", "1.2.3.4"),
+    ("1.2.3.4", "1.2.3.4:443"),          # ThreatFox's ip:port form
+    ("2001:db8::1", "[2001:db8::1]:8080"),
+    ("2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001"),  # same address
+])
+def test_the_same_address_is_a_hit_however_it_is_written(observable, ioc):
+    """The control. A guard that rejects every IP would pass every test above
+    and detect nothing — including the port form the feed actually sends, and
+    the expanded IPv6 form that is the same address."""
+    assert scope_of(observable, ioc) == SAME_HOST
+    assert about_observable(observable, [_match(ioc, "ip:port")]) == [
+        _match(ioc, "ip:port")
+    ]
+
+
+def test_a_url_on_the_observable_ip_is_a_path_not_the_address():
+    """Same relation as the domain case: a payload URL hosted on an address
+    says a path is malicious, not that the address is."""
+    assert scope_of("1.2.3.4", "http://1.2.3.4/payload.exe") == PATH_ON_HOST
+    assert about_observable("1.2.3.4", [_match("http://1.2.3.4/x.exe", "url")]) == []
+
+
+def test_equality_is_by_parsed_address_not_by_string():
+    """The property that makes containment impossible rather than filtered:
+    the comparison is between parsed addresses, so no string overlap can make
+    two different addresses equal."""
+    import ipaddress
+
+    from app.services.threatfox_match_scope import _address_of
+
+    assert _address_of("1.2.3.4:443") == ipaddress.ip_address("1.2.3.4")
+    assert _address_of("[2001:db8::1]:8080") == ipaddress.ip_address("2001:db8::1")
+    assert _address_of("http://1.2.3.4/x") == ipaddress.ip_address("1.2.3.4")
+    # Not addresses, so they get no equality at all.
+    assert _address_of("example.com") is None
+    assert _address_of("1.2.3.4.5") is None
+    assert _address_of("") is None

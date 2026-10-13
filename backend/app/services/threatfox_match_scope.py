@@ -47,8 +47,43 @@ different — the discriminator is in the data, so it is read from the data.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any, Iterable
 from urllib.parse import urlparse
+
+
+def _address_of(value: str) -> ipaddress._BaseAddress | None:
+    """The IP address an IOC refers to, or None if it is not one.
+
+    An IP needs its own rule and it is **stricter** than the domain rule, not
+    a special case of it. A domain has label structure to anchor equality on;
+    an IP is a bare token, so `1.2.3.4` is a substring of `11.2.3.40` with
+    nothing in the string itself to say they are different addresses.
+    ThreatFox's `search_ioc` is a substring search and its network IOCs are
+    written `ip:port`, so the only safe comparison is: parse both sides as
+    addresses, strip the port, and compare the parsed values.
+
+    Parsing is what makes substring matching **impossible** rather than
+    filtered afterwards — `11.2.3.40` and `1.2.3.4` are different
+    `IPv4Address` objects and no amount of string overlap can make them
+    equal. A value that does not parse is not an address and gets no
+    equality at all.
+    """
+    raw = str(value or "").strip().lower().rstrip(".")
+    if not raw:
+        return None
+    if "://" in raw:
+        raw = urlparse(raw).hostname or ""
+    if raw.startswith("["):
+        # [2001:db8::1]:443
+        raw = raw[1:].split("]", 1)[0]
+    elif raw.count(":") == 1:
+        # ThreatFox writes `ip:port` for network IOCs.
+        raw = raw.split(":", 1)[0]
+    try:
+        return ipaddress.ip_address(raw)
+    except ValueError:
+        return None
 
 
 def _host_of(value: str) -> str:
@@ -90,6 +125,10 @@ def _path_of(value: str) -> str:
 def scope_of(observable: str, indicator: str) -> str:
     """How `indicator` relates to `observable`. One of the four above.
 
+    IP observables are decided by parsed-address equality before any string
+    comparison happens, because an IP has no label structure to anchor on and
+    a substring test on `1.2.3.4` matches `11.2.3.40`.
+
     This is the primitive both feeds need. A host-level listing on a shared
     platform is `PATH_ON_HOST` relative to any specific URL we were asked
     about, and that is the distinction seven months of silence hid: the
@@ -97,9 +136,27 @@ def scope_of(observable: str, indicator: str) -> str:
     raw.githubusercontent.com, discord.com and www.google.com, and **not one**
     of them was for the path this platform had actually investigated.
     """
+    # ── IP observables: parsed equality, never string containment ──
+    target_ip = _address_of(observable)
+    if target_ip is not None:
+        indicator_ip = _address_of(indicator)
+        if indicator_ip is None:
+            # A domain IOC cannot be evidence about an IP, and a value that
+            # does not parse as an address gets no equality at all.
+            return ELSEWHERE
+        if indicator_ip != target_ip:
+            return ELSEWHERE
+        # Same address. A URL on it is still a path, not the address.
+        return SAME_HOST if not _path_of(indicator).rstrip("/") else PATH_ON_HOST
+
     target = _host_of(observable)
     if not target:
         return UNKNOWN
+    # An IP indicator cannot be evidence about a domain observable either:
+    # the only way `_host_of` could equate them is if the domain *is* the
+    # address, which the branch above already handled.
+    if _address_of(indicator) is not None:
+        return ELSEWHERE
     host = _host_of(indicator)
     if host != target:
         return ELSEWHERE

@@ -344,11 +344,7 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
         "recommended_steps": recommended_steps,
         "risk_score": risk_score,
         "risk_rationale": evidence_str,
-        "decision_engine": {
-            "version": 1,
-            "source": "deterministic",
-            "canonical_fields": ["classification", "confidence", "risk_score", "recommended_action"],
-        },
+        "decision_engine": _provenance(),
     }
 
 
@@ -357,6 +353,57 @@ def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -
 # reading rather than of a measurement — deliberately short of the numbers a
 # sandbox verdict earns.
 _ANALYST_RISK_FLOOR = {"malicious": 70, "suspicious": 45, "benign": 10, "inconclusive": None}
+
+
+def _provenance() -> dict[str, Any]:
+    """Which code produced this verdict, recorded with the verdict.
+
+    `source` and `canonical_fields` were already here. `code` is new, and it
+    is the field that would have turned an afternoon into a query.
+
+    On 2026-10-13 a `malicious/high/risk-90/block` verdict on `live.com` had
+    to be attributed to a specific build by noticing that its `key_evidence`
+    said `ThreatFox matches: 25` and that the scoped version of this function
+    builds that line from the scoped list, so it would not have emitted it at
+    all — then corroborating against the worker's process start time
+    (09:21:06) against the commit that fixed it (10:53). Three inferences to
+    answer "which code decided this", and nobody should ever have to make
+    them.
+
+    `analysis_task` runs in the Celery worker and the worker does not reload,
+    so the api can be running today's code while the worker runs this
+    morning's. The fingerprint is a content hash of the loaded `*.py`, taken
+    at import time, so it identifies the **process that decided** rather than
+    the source on disk — which is the whole distinction.
+
+    Companion to `source_coverage_service`: that says which sources answered,
+    this says which code decided. Together a verdict is self-describing.
+
+    Best effort. A verdict must never fail to be produced because its
+    provenance could not be computed.
+    """
+    block: dict[str, Any] = {
+        "version": 2,
+        "source": "deterministic",
+        "canonical_fields": [
+            "classification", "confidence", "risk_score", "recommended_action",
+        ],
+    }
+    try:
+        from app.code_version import code_version
+
+        version = code_version()
+        block["code"] = {
+            "fingerprint": version.get("code_fingerprint"),
+            "imported_at": version.get("imported_at"),
+            "git_sha": version.get("git_sha"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        block["code"] = {
+            "fingerprint": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return block
 
 
 def apply_decision_to_report(report_data: dict[str, Any], decision_report: dict[str, Any]) -> dict[str, Any]:
