@@ -71,6 +71,44 @@ That restores pooling and is the right long-term shape. It was not taken on
 on a box ingesting live alerts, at the end of a long session. It needs its own
 change window and its own verification.
 
+## Re-audit: which claims rested on a failed sweep?
+
+Every claim made this week from a sweep or watch **return value** is suspect.
+Claims from SQL are not — the database is ground truth and the fault never
+corrupted it.
+
+A failed sweep returns before writing anything, so its signature is an
+**undrained backlog**, never a half-written graph. The two populations to
+check are therefore "runs with no graph rows" and "runs believed drained".
+
+    runs marked materialised but holding no graph rows : 587
+      of those, from a source this platform can read   : 0
+
+All 587 are no-field-map sources — appsec-agent, Fortigate and the rest —
+where extraction legitimately yields nothing. That is the documented
+`no_field_map` condition and not a silent miss. **No readable run is missing
+its graph rows.**
+
+What that leaves:
+
+| claim | source | verdict |
+|---|---|---|
+| provenance counts (26,859 / 4,282 / 12) | SQL group-by | stands |
+| entity and edge totals | SQL count | stands |
+| `1 run unmaterialised`, 2026-10-12 | SQL count of `graph_materialised_at IS NULL` | stands |
+| case-level figures, staleness, technique measurements | SQL, re-derived each time | stand |
+| **"the backlog is drained"**, 2026-10-13 | a sweep return read with `.get()` | **false, and corrected in-session** |
+
+The one corrupted claim class is "the sweep finished", and the only instance
+is the drain loop that reported success on 2026-10-13 while the sweep was
+failing. No figure published to anyone rested on it.
+
+The reason the damage is contained is worth stating: these tasks are
+instruments, not writers of derived state. Their failure costs freshness, not
+correctness — the graph tables lag rather than lie. Had the same fault hit a
+task that computes and stores a verdict, every claim downstream of it would
+need re-deriving instead of one sentence.
+
 ## How to tell whether it is fixed
 
 Not by a test — the fault needs two real tasks overlapping under a real
