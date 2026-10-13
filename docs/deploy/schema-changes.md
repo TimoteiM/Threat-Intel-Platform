@@ -166,6 +166,16 @@ after a day's work on naming them. The API process had been serving code from
 12:59; `worker` and `beat` from 12:38, which also meant the nightly IP refresh
 would have run the ThreatFox `no_result` bug that was fixed at 12:48.
 
+**The materialisation window was benign because of its input, not because
+stale workers are harmless.** `worker` ran the graph sweep every two minutes
+for three and a half hours on the pre-chokepoint extractor. 29 runs were
+materialised, 15 technique nodes written, and **0** carried the malformed
+`{0=T1489}` form — because none of those alert bodies happened to contain a
+map-form id. The same hours with map-form ids arriving would have written
+fabricated technique nodes into the graph tables, and nothing would have
+flagged it. Read this as "that window's traffic was lucky", never as "a stale
+worker does no damage".
+
 The diagnosis was slowed by a check that could not have failed:
 
     docker compose exec api python /tmp/probe.py
@@ -204,6 +214,28 @@ self-consistent; a skew is not.
 
 Note the inversion against the `.env` row. There the files are stale and
 `restart` is useless; here the files are fine and only the process is stale.
+
+### Container start time no longer answers anything
+
+**Fixing this invalidated the instrument that found it.** The staleness above
+was diagnosed from `docker inspect ... .State.StartedAt` — api started 12:59,
+the resolver landed 14:40, therefore the process could not have it. That
+reasoning was sound *because `--reload` was off*.
+
+It is now unsound. WatchFiles replaces the server child without restarting the
+container, so container start and import time diverge by an unbounded and
+growing margin while looking exactly the same. Measured within half an hour of
+enabling it:
+
+    container started : 16:08:40
+    process imported  : 16:28:40
+
+The next person with a staleness symptom will reach for `docker inspect`. It
+is the obvious move, it worked yesterday, and from today it answers a question
+nobody is asking. Use `/health`'s `code.imported_at` for the API and the
+`code_version` task for the worker. `StartedAt` now tells you only when the
+container was created, which for a reloading service is almost never when its
+code was loaded.
 
 ### The structural fix, and what it does not cover
 
