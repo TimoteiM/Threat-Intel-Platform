@@ -273,6 +273,26 @@ Tests may use TestClient freely — including the tests for the debug route's
 own gates. The rule is about which question is being asked, not about the
 tool.
 
+### This is a different shape from an absence read as a value
+
+`app/services/absence.py` carries a rule for check scripts — index rather than
+`.get()`, guard empty shell expansions — and it covers a real family: a
+missing key read as "finished", an empty `pgrep` expansion read as a path. All
+mechanical, all catchable by the rule.
+
+**Querying the wrong layer is not in that family and the rule does not catch
+it.** `docker compose exec api python` reads current source and reports it as
+the server's behaviour. A query against `alert_graph_entity` for
+`absorbed_parent` returns zero rows for ever, because that attribute is
+created in `assemble` at read time and nothing writes it to storage. Both
+checks are well formed, handle absence correctly, and answer a question about
+a layer where the value does not live.
+
+The fix is not a coding rule. It is knowing **where in the pipeline a value is
+born** — extraction, materialisation, assembly, or the request — and querying
+that layer. Before trusting a check, say which layer creates the thing being
+looked for and confirm the check reads that one.
+
 ### The payload layer is checkable without a credential
 
 `GET /api/debug/case-graph?case_key=…` returns exactly what

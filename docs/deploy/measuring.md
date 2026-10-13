@@ -56,3 +56,44 @@ by similarity), which keeps the most relevant and is the right direction.
 And the leak went further than the payload: `alerts_at_close` was recorded
 from the same capped list, so 24 of the 56 cases flagged for disposition
 review read "judged on 100" when 100 is a floor rather than a count.
+
+---
+
+## State the grain beside the number
+
+Nearly every table here is **per-run** or **per-alert**. Nearly every question
+anyone asks is **per-case** or **per-entity**. The conversion between them is
+not arithmetic — it is a merge, and its factor varies per case.
+
+Two instances five days apart, in opposite directions, both by people who
+knew the rule:
+
+    2026-10-08  `ip_lookups` holds 6,376 rows over 1,535 addresses. Read as
+                current state, it gave "two reads in three are stale". Row
+                count quoted as an entity-level outcome; the real figure,
+                newest row per address and weighted by what is actually
+                drawn, was 18% of public draws.
+
+    2026-10-13  2,995 parent/child technique pairs in `alert_graph_entity`,
+                8.7% of stored technique rows, projected as "8.2% of nodes".
+                A case graph merges by `merge_key` across every run in the
+                case, so a pair appearing in 500 runs is 1,000 rows and
+                exactly **one** folded node. Measured on drawn graphs: 3.1%
+                typical, 14.1% dense — over-counted about threefold.
+
+**The discipline: write the grain into the sentence.** "2,783 stored rows" is
+true. "3.1% of drawn nodes" is true. "2,783 nodes, 8.2%" fuses two grains into
+one claim, and once written down the error is invisible — nothing in the
+sentence records which population it came from.
+
+**And measure at the grain of the decision before building, not after.** The
+collapse was approved on a projected 8.2% and the dense cases came in at
+14.1%, so the decision survived by direction rather than by soundness. Had it
+gone the other way the work would have been done for nothing, and the
+measurement that would have prevented that cost ten minutes.
+
+A note on how this hides: a grain hypothesis *about the data* and a check on
+*your own arithmetic* feel like different activities. They are not. On
+2026-10-13 a grain hypothesis was raised, tested and correctly refuted in the
+morning, and the same conversion was missed in the author's own sums two hours
+later.
