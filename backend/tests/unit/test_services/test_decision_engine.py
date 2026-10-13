@@ -17,7 +17,7 @@ def test_decision_engine_overrides_ai_verdict_for_contextual_http_only():
         "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
         "hybrid_analysis": {"verdict": "clean", "score": 0},
         "whois": {"domain_age_days": 5000},
-        "threat_feeds": {},
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
         "intel": {"blocklist_hits": []},
     }
     decision = build_decision_report(evidence, "domain")
@@ -47,7 +47,7 @@ def test_decision_engine_flags_anyrun_malicious_without_ai():
             "hybrid_analysis": {
                 "items": [{"verdict": "malicious", "threat_names": ["phishing"]}],
             },
-            "threat_feeds": {},
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
             "intel": {"blocklist_hits": []},
             "whois": {"domain_age_days": 400},
         },
@@ -85,7 +85,7 @@ def test_decision_engine_summary_prioritizes_anyrun_residential_sandbox():
                     }
                 ],
             },
-            "threat_feeds": {},
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
             "intel": {"blocklist_hits": []},
         },
         "domain",
@@ -125,7 +125,7 @@ def test_decision_engine_flags_anyrun_clickfix_tags_as_malicious():
                     }
                 ],
             },
-            "threat_feeds": {},
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
             "intel": {"blocklist_hits": []},
             "whois": {"domain_age_days": 3204},
         },
@@ -264,7 +264,7 @@ def test_decision_engine_does_not_treat_generic_clean_anyrun_tags_as_malicious()
                     },
                 ],
             },
-            "threat_feeds": {},
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
             "intel": {"blocklist_hits": []},
             "whois": {"domain_age_days": 3204},
         },
@@ -342,7 +342,7 @@ def _clean_business_site(**overrides) -> dict:
         },
         "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
         "whois": {"domain_age_days": 5246},
-        "threat_feeds": {},
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
         "url_lexical_ml": {"label": "low", "score": 0.1466},
         "email_security": {"spoofability_score": "low"},
         "infrastructure_pivot": {
@@ -598,7 +598,7 @@ def _anyrun_labelled_clean(vt: dict | None = None, **extra):
                 }
             ]
         },
-        "threat_feeds": {},
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
         "http": {},
         "urlscan": {},
         "intel": {},

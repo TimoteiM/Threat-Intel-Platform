@@ -537,6 +537,20 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     tf_matches = about_observable(
         domain, threat_feeds.get("threatfox_matches") or []
     )
+    # Did the feed actually answer? `not tf_matches` is true both when
+    # ThreatFox said "nothing" and when it never replied, and for seven
+    # months it was the second: the collector recorded
+    # `threatfox (error: HTTPError)` in `feeds_skipped` on every row while
+    # the empty match list read as "not listed" to everything downstream.
+    #
+    # Granularity does not fix that — the next 401 empties the list again —
+    # so a clean *precondition* must require checked-and-not-listed, exactly
+    # as the Google Safe Browsing handling below already does. The flag is
+    # not new: nothing read it.
+    feeds_checked = {
+        str(f).strip().lower() for f in (threat_feeds.get("feeds_checked") or [])
+    }
+    threatfox_checked = "threatfox" in feeds_checked
     openphish_listed = bool(threat_feeds.get("openphish_listed"))
     phishtank = threat_feeds.get("phishtank") or {}
     phishtank_positive = bool(phishtank.get("in_database"))
@@ -628,6 +642,11 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         and vt_suspicious == 0
         and not phishtank_positive
         and not openphish_listed
+        # "asked and not listed", never "never asked". An unchecked feed
+        # blocks this branch rather than unlocking it, which is the correct
+        # direction for a precondition: absence of an answer is not evidence
+        # of cleanliness.
+        and threatfox_checked
         and not tf_matches
         and not intel_hits
         and int((evidence_data.get("whois") or {}).get("domain_age_days") or 0) >= 365

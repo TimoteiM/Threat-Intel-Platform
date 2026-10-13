@@ -43,6 +43,34 @@ every case touching Microsoft, Cloudflare, Discord or GitHub infrastructure —
 most cases. Seven months of under-escalation would have become drowning on
 the first day.
 
+## Granularity is not the structural fix
+
+Scoping hits to the observable prevents the flood. It does **not** prevent the
+recurrence: the next 401 empties the match list again, `not tf_matches` is
+true again, and the clean branch opens again on nothing.
+
+The structural fix was sitting twelve lines away. Google Safe Browsing is
+consumed as `(gsb_checked and not gsb_listed)` — *asked and not listed*, never
+*not listed*. So the precondition now requires `threatfox_checked`, and a feed
+that did not answer **blocks** the branch instead of unlocking it, which is
+the correct direction for a precondition.
+
+**The flag was not missing.** `feeds_checked` has excluded `threatfox` and
+`feeds_skipped` has carried `threatfox (error: HTTPError)` on every row since
+March. The collector recorded the distinction correctly for seven months and
+nothing consumed it. This is `app/services/absence.py` applied where it never
+was — and the one source that already did it right sits in the same file.
+
+### What this costs operationally
+
+A feed outage now produces *suspicious* where it used to produce
+*benign, high*. That is the honest answer — nothing established the observable
+was clean — but it is a visible change in behaviour, and a sustained ThreatFox
+outage would move a chunk of benign verdicts to suspicious rather than
+silently passing them. The mitigation is that such an outage is now detectable
+directly: `python -m app.cli.source_answers` and the watch heartbeat both name
+it, which was the whole problem seven months ago.
+
 ## The rule
 
 **Before putting a feed in a clean-precondition, ask what its absence means

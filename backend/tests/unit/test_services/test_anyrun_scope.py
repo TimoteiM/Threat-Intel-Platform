@@ -49,7 +49,12 @@ def test_scope_guard_recomputes_lookup_from_matching_domain_tasks_only():
             ]
         },
         "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
-        "threat_feeds": {},
+        # `feeds_checked` names the feeds that actually answered. It is required
+        # for the clean-control branch since 2026-10-13: an empty match list
+        # from a feed that never replied used to read as "not listed", which is
+        # how seven months of ThreatFox 401s stayed invisible. A fixture
+        # asserting "clean controls" has to say the controls ran.
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
         "intel": {"blocklist_hits": []},
         "whois": {"domain_age_days": 3873},
         "http": {
