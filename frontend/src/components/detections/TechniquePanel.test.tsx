@@ -113,7 +113,7 @@ describe("a retired id", () => {
     const text = getByTestId("technique-retired").textContent || "";
     expect(text).toContain("Retired in ATT&CK 19.2");
     expect(text).toContain("T1685");
-    expect(text).toContain("Search current ATT&CK for");
+    expect(text).toContain("Current guidance");
   });
 
   it("does not read as a judgement on the detection", () => {
@@ -170,5 +170,44 @@ describe("the key list the attribute dump uses", () => {
     // belong to the generic rows and must keep showing.
     expect(TECHNIQUE_PANEL_KEYS.has("source_severity")).toBe(false);
     expect(TECHNIQUE_PANEL_KEYS.has("indicator_risk_score")).toBe(false);
+  });
+});
+
+describe("when the retired id is all the analyst has", () => {
+  // In 8 of the 11 affected cases every technique drawn is retired, so the
+  // current equivalent is not a footnote on the ATT&CK framing — it is the
+  // only part of that framing still valid. A bare id there would send the
+  // analyst away to look it up, which is the complaint this started from.
+  const withEquivalent = {
+    ...RETIRED,
+    current_equivalent_name: "Disable or Modify Tools",
+    current_equivalent_url: "https://attack.mitre.org/techniques/T1685",
+  };
+
+  it("names the current equivalent, not just its id", () => {
+    const { getByTestId } = render(<TechniquePanel attrs={withEquivalent} />);
+    const text = getByTestId("technique-equivalent").textContent || "";
+    expect(text).toContain("T1685");
+    expect(text).toContain("Disable or Modify Tools");
+  });
+
+  it("links to the successor's own ATT&CK page", () => {
+    const { getByTestId } = render(<TechniquePanel attrs={withEquivalent} />);
+    const link = getByTestId("technique-equivalent").querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://attack.mitre.org/techniques/T1685");
+  });
+
+  it("still shows the id when the name could not be resolved", () => {
+    const { getByTestId } = render(
+      <TechniquePanel attrs={{ ...RETIRED, current_equivalent_name: null }} />,
+    );
+    expect(getByTestId("technique-equivalent").textContent).toContain("T1685");
+  });
+
+  it("shows nothing to search when there is no equivalent", () => {
+    const { queryByTestId } = render(
+      <TechniquePanel attrs={{ ...RETIRED, current_equivalent: null }} />,
+    );
+    expect(queryByTestId("technique-equivalent")).toBeNull();
   });
 });

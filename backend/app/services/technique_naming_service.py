@@ -123,6 +123,17 @@ def name_technique(technique_id: Any) -> dict[str, Any]:
         # intermediate has been given the answer as of an older release.
         "revoked_by": found.get("revoked_by"),
         "current_equivalent": current,
+        # The successor's own name and page, resolved here rather than left
+        # for each surface to look up. On the 8 cases in 11 where *every*
+        # technique drawn is retired, this is not a footnote on the ATT&CK
+        # framing — it is the only part of that framing still valid, so a
+        # bare id would reproduce the original complaint one layer along.
+        "current_equivalent_name": (
+            (describe_technique(str(current)) or {}).get("name") if current else None
+        ),
+        "current_equivalent_url": (
+            (describe_technique(str(current)) or {}).get("url") if current else None
+        ),
         "attack_version": ATTACK_VERSION,
     }
     if found.get("retired"):

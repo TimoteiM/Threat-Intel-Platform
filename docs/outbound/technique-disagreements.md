@@ -145,9 +145,15 @@ because it tells us our attribution needs work before anyone leans on it.
 
 # Part two — four ATT&CK ids that 19.2 has retired
 
-**This is a maintenance item, not an error, and it is much smaller than part
-one.** It is in the same document only because it reaches the same people. If
-part one is the one you have time for, do that one.
+**For roughly one case in ten, the only ATT&CK context we give an analyst is
+withdrawn guidance.** Not "some mappings are stale" — in those cases every
+technique shown on the case has been retired by MITRE, so there is nothing
+valid left on the screen to read.
+
+It is still a maintenance item rather than an error: nothing is broken, the
+rules fire correctly, and the mappings were right for the ATT&CK of their day.
+But it is met more often than "four retired ids" suggests, and it is almost
+entirely one rule.
 
 ## What changed, and why nothing was wrong before
 
@@ -198,22 +204,30 @@ So this is almost entirely local content, and almost entirely one rule.
 
 ## How often an analyst actually meets one
 
-Measured 2026-10-13 over the 150 most recent cases, re-derived through the
-same membership the case page uses:
+**The population, stated precisely, because this figure is easy to quote back
+wrong.** Measured 2026-10-13 against the 150 most recently opened cases in our
+case spine. 128 of those re-derive their membership; of those, **76 produce a
+materialised case graph that draws at least one ATT&CK technique**. That set
+of 76 is the denominator below. It is not 128, it is not all cases, and it is
+not a random sample of anything — graph materialisation follows alert
+resolution, so these are the cases that got as far as being analysed.
 
-- 76 of 128 cases draw any ATT&CK technique at all
-- **11 of those 76 (14.5%) draw at least one retired id**
-- in **8 of those 11**, *every* technique on the case is retired
+Of those 76 case graphs:
 
-The last line needs its denominator stated or it overstates: affected cases
-draw a median of 2 techniques, so "every technique is retired" is usually
-"both of the two shown". It is still the case that roughly one case in seven
-points an analyst at withdrawn MITRE guidance, and in most of those there is
-nothing else on the screen to look at instead.
+- **11 (14.5%) draw at least one retired id**
+- **8 (10.5%) draw nothing but retired ids** — every technique on the case
 
-That is why this is worth ten minutes rather than nothing, and it is almost
-all one rule. On our side those ids now render with their retirement and
-current equivalent stated, so nobody is silently misled while this waits.
+The second line is the one that matters, and it needs its own caveat:
+affected cases draw a median of 2 techniques, so "every technique is retired"
+is usually "both of the two shown" rather than "all eight of eight". That does
+not soften it much. A case with two techniques on it, both withdrawn, offers
+an analyst no current ATT&CK framing at all.
+
+On our side those ids now render with their retirement stated and the current
+equivalent named and linked, so nobody is silently misled while this waits.
+That is a mitigation, not a fix: we are telling the analyst the guidance is
+withdrawn and where the current guidance lives, which is better than silence
+and worse than the rule pointing at the current technique.
 
 ## The ask
 

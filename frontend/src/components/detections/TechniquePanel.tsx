@@ -83,6 +83,10 @@ export function TechniquePanel({ attrs }: { attrs: Record<string, unknown> }) {
   const retirement = typeof attrs.retirement === "string" ? attrs.retirement : null;
   const equivalent =
     typeof attrs.current_equivalent === "string" ? attrs.current_equivalent : null;
+  const equivalentName =
+    typeof attrs.current_equivalent_name === "string" ? attrs.current_equivalent_name : null;
+  const equivalentUrl =
+    typeof attrs.current_equivalent_url === "string" ? attrs.current_equivalent_url : null;
 
   return (
     <div data-testid="technique-panel" style={{ marginTop: 10 }}>
@@ -125,8 +129,24 @@ export function TechniquePanel({ attrs }: { attrs: Record<string, unknown> }) {
               outbound document all say the same thing about the same id. */}
           {retirement}
           {equivalent ? (
-            <div style={{ marginTop: 4 }}>
-              Search current ATT&amp;CK for <strong>{equivalent}</strong>.
+            <div style={{ marginTop: 6 }} data-testid="technique-equivalent">
+              {/* Named, not just numbered. Where every technique on a case is
+                  retired — 8 of the 11 affected cases — this line is the only
+                  valid ATT&CK framing left on the page, and a bare id would
+                  send the analyst off to look it up, which is the complaint
+                  this whole thread started from. */}
+              Current guidance:{" "}
+              {equivalentUrl ? (
+                <a href={equivalentUrl} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                  <strong>{equivalent}</strong>
+                  {equivalentName ? ` — ${equivalentName}` : null}
+                </a>
+              ) : (
+                <>
+                  <strong>{equivalent}</strong>
+                  {equivalentName ? ` — ${equivalentName}` : null}
+                </>
+              )}
             </div>
           ) : null}
         </div>
@@ -164,6 +184,8 @@ export const TECHNIQUE_PANEL_KEYS = new Set([
   "revoked",
   "revoked_by",
   "current_equivalent",
+  "current_equivalent_name",
+  "current_equivalent_url",
   "deprecated_without_replacement",
   "retirement",
   "attack_version",
