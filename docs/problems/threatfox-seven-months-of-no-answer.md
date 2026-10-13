@@ -61,16 +61,62 @@ that basis would have been wrong, so the benign verdict stands on its merits.
 **On this sample, no disposition was wrongly benign because of the missing
 feed.**
 
-## What this audit does not establish
+## Correction: the bound above was wrong, and so was the one before it
 
-The sample is the first 60 distinct domains in alphabetical order, not a
-random draw, and 1,827 distinct domains were checked against the broken feed
-across 2,224 investigations concluded benign or suspicious. A full audit is a
-loop over those 1,827 at roughly one request a second — about half an hour of
-wall clock and well inside abuse.ch's limits. It was not run here. Anyone
-wanting certainty rather than a sample should run it; the script is
-`tf_audit.py` in the session scratch, and the only change needed is dropping
-the `limit`.
+**The "missed escalation, not false exculpation" bound does not hold.** It
+was reached by reading three call sites that use `tf_matches` inside an `OR`,
+and never searching for the others. `decision_engine` has two more:
+
+    observable_clean = (... and not tf_matches and not intel_hits and ...)
+    anyrun_label_contradicted = (... and not tf_matches and not intel_hits ...)
+
+    elif observable_clean:
+        classification, confidence, risk_score, action = "benign", "high", 15, "monitor"
+
+An empty `tf_matches` is a **precondition for a benign verdict**, not merely
+a failure to escalate. With both feeds silently empty, `not tf_matches` and
+`not intel_hits` were permanently true for seven months, so that branch was
+reachable on evidence two working feeds could have blocked. The second
+expression downgrades a malicious sandbox verdict to suspicious on the same
+basis.
+
+**206 investigations since 2026-04-01 carry the `observable_clean` signature**
+(benign / high / 15 / monitor), out of 2,365.
+
+This is the scope error for the third time in a day, in the analysis that was
+specifically about scope — a completeness claim ("no consumer treats absence
+as exculpatory") made from a search that was never run.
+
+## The full pass
+
+All 1,829 distinct domains re-queried. **45 are in ThreatFox**, 7 errored:
+
+    investigations on those 45 domains : 83
+      malicious                        : 31
+      benign                           : 34
+      suspicious                       : 16
+
+**Almost every benign verdict is correct.** The domains are shared platforms —
+`live.com`, `discord.com`, `cloudflare.com`, `sharepoint.com`, `github.io`,
+`githubusercontent.com`, `amazonaws.com`, `zoom.us`, `linkedin.com`,
+`telegram.org`, `eu.org`, `b-cdn.net`, `comcast.net`, `telenet.be`,
+`iana.org`. ThreatFox lists them because malware is *hosted* on them; the
+apex domain is not malicious and a hit there would have been a false
+positive. A working feed would have made those verdicts worse, not better.
+
+**One domain is not shared infrastructure and warrants a human look:**
+
+| domain | ThreatFox holds | verdict | date |
+|---|---|---|---|
+| `grupobiopar.com.br` | IClickFix | benign / medium / risk 19 / monitor | 2026-08-24 |
+
+That is the whole list. Against 2,224 investigations concluded benign or
+suspicious over seven months with two feeds silent, one case where a working
+ThreatFox would plausibly have changed the answer.
+
+`corp.com` (ClearFake, Cobalt Strike, Remcos, Remus — benign/high) and
+`tenderly.co` (Unknown malware — already suspicious) are judgement calls for
+the same reviewer, but both are widely-used infrastructure.
 
 ## The instrument error inside the audit
 
