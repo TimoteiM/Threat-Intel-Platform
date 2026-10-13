@@ -47,11 +47,13 @@ const NAMED_BY: Record<string, { label: string; detail: string }> = {
       "The telemetry supports this technique and no rule claimed it. A " +
       "finding, not a corroboration.",
   },
-  both: {
-    label: "rule and telemetry",
+  rule_confirmed: {
+    label: "rule, endorsed by the assessment",
     detail:
-      "The rule claimed it and the telemetry supports it. 12 technique " +
-      "nodes in this estate are in this state.",
+      "The rule claimed this technique and the assessment marked that same " +
+      "id confirmed. That is an endorsement of the rule's own answer, not " +
+      "two sources independently arriving at it — 12 technique nodes in " +
+      "this estate are in this state.",
   },
 };
 

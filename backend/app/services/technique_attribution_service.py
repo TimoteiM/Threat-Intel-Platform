@@ -24,18 +24,41 @@ nothing drew them.
 
 Four states, because there are four things that can be true
 -----------------------------------------------------------
-    both         rule and evidence name it. The strongest statement available.
-    rule_only    an assertion with nothing behind it. 
-    model_only   the evidence supports it and no rule claimed it. Derived from
-                 reading the telemetry — not corroboration, and never counted
-                 as such.
-    disagreement rule says X, evidence says Y on the same alert. Both are
-                 drawn and the conflict is marked.
+    rule_confirmed  the assessment marked the rule's OWN id `confirmed`.
+    rule_only       the rule claimed it and the assessment did not confirm it.
+    model_only      the evidence supports it and no rule claimed it. Derived
+                    from reading the telemetry — not corroboration, and never
+                    counted as such.
+    disagreement    rule says X, evidence says Y on the same alert. Both are
+                    drawn and the conflict is marked.
 
-Only `both` is corroboration. `model_only` is a finding of a different kind and
-is labelled as one, in the same spirit as claimed-versus-corroborated,
-attributed supersession and `prior_judgement`: never collapse two statements
-into one — show both and say who said what.
+This state was called `both` until 2026-10-13, and the name was doing damage.
+"Both" says *two sources independently named this* — two witnesses. The code
+says the assessment endorsed the id the rule had already supplied: one witness
+and an endorsement, which is a weaker claim. The label travelled into the UI
+and into every conversation about the data, and it produced a wrong hypothesis
+about the comparison being broken before anyone read the code. A field name is
+worse than a misleading comment for exactly that reason. Renamed to what it
+computes.
+
+The other three were then audited rather than assumed, because one of four
+lying is no reason to trust the rest:
+
+    rule_only    accurate. It would be false if a rule-claimed id also
+                 appeared in `additional_techniques` as deterministically
+                 supported — `states.setdefault` would leave it `rule_only`
+                 while two sources had in fact named it. Measured across all
+                 16,725 assessments: **0 overlap**. True by the assessment's
+                 construction rather than by anything enforced here, so
+                 `test_technique_attribution` pins it.
+    model_only   accurate.
+    disagreement accurate as stated. It compares exact ids, so a rule claiming
+                 a parent and the telemetry supporting its sub-technique is
+                 recorded here as a disagreement; the 202 cases where that
+                 happens are separated downstream by the CLI and are the
+                 subject of docs/problems/provenance-at-different-depths.md.
+
+Never collapse two statements into one — show both and say who said what.
 
 The disagreement is the one worth a human
 ------------------------------------------
@@ -51,11 +74,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-#: The four states. `BOTH` is the only one that means corroborated.
-BOTH = "both"
+#: The states. `RULE_CONFIRMED` is the only one that means the assessment
+#: endorsed the rule's own id — which is not two independent witnesses.
+RULE_CONFIRMED = "rule_confirmed"
 RULE_ONLY = "rule_only"
 MODEL_ONLY = "model_only"
-STATES = (BOTH, RULE_ONLY, MODEL_ONLY)
+STATES = (RULE_CONFIRMED, RULE_ONLY, MODEL_ONLY)
 
 #: Statuses the assessment writes for a technique the rule claimed.
 CONFIRMED = "confirmed"
@@ -119,8 +143,10 @@ class Attribution:
         return self.states.get(str(technique_id or "").strip().upper())
 
     def corroborated(self) -> list[str]:
-        """Only `both`. The word means one thing in this codebase."""
-        return sorted(t for t, s in self.states.items() if s == BOTH)
+        """Only `rule_confirmed`. The word means one thing in this codebase —
+        and note that it means the assessment endorsed the rule's id, not that
+        two sources independently arrived at it."""
+        return sorted(t for t, s in self.states.items() if s == RULE_CONFIRMED)
 
     def model_only(self) -> list[str]:
         return sorted(t for t, s in self.states.items() if s == MODEL_ONLY)
@@ -184,7 +210,7 @@ def attribute(
     }
     for tid in confirmed:
         if tid:
-            states[tid] = BOTH
+            states[tid] = RULE_CONFIRMED
 
     # Deterministic-signal entries only. An AI proposal rides in the same list
     # and is not the telemetry speaking.

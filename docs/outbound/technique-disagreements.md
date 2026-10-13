@@ -53,6 +53,26 @@ Excluded from that 1,395, deliberately:
 - 3 alerts agreeing at the parent technique.
 - Everything from hosts classified as test rigs.
 
+## What 1,399 is counted out of
+
+**These are the disagreements we could check, not the disagreements that
+exist.** A comparison needs both a rule mapping and a technique the telemetry
+supports, and the second is rare:
+
+    runs carrying a rule mapping and a model technique : 1,583
+    runs carrying a rule mapping and nothing to check it against : 13,099
+
+So the 1,399 come from 1,583 comparable runs. The other 13,099 carry a
+mapping that has never been checked against anything — not because it passed,
+but because nothing on those alerts corroborated any technique.
+
+**Do not read a rate from this.** 1,399 of 1,583 is not "88% of your mappings
+are wrong": the comparable set is the alerts where our investigation found
+supporting evidence, which is not a random sample of your ruleset — it skews
+toward alerts rich enough to produce evidence at all. The honest statement is
+the count, the population it came from, and the fact that most mappings remain
+unexamined.
+
 ## The split that decides who this is for
 
 Wazuh reserves rule IDs of 100000 and above for local rules; below that is the

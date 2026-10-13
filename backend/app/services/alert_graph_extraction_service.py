@@ -59,7 +59,7 @@ from typing import Any, Iterable
 from app.services.alert_field_service import is_machine_account
 from app.services import panos_field_map
 from app.services.technique_attribution_service import (
-    BOTH,
+    RULE_CONFIRMED,
     MODEL_ONLY,
     RULE_ONLY,
 )
@@ -997,7 +997,7 @@ def _populate(
         tid for i in ids for tid in _technique_ids(str(i))
     )
     for tid in rule_ids:
-        named = BOTH if tid in confirmed else RULE_ONLY
+        named = RULE_CONFIRMED if tid in confirmed else RULE_ONLY
         technique = b.node(
             "technique", f"technique:{tid}", tid,
             OBSERVED if tid in confirmed else INFERRED, id=tid, named_by=named,
@@ -1015,6 +1015,36 @@ def _populate(
         )
         b.edge("evidenced_by", anchor, technique, basis=INFERRED,
                named_by=MODEL_ONLY)
+
+    # ---- One claim at two depths is not a disagreement --------------------
+    #
+    # Rules skew to parent techniques and the assessment emits both, so a rule
+    # claiming T1071 beside telemetry supporting T1071.001 draws two nodes —
+    # one `rule_only`, one `model_only` — which reads as the rule and the
+    # evidence contradicting each other. They agree, and the telemetry is more
+    # precise. 202 runs are in this state.
+    #
+    # This needs no new provenance: both nodes are already drawn and already
+    # evidenced by this alert. The only missing thing is the relation between
+    # them, and its warrant is ATT&CK's own hierarchy — the same warrant as
+    # the technique names already rendered, and MITRE's claim rather than
+    # ours. Stated as such on the edge.
+    #
+    # Distinct from drawing a *successor* for a retired id, which is blocked:
+    # nothing in the alert evidenced the successor, so that node would assert
+    # a claim nobody made and could carry no truthful edge. See
+    # docs/problems/drawing-a-successor-technique.md.
+    drawn_techniques = sorted(set(rule_ids) | (model_only - set(rule_ids)))
+    for child in drawn_techniques:
+        if "." not in child:
+            continue
+        parent = child.split(".", 1)[0]
+        if parent not in drawn_techniques:
+            continue
+        b.edge(
+            "refines", f"technique:{child}", f"technique:{parent}",
+            basis=INFERRED, warrant="attack_hierarchy",
+        )
 
     # ---- Risk, carried on every node this alert touched ------------------
     # Two different numbers, kept apart. `indicator_risk_score` is the

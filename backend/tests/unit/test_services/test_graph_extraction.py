@@ -871,3 +871,71 @@ def test_duplicates_collapse_and_order_is_kept():
     assert _technique_ids("{0=T1106, 1=T1055.001, 2=T1106}") == [
         "T1106", "T1055.001",
     ]
+
+
+# --- a claim at two depths is a refinement, not a contradiction ------------
+#
+# Rules skew to parents and the assessment emits both, so T1071 from the rule
+# beside T1071.001 from the telemetry draws two nodes with opposing
+# provenance, which reads as disagreement. They agree. 202 runs are in this
+# state, and the CLI already excludes them from the conflicts sent to
+# detection owners — the graph did not.
+
+def _extracted(rule_ids, model_only):
+    import json
+    body = json.dumps({
+        "rule": {"mitre": {"id": rule_ids}, "id": "1", "description": "x"},
+        "agent": {"name": "h1"},
+    })
+    return extract(body, risk_score=10, confirmed_techniques=[],
+                   model_only_techniques=model_only)
+
+
+def _refines(ex):
+    return {(e.source, e.target) for e in ex.edges if e.kind == "refines"}
+
+
+def test_a_sub_technique_refines_the_parent_drawn_beside_it():
+    ex = _extracted(["T1071"], ["T1071.001"])
+    assert _refines(ex) == {("technique:T1071.001", "technique:T1071")}
+
+
+def test_the_relation_is_drawn_whichever_side_named_which():
+    """The rule may hold the sub-technique and the telemetry the parent."""
+    ex = _extracted(["T1059.001"], ["T1059"])
+    assert _refines(ex) == {("technique:T1059.001", "technique:T1059")}
+
+
+def test_no_edge_when_the_parent_is_not_on_this_alert():
+    """The relation is between two nodes that are both already drawn and
+    already evidenced. Inventing the parent would be a different claim."""
+    ex = _extracted(["T1071.001"], [])
+    assert _refines(ex) == set()
+    assert not any(n.merge_key == "technique:T1071" for n in ex.entities)
+
+
+def test_no_edge_between_unrelated_techniques():
+    ex = _extracted(["T1071"], ["T1059"])
+    assert _refines(ex) == set()
+
+
+def test_no_edge_between_two_siblings():
+    """T1071.001 and T1071.002 are both refinements of a parent that is not
+    here; neither refines the other."""
+    ex = _extracted(["T1071.001"], ["T1071.002"])
+    assert _refines(ex) == set()
+
+
+def test_the_warrant_is_stated_as_attacks_and_not_ours():
+    ex = _extracted(["T1071"], ["T1071.001"])
+    edge = next(e for e in ex.edges if e.kind == "refines")
+    assert edge.attrs.get("warrant") == "attack_hierarchy"
+
+
+def test_both_nodes_keep_their_own_provenance():
+    """The edge explains the relation; it does not merge the two claims or
+    relabel either side."""
+    ex = _extracted(["T1071"], ["T1071.001"])
+    by_key = {n.merge_key: n for n in ex.entities if n.kind == "technique"}
+    assert by_key["technique:T1071"].attrs["named_by"] == "rule_only"
+    assert by_key["technique:T1071.001"].attrs["named_by"] == "model_only"

@@ -11,7 +11,7 @@ intersection, not the evidence and not the test rig.
 from __future__ import annotations
 
 from app.services.technique_attribution_service import (
-    BOTH,
+    RULE_CONFIRMED,
     MODEL_ONLY,
     RULE_ONLY,
     Attribution,
@@ -36,7 +36,7 @@ class TestTheFourStates:
         found = attribute(
             _assessment(claimed=[("T1055", "confirmed")]), rule_ids=["T1055"]
         )
-        assert found.of("T1055") == BOTH
+        assert found.of("T1055") == RULE_CONFIRMED
         assert found.corroborated() == ["T1055"]
 
     def test_a_rule_claim_with_nothing_behind_it(self):
@@ -178,4 +178,28 @@ class TestTheGraphDrawsAllFour:
         found = extract(body, confirmed_techniques=["T1055"])
         node = next(e for e in found.entities if e.kind == "technique")
         assert node.basis == OBSERVED
-        assert node.attrs.get("named_by") == BOTH
+        assert node.attrs.get("named_by") == RULE_CONFIRMED
+
+
+def test_rule_only_would_be_a_lie_if_the_assessment_overlapped() -> None:
+    """`rule_only` says "the rule claimed it and nothing backed it up".
+
+    That is true only because `additional_techniques` never contains an id the
+    rule claimed — measured across all 16,725 stored assessments, 0 overlap.
+    Nothing in `attribute` enforces it: `states.setdefault` would leave such an
+    id `rule_only` while two sources had in fact named it, which is the
+    strongest corroboration available being labelled as the weakest. Pinned
+    here so the day the assessment changes shape, this fails rather than the
+    label quietly starting to lie.
+    """
+    found = attribute(
+        {
+            "techniques": [{"id": "T1059", "status": "not_corroborated"}],
+            "additional_techniques": [{"id": "T1059", "status": "additional"}],
+        },
+        rule_ids=["T1059"],
+    )
+    assert found.of("T1059") == RULE_ONLY, (
+        "if this ever fails, the overlap now exists in the data and the label "
+        "is wrong for those ids — see docs/problems/provenance-at-different-depths.md"
+    )
