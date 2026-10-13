@@ -4,6 +4,46 @@ Automated, evidence-based domain threat investigation platform powered by Claude
 
 ---
 
+## Where values are born
+
+The one invariant to hold before reading anything else here, because almost
+every confused question about this codebase is a question asked of the wrong
+layer:
+
+| layer | what it holds | written by |
+|---|---|---|
+| `alert_body_investigation_runs.alert_body` | the source's own text, untouched | ingest |
+| `alert_graph_entity` / `alert_graph_edge` | **exactly what extraction produced**, per run | `extract()`, via the materialisation sweep |
+| the assembled graph | merges, folds, enrichment, ATT&CK naming, reused-infrastructure flags | `assemble()` / `graph_for_runs()`, **at read time** |
+| the endpoint payload | case overlays — criticality, supersession, pivots, draw summary | `get_case_graph` |
+
+**Storage records what was extracted. Everything derived happens on read and
+is never stored.** So `alert_graph_entity` will never contain
+`absorbed_parent`, a technique's `name`, its `tactic` or an enrichment
+verdict, and a query looking for one there returns zero rows for ever — which
+looks exactly like the feature being broken. Verified 2026-10-13: 0 stored
+technique rows carry any of them, and 0 rows of any kind carry enrichment.
+
+One caution when checking this yourself: attribute names are not unique across
+node kinds. `attrs ? 'name'` matches a *service* node, where `name` is the
+service's own name and is extraction output. Scope the check to the kind you
+mean.
+
+The same line answers the other direction. A change to extraction needs the
+runs re-materialised before it appears; a change to assembly, naming or
+enrichment appears on the next request with no backfill at all. The `refines`
+edge needed a drain; the parent/child fold did not, and that followed from
+this table rather than from a measurement.
+
+**A new source is what tests this.** When CrowdStrike lands it brings new
+extraction, and the invariant holds only if nothing CrowdStrike-derived is
+computed at read time and nothing currently derived gets stored because it was
+convenient during the integration. If that line stops being true, the next
+wrong-layer question has no answer at all — which is worse than today, where
+the answer existed as soon as somebody looked.
+
+---
+
 ## Read these before changing anything
 
 Eight rules that were learned expensively and are not obvious from the code:
