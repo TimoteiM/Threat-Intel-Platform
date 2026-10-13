@@ -190,3 +190,66 @@ queries into one changed the runtime by nothing, because the cost is per-row
 extraction rather than per-scan — a hypothesis worth recording as refuted. The
 right home is a scheduled task storing its result, exactly as `watch_heartbeat`
 does. Not built.
+
+
+---
+
+## Addendum, 2026-10-13: the listing dates, and a claim corrected
+
+The audit above concluded that no verdict rested on ThreatFox's silence.
+That was true and it was true for a reason the audit had not established.
+Without comparing each listing's `first_seen` against our own verdict date,
+"no wrong verdicts" cannot distinguish **we did not miss it** from **it was
+not knowable then** — and those are different claims about the audit, not
+about the domains.
+
+So the comparison was run over the whole silent period: every observable that
+reached a verdict on a row whose `feeds_skipped` carries
+`threatfox (error: HTTPError)` — 1,824 observables across 517 distinct hosts
+— each asked again today and each match scoped with `about_observable`.
+
+| | |
+|---|---|
+| scoped ThreatFox hits | **26** |
+| listing **predates** our first verdict (knowable at the time) | **25** |
+| listing postdates our last verdict (not knowable then) | 1 |
+| listing between first and last verdict | 0 |
+| listing undated | 0 |
+| hosts refused as `illegal_search_term` | 7 |
+
+So the answer is the opposite of the comfortable one: **25 of 26 were
+knowable when we judged them.** ThreatFox had the listing, sometimes for
+months — `dntds.shop` since 2026-04-03 against a 2026-07-24 verdict,
+`purerawk.com` since 2026-06-03 against 2026-08-24 — and we never asked.
+
+And every one of those 25 was classified **malicious at high confidence
+anyway**. Not one benign, not one suspicious. Something else caught all 25:
+ClearFake, SmartApeSG, FAKEUPDATES and Nanocore infrastructure that
+VirusTotal, urlscan or the HTTP signals reached independently.
+
+The single exception that postdates its verdict is `grupobiopar.com.br`,
+listed 2026-09-23 against a 2026-08-24 benign verdict — see
+`docs/outbound/grupobiopar-now-listed.md`.
+
+### What this changes
+
+* the conclusion stands, and now rests on evidence: ThreatFox's silence
+  changed **zero** verdicts, because on all 25 knowable cases other sources
+  independently reached malicious/high — not because the listings came too
+  late;
+* it is also a measurement of ThreatFox's **marginal** value on this estate:
+  25 of 25 knowable positives were redundant. That is worth weighing before
+  anything is built that treats it as decisive;
+* and it narrows the earlier "45 positives, 44 shared-provider apexes" figure,
+  which was counted **before** scoping. Scoped to the observable, over the
+  population that actually lost the feed, the number is 26.
+
+### A side finding
+
+7 of 517 "hosts" were rejected by ThreatFox as `illegal_search_term`:
+`02.id`, `b.bo`, `e.ga`, `n.net`, `nc.de`. These are not domains. They are
+extraction artefacts of the delimiter-boundary family, and the platform
+opened investigations on them. `illegal_search_term` is correctly recorded as
+`unrecognised_absence` today, since it is not in the measured refusal set —
+but it is now measured, and it means something specific: the question was
+malformed, not refused.

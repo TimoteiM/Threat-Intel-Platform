@@ -89,6 +89,12 @@ WINDOW_DAYS = 90
 #: `check_failed`, not as a 0% rate and not as too little history.
 SOURCES: dict[str, str] = {
     "threatfox": "evidence_json->'threat_feeds'->'threatfox_matches'",
+    # Added 2026-10-13. It was missing, and it is 70.5% dead: `feeds_skipped`
+    # carries `otx (error: HTTPError)` on 1,567 of 2,221 rows in the window
+    # plus 112 ReadTimeouts. The check built to find sources that stopped
+    # answering did not cover one that had — the eighth instance of the
+    # hand-maintained list that swallows an entry with no error.
+    "otx": "evidence_json->'threat_feeds'->'otx'",
     "abuseipdb": "evidence_json->'threat_feeds'->'abuseipdb'",
     "phishtank": "evidence_json->'threat_feeds'->'phishtank'",
     "virustotal": "evidence_json->'vt'",

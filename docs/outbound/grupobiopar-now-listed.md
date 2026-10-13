@@ -32,8 +32,11 @@ Asked today, with a working credential:
 | first seen | **2026-09-23 15:25 UTC** |
 | last seen | 2026-10-06 13:49 UTC |
 
-URLhaus has nothing for it, and this is the one domain out of 1,829 in the
-seven-month ThreatFox audit that is both listed and *not* a shared-provider
+URLhaus has nothing for it. Of the 26 scoped ThreatFox listings across the
+whole silent period, this is the **only one** whose listing postdates our
+verdict: the other 25 were already listed when we judged them, and every one
+of those 25 we called malicious at high confidence anyway on other evidence.
+It is also the one listed domain that is not a shared-provider
 apex — the other 44 were Discord, Cloudflare, Microsoft and similar, where a
 listing describes somebody else's content on shared infrastructure rather
 than the domain.
@@ -70,6 +73,14 @@ A verdict is a statement about the evidence on a date. Our storage treats it
 as a standing conclusion. There is no mechanism that revisits a concluded
 investigation when a feed later lists its subject, so the gap is as wide as
 the archive.
+
+## One sentence for the related policy question
+
+If the `len(intel_hits) >= 2` threshold comes to you in the same sitting:
+**one decisive source cannot escalate, but two entries from the same zone
+can — the threshold counts verbosity, not corroboration.** One Spamhaus DBL
+listing produces one entry and does not escalate; one URLhaus listing used to
+produce up to eleven and did.
 
 ## The two questions
 
