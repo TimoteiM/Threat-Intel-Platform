@@ -39,7 +39,8 @@ The criterion that matters is narrow:
 
 Applying that to the four expressions in `decision_engine` where absence
 lowers risk — `observable_clean`, `anyrun_label_contradicted`,
-`authoritative_clean`, `reputation_available` — gives a list of five, not 198.
+`authoritative_clean`, `reputation_available` — gives a list of five, not 198 — and the grain split below removes one of
+those five, leaving four.
 
 ## The actual list
 
@@ -54,16 +55,37 @@ Measured over 2,221 evidence rows, 90 days to 2026-10-13.
 | **openphish** | `not openphish_listed` | **yes** — in `feeds_checked` on 98.3% of rows | **no** |
 | **urlscan** | `not urlscan_malicious` | yes — `urlscan.meta.status`, completed on 98.3% | **no** |
 | **http signals** | `not high_conf_http` | yes — `http.reachable` true on 84.1%, `meta.status` completed on 97.9% | **no** |
-| ANY.RUN / hybrid | `anyrun_verdict not in {malicious, suspicious}` | yes — `meta.status`, completed on only **45.2%** | **no, deliberately** |
+| ANY.RUN / hybrid | `anyrun_verdict not in {malicious, suspicious}` | yes — `meta.status`, which also emits `skipped` | **no, deliberately** — see the split below |
 
 So for four of them the flag already exists and nothing reads it — the same
 finding for the third and fourth time in two days. The fix is not new
 plumbing; it is consuming a field that is already written.
 
-The ANY.RUN row is a documented decision, not an oversight: requiring
-`anyrun == "clean"` once meant a sandbox that never ran blocked every benign
-verdict. Worth keeping — but the scale of it belongs on record. **54.8% of
-runs have no completed sandbox**, and all of them read as not-flagged.
+The ANY.RUN row needed its grain split before it could be filed, and the
+split moves it off this list almost entirely. "54.8% have no completed
+sandbox" lumps three states that mean different things:
+
+| state | rows | share |
+|---|---|---|
+| completed | 1,005 | 45.2% |
+| **attempted and failed** | **2** | **0.1%** |
+| never attempted (`meta.status = "skipped"`) | 1,214 | 54.7% |
+| not applicable to the observable type | 0 | 0.0% |
+
+So the absence-as-value exposure on the dominant dynamic signal is **2 rows**,
+not 1,214 — and both of those are
+`IntegrityError: UniqueViolation`, a database defect rather than a provider
+failure. The 54.7% were never attempted *by policy*: `hybrid_analysis` is in
+`OPT_IN_COLLECTORS` and is not part of the default selection. That is a
+selection fact, not a hidden failure, and the collector records it explicitly
+as `meta.status = "skipped"` — a fourth state the asked/answered question
+needs and that none of the other sources emit.
+
+What remains true is narrower and belongs with per-verdict coverage rather
+than here: `anyrun_not_flagged` reads "skipped" identically to "ran and found
+nothing", so 54.7% of verdicts were reached with no dynamic analysis and the
+page does not say so. Not an absence erased by a default — an absence
+recorded accurately and never surfaced.
 
 ## A fifth, found on the way
 

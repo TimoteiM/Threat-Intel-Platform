@@ -74,10 +74,16 @@ MIN_OBSERVATIONS = 50
 WINDOW_DAYS = 90
 
 #: Each source, and the JSONB path whose non-emptiness means "this source
-#: returned something". Declared rather than discovered: a source that stops
-#: appearing in the evidence at all is a different fault, and a check that
-#: silently stopped covering it would be the hand-maintained-list failure
-#: this codebase has had seven times.
+#: returned something".
+#:
+#: Still written out, because a JSONB path is not derivable from a collector
+#: class — but no longer *trusted* to be complete. `otx` was missing from
+#: this dict while being 70% dead, which is the check built to find dead
+#: sources failing to cover one, and the third hand-maintained list to
+#: swallow an entry on 2026-10-13. So `uncovered_collectors()` below derives
+#: the expected scope from `COLLECTOR_REGISTRY` and `answer_rates` reports
+#: what this dict is missing, in its own output, every time it runs. A list
+#: that cannot be derived can still be audited against the thing it shadows.
 #:
 #: `test_source_answer_rate` checks that each path is **well formed** — rooted
 #: in `evidence_json` and quoted. It does not and cannot check that a path
@@ -209,6 +215,61 @@ class SourceAnswers:
         }
 
 
+#: Collectors whose output this check does not read, keyed by collector, with
+#: why. Written down so the gap is a stated exemption rather than an
+#: omission — the distinction `docs/deploy/schema-changes.md` makes about
+#: named non-instruments.
+UNMEASURED: dict[str, str] = {
+    "dns": "resolution, not a reputation source; emptiness is a real answer",
+    "http": "fetches the page itself; covered by `source_coverage` per verdict",
+    "tls": "reads the presented certificate; not a source that can decline",
+    # Also measured per verdict: 236 of 2,184 rows failed (10.8%), which
+    # nothing had counted before `source_coverage` derived its scope from
+    # the registry.
+    "whois": "registry data; emptiness is a real answer, but 10.8% of rows "
+             "are collector failures — see source_coverage",
+    "asn": "routing data; emptiness is a real answer",
+    # Exemption corrected 2026-10-13. It said "opt-in, so a low rate is a
+    # selection fact not a fault" — which was wrong: brave_osint records
+    # `meta.status = "failed"` on 746 of 1,773 rows (42.1%), HTTP 402
+    # Payment Required, 2026-08-20 to 2026-09-22. A lapsed subscription, not
+    # a selection. Left exempt here because `source_coverage` measures it
+    # per verdict from `meta.status`, which is the right grain for a
+    # collector that has no single "did it answer" JSONB path — but the
+    # reason is now the true one.
+    "brave_osint": "measured per verdict by source_coverage; 42.1% failed "
+                   "(HTTP 402) in the last 90 days",
+    "hybrid_analysis": "opt-in; 54.7% of rows are `meta.status = skipped` "
+                       "and only 2 are failures",
+    "cape": "opt-in detonation, not an enrichment lookup",
+    # 61 failures in 90 days, and 45 of them are
+    # `AttributeError: 'NoneType' object has no attribute 'get'` — a defect
+    # in the collector rather than an outage.
+    "opencti": "local instance, not an external provider; 2.8% failures, "
+               "mostly an AttributeError in the collector",
+}
+
+
+def uncovered_collectors() -> dict[str, str]:
+    """Registered collectors that this check neither measures nor exempts.
+
+    Derived from `COLLECTOR_REGISTRY` rather than listed, so a new collector
+    appears here the moment it is registered. Returns {collector: reason}.
+    """
+    from app.collectors.registry import COLLECTOR_REGISTRY
+
+    # Which collector each measured source's path reads out of.
+    measured = {
+        path.split("->")[1].strip("'") for path in SOURCES.values()
+    } | set(COLLECTOR_OF.values())
+    return {
+        name: "registered collector with no entry in SOURCES and no stated "
+              "exemption in UNMEASURED"
+        for name in sorted(COLLECTOR_REGISTRY)
+        if name not in measured and name not in UNMEASURED
+    }
+
+
 async def answer_rates(
     db: AsyncSession, *, days: int = WINDOW_DAYS, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -284,6 +345,11 @@ async def answer_rates(
         "never_answered": sorted(silent),
         "never_asked": sorted(never_asked),
         "never_present": sorted(never_present),
+        # The check's own scope, reported in the check's own output. An
+        # instrument that cannot say what it does not cover is the shape that
+        # let `otx` be 70% dead and uncounted.
+        "collectors_not_covered": uncovered_collectors(),
+        "collectors_exempt": sorted(UNMEASURED),
         "note": (
             "A source at 0% over a meaningful window is broken, whatever it "
             "claims. This reports and does not alarm: the threshold for "

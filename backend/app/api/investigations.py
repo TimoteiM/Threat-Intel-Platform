@@ -205,12 +205,32 @@ async def delete_investigation(investigation_id: str, session: DBSession):
 
 @router.get("/{investigation_id}/evidence")
 async def get_evidence(investigation_id: str, session: DBSession):
-    """Get collected evidence JSON."""
+    """Get collected evidence JSON, with this verdict's source coverage.
+
+    `source_coverage` is **derived on read**, never stored, per the layer
+    contract at the top of the README. Two consequences, both wanted: it
+    works for every historical verdict with no backfill — the inputs
+    (`meta.status`, `feeds_checked`, `sources_checked`) were always there,
+    and nothing read them — and it cannot drift from the evidence it
+    describes.
+
+    It is what makes "4 of 8 sources unavailable" visible on a verdict from
+    2026-09-15, when VirusTotal was rate-limited, the intel collector had
+    been dead six weeks, ThreatFox was 401-ing and OTX was erroring on 70%
+    of runs. Additive: the key is new, nothing existing moved.
+    """
     service = InvestigationService(session)
     evidence = await service.get_evidence(investigation_id)
     if not evidence:
         raise HTTPException(404, "Evidence not yet collected")
-    return evidence
+
+    from app.services.source_coverage_service import coverage
+
+    inv = await service.get(investigation_id)
+    observable_type = getattr(inv, "observable_type", None) if inv else None
+    payload = dict(evidence)
+    payload["source_coverage"] = coverage(evidence, observable_type).as_json()
+    return payload
 
 
 @router.get("/{investigation_id}/report")

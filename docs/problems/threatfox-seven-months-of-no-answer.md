@@ -1,5 +1,13 @@
 # ThreatFox answered nothing for seven months, and the code reported "no hits"
 
+> **Measured value, so nobody spends an afternoon on this again.** Over
+> seven months of total silence ThreatFox would have changed **zero**
+> verdicts: 25 of 25 knowable positives were already caught as
+> malicious/high by other sources, and the one non-redundant case
+> postdates its own verdict. Chasing it found the dead intel collector,
+> OTX at 70% failure and the VirusTotal load collapse — which *do*
+> matter. The feed itself earns almost nothing at host granularity here.
+
 Audit, 2026-10-13. Prompted by a 401 in the worker log a day after the feed
 was declared fixed.
 

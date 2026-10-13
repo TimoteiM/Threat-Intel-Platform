@@ -71,3 +71,48 @@ def test_every_declared_source_reads_a_plausible_path(source, path):
 def test_the_sources_cover_the_feed_that_caused_this():
     assert "threatfox" in SOURCES
     assert "threatfox_matches" in SOURCES["threatfox"]
+
+
+# ─── the check's own scope, and whether that guard can fail ───────────────
+
+def test_no_registered_collector_is_silently_uncovered():
+    """Every collector is either measured by SOURCES or exempt in UNMEASURED.
+
+    `otx` was neither for 90 days while being 70% dead — the check built to
+    find sources that stopped answering did not cover one that had.
+    """
+    from app.services.source_answer_rate_service import uncovered_collectors
+
+    assert uncovered_collectors() == {}
+
+
+def test_the_coverage_guard_can_actually_fail(monkeypatch):
+    """What this check would print if the answer were bad.
+
+    A guard that passes because it cannot fail is decoration — three such
+    checks in a row reported "fine" on 2026-10-12. So: register a collector
+    and assert the guard notices.
+    """
+    from app.collectors import registry
+    from app.collectors.base import BaseCollector
+    from app.services.source_answer_rate_service import uncovered_collectors
+
+    class _Newcomer(BaseCollector):
+        name = "brand_new_feed"
+        supported_types = frozenset({"domain"})
+
+    monkeypatch.setitem(registry.COLLECTOR_REGISTRY, "brand_new_feed", _Newcomer)
+    assert "brand_new_feed" in uncovered_collectors()
+
+
+def test_nothing_is_both_measured_and_exempt():
+    """A contradiction would make the guard pass while the exemption claimed
+    the source needs no measuring."""
+    from app.services.source_answer_rate_service import (
+        COLLECTOR_OF,
+        UNMEASURED,
+    )
+
+    assert not (set(COLLECTOR_OF.values()) & set(UNMEASURED)), (
+        "a collector is both measured and exempt"
+    )

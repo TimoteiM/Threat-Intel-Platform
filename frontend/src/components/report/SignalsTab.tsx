@@ -11,9 +11,74 @@ interface Props {
 export default function SignalsTab({ evidence }: Props) {
   const signals = Array.isArray(evidence?.signals) ? evidence.signals : [];
   const dataGaps = Array.isArray(evidence?.data_gaps) ? evidence.data_gaps : [];
+  // Derived on read by the API from each collector's own `meta.status`, so it
+  // is present on historical verdicts too. On 2026-09-15, nine of eighteen
+  // sources were unavailable and the page said nothing.
+  const coverage: any = (evidence as any)?.source_coverage ?? null;
+  const unavailable: any[] = Array.isArray(coverage?.sources)
+    ? coverage.sources.filter((s: any) => s?.state === "failed")
+    : [];
+  const notAsked: string[] = Array.isArray(coverage?.not_attempted_sources)
+    ? coverage.not_attempted_sources
+    : [];
 
   return (
     <div>
+      {coverage && (
+        <Section title="Source coverage for this verdict">
+          <div
+            style={{
+              padding: "10px 14px",
+              background:
+                unavailable.length > 0
+                  ? "rgba(240,112,80,0.04)"
+                  : "rgba(80,200,140,0.04)",
+              border:
+                unavailable.length > 0
+                  ? "1px solid rgba(240,112,80,0.12)"
+                  : "1px solid rgba(80,200,140,0.12)",
+              borderRadius: "var(--radius-sm)",
+              marginBottom: 8,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: unavailable.length > 0 ? "var(--red)" : "var(--text)",
+              }}
+            >
+              {coverage.headline || "Source coverage unknown"}
+            </div>
+            {unavailable.length > 0 && (
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                {unavailable.map((s: any, i: number) => (
+                  <div key={s?.source || i} style={{ fontSize: 11 }}>
+                    <span style={{ color: "var(--red)", fontWeight: 600 }}>
+                      {s?.source}
+                    </span>
+                    <span style={{ color: "var(--text-dim)" }}>
+                      {" — "}
+                      {s?.absence?.reason || s?.detail || "did not answer"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {notAsked.length > 0 && (
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+                Not asked (outside this run&apos;s selection, so not a gap):{" "}
+                {notAsked.join(", ")}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+              A source that did not answer is not a source that found nothing.
+              An empty result from an unavailable source carries no information
+              about this observable.
+            </div>
+          </div>
+        </Section>
+      )}
       <Section title="Signals (investigative clues, not conclusions)">
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {signals.length === 0 ? (

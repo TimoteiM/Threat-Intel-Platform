@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Ten rules that were learned expensively and are not obvious from the code:
+Eleven rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -152,6 +152,19 @@ Ten rules that were learned expensively and are not obvious from the code:
   *lowers* risk toward benign, and not where it would raise risk toward a
   block: requiring a feed to have answered before the platform will decline
   to auto-block makes an outage cause blocks.
+
+- **[Recording a failure is not reading it](docs/problems/per-verdict-source-coverage.md)**
+  — every multi-month outage found on 2026-10-13 was already written down, on
+  every affected row, in a field built for the purpose: ThreatFox's 401 in
+  `feeds_skipped`, the intel collector's 2,198 consecutive failures in
+  `meta.status`, OTX at 70%, VirusTotal's rate limits, brave_osint's lapsed
+  subscription at 42%. The defect was never the recording. Nothing consumed
+  it, and no surface showed it to the person making the decision — so a
+  verdict reached with nine of eighteen sources unavailable looked exactly
+  like one reached with all of them. When adding a failure state, name the
+  consumer and the surface in the same change, and **derive the expected set
+  from the registry** rather than listing it: `otx` was missing from the
+  check built to find dead sources while being 70% dead.
 
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow
