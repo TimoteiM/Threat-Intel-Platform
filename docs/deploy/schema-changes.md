@@ -215,6 +215,47 @@ self-consistent; a skew is not.
 Note the inversion against the `.env` row. There the files are stale and
 `restart` is useless; here the files are fine and only the process is stale.
 
+### The frontend answers the same question, as a pair
+
+    curl -s localhost:3000/ | grep x-build-fingerprint   # from the HTML
+    # and the browser console logs the fingerprint compiled into the bundle
+
+They are **not** two readable copies of one fact. The meta tag arrives with
+the HTML, which is not cached the way hashed JS is; the console line is
+compiled into the bundle. **If they disagree, the HTML is fresh and the
+bundle is cached**, which is the same comparison as API against worker, one
+layer up — and it is the layer that would otherwise send the next person back
+to elimination.
+
+The first version put the console line in an inline `<script>` in the layout.
+That ships with the HTML, so the two would always have agreed: a check
+incapable of returning the bad answer, which is the failure this document
+exists to stop.
+
+### An open question: is this machine dev or prod?
+
+**`--reload` is a hazard created by the fix, and the decision has not been
+made.** This box ingests live alerts. `backend/` is bind-mounted and
+WatchFiles watches it, so **any save under `backend/` swaps the running
+analyser mid-ingest** — including a file someone opens to read and saves out
+of habit, or an editor writing on focus-loss. Uvicorn drains in-flight
+requests, but a reload during a batch is still a process boundary nothing in
+the pipeline was designed around.
+
+That is ordinary on a development box and wrong on one processing real
+traffic. The two answers:
+
+- **dev** — leave `--reload` on, keep the split restart row for `worker` and
+  `beat`, and accept that an editor save restarts the API.
+- **prod** — take `--reload` off and rely on the restart row for all three,
+  which is the state of 2026-10-12 plus the knowledge of how to detect it:
+  `/health`'s `code.imported_at` and the `code_version` task make the
+  staleness visible in one call, which is what made it invisible before.
+
+Not decided, and deliberately not changed while unresolved. Whoever decides
+should also note that `--reload` is currently the only reason the API and the
+worker can diverge at all.
+
 ### Container start time no longer answers anything
 
 **Fixing this invalidated the instrument that found it.** The staleness above

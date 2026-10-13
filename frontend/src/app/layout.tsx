@@ -3,6 +3,7 @@ import "@/styles/globals.css";
 import AppShell from "@/components/layout/AppShell";
 import SettingsPreferencesProvider from "@/components/settings/SettingsPreferencesProvider";
 import ThemeScript from "@/components/settings/ThemeScript";
+import BuildStampClient from "@/components/layout/BuildStampClient";
 import { APP_BRAND, APP_SUBTITLE } from "@/lib/constants";
 
 export const metadata: Metadata = {
@@ -23,8 +24,10 @@ export const metadata: Metadata = {
  * shows the wrong thing, this says in one glance whether the browser is even
  * running the build you made, before anyone starts eliminating layers.
  *
- * A meta tag so it is readable without the console, and a console line so it
- * is readable without view-source. Both, because the two audiences differ.
+ * The meta tag here and the console line in `BuildStampClient` are a pair,
+ * not redundancy: this one arrives with the HTML, that one is compiled into
+ * the JS bundle. If they disagree, the HTML is fresh and the bundle is
+ * cached — the same comparison as API against worker, one layer up.
  */
 function BuildStamp() {
   const fingerprint = process.env.NEXT_PUBLIC_BUILD_FINGERPRINT || "unavailable: not set at build time";
@@ -33,17 +36,6 @@ function BuildStamp() {
     <>
       <meta name="x-build-fingerprint" content={fingerprint} />
       <meta name="x-build-files" content={files} />
-      <script
-        dangerouslySetInnerHTML={{
-          __html:
-            "console.info('build %c" +
-            fingerprint.slice(0, 16) +
-            "%c (" +
-            files +
-            " source files) — compare with /health .code.code_fingerprint for the API'," +
-            "'font-weight:bold','');",
-        }}
-      />
     </>
   );
 }
@@ -56,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <ThemeScript />
+        <BuildStampClient />
         <SettingsPreferencesProvider>
           <AppShell>{children}</AppShell>
         </SettingsPreferencesProvider>
