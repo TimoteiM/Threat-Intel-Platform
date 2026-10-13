@@ -55,7 +55,17 @@ def test_scope_guard_recomputes_lookup_from_matching_domain_tasks_only():
         # how seven months of ThreatFox 401s stayed invisible. A fixture
         # asserting "clean controls" has to say the controls ran.
         "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-        "intel": {"blocklist_hits": []},
+        # A clean control has to say the check ran. `{"blocklist_hits": []}`
+        # alone is the state 2,198 runs were in from 2026-07-07: the intel
+        # collector failed outright and the empty list was a Pydantic default,
+        # not a negative. Naming the sources is what production records now.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
         "whois": {"domain_age_days": 3873},
         "http": {
             "has_login_form": False,

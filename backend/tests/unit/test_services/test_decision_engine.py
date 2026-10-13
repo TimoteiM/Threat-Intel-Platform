@@ -18,7 +18,17 @@ def test_decision_engine_overrides_ai_verdict_for_contextual_http_only():
         "hybrid_analysis": {"verdict": "clean", "score": 0},
         "whois": {"domain_age_days": 5000},
         "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-        "intel": {"blocklist_hits": []},
+        # A clean control has to say the check ran. `{"blocklist_hits": []}`
+        # alone is the state 2,198 runs were in from 2026-07-07: the intel
+        # collector failed outright and the empty list was a Pydantic default,
+        # not a negative. Naming the sources is what production records now.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
     }
     decision = build_decision_report(evidence, "domain")
     ai_report = {
@@ -48,7 +58,13 @@ def test_decision_engine_flags_anyrun_malicious_without_ai():
                 "items": [{"verdict": "malicious", "threat_names": ["phishing"]}],
             },
             "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-            "intel": {"blocklist_hits": []},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
             "whois": {"domain_age_days": 400},
         },
         "domain",
@@ -86,7 +102,13 @@ def test_decision_engine_summary_prioritizes_anyrun_residential_sandbox():
                 ],
             },
             "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-            "intel": {"blocklist_hits": []},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
         },
         "domain",
     )
@@ -126,7 +148,13 @@ def test_decision_engine_flags_anyrun_clickfix_tags_as_malicious():
                 ],
             },
             "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-            "intel": {"blocklist_hits": []},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
             "whois": {"domain_age_days": 3204},
         },
         "domain",
@@ -265,7 +293,13 @@ def test_decision_engine_does_not_treat_generic_clean_anyrun_tags_as_malicious()
                 ],
             },
             "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
-            "intel": {"blocklist_hits": []},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
             "whois": {"domain_age_days": 3204},
         },
         "domain",
@@ -300,7 +334,13 @@ def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious(monkeypa
             },
             "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
             "threat_feeds": {"openphish_listed": False, "threatfox_matches": [], "phishtank": {"verified": False}},
-            "intel": {"blocklist_hits": []},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
             "whois": {"domain_age_days": 2612},
             "hybrid_analysis": {"items": [{"verdict": "clean"}]},
             "url_lexical_ml": {
@@ -343,6 +383,16 @@ def _clean_business_site(**overrides) -> dict:
         "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
         "whois": {"domain_age_days": 5246},
         "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+        # A 14-year-old company site is a *clean control*, so the controls
+        # have to have run. Without this the fixture asserted that four
+        # blocklists cleared a domain none of them was asked about.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
         "url_lexical_ml": {"label": "low", "score": 0.1466},
         "email_security": {"spoofability_score": "low"},
         "infrastructure_pivot": {

@@ -41,7 +41,17 @@ def _clean_evidence(**feeds) -> dict:
             **feeds,
         },
         "whois": {"domain_age_days": 4000},
-        "intel": {"blocklist_hits": []},
+        # A clean control has to say the check ran. `{"blocklist_hits": []}`
+        # alone is the state 2,198 runs were in from 2026-07-07: the intel
+        # collector failed outright and the empty list was a Pydantic default,
+        # not a negative. Naming the sources is what production records now.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
         "http": {},
         "urlscan": {},
         "hybrid_analysis": {},

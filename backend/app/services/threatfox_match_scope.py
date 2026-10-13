@@ -1,4 +1,11 @@
-"""Which ThreatFox hits are evidence *about this observable*.
+"""Which feed hits are evidence *about this observable*.
+
+Written for ThreatFox, and now used by URLhaus too, because the two share a
+granularity: both are asked about a **host** and answer with **paths**. The
+module keeps its name and gained a general primitive rather than acquiring a
+near-copy next door — the second implementation is always the stale one, and
+this codebase has paid for that with nine membership consumers, two parsers
+and three ATT&CK copies.
 
 ThreatFox search is substring-based, so asking it about a domain returns
 every IOC whose value contains that string. For a shared provider that is
@@ -57,6 +64,56 @@ def _host_of(value: str) -> str:
     return raw.rstrip(".")
 
 
+#: The category on a hit that describes a **host** rather than the observable
+#: itself: URLhaus's `url_count` for a shared platform, which on 2026-10-13
+#: was 9,654 for github.com and 22,665 for raw.githubusercontent.com. Named
+#: here rather than in the collector because it is the decision layer that
+#: must drop it, and the collector that must keep it in the evidence.
+HOST_AGGREGATE = "malware_hosted_on_host"
+
+#: Where an indicator sits relative to the observable.
+SAME_HOST = "same_host"        # the indicator IS this host
+PATH_ON_HOST = "path_on_host"  # a URL hosted on it, which is a different claim
+ELSEWHERE = "elsewhere"        # a different host that merely contains the string
+UNKNOWN = "unknown"            # the observable could not be read
+
+
+def _path_of(value: str) -> str:
+    raw = str(value or "").strip()
+    if "://" not in raw:
+        # A bare `host/path` form. Anything before the first slash is the host.
+        return ("/" + raw.split("/", 1)[1]) if "/" in raw else ""
+    parsed = urlparse(raw)
+    return (parsed.path or "") + (("?" + parsed.query) if parsed.query else "")
+
+
+def scope_of(observable: str, indicator: str) -> str:
+    """How `indicator` relates to `observable`. One of the four above.
+
+    This is the primitive both feeds need. A host-level listing on a shared
+    platform is `PATH_ON_HOST` relative to any specific URL we were asked
+    about, and that is the distinction seven months of silence hid: the
+    2026-10-13 re-query found URLhaus listings on github.com,
+    raw.githubusercontent.com, discord.com and www.google.com, and **not one**
+    of them was for the path this platform had actually investigated.
+    """
+    target = _host_of(observable)
+    if not target:
+        return UNKNOWN
+    host = _host_of(indicator)
+    if host != target:
+        return ELSEWHERE
+    ind_path = _path_of(indicator).rstrip("/")
+    obs_path = _path_of(observable).rstrip("/")
+    if not ind_path:
+        return SAME_HOST
+    # The indicator names a path. It is about our observable only if it is
+    # our observable's path, or sits under it.
+    if obs_path and (ind_path == obs_path or ind_path.startswith(obs_path + "/")):
+        return SAME_HOST
+    return PATH_ON_HOST
+
+
 def is_about(observable: str, match: Any) -> bool:
     """Whether this hit is evidence about `observable` itself.
 
@@ -65,18 +122,15 @@ def is_about(observable: str, match: Any) -> bool:
     not that Discord is. A sibling or unrelated domain that merely contains
     the string is not either.
     """
-    target = _host_of(observable)
-    if not target:
-        return False
     ioc_value = match.get("ioc_value") if isinstance(match, dict) else getattr(match, "ioc_value", "")
     ioc_type = match.get("ioc_type") if isinstance(match, dict) else getattr(match, "ioc_type", "")
-    host = _host_of(ioc_value)
-    if host != target:
+    scope = scope_of(observable, ioc_value)
+    if scope in {UNKNOWN, ELSEWHERE, PATH_ON_HOST}:
         return False
-    # The host matches. A `url` IOC still describes a path on that host
-    # rather than the host, so it only counts when the observable was itself
-    # that URL — which `_host_of` cannot tell us, so require a host-shaped
-    # IOC type.
+    # The host matches and no foreign path narrows it. A `url` IOC still
+    # describes a path on that host rather than the host, so it only counts
+    # when the observable was itself that URL — which a bare host comparison
+    # cannot tell us, so require a host-shaped IOC type.
     return str(ioc_type or "").strip().lower() in {"domain", "ip:port", "ip", ""}
 
 
@@ -99,3 +153,45 @@ def about_observable(observable: str, matches: Iterable[Any]) -> list[Any]:
     if not _host_of(observable):
         return matches
     return [m for m in matches if is_about(observable, m)]
+
+
+def intel_hits_about_observable(observable: str, hits: Iterable[Any]) -> list[Any]:
+    """The `intel.blocklist_hits` that are evidence about `observable` itself.
+
+    Two kinds of hit arrive in that list and they need different treatment:
+
+    * a **DNSBL** hit (SURBL, Spamhaus DBL) is the answer to a query for this
+      exact name, so its indicator is the observable by construction and it
+      always counts;
+    * a **URLhaus** hit comes from the `/v1/host/` endpoint, which answers a
+      host question with a list of URLs. Asked about `github.com` it reports
+      22,665 other people's payloads. Scoped, because restoring that feed at
+      host granularity would escalate every GitHub, Discord and Google URL in
+      the estate — which is most of them.
+
+    Unknown observable keeps everything, for the same reason as
+    `about_observable`: these hits are read as `and not intel_hits`, a
+    precondition for benign, so dropping what cannot be scoped would unlock
+    that branch while keeping it only blocks it.
+    """
+    hits = list(hits or [])
+    if not _host_of(observable):
+        return hits
+    kept = []
+    for hit in hits:
+        indicator = (
+            hit.get("indicator") if isinstance(hit, dict)
+            else getattr(hit, "indicator", "")
+        )
+        category = (
+            hit.get("category") if isinstance(hit, dict)
+            else getattr(hit, "category", "")
+        )
+        if str(category or "") == HOST_AGGREGATE:
+            # "N malicious URLs exist under this host" is not a statement
+            # about the host. It stays in the evidence as context and decides
+            # nothing.
+            continue
+        if scope_of(observable, indicator) != PATH_ON_HOST:
+            kept.append(hit)
+    return kept

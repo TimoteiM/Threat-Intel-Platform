@@ -164,6 +164,16 @@ class IntelHit(BaseModel):
 
 class IntelEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="intel"))
+    #: Which of the four sources behind `blocklist_hits` actually answered,
+    #: and why each of the others did not. `blocklist_hits: []` is produced by
+    #: four sources agreeing, by four sources failing, and by a collector that
+    #: never ran, and for 2,198 runs between 2026-07-07 and 2026-10-13 it was
+    #: the third — a 401 from an unrelated fourth source raised out of
+    #: `_collect` and every consumer read the Pydantic default as "nothing is
+    #: listed". These two fields are what makes those cases distinguishable;
+    #: `sources_skipped` values are `app.services.absence.Absent.as_json()`.
+    sources_checked: list[str] = []
+    sources_skipped: dict[str, Any] = {}
     blocklist_hits: list[IntelHit] = []
     allowlist_hits: list[IntelHit] = []
     related_certs: list[str] = []

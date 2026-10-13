@@ -7,6 +7,46 @@ Sources:
 - Abuse contact lookup via abuse.ch / URLhaus — free API
 
 Facts only. No interpretation.
+
+What a DNS blocklist says, and what it does not
+-----------------------------------------------
+Measured from the api container on 2026-10-13. Each zone publishes a name
+that is permanently listed, for exactly this purpose:
+
+    dbltest.com.dbl.spamhaus.org     (listed)  -> 127.255.255.254
+    test.surbl.org.multi.surbl.org   (listed)  -> 127.0.0.254
+    expertware.net.dbl.spamhaus.org            -> 127.255.255.254
+    expertware.net.multi.surbl.org             -> NXDOMAIN
+    vshkolu.cz.dbl.spamhaus.org                -> NXDOMAIN
+
+`127.255.255.254` is Spamhaus for "query via a public/open resolver" and
+`127.0.0.254` is SURBL's equivalent. Read the five lines together and the
+refusal is **per query, not per zone**: both zones refused their own test
+point and both answered an ordinary name, in the same minute. So this
+deployment is being rate-limited rather than blocked, which means
+
+  * an NXDOMAIN really is "not listed" — the query got through;
+  * a refusal really is no answer at all;
+  * and the two must not be the same value, which is the whole fix.
+
+It also means listings are being lost. The one name we know for certain is
+listed came back as a refusal, so the DNSBL half of this collector is
+answering incompletely, and the `sources_skipped` record is what makes that
+visible for the first time. Moving these queries to a resolver Spamhaus and
+SURBL will serve is the real repair; this code's job is to stop reporting the
+gap as a clean result.
+
+Three states, not two. A zone can answer "listed", answer "not listed"
+(NXDOMAIN, and only NXDOMAIN), or not answer. `socket.gaierror` covers the
+second and the third indistinguishably — EAI_AGAIN is a SERVFAIL or a dead
+resolver, not a clean domain — and the original code's comment asserted
+"NXDOMAIN = not listed (good)" for all of them. That is the same shape as
+seven months of ThreatFox silence, in DNS.
+
+The Spamhaus refusal family was recognised and SURBL's was not, so SURBL's
+`127.0.0.254` would have been read as a listing on every domain in the
+estate the moment the collector stopped crashing — a mass false positive
+created by the fix for a mass false negative.
 """
 
 from __future__ import annotations
@@ -20,8 +60,12 @@ from urllib.parse import quote
 
 import requests
 
+from typing import Any
+
 from app.collectors.base import BaseCollector
 from app.config import get_settings
+from app.services.absence import CHECK_FAILED, UNRECOGNISED, absent
+from app.services.threatfox_match_scope import HOST_AGGREGATE
 from app.models.schemas import CollectorMeta, IntelEvidence, IntelHit, CertTimelineEntry, CertTimelineEvidence
 
 logger = logging.getLogger(__name__)
@@ -38,12 +82,63 @@ SPAMHAUS_DNSBL_ERROR_CODES = {
     "127.255.255.255": "excessive number of queries",
 }
 
+#: SURBL answers with a bitmask in the last octet — 8 phishing, 16 malware,
+#: 32 abuse, 64 cracked. `254` is every bit set at once, which is not a
+#: listing any domain can have; SURBL uses it as the refusal sentinel for an
+#: open resolver or an exceeded free-use limit. It is the only thing this
+#: deployment has received from the zone, including for SURBL's own test
+#: point, so reading it as a reputational response would mark everything.
+#: The four sources whose answers land in `blocklist_hits`, named once so the
+#: checked/skipped record and the consumers cannot drift apart.
+#: One spelling. This feed used to emit two — "URLhaus" from the per-URL path
+#: and "URLhaus (abuse.ch)" from the aggregate — so any per-source count of
+#: it was wrong in a way nothing could see.
+URLHAUS = "URLhaus (abuse.ch)"
+SPAMHAUS_SIA = "Spamhaus SIA"
+BLOCKLIST_SOURCES = ("SURBL", "Spamhaus DBL", URLHAUS, SPAMHAUS_SIA)
+
+SURBL_DNSBL_ERROR_CODES = {
+    "127.0.0.254": "query refused (open resolver or free-use limit exceeded)",
+}
+
+#: The one `gaierror` that is an answer. EAI_NONAME is NXDOMAIN: the name is
+#: not in the zone, which is exactly what "not listed" means. Everything else
+#: — EAI_AGAIN (SERVFAIL, timeout, no resolver), EAI_FAIL — is the query not
+#: completing, and must not be recorded as a negative.
+_NOT_LISTED_ERRNOS = {
+    getattr(socket, name)
+    for name in ("EAI_NONAME", "EAI_NODATA")
+    if hasattr(socket, name)
+}
+
 _SPAMHAUS_SIA_TOKEN_CACHE: dict[str, int | str] = {"token": "", "expires": 0}
 
 
 class IntelCollector(BaseCollector):
     supported_types = frozenset({"domain", "url"})
     name = "intel"
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Per-source, because `blocklist_hits` merges four of them into one
+        # list and an empty list says nothing about which ones were asked.
+        self.sources_checked: list[str] = []
+        self.sources_skipped: dict[str, dict] = {}
+        self._dnsbl_notes: list[str] = []
+
+    def _answered(self, source: str) -> None:
+        """This source was asked and replied. Recorded even when the reply was
+        "not listed", because that is the fact a clean verdict needs."""
+        if source not in self.sources_checked:
+            self.sources_checked.append(source)
+        self.sources_skipped.pop(source, None)
+
+    def _unanswered(self, source: str, kind: str, reason: str, raw: Any = None) -> None:
+        """This source did not answer. Never also `_answered`."""
+        if source in self.sources_checked:
+            self.sources_checked.remove(source)
+        self.sources_skipped[source] = absent(kind, reason, raw=raw).as_json()
+        self._dnsbl_notes.append(f"{source} did not answer: {reason}")
 
     def _collect(self) -> IntelEvidence:
         evidence = IntelEvidence()
@@ -80,12 +175,21 @@ class IntelCollector(BaseCollector):
         # ── 2. DNS Blocklist checks ──
         try:
             self._dnsbl_notes = []
-            blocklist_hits = self._check_dns_blocklists(target)
-            evidence.blocklist_hits = blocklist_hits
-            evidence.notes.extend(getattr(self, "_dnsbl_notes", []))
+            # `extend`, not `=`. The assignment that used to be here replaced
+            # the list the cached URLhaus hits had just been appended to, so
+            # on the cache path — the common path — a host URLhaus had flagged
+            # came back with no hits at all.
+            evidence.blocklist_hits.extend(self._check_dns_blocklists(target))
+            evidence.notes.extend(self._dnsbl_notes)
         except Exception as e:
             logger.warning(f"DNSBL check failed for {target}: {e}")
             evidence.notes.append(f"DNSBL check failed: {e}")
+            for _zone, source_name in DNSBL_LISTS:
+                if source_name not in self.sources_checked:
+                    self._unanswered(
+                        source_name, CHECK_FAILED,
+                        f"The DNSBL pass raised {type(e).__name__}: {e}",
+                    )
 
         # ── 3. URLhaus lookup ──
         urlhaus_hits: list[IntelHit] = []
@@ -99,6 +203,13 @@ class IntelCollector(BaseCollector):
             except Exception as e:
                 logger.warning(f"URLhaus lookup failed for {target}: {e}")
                 evidence.notes.append(f"URLhaus lookup failed: {e}")
+                self._unanswered(
+                    URLHAUS, CHECK_FAILED,
+                    f"The URLhaus lookup raised {type(e).__name__}: {e}",
+                )
+        else:
+            # A cache hit is URLhaus's answer, recorded earlier and reused.
+            self._answered(URLHAUS)
             self._save_cached_intel(
                 target,
                 related_certs=evidence.related_certs,
@@ -109,7 +220,25 @@ class IntelCollector(BaseCollector):
             )
 
         # ── 4. Spamhaus Intelligence API ──
-        spamhaus_token = self._get_spamhaus_sia_token(settings)
+        #
+        # Guarded. This single line, unprotected, is what killed the whole
+        # collector: `_get_spamhaus_sia_token` raises `RuntimeError` on a
+        # failed login, and from 2026-07-07 to 2026-10-13 it raised on every
+        # run — 2,198 of them, every one recorded as
+        # `meta.status = "failed"` with crt.sh, both DNSBLs and URLhaus
+        # already collected and thrown away with the exception. A fourth
+        # source's credential must not be able to discard the other three.
+        try:
+            spamhaus_token = self._get_spamhaus_sia_token(settings)
+        except Exception as e:
+            logger.warning(f"Spamhaus SIA login failed for {target}: {e}")
+            evidence.notes.append(f"Spamhaus SIA login failed: {e}")
+            self._unanswered(
+                SPAMHAUS_SIA, CHECK_FAILED,
+                f"The Spamhaus SIA login did not succeed ({type(e).__name__}: {e}), "
+                "so this source was never asked.",
+            )
+            spamhaus_token = ""
         if spamhaus_token:
             try:
                 evidence.spamhaus_sia = self._query_spamhaus_sia_domain(
@@ -127,19 +256,42 @@ class IntelCollector(BaseCollector):
                             base_url=settings.spamhaus_sia_base_url,
                             timeout=min(self.timeout, settings.spamhaus_sia_timeout_seconds),
                         )
+                self._answered(SPAMHAUS_SIA)
             except Exception as e:
                 logger.warning(f"Spamhaus SIA lookup failed for {target}: {e}")
                 evidence.notes.append(f"Spamhaus SIA lookup failed: {e}")
-        else:
+                self._unanswered(
+                    SPAMHAUS_SIA, CHECK_FAILED,
+                    f"The Spamhaus SIA lookup raised {type(e).__name__}: {e}",
+                )
+        elif SPAMHAUS_SIA not in self.sources_skipped:
             evidence.notes.append(
                 "Spamhaus SIA lookup skipped: configure SPAMHAUS_SIA_TOKEN or SPAMHAUS_SIA_USERNAME/PASSWORD"
             )
+            self._unanswered(
+                SPAMHAUS_SIA, CHECK_FAILED,
+                "No Spamhaus SIA credential is configured, so this source was "
+                "never asked. Set SPAMHAUS_SIA_TOKEN or "
+                "SPAMHAUS_SIA_USERNAME/PASSWORD.",
+            )
+
+        # ── What was asked, and what was not ──
+        #
+        # On the evidence rather than only in the log, because the log is not
+        # what the decision engine reads. This is the field that makes an
+        # empty `blocklist_hits` mean something: four sources agreeing is a
+        # clean result, four sources refusing is not, and until now the
+        # payload said exactly the same thing in both cases.
+        evidence.sources_checked = list(self.sources_checked)
+        evidence.sources_skipped = dict(self.sources_skipped)
 
         # ── Store artifact ──
         self._store_artifact("raw_intel", json.dumps({
             "certs_count": len(evidence.related_certs),
             "subdomains_count": len(evidence.related_subdomains),
             "blocklist_hits": len(evidence.blocklist_hits),
+            "sources_checked": list(evidence.sources_checked),
+            "sources_skipped": sorted(evidence.sources_skipped),
             "spamhaus_sia_status": evidence.spamhaus_sia.get("status") if evidence.spamhaus_sia else None,
             "subdomains_sample": evidence.related_subdomains[:20],
         }, default=str))
@@ -212,15 +364,31 @@ class IntelCollector(BaseCollector):
                 answers = socket.getaddrinfo(query, None, socket.AF_INET)
                 result_ips = sorted({answer[4][0] for answer in answers if answer and answer[4]})
                 reputational_ips: list[str] = []
+                refusals: list[str] = []
                 for result_ip in result_ips:
                     error_reason = self._dnsbl_error_reason(source_name, result_ip)
                     if error_reason:
+                        refusals.append(f"{error_reason} (response: {result_ip})")
                         note = f"{source_name} lookup skipped: {error_reason} (response: {result_ip})"
-                        getattr(self, "_dnsbl_notes", []).append(note)
+                        self._dnsbl_notes.append(note)
                         logger.info("%s for %s", note, target)
                     else:
                         reputational_ips.append(result_ip)
 
+                if refusals and not reputational_ips:
+                    # The zone replied, and what it said was "I am not
+                    # answering you". That is an absence, not a negative, and
+                    # it is every reply this deployment has had since March.
+                    self._unanswered(
+                        source_name, CHECK_FAILED,
+                        f"{source_name} refused the query: {'; '.join(refusals)}. "
+                        "Its answer carries no information about this domain, "
+                        "so an empty hit list here is not a clean result.",
+                        raw=", ".join(result_ips),
+                    )
+                    continue
+
+                self._answered(source_name)
                 if reputational_ips:
                     result_detail = ", ".join(reputational_ips)
                     hits.append(IntelHit(
@@ -230,73 +398,155 @@ class IntelCollector(BaseCollector):
                         severity="high",
                         details=f"Listed in {source_name} (response: {result_detail})",
                     ))
-            except socket.gaierror:
-                # NXDOMAIN = not listed (good)
-                pass
+            except socket.gaierror as e:
+                if e.errno in _NOT_LISTED_ERRNOS:
+                    # NXDOMAIN: the name is not in the zone. A real negative,
+                    # and the only gaierror that is one.
+                    self._answered(source_name)
+                else:
+                    self._unanswered(
+                        source_name, CHECK_FAILED,
+                        f"The {source_name} query did not complete: "
+                        f"{e.strerror or e}. A failed resolution is not an "
+                        "absent listing.",
+                        raw=f"gaierror errno={e.errno}",
+                    )
             except Exception as e:
                 logger.debug(f"DNSBL {source_name} check error: {e}")
+                self._unanswered(
+                    source_name, CHECK_FAILED,
+                    f"The {source_name} query raised {type(e).__name__}: {e}",
+                )
 
         return hits
 
     @staticmethod
     def _dnsbl_error_reason(source_name: str, result_ip: str) -> str | None:
+        """Why this response is a refusal rather than a listing, or None.
+
+        Per zone, because the codes are per zone and a shared rule would be
+        wrong in both directions: `127.0.0.254` is a refusal for SURBL and
+        `127.255.255.254` is one for Spamhaus, and neither zone uses the
+        other's. Only the Spamhaus half existed, which is why SURBL's refusal
+        would have become a hit on every domain.
+        """
         if source_name == "Spamhaus DBL":
             if result_ip in SPAMHAUS_DNSBL_ERROR_CODES:
                 return SPAMHAUS_DNSBL_ERROR_CODES[result_ip]
             if result_ip.startswith("127.255.255."):
                 return "Spamhaus DNSBL query error"
+        if source_name == "SURBL":
+            if result_ip in SURBL_DNSBL_ERROR_CODES:
+                return SURBL_DNSBL_ERROR_CODES[result_ip]
         return None
 
     def _check_urlhaus(self, target: str, *, timeout: int) -> list[IntelHit]:
+        """Ask abuse.ch URLhaus about this host.
+
+        Not a free API any more, and that is why this has never produced a
+        stored hit in 400 days. Measured 2026-10-13 from the api container:
+
+            POST /v1/host/ with no Auth-Key   -> HTTP 401
+            POST /v1/host/ with the Auth-Key  -> HTTP 200, query_status present
+
+        and the old body was `if resp.status_code != 200: return []`, which
+        turned every 401 into "this host is in no blocklist". Third abuse.ch
+        caller with the same defect, after `ip_lookup_service` and
+        `threat_feeds_collector`.
+
+        What a host-level answer does and does not say
+        ---------------------------------------------
+        This endpoint is asked about a host and replies with the URLs under
+        it. Asked about `github.com` on 2026-10-13 it reported 9,654, and
+        `raw.githubusercontent.com` 22,665 — other people's payloads on a
+        shared platform. So the aggregate is recorded as context under
+        `HOST_AGGREGATE` and is deliberately **not** decision-grade; only a
+        URL entry whose path matches the observable is. The re-query of all
+        259 hosts that received a benign verdict while this collector was
+        dead found four listed, all of them shared platforms, and not one
+        with a listing for the path this platform had investigated.
         """
-        Check domain against abuse.ch URLhaus.
-        Free API, no key needed.
-        """
+        key = (getattr(get_settings(), "abusech_auth_key", "") or "").strip()
+        if not key:
+            # No request at all. An unauthenticated call can only return 401,
+            # and a 401 is what this defect was made of.
+            raise RuntimeError(
+                "No abuse.ch Auth-Key configured (ABUSECH_AUTH_KEY), so "
+                "URLhaus was not asked. It answers 401 without one."
+            )
+
         resp = requests.post(
             "https://urlhaus-api.abuse.ch/v1/host/",
             data={"host": target},
             timeout=timeout,
+            headers={"Auth-Key": key},
         )
 
         if resp.status_code != 200:
-            return []
+            # Raised, not swallowed: `_collect` records it as an absence
+            # against this source. Never the key itself in the message.
+            raise RuntimeError(f"URLhaus returned HTTP {resp.status_code}")
 
         data = resp.json()
+        status = str(data.get("query_status") or "").strip().lower()
 
-        if data.get("query_status") != "no_results" and data.get("urlhaus_reference"):
-            hits = []
+        if status == "no_results":
+            # A real negative: asked, and URLhaus holds nothing for this host.
+            self._answered(URLHAUS)
+            return []
 
-            # Main domain hit
-            url_count = data.get("url_count", 0)
-            if url_count and int(url_count) > 0:
-                hits.append(IntelHit(
-                    source="URLhaus (abuse.ch)",
-                    indicator=target,
-                    category="malware_distribution",
-                    severity="high",
-                    details=f"URLhaus: {url_count} malicious URLs associated",
-                    last_seen=self._parse_urlhaus_date(
-                        data.get("urls", [{}])[0].get("date_added") if data.get("urls") else None
-                    ),
-                ))
+        if not data.get("urlhaus_reference"):
+            # abuse.ch does not document this vocabulary, so the set of values
+            # can grow without notice. An unrecognised one is neither a result
+            # nor a known failure, and the point of the kind is to refuse to
+            # pick between them.
+            self._unanswered(
+                URLHAUS, UNRECOGNISED,
+                f"URLhaus replied with a query_status this code does not "
+                f"recognise ({status or 'missing'}), so whether this host is "
+                "listed is unknown.",
+                raw=status or None,
+            )
+            return []
 
-            # Individual URL entries (cap at 10)
-            for url_entry in (data.get("urls") or [])[:10]:
-                threat = url_entry.get("threat", "unknown")
-                url = url_entry.get("url", "")
-                status = url_entry.get("url_status", "")
-                hits.append(IntelHit(
-                    source="URLhaus",
-                    indicator=url,
-                    category=threat,
-                    severity="high" if status == "online" else "medium",
-                    details=f"Threat: {threat}, Status: {status}",
-                    last_seen=self._parse_urlhaus_date(url_entry.get("date_added")),
-                ))
+        self._answered(URLHAUS)
+        hits = []
 
-            return hits
+        # The host-level aggregate. Context, by category: see the docstring.
+        url_count = data.get("url_count", 0)
+        if url_count and int(url_count) > 0:
+            hits.append(IntelHit(
+                source=URLHAUS,
+                indicator=target,
+                category=HOST_AGGREGATE,
+                severity="high",
+                details=(
+                    f"URLhaus holds {url_count} malicious URL(s) under {target}. "
+                    "A count against a host is not a statement about the host — "
+                    "on a shared platform it is other tenants' payloads — so "
+                    "this is recorded as context and does not decide anything."
+                ),
+                last_seen=self._parse_urlhaus_date(
+                    data.get("urls", [{}])[0].get("date_added") if data.get("urls") else None
+                ),
+            ))
 
-        return []
+        # Individual URL entries (cap at 10). These carry the path, which is
+        # what makes them scopable to the observable.
+        for url_entry in (data.get("urls") or [])[:10]:
+            threat = url_entry.get("threat", "unknown")
+            url = url_entry.get("url", "")
+            status_text = url_entry.get("url_status", "")
+            hits.append(IntelHit(
+                source=URLHAUS,
+                indicator=url,
+                category=threat,
+                severity="high" if status_text == "online" else "medium",
+                details=f"Threat: {threat}, Status: {status_text}",
+                last_seen=self._parse_urlhaus_date(url_entry.get("date_added")),
+            ))
+
+        return hits
 
     def _query_spamhaus_sia_domain(
         self,

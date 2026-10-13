@@ -14,7 +14,10 @@ from app.services import hosting_platform_service as platform
 # audited hits and false for discord.com, cloudflare.com and live.com —
 # registrable domains that are shared providers all the same. The match scope
 # below reads the IOC rather than the domain, so it covers both.
-from app.services.threatfox_match_scope import about_observable
+from app.services.threatfox_match_scope import (
+    about_observable,
+    intel_hits_about_observable,
+)
 
 from typing import Any
 
@@ -529,10 +532,39 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
     newly_registered = domain_age is not None and domain_age <= NEWLY_REGISTERED_DAYS
     recently_registered = domain_age is not None and NEWLY_REGISTERED_DAYS < domain_age <= YOUNG_DOMAIN_DAYS
 
+    # Scoped to this observable, for the reason URLhaus's own answer gives:
+    # asked about `github.com` it reports 9,654 malicious URLs, every one of
+    # them somebody else's path on a shared platform. The 2026-10-13 re-query
+    # of all 259 hosts that received a benign verdict while this collector was
+    # dead found four listed — github.com, raw.githubusercontent.com,
+    # discord.com, www.google.com — and not one with a listing for the path
+    # this platform had investigated. Restoring the feed at host granularity
+    # would have escalated most of the estate.
     intel_hits = [
-        hit for hit in (intel.get("blocklist_hits") or [])
+        hit for hit in intel_hits_about_observable(
+            domain, intel.get("blocklist_hits") or []
+        )
         if str((hit or {}).get("source") or "").strip().lower() != "uribl"
     ]
+    # Did any of the four sources behind that list actually answer?
+    #
+    # `blocklist_hits` merges SURBL, Spamhaus DBL, URLhaus and Spamhaus SIA,
+    # so an empty list is eight different claims and until 2026-10-13 the
+    # payload could express only one of them. It was the worst one: the intel
+    # collector failed outright on 2,198 consecutive runs from 2026-07-07,
+    # a 401 from Spamhaus SIA raising out of `_collect` and discarding crt.sh,
+    # both DNSBLs and URLhaus with it, while `blocklist_hits: []` — a Pydantic
+    # default on the failure path — read downstream as "in no blocklist".
+    # 583 benign verdicts across 374 domains were reached in that state.
+    #
+    # Same correction as the threatfox limb below, and unlike that one there
+    # was no flag to consume: `sources_checked` had to be built. Evidence
+    # written before it exists has no key, which lands here as unchecked —
+    # the correct direction, since unknown is not clean.
+    intel_sources_checked = {
+        str(name).strip() for name in (intel.get("sources_checked") or [])
+    }
+    intel_checked = bool(intel_sources_checked)
     # Scoped to this observable — see the note at the other call site.
     tf_matches = about_observable(
         domain, threat_feeds.get("threatfox_matches") or []
@@ -618,6 +650,15 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         and vt_broadly_clean
         and not phishtank_positive
         and not openphish_listed
+        # Deliberately *not* `threatfox_checked` / `intel_checked` here,
+        # though both are in scope and `observable_clean` below requires
+        # them. The checked-and-not-listed rule applies where absence lowers
+        # risk toward benign. This branch is the opposite: it declines to
+        # auto-block on a bare sandbox label that 20+ VirusTotal engines
+        # contradict, and the result is still suspicious/investigate, with a
+        # human on it. Requiring a feed to have answered before the platform
+        # will decline to block would make a feed outage *cause* blocks —
+        # the right rule at the wrong site, in the dangerous direction.
         and not tf_matches
         and not intel_hits
         and not urlscan_malicious
@@ -648,6 +689,7 @@ def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, st
         # of cleanliness.
         and threatfox_checked
         and not tf_matches
+        and intel_checked
         and not intel_hits
         and int((evidence_data.get("whois") or {}).get("domain_age_days") or 0) >= 365
         and not high_conf_http

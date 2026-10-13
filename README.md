@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Eight rules that were learned expensively and are not obvious from the code:
+Ten rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -122,6 +122,36 @@ Eight rules that were learned expensively and are not obvious from the code:
   rows accumulate per subject, select `distinct on (subject) ... order by
   subject, stamp desc`, and ask what one row means before computing any
   percentage over the table.
+
+- **[A feed answers about a host; a verdict is about an observable](docs/problems/the-intel-collector-was-dead-for-98-days.md)**
+  — reached independently on two feeds a day apart, so it is a property of
+  host-granular intelligence and not of either provider. ThreatFox's
+  substring search returned 45 positive domains across seven months and 44
+  were shared-provider apexes; URLhaus, asked about `github.com`, reports
+  9,654 malicious URLs and 22,665 for `raw.githubusercontent.com`. Of the
+  four hosts it listed among 259 that had received a benign verdict, **not
+  one** carried a listing for the path this platform had investigated.
+  Consuming either feed at host granularity in `and not hits` — a
+  precondition for benign — would have taken the pipeline from
+  under-escalating for seven months to escalating most of the estate on the
+  day the credential landed. So the raw answer stays in the evidence, because
+  "malware is hosted here" is real context, and the *decision* uses only what
+  is about the observable itself: `app/services/threatfox_match_scope.py`,
+  one module for both feeds. Recording what a source said and deciding what
+  it means are two statements.
+
+- **A precondition must require `checked and not listed`.** `not hits` is
+  true both when a source answered "nothing" and when it never answered, and
+  in a benign precondition the second unlocks the branch on no evidence at
+  all. ThreatFox spent seven months there and the intel collector 98 days,
+  and in **both** cases the platform had already recorded which it was —
+  `feeds_skipped` carrying `threatfox (error: HTTPError)`, `meta.status =
+  "failed"` on 2,198 consecutive runs — and nothing read it. The one source
+  that did it right, Google Safe Browsing's `(checked and not listed)`, sat
+  twelve lines away in the same function. Apply the rule where absence
+  *lowers* risk toward benign, and not where it would raise risk toward a
+  block: requiring a feed to have answered before the platform will decline
+  to auto-block makes an outage cause blocks.
 
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow

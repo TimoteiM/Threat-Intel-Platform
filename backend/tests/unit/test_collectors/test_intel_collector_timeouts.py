@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from app.collectors.intel_collector import IntelCollector
 
 
@@ -35,14 +37,22 @@ def test_query_crtsh_uses_explicit_timeout(monkeypatch):
 def test_check_urlhaus_uses_explicit_timeout(monkeypatch):
     seen = {}
 
-    def _fake_post(url, data=None, timeout=None):
+    def _fake_post(url, data=None, timeout=None, headers=None):
         seen["timeout"] = timeout
+        seen["headers"] = headers or {}
         return _Resp(200, {"query_status": "no_results"})
 
     monkeypatch.setattr("app.collectors.intel_collector.requests.post", _fake_post)
+    monkeypatch.setattr(
+        "app.collectors.intel_collector.get_settings",
+        lambda: SimpleNamespace(abusech_auth_key="test-key-not-a-real-one"),
+    )
     c = _collector()
     c._check_urlhaus("example.com", timeout=5)
     assert seen["timeout"] == 5
+    # URLhaus answers 401 without this, and a 401 used to read as "not
+    # listed" — measured on 2026-10-13, after 400 days of zero hits.
+    assert seen["headers"].get("Auth-Key")
 
 
 def test_spamhaus_public_resolver_response_is_not_blocklist_hit(monkeypatch):
@@ -56,9 +66,14 @@ def test_spamhaus_public_resolver_response_is_not_blocklist_hit(monkeypatch):
     c._dnsbl_notes = []
 
     assert c._check_dns_blocklists("4castplus.com") == []
-    assert c._dnsbl_notes == [
-        "Spamhaus DBL lookup skipped: query via public/open resolver (response: 127.255.255.254)"
-    ]
+    assert c._dnsbl_notes[0] == (
+        "Spamhaus DBL lookup skipped: query via public/open resolver "
+        "(response: 127.255.255.254)"
+    )
+    # And the refusal is now recorded as an absence against the source, not
+    # left as an empty hit list that reads as a clean answer.
+    assert "Spamhaus DBL" not in c.sources_checked
+    assert c.sources_skipped["Spamhaus DBL"]["absent"] is True
 
 
 def test_spamhaus_reputation_response_is_blocklist_hit(monkeypatch):
