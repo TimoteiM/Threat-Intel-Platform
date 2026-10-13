@@ -196,9 +196,29 @@ Of the 371, **one rule is 84% of it**:
 337 of the 371 are on local rules (id >= 100000) and 34 on the stock ruleset.
 So this is almost entirely local content, and almost entirely one rule.
 
+## How often an analyst actually meets one
+
+Measured 2026-10-13 over the 150 most recent cases, re-derived through the
+same membership the case page uses:
+
+- 76 of 128 cases draw any ATT&CK technique at all
+- **11 of those 76 (14.5%) draw at least one retired id**
+- in **8 of those 11**, *every* technique on the case is retired
+
+The last line needs its denominator stated or it overstates: affected cases
+draw a median of 2 techniques, so "every technique is retired" is usually
+"both of the two shown". It is still the case that roughly one case in seven
+points an analyst at withdrawn MITRE guidance, and in most of those there is
+nothing else on the screen to look at instead.
+
+That is why this is worth ten minutes rather than nothing, and it is almost
+all one rule. On our side those ids now render with their retirement and
+current equivalent stated, so nobody is silently misled while this waits.
+
 ## The ask
 
-Nothing urgent. When rule 103026 is next touched, consider remapping
+Nothing urgent, and nothing breaks if it is never done. When rule 103026 is
+next touched, consider remapping
 T1562.001 to T1685 and T1562.002 to T1685.001. That one change covers 84% of
 this. The other seven are a handful of alerts between them.
 

@@ -202,15 +202,13 @@ running".
 |---|---|
 | migration | rebuild **every** container running the code |
 | `.env` | `up -d --force-recreate` — `restart` reuses the old environment |
-| mounted Python source, **`api`** | **nothing** — `--reload` picks it up |
-| mounted Python source, **`worker` / `beat`** | **`docker compose restart worker beat`** — Celery has no autoreload |
+| mounted Python source, **all three** | **`docker compose restart api worker beat`** |
 
-The last two rows are the live hazard and they are deliberately split. Since
-`--reload` went on, writing "restart for mounted source" would teach a reflex
-that is wrong for `api` and would get `worker` skipped — which is the worse
-half, because the API racing ahead of the worker means two processes writing
-the same tables under different rules. Both stale is at least
-self-consistent; a skew is not.
+All three, every time. `--reload` was on for part of 2026-10-12 and is off
+again as of 2026-10-13, so there is no longer an asymmetry to remember: no
+backend process picks up a change by itself. That includes a new route
+appearing — the case-graph debug route below is a code change under mounted
+source like any other, and `api` will not serve it until restarted.
 
 Note the inversion against the `.env` row. There the files are stale and
 `restart` is useless; here the files are fine and only the process is stale.
@@ -232,10 +230,9 @@ That ships with the HTML, so the two would always have agreed: a check
 incapable of returning the bad answer, which is the failure this document
 exists to stop.
 
-### An open question: is this machine dev or prod?
+### Decided: this machine is prod, and `--reload` is off
 
-**`--reload` is a hazard created by the fix, and the decision has not been
-made.** This box ingests live alerts. `backend/` is bind-mounted and
+**Decided 2026-10-13.** This box ingests live alerts. `backend/` is bind-mounted and
 WatchFiles watches it, so **any save under `backend/` swaps the running
 analyser mid-ingest** — including a file someone opens to read and saves out
 of habit, or an editor writing on focus-loss. Uvicorn drains in-flight
@@ -243,18 +240,13 @@ requests, but a reload during a batch is still a process boundary nothing in
 the pipeline was designed around.
 
 That is ordinary on a development box and wrong on one processing real
-traffic. The two answers:
+traffic, so it is off. We are back to the state of 2026-10-12 — a process
+keeps what it imported until restarted — with the difference that the
+staleness is now detectable in one call rather than invisible:
+`/health`'s `code.imported_at` and the `code_version` task.
 
-- **dev** — leave `--reload` on, keep the split restart row for `worker` and
-  `beat`, and accept that an editor save restarts the API.
-- **prod** — take `--reload` off and rely on the restart row for all three,
-  which is the state of 2026-10-12 plus the knowledge of how to detect it:
-  `/health`'s `code.imported_at` and the `code_version` task make the
-  staleness visible in one call, which is what made it invisible before.
-
-Not decided, and deliberately not changed while unresolved. Whoever decides
-should also note that `--reload` is currently the only reason the API and the
-worker can diverge at all.
+Note for anyone revisiting this: leaving the question open is **not**
+neutral. The undecided state was reload-on, which is the hazardous one.
 
 ### Named non-instruments: TestClient and `exec ... python`
 
@@ -301,6 +293,19 @@ name only.
     TOKEN=$(awk -F= '/^GRAPH_DEBUG_TOKEN=/{print substr($0, index($0,"=")+1)}' .env)
     curl -s -H "X-Graph-Debug: $TOKEN" \
       "http://localhost:8000/api/debug/case-graph?case_key=<key>" | jq ._debug
+
+**The flag is `0`. Re-enabling it means rotating the token first.** The
+current value has sat in `.env` through an unknown number of backups,
+snapshots and container images; a secret with that history is not the secret
+it was when it was generated. Generate a new one, set the flag, recreate
+`api` (an `env_file` change needs `--force-recreate`, not `restart`), and set
+the flag back to `0` when finished.
+
+Turning it off is also the only test of the gate that counts. The unit tests
+answer "what does this code do"; they cannot answer "what is the API
+serving" — two rows apart in the table above. Confirmed over HTTP from the
+VM shell with the flag at `0`: a request carrying the **correct** token
+returns 404.
 
 **The gap was never external.** For four days the case page's behaviour was
 treated as blocked on a dev login, and nothing external was involved. Each

@@ -166,22 +166,24 @@ services:
     # connect, and a failed preflight means a batch of alerts is not sent at
     # all. Five seconds is ample for real HTTP requests here: the long work
     # runs in Celery, and an EventSource reconnects on its own.
-    # `--reload` because `backend/` is bind-mounted at /app: the files in the
-    # container are always current, but a running Python process keeps the
-    # modules it imported at startup. On 2026-10-12 that meant seven backend
-    # commits — including the ATT&CK resolver — were on disk, committed and
-    # pushed while the live API had been serving code from 12:59 all
-    # afternoon. Every filesystem check said "deployed"; only the process was
-    # stale, and `docker compose exec api python` could not see it because it
-    # spawns a *new* interpreter that re-imports from the mount.
+    # NO `--reload`, decided 2026-10-13. It was on for part of 2026-10-12
+    # and is off again deliberately.
     #
-    # This fixes the API only. Celery dropped worker autoreload, so `worker`
-    # and `beat` still need an explicit `docker compose restart` after a
-    # backend change — and the asymmetry is its own hazard: the API can now
-    # be two hours ahead of the worker. If a graph looks right on the page
-    # and wrong after materialisation, suspect that before suspecting the
-    # code. See docs/deploy/schema-changes.md.
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5 --reload --reload-dir /app/app
+    # `backend/` is bind-mounted at /app and this box ingests live alerts, so
+    # WatchFiles would swap the running analyser mid-ingest on *any* save
+    # under backend/ — including a file someone opens to read and saves out
+    # of habit, or an editor writing on focus-loss. Ordinary on a development
+    # box, wrong on one carrying real traffic.
+    #
+    # The cost is that a running process keeps the modules it imported at
+    # startup, which on 2026-10-12 left seven backend commits pushed and not
+    # serving for an afternoon while every filesystem check said "deployed".
+    # That is now detectable rather than invisible: /health carries
+    # `code.imported_at` and `code.code_fingerprint`, and the worker answers
+    # the same through `app.tasks.pipeline_watch_task.code_version`. After a
+    # backend change, `docker compose restart api worker beat` — all three.
+    # See docs/deploy/schema-changes.md.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
 
   # ── Celery Worker ──
   worker:
