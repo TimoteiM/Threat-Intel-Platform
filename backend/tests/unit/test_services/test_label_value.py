@@ -204,3 +204,66 @@ def test_the_non_observable_set_is_label_meanings_not_values():
     # A field that genuinely carries observables must not be in it.
     assert "user principal name" not in NON_OBSERVABLE_LABELS
     assert "image" not in NON_OBSERVABLE_LABELS
+
+
+# --- the twelfth instance: the fix for the eleventh over-extended ----------
+#
+# Bounding a value by "the next label" and nothing else makes a newline
+# invisible. Measured against 25,186 materialised account nodes, this parser
+# disagreed with the live line-anchored one on 12,421 — and in 9,963 of them
+# (80.2%) the live value was a PREFIX of mine, because mine had joined the
+# next line onto the value. The live parser was right and the fix was worse.
+
+WITH_TRAILING_LINE = (
+    "Account Name:  WINDOWS-TEST-DE\\Attck_User\n"
+    "\n"
+    "Mitre.Sub_technique.\n"
+)
+
+
+def test_a_value_does_not_absorb_the_following_line():
+    """The failure that 9,963 live account nodes demonstrated."""
+    fields = parse(WITH_TRAILING_LINE).fields
+    assert fields["account name"] == "WINDOWS-TEST-DE\\Attck_User"
+    assert "\n" not in fields["account name"]
+    assert "Mitre" not in fields["account name"]
+
+
+def test_no_parsed_value_anywhere_spans_a_newline():
+    """A line end is a hard boundary in this corpus, for every field."""
+    body = (
+        "A service was installed in the system.\n"
+        "Service Name:  My Long Service Name\n"
+        "Service Account:  LocalSystem\n"
+        "\n"
+        "Some trailing prose that is not a field at all.\n"
+    )
+    for label, value in parse(body).fields.items():
+        assert "\n" not in value, f"{label!r} spans a line break: {value!r}"
+
+
+def test_same_line_pairs_still_split_after_the_newline_fix():
+    """The newline bound must not cost the behaviour it was built for.
+
+    63.8% of bodies carry 2+ pairs on one line, so this is the common case,
+    not the edge one.
+    """
+    body = "Account Name:  adm_lbyfszaa   Display Name:  Zakaria El Bouyafsakh adm"
+    fields = parse(body).fields
+    assert fields["account name"] == "adm_lbyfszaa"
+    assert fields["display name"] == "Zakaria El Bouyafsakh adm"
+
+
+def test_the_live_line_anchored_parser_agrees_on_the_windows_sample():
+    """Where the live parser is right, this one must not differ from it.
+
+    Not a tautology: before the newline bound, this assertion failed on
+    9,963 real rows.
+    """
+    mine = parse(WITH_TRAILING_LINE).fields["account name"]
+    naive_line_anchored = None
+    for line in WITH_TRAILING_LINE.splitlines():
+        if line.startswith("Account Name:"):
+            naive_line_anchored = line.split(":", 1)[1].strip()
+    assert naive_line_anchored == "WINDOWS-TEST-DE\\Attck_User"
+    assert mine == naive_line_anchored

@@ -109,6 +109,18 @@ Fourteen rules that were learned expensively and are not obvious from the code:
   positives has no complement, so the number you take from it by subtraction
   is not measuring anything.
 
+  **And the sum test is seductive, because passing it proves only that the
+  partition is exhaustive.** It says nothing about whether anything landed in
+  the right bucket. Ordering the classifiers made the shares sum, which was
+  the defect being fixed, and it did nothing to make each classifier correct:
+  a table that sums to 100% while assigning half its mass to the wrong shape
+  passes the check completely. `json_keys_embedded` is the live example — it
+  took 31.1% of the corpus on a quoted-word-before-a-colon match, and only
+  7.0% of those bodies hold an object that parses. So exhaustiveness and
+  correctness are separate claims needing separate evidence, and the second
+  one is per-bucket work that no amount of arithmetic on the totals can
+  stand in for.
+
 - **When comparing two periods, state both lengths.** The specific form of
   compare-like-with-like that keeps recurring here: `alerts_at_close` counted
   at one window against a re-derivation at another, and a host reported at

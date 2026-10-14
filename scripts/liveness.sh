@@ -137,9 +137,21 @@ if [[ -z "$api" || -z "$worker" ]]; then
     line="$line · CANNOT VERIFY — a missing fingerprint is not a match"
 elif [[ "$api" == "$worker" ]]; then
     line="$line · in sync"
+elif [[ "$tree" != "tree clean" ]]; then
+    # Separated deliberately. `code_fingerprint` hashes every *.py under the
+    # root at import time, and the api runs --reload, so ANY edit — including
+    # a new file nothing imports — moves the api's hash and not the worker's.
+    # On a box where someone is editing, an undifferentiated SKEWED is
+    # therefore permanently red, which is how a monitor stops being read.
+    # This case is implied by the dirty tree and is not independently
+    # actionable; the next line says the edits are not running anywhere.
+    line="$line · skew expected (tree dirty, api reloads)"
 else
-    # The direction that bit: api reloaded, worker did not.
-    line="$line · SKEWED — docker compose restart worker beat"
+    # The dangerous case, and the one this exists for: the tree is clean, so
+    # the api is running committed code and the worker is running something
+    # older. This is the shape that left a pre-fix decision_engine serving
+    # verdicts for 92 minutes after the fix was committed.
+    line="$line · SKEWED — worker behind committed code — docker compose restart worker beat"
 fi
 
 if (( env_bad )); then
@@ -174,5 +186,15 @@ fi
 # Exit non-zero on code skew, env drift, or a fingerprint we could not read,
 # so this can gate something later. A check that cannot fail is decoration,
 # and "could not read it" is not "it matches".
-[[ -n "$api" && "$api" == "$worker" ]] || exit 1
+#
+# A dirty tree is exempted from the skew exit for the reason given above — not
+# to make the check quieter, but because that red could not be cleared while
+# anyone was editing, and a signal that cannot go green is not a signal. Env
+# drift and an unreadable fingerprint still fail, and so does skew on a clean
+# tree, which is the condition this was built to catch.
+if [[ -z "$api" || -z "$worker" ]]; then
+    exit 1
+elif [[ "$api" != "$worker" && "$tree" == "tree clean" ]]; then
+    exit 1
+fi
 (( env_bad == 0 )) || exit 1

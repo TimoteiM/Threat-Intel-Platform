@@ -21,13 +21,27 @@ That is the eleventh instance of this codebase's delimiter-boundary family,
 and it lives in the biggest format we have, which is why its test came
 before the parser.
 
-The fix: a value ends where the next *label* begins
----------------------------------------------------
+The fix: a value ends at the next *label* or the end of the line
+----------------------------------------------------------------
 Not at the next space. Labels are located first, and each value is the text
-between its own colon and the start of the next label. So a value containing
-spaces, colons inside a path, or a time like `09:38:44` survives whole,
-because nothing is split on a character — the boundaries are the labels
-themselves.
+between its own colon and the next boundary. So a value containing spaces,
+colons inside a path, or a time like `09:38:44` survives whole, because
+nothing is split on a character — the boundaries are the labels themselves.
+
+**And the end of the line is also a boundary.** The first version of this
+parser bounded values *only* by the next label, which made a newline
+invisible: a value ran on until the next thing that looked like a label,
+swallowing whole following lines. Measured against the 25,186 materialised
+account nodes, it disagreed with the live line-anchored parser on 12,421, and
+in **9,963 of them (80.2%) the live value was a prefix of this one** — the
+fix was worse than what it replaced, on four fifths of the rows where they
+differed.
+
+That is the **twelfth** delimiter-boundary instance in this codebase, and it
+was inside the fix for the eleventh. Both halves are needed and neither is
+sufficient: the line bound alone is the live parser, which cannot split the
+63.8% of bodies carrying several pairs on one line; the label bound alone is
+what this module shipped with first.
 
 A label is deliberately narrow: capitalised words, no digits, at most four of
 them, immediately followed by a colon and whitespace. `Account Domain:` is a
@@ -110,6 +124,12 @@ def parse(body: str) -> LabelledFields:
         label = re.sub(r"\s+", " ", match.group(1)).strip().lower()
         value_start = match.end()
         value_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        # A line end is a hard boundary, and bounding only by the next label
+        # made it invisible. See the module docstring: this cost 9,963 of
+        # 25,186 materialised account nodes a joined-on trailing line.
+        newline = text.find("\n", value_start)
+        if newline != -1 and newline < value_end:
+            value_end = newline
         raw = text[value_start:value_end]
         value = raw.strip()
         # Trim the trailing run of whitespace from the span too, so an

@@ -353,3 +353,25 @@ hit with no corresponding host query is interesting in its own right.
   *"no subscriptions found"*; the ask is a **DQS** key, which also fixes the
   SURBL/DBL public-resolver refusals. An SIA subscription would only restore
   a field nothing reads.
+
+## 11. `_ALIASES` reads one identity field where the corpus carries six
+
+`alert_graph_extraction_service._ALIASES` maps `"User"` and nothing else from
+the Windows identity labels. `Account Name`, `SAM Account Name`,
+`Display Name`, `User Principal Name` and `Security ID` have no entry, so the
+graph never reads them however well they parse. The **eighth** silent
+registry: no error, the field is simply never read.
+
+Measured: **4,805 account nodes (19.1% of 25,186)** sit on a body carrying an
+unaliased identity label. Adding aliases would recover **554 substantive
+values over 346 bodies** — 343 Security IDs, 106 account names, 105 account
+domains (the other 91.5% of candidates are Windows' `-` placeholder and
+recover nothing).
+
+Not a parser change — a node-identity change. 343 of those are SIDs, and the
+Account merge key is `account:sid:` when a SID is present, so adding the
+alias would re-key nodes that currently fragment by username. That is a graph
+re-materialisation with moving merge keys, so it needs its own before/after
+measurement of which nodes merge, which split, and whether any analyst-facing
+graph changes shape. Evidence:
+[the-key-collapse-that-was-not-there.md](problems/the-key-collapse-that-was-not-there.md).
