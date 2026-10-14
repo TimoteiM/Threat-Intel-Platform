@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Twelve rules that were learned expensively and are not obvious from the code:
+Thirteen rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -78,6 +78,24 @@ Twelve rules that were learned expensively and are not obvious from the code:
   never arrived, so two sources worth 34% of all alerts went silent for 17 and
   23 days unnoticed. A new alarm needs to say which of the two it can tell
   apart.
+- **State the stores an absence was sought in.** An absence claim has a
+  scope the way a number has a population, and it should carry it. "The true
+  exposure is unknown" was written about truncated IPv4-mapped addresses
+  because none survived in `ioc_values` — while the alert bodies were
+  retained one table over and still held 93 of the originals. *"Not found in
+  `ioc_values`; bodies not checked"* would have been true and would have
+  prompted the next step immediately.
+
+  The same failure, larger, two steps later: 55.6% of alert bodies were
+  reported as free text with no recoverable field, having only been tested
+  against four shapes. Censused against nine, **99.9% are parseable** and the
+  genuinely unclassified remainder is 10 bodies. Declaring something
+  unknowable without naming where you looked turns an unsearched place into a
+  known negative — which is the same move as reading an empty result as a
+  clean one, one level up. Its sibling is
+  [the grain rule](docs/deploy/measuring.md): a number states its
+  population, an absence states its scope.
+
 - **When comparing two periods, state both lengths.** The specific form of
   compare-like-with-like that keeps recurring here: `alerts_at_close` counted
   at one window against a re-derivation at another, and a host reported at

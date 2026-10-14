@@ -194,10 +194,28 @@ A nearest-preceding-key rule was measured and **misattributes both** —
 `detailEntry` and `errorNumber`, adjacent keys from other log lines — so it
 must refuse rather than guess.
 
-Honest limit: this reaches only values from a recognised format. Body shapes
-of 16,969: JSON keys 33.3%, label prose 7.3%, Windows Event XML 2.3%, CEF
-1.5%. Anything regex-scraped from genuine free text has no field provenance
-and the semantic question stays per-case there.
+**The limit is much narrower than first written.** Censused properly — each
+of 16,969 bodies classified once, most-specific shape first, so shares sum
+to 100%:
+
+| shape | share | | shape | share |
+|---|---|---|---|---|
+| `Label: value` single space | **43.5%** | | Windows Event XML | 1.7% |
+| embedded JSON keys | 31.1% | | **CEF** | 1.5% |
+| bare `key=value` | **15.9%** | | JSON object | 1.0% |
+| `Label:  value` prose | 4.8% | | syslog 3164 / 5424 | 0.4% |
+| | | | **unclassified** | **0.1% (10)** |
+
+**99.9% of bodies have a parseable shape.** The earlier "55.6% free text"
+was an artefact of overlapping counts plus only testing four patterns; the
+remainder was label-value-single-space and bare `key=value`. Of the 10 that
+remain, most are double-escaped JSON. So the outstanding work is **parsers
+for nine shapes, not four** — a different and better problem than "the
+majority is unreachable".
+
+`app/services/cef_header_service.py` is the first, with the escaped-pipe
+guard (eleventh delimiter instance, 0 of 257 bodies affected today, caught
+before it was live).
 
 Next: quarantine the extraction defects at entry (the same predicate, the
 other consumer), add the tenant-identity exclusion,

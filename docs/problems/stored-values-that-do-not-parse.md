@@ -170,18 +170,70 @@ by label. Each is a parser for a named format rather than a list of bad
 values, and each generalises — a new CEF source gets Device Version right on
 arrival with nothing added.
 
-### The honest limit, stated rather than implied
+### The limit I wrote first was wrong, and by a wide margin
 
-This only reaches values pulled from a recognised format. A value
-regex-scraped from genuine free text has **no field provenance and never
-will**, and for those the semantic question stays per-case. On the measured
-sample that is the majority of occurrences — the four formats above do not
-cover every body, and a body can carry an indicator in its prose as well as
-in its fields.
+I wrote that the uncovered bodies are "free text, and never will have field
+provenance". **Nothing had established that.** The four formats summed to
+44.4% and I reported the other 55.6% as a known negative when it was
+*unclassified* — an absence presented as a measurement, which is the exact
+shape this platform exists to avoid.
 
-Partial, and worth saying so. What it buys is that the two classes this
-sweep could not catch become answerable *for the sources where they occur*,
-and both occur almost exclusively in one format each.
+So it was censused. Every body classified once, most-specific shape first,
+so the shares sum to 100% — unlike the earlier overlapping counts, which is
+what made 44.4% look like coverage:
+
+| shape | bodies | share |
+|---|---|---|
+| `Label: value`, single space | 7,386 | **43.5%** |
+| embedded JSON keys | 5,270 | 31.1% |
+| bare `key=value` pairs | 2,704 | **15.9%** |
+| `Label:  value` prose | 813 | 4.8% |
+| Windows Event XML | 283 | 1.7% |
+| **CEF** | 257 | 1.5% |
+| JSON object | 178 | 1.0% |
+| syslog RFC3164 | 54 | 0.3% |
+| syslog RFC5424 | 14 | 0.1% |
+| **unclassified** | **10** | **0.1%** |
+
+**99.9% of bodies have a parseable shape.** The "55.6% of free text" was
+overwhelmingly two shapes I had not tested for — label-value with a single
+space (43.5%) and bare `key=value` pairs (15.9%).
+
+And the 10 that remain are not free text either. Six of the first six
+sampled are **double-escaped JSON** — `"{\"approxLogTime\":...}"` — which
+my own key regex missed because the quotes arrive as `\"`. Two are genuine
+prose. So the floor for "no field provenance possible" is nearer **2 bodies
+than 9,000**.
+
+The real limit is therefore much narrower and worth stating accurately:
+field provenance needs a parser per shape, and there are nine shapes rather
+than four. Nothing in this corpus is beyond reach for want of structure;
+what is outstanding is parser work, which is a different and much better
+problem than the one I described.
+
+What it buys is unchanged: the two classes this sweep could not catch become
+answerable for the sources where they occur, and each occurs almost entirely
+in one format.
+
+### The CEF parser, and the eleventh instance caught before it was live
+
+`app/services/cef_header_service.py`. Field 4 is Device Version by
+specification, so the attribution is definitional.
+
+**CEF escapes a literal pipe inside a header field as `\|`.** A naive
+`split("|")` on such a body shifts every later field by one and reads Device
+Event Class ID as the Device Version — no exception, no empty value, just the
+wrong field under the right name. That is the eleventh delimiter-boundary
+instance in this codebase, and it would have been **latent inside the parser
+written to fix the tenth**.
+
+Measured: **0 of 257 CEF bodies in the corpus contain an escaped pipe.** So
+it is not live — which is why it had to be written now rather than after a
+new CEF source arrived with a product name like `Firewall \| Edge`. The
+parser hand-scans for unescaped separators, and
+`test_an_escaped_pipe_in_field_3_does_not_shift_field_4` asserts both that
+the parser is right *and* that `split("|")` is wrong, so the test is not
+passing for want of a failure mode.
 
 ## The statistic, and a prediction that failed informatively
 
