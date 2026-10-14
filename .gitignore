@@ -28,3 +28,14 @@ nul
 # be committed to explain what the directory is for.
 secrets/*
 !secrets/README.md
+
+# Database dumps. A 689M production dump appeared in the repo root on
+# 2026-10-14 and was NOT ignored, so any `git add -A` would have committed
+# the whole alert corpus — bodies, hostnames, account names — to the remote.
+# Ignored by pattern rather than by name: the next one will have a different
+# date in it.
+*.dump
+*.sql
+*.sql.gz
+*.pgdump
+*.tar.zst
