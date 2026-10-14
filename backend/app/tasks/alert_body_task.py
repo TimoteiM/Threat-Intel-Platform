@@ -106,6 +106,10 @@ def run_alert_body_investigation_task(
             is_cancelled=lambda: _is_cancelled(parsed_id),
             # Written at ingest; this is what a suppression is matched on.
             alert_fields=(run.result_json or {}).get("alert_fields"),
+            # The customer. Per-tenant integrations resolve their credential
+            # from this, so before it was threaded through, a verified Falcon
+            # contributed to no verdict at all.
+            tenant_id=run.tenant_id,
         )
         summary = payload.get("summary") or {}
         # The sender's own reference travels with the run, so their callback and

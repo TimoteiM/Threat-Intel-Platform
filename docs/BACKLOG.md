@@ -425,3 +425,55 @@ account keys the same way whether or not its own body carried the SID. That
 removes the fragmentation rather than redistributing it, and it is the only
 version where the node count moves in the direction a consolidation should.
 The 24 individual principals are the seed data for it, not the deliverable.
+
+## 12. Falcon device_id / agent_id as merge keys — decide before ingest lands
+
+Carried forward from the SID re-keying prediction, because it is the same
+shape and it is about to recur.
+
+**"Partial coverage is worse than none" applies to any merge key drawn from a
+field only some records carry.** Re-keying account nodes by SID was projected
+to *raise* the distinct-node count from 756 to 763, because whether a row got
+a SID key depended on whether that row's own body carried the SID rather than
+on who the account was: 12 merges and 12 splits, one human becoming two nodes.
+
+Falcon ingest brings `device_id` and `agent_id`, which will be present on some
+host records and absent from others — Wazuh-sourced host nodes will have
+neither. Keying hosts on them where present and on hostname where not
+reproduces the fragmentation exactly: the same machine becomes two nodes
+depending on which source saw it.
+
+**Decide before ingest lands, not after:**
+
+1. Either key hosts on a resolution table (`device_id` ↔ hostname, populated
+   from whichever source has both) so every row for a known host keys the
+   same way — or key on hostname alone and carry `device_id` as an attribute.
+2. Do not add a conditional key. That is the version the prediction killed.
+3. State the expected node-count change before running the backfill, per
+   [README rule on predicting a remediation's direction](../README.md).
+4. Check the well-known-value trap: `device_id` values like `00000000-...`
+   or a shared image's duplicated agent id are the `S-1-5-18` of this
+   dataset — a value true of many hosts, which merges unrelated machines.
+
+Evidence for the shape:
+[the-key-collapse-that-was-not-there.md](problems/the-key-collapse-that-was-not-there.md)
+and [backlog 11](#11-_aliases-reads-one-identity-field-where-the-corpus-carries-six).
+
+## 13. `liveness.sh` does not check the frontend
+
+Found while building the integrations page: the page, its nav entry and its
+API client had been committed since 07:48 and `GET /integrations` returned
+**404**, because the frontend is a built image (`build:` with no volume
+mount) and the running container was 28 hours old. From the user's side the
+feature did not exist.
+
+This is the same class as the worker skew the script *does* catch — code on
+disk that is not running, with nothing saying so — and the script has no
+frontend check at all, so it reported `env ok · in sync` while a whole page
+was missing.
+
+Add a frontend limb: compare the routes the source tree declares
+(`frontend/src/app/*/page.tsx`) against what the running container serves,
+and report any route that 404s. A built-image frontend cannot be checked by
+fingerprint the way the Python processes are, but a 404 on a declared route
+is unambiguous and needs no fingerprint.

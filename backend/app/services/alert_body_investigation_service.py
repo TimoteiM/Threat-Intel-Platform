@@ -168,6 +168,11 @@ def run_alert_body_investigation(
     prior_investigation_lookup: Callable[[list[tuple[str, str]]], dict[str, Any]] | None = None,
     spawn_investigations: bool | None = None,
     alert_fields: dict[str, Any] | None = None,
+    #: The customer this alert belongs to. Per-tenant integrations resolve
+    #: their credentials from it, so an alert run without it gets the
+    #: platform-wide collectors only — which is the state every run was in
+    #: before this was threaded through.
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Extract indicators from `alert_body` and investigate each one.
@@ -301,6 +306,7 @@ def run_alert_body_investigation(
                     context=context,
                     spawn_investigations=spawn_investigations,
                     investigation_deadline=investigation_deadline,
+                    tenant_id=tenant_id,
                 ): index
                 for index, indicator in pending
             }
@@ -592,6 +598,7 @@ def _investigate_indicator(
     context: str | None = None,
     spawn_investigations: bool | None = None,
     investigation_deadline: float | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     if is_cancelled and is_cancelled():
         return _skipped_report(indicator, reason="run_cancelled")
@@ -613,6 +620,7 @@ def _investigate_indicator(
             deadline=investigation_deadline,
             include_raw_evidence=include_raw_evidence,
             is_cancelled=is_cancelled,
+            tenant_id=tenant_id,
         )
 
     collectors = resolve_collectors(observable_type, requested_collectors)
@@ -632,6 +640,7 @@ def _investigate_indicator(
                     observable_type=observable_type,
                     investigation_ref=investigation_ref,
                     timeout=timeout,
+                    tenant_id=tenant_id,
                 ): name
                 for name in collectors
             }
@@ -694,10 +703,13 @@ def _investigate_via_full_investigation(
     deadline: float | None,
     include_raw_evidence: bool,
     is_cancelled: Callable[[], bool] | None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a full investigation for this indicator, wait for it, report it."""
     descriptor = _indicator_descriptor(indicator, observable_type)
-    investigation_id = spawn_investigation(value, observable_type, context=context)
+    investigation_id = spawn_investigation(
+        value, observable_type, context=context, tenant_id=tenant_id
+    )
     if not investigation_id:
         return _failed_report(indicator, error=f"Could not start an investigation for {value}")
 
@@ -727,10 +739,21 @@ def _run_collector(
     observable_type: str,
     investigation_ref: str,
     timeout: int,
+    tenant_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     collector_cls = get_collector(name)
     if not collector_cls:
         return None, {"collector": name, "status": "skipped", "error": "Unknown collector", "duration_ms": 0}
+
+    # Per-tenant integrations resolve their credential from this, so without
+    # it Falcon verifies green on the integrations page and contributes
+    # nothing to any verdict. A blank or whitespace tenant is *absent*, not a
+    # tenant named "": the key is omitted rather than set, so the collector
+    # records "no tenant" instead of failing a lookup for a tenant nobody
+    # owns. Absence and a value must not share a representation.
+    external_context: dict[str, Any] | None = None
+    if tenant_id is not None and str(tenant_id).strip():
+        external_context = {"tenant_id": str(tenant_id).strip()}
 
     try:
         collector = collector_cls(
@@ -738,6 +761,7 @@ def _run_collector(
             investigation_id=investigation_ref,
             observable_type=observable_type,
             timeout=timeout,
+            external_context=external_context,
         )
         collected, meta, _artifacts = collector.run()
         payload = collected.model_dump(mode="json") if hasattr(collected, "model_dump") else {}

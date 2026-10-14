@@ -88,6 +88,9 @@ class ToolSpec:
     tool: str
     label: str
     directions: tuple[str, ...]
+    #: `edr` | `firewall` | `email` | ... — see CollectorBase. Grouping key
+    #: for the page, derived from the connector's own declaration.
+    category: str = "other"
     config_fields: dict[str, str] = field(default_factory=dict)
     secret_fields: dict[str, str] = field(default_factory=dict)
 
@@ -95,6 +98,7 @@ class ToolSpec:
         return {
             "tool": self.tool,
             "label": self.label,
+            "category": self.category,
             "directions": list(self.directions),
             "config_fields": dict(self.config_fields),
             # Names and descriptions only. A secret field is declared so the
@@ -122,6 +126,7 @@ def catalogue() -> dict[str, ToolSpec]:
         out[name] = ToolSpec(
             tool=name,
             label=str(getattr(cls, "integration_label", "") or name),
+            category=str(getattr(cls, "integration_category", "") or "other"),
             directions=directions or (ENRICHMENT,),
             config_fields=dict(getattr(cls, "integration_config_fields", {}) or {}),
             secret_fields=dict(getattr(cls, "integration_secret_fields", {}) or {}),
@@ -181,6 +186,7 @@ def status_of(spec: ToolSpec | None, row: Any, tool: str) -> dict[str, Any]:
         return {
             "tool": tool,
             "label": tool,
+            "category": "other",
             "overall": NOT_IMPLEMENTED,
             "directions": {},
             "configured": False,
@@ -205,6 +211,7 @@ def status_of(spec: ToolSpec | None, row: Any, tool: str) -> dict[str, Any]:
         return {
             "tool": spec.tool,
             "label": spec.label,
+            "category": spec.category,
             "overall": NOT_CONFIGURED,
             "directions": per_direction,
             "configured": False,
@@ -221,6 +228,7 @@ def status_of(spec: ToolSpec | None, row: Any, tool: str) -> dict[str, Any]:
     return {
         "tool": spec.tool,
         "label": spec.label,
+        "category": spec.category,
         "overall": overall,
         "directions": per_direction,
         "configured": True,

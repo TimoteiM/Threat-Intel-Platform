@@ -59,8 +59,12 @@ def spawning(monkeypatch):
     def fake_should_spawn(observable_type, enabled=None):
         return observable_type in ("domain", "url") and enabled is not False
 
-    def fake_spawn(value, observable_type, *, context=None):
+    def fake_spawn(value, observable_type, *, context=None, tenant_id=None):
+        # `tenant_id` is recorded, not just absorbed: the spawned path is one
+        # of the two the tenant has to reach, and a stub that swallowed the
+        # kwarg would let it silently stop arriving.
         calls["spawned"].append((value, observable_type, context))
+        calls.setdefault("spawned_tenants", []).append(tenant_id)
         return "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
 
     def fake_wait(investigation_id, *, deadline, is_cancelled=None, poll_seconds=None):

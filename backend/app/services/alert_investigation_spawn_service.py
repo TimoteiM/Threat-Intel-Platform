@@ -78,6 +78,12 @@ def spawn_investigation(
     observable_type: str,
     *,
     context: str | None = None,
+    #: The customer this indicator came from. Forwarded into the pipeline's
+    #: `external_context` so per-tenant integrations can resolve a credential.
+    #: Omitted from the context entirely when absent, because a tenant_id of
+    #: `""` is a tenant nobody owns and would turn "nobody asked" into "not
+    #: configured for ''".
+    tenant_id: str | None = None,
 ) -> str | None:
     """
     Create an Investigation row for `value` and queue the standard pipeline.
@@ -127,6 +133,11 @@ def spawn_investigation(
             # the analyst waits for all of them. The results page offers the
             # sandbox per indicator instead.
             external_context={
+                **(
+                    {"tenant_id": str(tenant_id).strip()}
+                    if tenant_id is not None and str(tenant_id).strip()
+                    else {}
+                ),
                 "sandbox_suppressed": True,
                 # Says where this run came from, rather than naming another
                 # collector to hold back. The task drops whatever

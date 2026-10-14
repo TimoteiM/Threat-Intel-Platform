@@ -264,3 +264,69 @@ def test_both_directions_green_is_the_only_green():
 def test_configured_unverified_counts_as_not_working():
     assert st.CONFIGURED_UNVERIFIED in st.NOT_WORKING
     assert st.VERIFIED_OK not in st.NOT_WORKING
+
+
+# --- grouping: declared at the connector, never listed in the UI ----------
+
+
+def test_every_tool_declares_a_category():
+    """The page groups on this, so an absent category is a missing card."""
+    for name, spec in st.catalogue().items():
+        assert spec.category, f"{name} has no integration_category"
+
+
+def test_falcon_is_an_edr():
+    assert st.catalogue()["falcon"].category == "edr"
+
+
+def test_the_category_reaches_the_json_payload():
+    """The page reads `category` off the tool entry, not off a second fetch."""
+    for spec in st.catalogue().values():
+        assert "category" in spec.as_json()
+
+
+def test_an_uncategorised_connector_gets_other_not_a_crash():
+    """`other` is the honest default — an uncategorised tool still renders.
+
+    A missing declaration must not drop the tool or raise; it lands under
+    "Other", which is visible, rather than vanishing from the grid.
+    """
+    class Bare:
+        integration = True
+        integration_directions = ("enrichment",)
+        integration_label = "Bare Tool"
+        # no integration_category
+
+    import app.collectors.registry as reg
+    original = dict(reg.COLLECTOR_REGISTRY)
+    try:
+        reg.COLLECTOR_REGISTRY["bare"] = Bare
+        spec = st.catalogue()["bare"]
+        assert spec.category == "other"
+    finally:
+        reg.COLLECTOR_REGISTRY.clear()
+        reg.COLLECTOR_REGISTRY.update(original)
+
+
+def test_the_category_is_not_hard_coded_in_the_status_service():
+    """Grouping must come from the connectors, not a list in the service.
+
+    The eighth silent registry was a hand-kept list in exactly this position.
+    Tokenised so a category named in a comment or docstring does not pass.
+    """
+    import io
+    import pathlib
+    import tokenize
+
+    src = pathlib.Path(st.__file__).read_text()
+    literals: list[str] = []
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type == tokenize.STRING:
+            literals.append(tok.string.strip("\"'"))
+    # "other" is the documented default and is allowed; a list of real
+    # category names in here would mean the grouping had been duplicated.
+    for banned in ("edr", "firewall", "email", "siem", "sandbox"):
+        assert banned not in literals, (
+            f"{banned!r} is a string literal in integration_status_service; "
+            "categories belong on the collectors"
+        )

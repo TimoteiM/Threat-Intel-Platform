@@ -28,15 +28,27 @@ read, and the whole reason credentials live on `tenant_id` is that it is the
 axis carrying authorisation. An investigation with no tenant is a question
 this integration cannot answer, and saying so is the correct answer.
 
-That is the common case today, and deliberately visible: the tenant does not
-currently reach an investigation at all. It lives on
-`alert_body_investigation_runs.tenant_id`, set by the API layer, and the
-indicator path in `alert_body_investigation_service` never sees it —
-`tenant_id` appears nowhere in that module. `spawn_investigation` now accepts
-the tenant so the receiving end is ready; threading it from the alert run is
-a named follow-on rather than a half-finished change, because a tenant that
-reached some paths and silently not others would be indistinguishable from
-one that worked.
+The tenant now reaches both paths. It lives on
+`alert_body_investigation_runs.tenant_id`, and `alert_body_task` threads it
+into `run_alert_body_investigation` → `_investigate_indicator` → either
+`_run_collector` (the inline path, where it becomes this collector's
+`external_context`) or `spawn_investigation` (the full-investigation path,
+where it joins the pipeline's `external_context`).
+
+Both, deliberately, because a tenant that reached some paths and silently not
+others would be indistinguishable from one that worked — the same alert would
+enrich or not depending on which branch an indicator took.
+
+An earlier version of this docstring claimed `spawn_investigation` already
+accepted the tenant. It did not: `tenant_id` appeared nowhere in that module.
+The claim was written as the work was planned and read afterwards as the work
+being done, which is why the plumbing is now asserted by
+`tests/unit/test_services/test_tenant_plumbing.py` rather than described here.
+
+**Absence stays absence.** A blank or whitespace `tenant_id` is omitted from
+`external_context` rather than passed as `""` — a tenant nobody owns would
+turn "nobody asked" into "not configured for ''", and a credential lookup
+failing for a fabricated tenant is a worse answer than no lookup.
 """
 
 from __future__ import annotations
@@ -58,6 +70,7 @@ class FalconCollector(BaseCollector):
     # ── the integration declaration ──────────────────────────────────────
     integration = True
     integration_label = "CrowdStrike Falcon"
+    integration_category = "edr"
     integration_directions = ("enrichment",)
     integration_config_fields = {
         "cloud": "Falcon cloud region — us-1, us-2, eu-1 or us-gov-1",

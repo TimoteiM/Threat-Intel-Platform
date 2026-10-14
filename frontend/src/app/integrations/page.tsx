@@ -30,6 +30,9 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { Button, Page, PageHeader } from "@/components/ui/Primitives";
 import {
+  getMe,
+  hasAdminRights,
+  type Me,
   configureIntegration,
   getIntegrationAudit,
   getIntegrationCatalogue,
@@ -87,6 +90,56 @@ const STATE_META: Record<
   },
 };
 
+/** Headings for the tool categories, and the order they appear in.
+ *
+ * The category itself is declared on the collector
+ * (`integration_category`), so this map is presentation only — and anything
+ * it does not know still renders, under its own raw key as a heading. That
+ * matters: a hand-kept list of categories here would silently drop a tool
+ * whose category it had never heard of, which is the exact failure shape of
+ * the eight registries in docs/design/silent-registries.md. Omission here is
+ * a missing *heading*, never a missing card.
+ */
+const CATEGORY_META: Record<string, { label: string; blurb: string }> = {
+  edr: {
+    label: "Endpoint detection & response",
+    blurb: "Agent telemetry and endpoint detections.",
+  },
+  firewall: {
+    label: "Firewall & network",
+    blurb: "Perimeter logs, blocklists and egress control.",
+  },
+  email: {
+    label: "Email security",
+    blurb: "Mail gateway verdicts and message tracing.",
+  },
+  siem: { label: "SIEM", blurb: "Log search and alert delivery." },
+  sandbox: { label: "Sandbox", blurb: "Dynamic analysis of files and URLs." },
+  intel: { label: "Threat intelligence", blurb: "Reputation and indicator feeds." },
+  other: { label: "Other", blurb: "Uncategorised tools." },
+};
+
+const CATEGORY_ORDER = ["edr", "firewall", "email", "siem", "sandbox", "intel", "other"];
+
+/** Group tools by category, keeping every tool even if its category is new.
+ *
+ * Returns the known categories in CATEGORY_ORDER first, then any unknown
+ * category alphabetically, so a tool declaring `integration_category =
+ * "casb"` gets a "casb" heading instead of disappearing.
+ */
+function groupByCategory(tools: any[]): Array<[string, any[]]> {
+  const groups: Record<string, any[]> = {};
+  for (const t of tools) {
+    const key = String(t?.category || "other");
+    (groups[key] ||= []).push(t);
+  }
+  const known = CATEGORY_ORDER.filter((c) => groups[c]?.length);
+  const unknown = Object.keys(groups)
+    .filter((c) => !CATEGORY_ORDER.includes(c))
+    .sort();
+  return [...known, ...unknown].map((c) => [c, groups[c]]);
+}
+
 function StateBadge({ state, compact }: { state: string; compact?: boolean }) {
   const m = STATE_META[state] ?? STATE_META.not_implemented;
   return (
@@ -121,6 +174,21 @@ export default function IntegrationsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [me, setMe] = useState<Me | null>(null);
+
+  // Writes are admin-only and the API returns 403. The server is the gate;
+  // this only stops the page offering an action that cannot succeed. An
+  // analyst still sees every status — reading is the point of the page.
+  const canWrite = hasAdminRights(me?.role);
+
+  useEffect(() => {
+    getMe()
+      .then(setMe)
+      // A failed /auth/me must not read as "admin". It leaves `me` null and
+      // `canWrite` false, so the controls stay hidden rather than appearing
+      // and failing — absence is not permission.
+      .catch(() => setMe(null));
+  }, []);
 
   const loadTop = useCallback(async () => {
     setError(null);
@@ -332,6 +400,50 @@ export default function IntegrationsPage() {
           </select>
         </div>
 
+        {groupByCategory(tools).map(([cat, catTools]) => {
+          const cm = CATEGORY_META[cat] ?? {
+            label: cat,
+            blurb: "Category declared by the connector.",
+          };
+          return (
+        <div key={cat} style={{ marginBottom: 22 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 8,
+              paddingBottom: 6,
+              marginBottom: 10,
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <h3
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                fontFamily: "var(--font-mono)",
+                color: "var(--text-dim)",
+                margin: 0,
+              }}
+            >
+              {cm.label}
+            </h3>
+            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+              {cm.blurb}
+            </span>
+            <span
+              style={{
+                marginLeft: "auto",
+                fontSize: 10,
+                color: "var(--text-muted)",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {catTools.length} {catTools.length === 1 ? "tool" : "tools"}
+            </span>
+          </div>
         <div
           style={{
             display: "grid",
@@ -339,7 +451,7 @@ export default function IntegrationsPage() {
             gap: 14,
           }}
         >
-          {tools.map((t: any) => {
+          {catTools.map((t: any) => {
             const spec = specByTool[t.tool];
             const meta = STATE_META[t.overall] ?? STATE_META.not_implemented;
             return (
@@ -398,7 +510,20 @@ export default function IntegrationsPage() {
                   </div>
                 )}
 
-                {spec && (
+                {spec && !canWrite && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      fontSize: 10,
+                      color: "var(--text-muted)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    Configuring an integration requires an administrator.
+                  </div>
+                )}
+
+                {spec && canWrite && (
                   <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
                     <Button
                       onClick={() => {
@@ -422,7 +547,7 @@ export default function IntegrationsPage() {
                   </div>
                 )}
 
-                {editing === t.tool && spec && (
+                {editing === t.tool && spec && canWrite && (
                   <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                     {Object.entries(spec.config_fields || {}).map(
                       ([k, desc]: [string, any]) => (
@@ -478,6 +603,9 @@ export default function IntegrationsPage() {
             );
           })}
         </div>
+        </div>
+          );
+        })}
       </section>
 
       {/* ── who configured what ──────────────────────────────────────── */}

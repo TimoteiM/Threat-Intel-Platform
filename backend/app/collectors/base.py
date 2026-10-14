@@ -79,6 +79,17 @@ class BaseCollector(abc.ABC):
     #: `app/security/secret_box.py` before storage.
     integration_secret_fields: dict[str, str] = {}
 
+    #: Which kind of tool this is, for grouping on the integrations page:
+    #: `edr`, `firewall`, `email`, `siem`, `sandbox`, `intel`. Declared here
+    #: rather than listed in the UI so the grouping is derived from the
+    #: connectors — the page renders whatever categories it is given and
+    #: falls back to the raw key as a heading, so a new category cannot be
+    #: swallowed the way a hand-kept list would swallow it.
+    #:
+    #: `other` is the honest default: an uncategorised tool appears under
+    #: "Other" rather than silently joining a group it does not belong to.
+    integration_category: str = "other"
+
     def __init__(
         self,
         domain: str,
