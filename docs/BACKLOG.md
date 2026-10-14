@@ -280,6 +280,19 @@ Evidence: the addendum in
 
 ## 9. Falcon ingest, and what it brings with it
 
+> **Two blockers, both to be settled before this is written, not during.**
+> Each is cheap now and silent afterwards:
+>
+> * [15](#15-blocker-for-falcon-ingest-materialise_run-destroys-graphs-when-log_events-is-omitted)
+>   — `materialise_run` replaces a run's rows, and omitting the optional
+>   `log_events` turns a 307-entity graph into 3 while stamping it fresh. The
+>   ingest pass materialises graphs for new runs and will be written against
+>   the signature.
+> * [12](#12-falcon-device_id--agent_id-as-merge-keys--decide-before-ingest-lands)
+>   — `device_id` / `agent_id` are present on some host records and absent
+>   from others, and a conditional merge key fragments identity rather than
+>   consolidating it. Decide the resolution-table approach first.
+
 Enrichment shipped 2026-10-14. Ingest did not, and deliberately:
 
 * **`_create_alert_run` must be extracted** from
@@ -487,3 +500,193 @@ unreachable → reported; `src` unreadable → reported.
 The first two harnesses silently failed to inject their variables, so the
 branch each change existed for went unexercised while the other rows passed.
 The stub generator now asserts its own injection landed.
+
+## 14. The 14 tolerated failures have no premises
+
+`docs/testing/tolerated-failures.txt` enumerates them, which stopped the set
+growing silently. It did not establish that any of them *should* be tolerated,
+and "the same 14, name for name" is quoted on every sign-off as though it had.
+
+Per the README rule on exemptions, each entry needs a premise verified
+independently of the check that cites it. What is known so far:
+
+* ~27 errors across the 14, **24** of them
+  `AttributeError: module 'app' has no attribute 'collectors' | 'db' | 'tasks'`
+  — monkeypatch target resolution, i.e. a harness fault.
+* **That grouping is not the whole set, and the first entry checked disproved
+  it.** `test_dns.py::TestDNSCollector::test_empty_evidence_on_failure` fails
+  on `assert 'completed' == 'failed'`: the DNS collector reports *completed*
+  for a run that produced no evidence. That is absence-read-as-value — a
+  candidate **live defect** being tolerated as a broken test.
+
+The work: one pass over the 14, each classified as harness fault (fix the
+patch target) or product defect (fix or file with evidence), with the premise
+written beside it. Expect the two assertion failures and `'error' in
+{'enabled'...}` to be the interesting ones; the 24 AttributeErrors are likely
+one shared fix.
+
+Start with the DNS one, because a collector reporting success for an empty
+result is the exact shape that let ThreatFox and the intel collector sit dead
+for months.
+
+## 15. BLOCKER for Falcon ingest: `materialise_run` destroys graphs when `log_events` is omitted
+
+Settled by measurement rather than by reading the docstring, which turned out
+to be accurate: **`materialise_run` REPLACES a run's rows.** Called twice over
+run `4bd69f04` it produced 307 entities / 290 edges both times, and the
+transaction was rolled back so live data was untouched.
+
+That also clears the interrupted sweep from 2026-10-14: `materialise_graphs`
+commits **once after the whole batch**, so killing it mid-sweep rolls the
+entire transaction back. No loss, no duplication. (My original claim that the
+interruption was harmless was right for the wrong reason — I cited the
+per-run delete, which is necessary but not sufficient; the batch-wide
+transaction is what actually makes it safe.)
+
+**The defect the measurement found instead.** The same call without
+`log_events` produced **3 entities / 2 edges for the same run** — a 99%
+reduction, committed as a replacement:
+
+| call | entities | edges |
+|---|---|---|
+| as the sweep makes it (`log_events=logs`) | 307 | 290 |
+| omitting `log_events` | **3** | **2** |
+
+Replace semantics plus an argument that is optional (`log_events: Any = None`,
+defaulting to `()`) and carries 99% of the content means **any caller that
+forgets it silently destroys the graph it was asked to refresh.** No error, no
+warning, and the run is stamped `graph_materialised_at` either way — so
+afterwards it reads as freshly materialised and genuinely sparse.
+
+### This is a prerequisite of the Falcon ingest pass, not a "soon"
+
+"One real caller" is a fact about today, not about the design. The next caller
+is **the Falcon ingest pass**, which materialises graphs for newly arriving
+alert runs — and it will be written against the signature, under time
+pressure, by someone who has no reason to read this docstring. The destructive
+path is the *shorter* call: omit one optional argument and a 307-entity graph
+becomes three, stamped `graph_materialised_at` as though it were fresh.
+
+So this is not scheduled after the ingest pass or alongside it. **It is done
+before the ingest pass is written**, because afterwards the damage is silent,
+committed, and indistinguishable from a sparse alert.
+
+The fix, in the order of preference the platform's own conventions imply:
+
+1. **Raise when the run has an `alert_log_context` row the caller did not
+   pass.** This is the right shape because it keeps "nobody passed logs"
+   distinguishable from "this run has none" — the absence distinction this
+   whole platform is built on, and the one a default of `()` erases.
+2. Make `log_events` a required keyword, so the omission cannot compile past
+   review. Weaker than (1): it makes forgetting hard rather than detectable,
+   and says nothing about a caller who passes an empty list.
+
+Do (1). (2) is a reasonable addition, not a substitute.
+
+Cross-reference: [backlog 12](#12-falcon-device_id--agent_id-as-merge-keys--decide-before-ingest-lands)
+is the other thing the ingest pass must not be written without. Both are the
+same category — a decision that is cheap now and silent later.
+
+## 16. An intermittent test-isolation failure in graph collapse
+
+`test_graph_extraction.py::test_identical_leaves_collapse_into_one_counted_node`
+failed once in the full suite and has not reproduced. **Not a product defect
+as far as measured** — the test is pure in-memory with fixed inputs.
+
+Direction, which narrows it: `assert 11 == 12` on `member_count`, with
+`len(accounts) == 1` and `attrs["group"] is True` both passing. So collapse
+happened and **one of twelve evidence rows never became an account node** —
+too few by exactly one, not over-merging and not a merge-key split.
+
+Ruled out by measurement, not inspection:
+
+* Not caused by the changes in that session — `git diff` showed the two files
+  temporarily edited for drift tests restored clean.
+* Not the new test files — passes with all three running ahead of it.
+* Not hash ordering **in isolation** — 0 failures in 40 seeds.
+* Not wall-clock — the fixture's `NOW` is a fixed `datetime`.
+* Not a settings leak — `COLLAPSE_AT` is a module constant and no other test
+  references it, `_collapse_siblings`, or the assembly service.
+* Not parallel-worker redistribution — `pytest-xdist` is not installed, there
+  is no `-n` option, and no `addopts` anywhere in the repo.
+* Not reproducible at `tests/unit/test_services/` scope — 4 seeds, and the one
+  failure there is `test_url_lexical_ml_service`, a baseline entry.
+
+**Also ruled out: an identity-hashed object in a set.** This was the strongest
+hypothesis, because `id()`-based hashing is not controlled by
+`PYTHONHASHSEED`, varies with allocation history (i.e. with what ran before),
+and would therefore be order-dependent, seed-independent and intermittent —
+exactly the observed shape. It does not hold here, established by reading
+every set construction in both files rather than by assuming:
+
+* Every set in the assembly and extraction path is a **set of strings** —
+  `inbound: dict[str, set[str]]`, `inbound: set[str]`, `self.unread: set[str]`,
+  the technique-id comprehensions, `MAPPED_DECODERS`, `_NOT_A_MACHINE`.
+* Every use of them is order-independent: `len()`, membership, or wrapped in
+  `sorted()` (`sorted(kinds)`, `sorted(model_only - set(rule_ids))`).
+* `Witness`, `AssembledNode`, `AssembledEdge` and the extraction `Edge` are
+  plain `@dataclass` — so `eq=True, frozen=False`, which sets `__hash__ =
+  None`. They are **unhashable**, so one entering a set raises `TypeError`
+  rather than reordering silently.
+* `_collapse_siblings` groups on `(source, kind, node.kind, marker)`, a tuple
+  of strings, in an insertion-ordered dict.
+
+**Observed rate: 1 failure in 5 full runs** (an earlier note said 1 in 3,
+which was the figure after three runs). Two of those five pinned
+`PYTHONHASHSEED` to 1 and 2 and passed, so seed-pinning has not produced a
+reproducer either.
+
+**Also ruled out: an elapsed-time or work budget.** The hypothesis was that a
+loaded box truncates the run — which would fit "too few by exactly one"
+precisely. `NOW` being a fixed datetime pins the *data's* clock and says
+nothing about the *execution* clock, so this needed checking separately.
+Grepped both files for `monotonic`, `perf_counter`, `time()`, `timeout`,
+`deadline`, `budget`, `elapsed`: **none present.** Every cap in the path is
+evaluated against input size, not time — `MAX_NODES = 150` only sets an
+`over_cap` flag on the output, `MAX_LOG_EVENTS = 400` counts inputs, and the
+`[:200]`/`[:80]`/`[:72]` are deterministic string truncations. There is no
+budget for load to truncate.
+
+**Two of my own explanations also died, and both were speculation rather than
+measurement:**
+
+* "The failing run was the only one not launched into a quiet box" — asserted,
+  and with no time budget in the code there is no mechanism by which load
+  could change the result.
+* "I edited source files during that run" — checked against timestamps and
+  false. The failing run executed 12:56:44→12:59:56; the two edits were
+  12:55:21 and 12:55:55, both before it started.
+
+**Observed rate: 1 failure in 8 full runs.** Seeds 1, 2 and 3 all passed with
+`PYTHONHASHSEED` pinned, and two concurrent full suites both passed.
+
+**A note on that concurrency attempt, because it is the kind of result that
+gets miscounted as evidence.** Two simultaneous suites finished in 191.73s and
+193.04s against a ~192s solo baseline — i.e. the box has 8 cores and two
+single-threaded pytest processes produced **no contention at all.** The run
+proves nothing about load, and its own elapsed times are what say so. Treating
+it as "load ruled out" would have been a false negative from an instrument
+incapable of returning the positive, which is the defect class this project
+tracks most often. Load was retested under 12 spinning CPU hogs, which is the
+only version of that experiment worth quoting.
+
+Bisection was deliberately **not** used and still should not be: it assumes
+determinism, and at this rate a passing prefix eliminates nothing.
+
+**State: unexplained, with every variable controllable from here held fixed
+and passing** — input, data clock, execution clock, hash seed, test order,
+test composition, parallelism, concurrent source edits. That is a worse
+outcome than a diagnosis but a more honest one than a mechanism nobody has
+demonstrated.
+
+If it recurs, the next useful datum is **which of the twelve accounts went
+missing** — that is in the assembled node list, not in the assertion, so
+capture the node list and the quarantine list at the moment of failure. The
+drop happens in extraction (one evidence row never became an account node),
+not in collapse, so `b.quarantine` entries are the first place to look: a
+quarantined account would explain the missing member and would name its own
+reason.
+
+Worth keeping because it is one of the two things that made the name-for-name
+diff worth having: a count-only check would have read 15 as "the same
+tolerated set, one bigger".

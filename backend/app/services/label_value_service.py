@@ -75,11 +75,37 @@ _LABEL = re.compile(
 #: *meanings*, not values — the same principle as the CEF header's
 #: non-observable positions, and it generalises to any source using these
 #: standard Windows labels.
+#:
+#: **This is an exemption, so its premise was measured independently of the
+#: skip it causes** — a wrong entry here raises no error, it drops an
+#: indicator, and a dropped indicator looks like a clean alert. Over 17,036
+#: bodies, counting every occurrence of each label and testing its value
+#: against IP / URL / domain / hash shapes: **zero observable-shaped values
+#: under any of them.** The premise holds where it bites.
+#:
+#: It does not hold everywhere, and the honest split matters: only **10 of
+#: the 17 ever occur** in this corpus. The other seven are exempted on *no
+#: evidence either way* — untested, not confirmed — and are marked below so
+#: nobody reads the measurement as covering them. They stay because they are
+#: standard Windows/CEF field names whose meanings are documented, and
+#: because removing them would invent observables rather than find any; but
+#: if one starts appearing, its premise is still unverified.
 NON_OBSERVABLE_LABELS = frozenset({
-    "logon id", "primary group id", "old uac value", "new uac value",
-    "password last set", "account expires", "rule level", "severity",
-    "version", "product version", "device version", "event id",
-    "keywords", "task category", "opcode", "process id", "thread id",
+    # Measured: occurs in the corpus, never holds an observable shape.
+    "event id",            # 16,058 occurrences
+    "logon id",            #  1,041
+    "primary group id",    #    294
+    "account expires",     #    294
+    "password last set",   #    294
+    "new uac value",       #    294
+    "old uac value",       #    294
+    "process id",          #    139
+    "version",             #     77
+    "severity",            #     27
+    # Untested: never seen in this corpus, so the measurement says nothing
+    # about them either way.
+    "rule level", "product version", "device version",
+    "keywords", "task category", "opcode", "thread id",
 })
 
 

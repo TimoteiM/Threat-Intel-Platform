@@ -97,11 +97,25 @@ def test_the_component_reads_that_exact_key_at_that_exact_depth():
     # And every key it reads off a tool must exist in the payload, or it is
     # reading something the API never sends — which renders as a default and
     # looks like data rather than a bug.
-    allowed_elsewhere = {
-        # Read off other objects that happen to be called `t` in scope.
-        "tenant_id", "name", "status", "tool", "map", "length", "filter",
-        "slice", "toLowerCase", "cells", "overall",
+    #
+    # The allowance is DERIVED, not asserted. `t` is also the loop variable
+    # over matrix tenant rows, so those keys are legitimately read off a
+    # different object; they come from the real tenant payload rather than a
+    # list I maintain. The only hand-kept part is JS builtins, which cannot
+    # be derived from a payload and are not API fields.
+    #
+    # This matters because it is itself an exemption: a hand-written allowance
+    # would let a genuinely missing payload key pass by being on the list,
+    # which is the shape that let the api fingerprint read "in sync" for three
+    # hours. An exemption's premise has to come from somewhere other than the
+    # check it exempts.
+    tenant_keys = {
+        "tenant_id", "name", "status",   # matrix()'s tenant dicts
     }
+    js_builtins = {
+        "map", "length", "filter", "slice", "toLowerCase",
+    }
+    allowed_elsewhere = tenant_keys | js_builtins | {"cells"}
     every_key = _all_branch_keys()
     unknown = sorted(
         k for k in reads
@@ -143,3 +157,19 @@ def test_every_payload_branch_carries_the_key():
     )
     # Serialisable, because it crosses the wire before the component sees it.
     json.dumps([unconfigured, unimplemented])
+
+
+def test_the_tenant_key_allowance_matches_the_real_matrix_payload():
+    """The allowance above claims these keys come from matrix() tenant rows.
+
+    Asserted rather than trusted: if `matrix()` stops sending one, the
+    allowance is silently covering for a key nothing provides, and the join
+    test above would pass while the page read undefined.
+    """
+    import inspect
+    src = inspect.getsource(st.matrix)
+    for key in ("tenant_id", "name", "status"):
+        assert f'"{key}"' in src, (
+            f"the join test allows t.{key} as a matrix tenant key, but "
+            f"matrix() no longer builds it"
+        )

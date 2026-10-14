@@ -183,6 +183,22 @@ services:
     # the same through `app.tasks.pipeline_watch_task.code_version`. After a
     # backend change, `docker compose restart api worker beat` — all three.
     # See docs/deploy/schema-changes.md.
+    #
+    # And since 2026-10-14 that restart is *enforced* rather than remembered.
+    # The decision above stayed correct and cost a bug anyway, because nothing
+    # made the restart mandatory: on 2026-10-14 the api served code 3h11m
+    # older than the commit it was supposedly running, and an integrations
+    # card rendered "Uncategorised" because the payload it received predated
+    # the field.
+    #
+    # The detectability described above already existed and the check did not
+    # use it: `scripts/liveness.sh` read the api fingerprint with
+    # `docker compose exec api python`, a fresh interpreter that imports
+    # whatever is on disk — so with this bind mount it reported the files and
+    # never the process, and printed "in sync" throughout. It now reads
+    # `code.code_fingerprint` over HTTP from the serving process and exits
+    # non-zero when the api and worker disagree. A correct decision with no
+    # enforcement is a decision that will be forgotten once.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
 
   # ── Celery Worker ──

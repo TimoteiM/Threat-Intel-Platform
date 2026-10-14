@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Fourteen rules that were learned expensively and are not obvious from the code:
+Fifteen rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -270,6 +270,38 @@ Fourteen rules that were learned expensively and are not obvious from the code:
   list of, or guard it with a test that fails when it is incomplete; a
   hand-kept list is fine only where omission fails loudly, which is why
   `APP_NAV_SECTIONS` stays as it is.
+
+- **Verify an exemption's premise independently of the check it exempts.**
+  An exemption added to quiet a false positive keeps quieting the *true* one
+  after the false one is fixed — and nobody notices, because a quiet check
+  looks the same either way.
+
+  `scripts/liveness.sh` is the instance. A dirty-tree carve-out was added on
+  the premise that "any edit moves the api's hash and not the worker's", so
+  skew on a dirty tree was expected rather than actionable. That premise was
+  true *only because the script was reading the api fingerprint from disk
+  instead of from the serving process* — **the premise for the workaround was
+  the bug**. Fix the reading and the exemption turns out to have been
+  silencing nothing real: with both values taken from the running processes,
+  an edit moves neither. It outlived its reason by half a day; it could as
+  easily have been months.
+
+  So the test is: could this premise be checked by something other than the
+  check I am exempting? If not, it is an assumption wearing a measurement's
+  clothes. Worked examples in this repo, audited 2026-10-14:
+
+  | exemption | premise | independent? |
+  |---|---|---|
+  | `cef_header_service.NON_OBSERVABLE_FIELDS` | the CEF spec fixes field positions | **definitional** — strongest kind |
+  | `_NO_ACCOUNT_FROM_EVENT = {"15"}` | Sysmon 15 leaks ADS bytes into `user`; 107 of 299,087 short account names come from it | **measured** |
+  | `source_coverage.UNAVAILABLE = {FAILED}` | only a real failure is unavailability; the wider set cried wolf on 47–50% of verdicts | **measured** |
+  | `label_value.NON_OBSERVABLE_LABELS` | these 17 labels never carry observables | **measured for 10, untested for 7** — now split in the source |
+  | the liveness dirty-tree carve-out | "an edit moves the api's hash" | **circular — removed** |
+
+  A premise that is merely plausible is still worth writing down, but it is
+  labelled as untested rather than counted as covered: seven of those
+  seventeen labels never occur in this corpus, so the measurement says
+  nothing about them in either direction.
 
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow

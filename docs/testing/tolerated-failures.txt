@@ -1,3 +1,33 @@
+# The tolerated test failures, enumerated.
+#
+# "The same 14" is quoted on every sign-off. Enumeration stopped the set
+# growing silently; it did NOT establish that any of them should be tolerated.
+# Per the README rule on exemptions: a carve-out added for a false positive
+# keeps quieting the true one, so each entry needs a premise verified
+# independently of the sign-off that cites it. **None of these has one yet.**
+#
+# What is established, 2026-10-14:
+#
+#   * The run produces ~27 errors across the 14, dominated by 24 of
+#     `AttributeError: module 'app' has no attribute 'collectors' | 'db' |
+#     'tasks'` — monkeypatch target resolution, which would be a harness
+#     fault rather than a product one.
+#
+#   * That grouping does NOT cover the set, and the first entry checked
+#     disproved it. `test_dns.py::test_empty_evidence_on_failure` fails on
+#     `assert 'completed' == 'failed'`: the DNS collector reports *completed*
+#     for a run that produced no evidence. That is the absence-read-as-value
+#     class this project tracks, and it is a candidate live defect sitting
+#     inside the tolerated set — not a broken test.
+#
+# So the set has at least two causes and one plausible real defect. Treat
+# "the same 14" as a stability check only: it proves no NEW failure appeared.
+# It does not say these fourteen are acceptable, because nobody has asked
+# each one why. Filed as backlog 14.
+#
+# Format: one pytest node id per line. Compare with
+#   pytest -q | grep '^FAILED' | sed 's/^FAILED //; s/ -.*//' | sort
+#
 tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_keeps_observed_results_when_no_hits_match_security_filter
 tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_run_builds_brave_osint_evidence
 tests/unit/test_collectors/test_dns.py::TestDNSCollector::test_empty_evidence_on_failure
