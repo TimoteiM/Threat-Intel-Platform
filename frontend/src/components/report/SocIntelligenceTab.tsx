@@ -127,8 +127,53 @@ export default function SocIntelligenceTab({ intelligence, report, evidence, det
   const rescanDiff = intelligence?.rescan_diff || {};
   const tone = toneFromVerdict(confidence?.verdict);
 
+  // Derived on read by the API from this investigation's own report rows, so
+  // it is present on historical investigations too. A verdict that changed
+  // must not read like one that never did: live.com went
+  // malicious/high/90/block -> suspicious/low/40/monitor in two and a half
+  // hours on 2026-10-13 and every surface served the newest row in silence.
+  const superseded: any = report?.superseded ?? null;
+  const priorVerdicts: any[] = Array.isArray(superseded?.superseded)
+    ? superseded.superseded
+    : [];
+
   return (
     <div style={{ display: "grid", gap: 18 }}>
+      {superseded?.flipped && priorVerdicts.length > 0 && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "rgba(240,176,80,0.05)",
+            border: "1px solid rgba(240,176,80,0.18)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--amber, #f0b050)" }}>
+            This verdict changed
+          </div>
+          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+            {priorVerdicts.map((p: any, i: number) => (
+              <div key={i} style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                previously{" "}
+                <span style={{ color: toneFromVerdict(p?.classification).color, fontWeight: 600 }}>
+                  {text(p?.classification, "unknown").toUpperCase()}
+                </span>
+                {p?.confidence ? ` / ${p.confidence}` : ""}
+                {p?.risk_score != null ? `, risk ${p.risk_score}` : ""}
+                {p?.recommended_action ? `, action ${p.recommended_action}` : ""}
+                {p?.at ? ` — recorded ${new Date(p.at).toLocaleString()}` : ""}
+                {p?.reason ? ` — ${p.reason}` : ""}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8 }}>
+            The earlier report is kept as the record of what was concluded
+            then. A corrected verdict that looked like an original one would
+            hide its own past.
+          </div>
+        </div>
+      )}
+
       <div style={metricGridStyle}>
         <Metric label="Verdict" value={text(confidence?.verdict, "unknown").toUpperCase()} color={tone.color} />
         <Metric label="Score" value={`${text(confidence?.score, "0")}/100`} color={tone.color} />

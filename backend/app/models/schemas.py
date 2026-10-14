@@ -1708,6 +1708,20 @@ class AnalystFeedbackCreate(BaseModel):
     verdict: str                             # true_positive | false_positive | unclear
     note: Optional[str] = Field(default=None, max_length=2000)
     analyst: Optional[str] = Field(default=None, max_length=255)
+    #: What the caller had on screen when the analyst made this call.
+    #:
+    #: The server used to read the subject's *current* classification and
+    #: stamp that onto the row, which is a reading of the present wearing the
+    #: shape of a record. Verdicts change here — `live.com` went
+    #: malicious/90 -> suspicious/40 in three hours on 2026-10-13 — and
+    #: analyst feedback is the ground truth `detection_quality_service` uses
+    #: to measure verdicts, so a snapshot that silently re-grades its own
+    #: history corrupts the thing the measurement rests on.
+    #:
+    #: The client is the only party that knows what was displayed, so it
+    #: says. Omitted, the row records *nothing* rather than something false.
+    platform_classification: Optional[str] = Field(default=None, max_length=20)
+    platform_risk_score: Optional[int] = None
 
 
 # â”€â”€â”€ Client Management â”€â”€â”€

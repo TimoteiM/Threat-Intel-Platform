@@ -297,6 +297,18 @@ class ReportRepository:
         return r
 
     async def get_latest(self, investigation_id: uuid.UUID) -> Optional[Report]:
+        """The newest report.
+
+        Note what this cannot tell a caller: whether the verdict it returns
+        has always been the verdict. On a platform where verdicts change, a
+        reader who sees only the newest cannot distinguish a stable
+        assessment from one that flipped two hours ago — `live.com` went
+        malicious/high/90/block to suspicious/low/40/monitor on 2026-10-13
+        and every surface served the newest row in silence.
+
+        Callers that show a verdict to a person should use `all_for()` or
+        `app.services.verdict_history_service` beside this.
+        """
         result = await self.session.execute(
             select(Report)
             .where(Report.investigation_id == investigation_id)
@@ -304,6 +316,19 @@ class ReportRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def all_for(self, investigation_id: uuid.UUID) -> list[Report]:
+        """Every report row, so supersession can be derived.
+
+        `reports` is append-only with an iteration per re-analysis, so the
+        history is already stored — it was simply never read.
+        """
+        result = await self.session.execute(
+            select(Report)
+            .where(Report.investigation_id == investigation_id)
+            .order_by(Report.iteration.asc(), Report.created_at.asc())
+        )
+        return list(result.scalars().all())
 
 
 class ArtifactRepository:

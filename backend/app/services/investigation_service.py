@@ -495,9 +495,23 @@ class InvestigationService:
         return ev.evidence_json if ev else None
 
     async def get_report(self, investigation_id: str) -> Optional[dict]:
-        """Get the latest analyst report."""
-        report = await self.report_repo.get_latest(uuid.UUID(investigation_id))
-        if not report:
+        """The latest analyst report, with what it superseded beside it.
+
+        `superseded` is derived on read from this investigation's own report
+        rows — append-only, one per iteration, each carrying its verdict — so
+        it works for every historical investigation with no backfill and
+        cannot drift from the reports it describes. It is a field rather than
+        a notice someone writes once: every future supersession carries its
+        own history without anyone remembering to add one.
+        """
+        inv_id = uuid.UUID(investigation_id)
+        rows = await self.report_repo.all_for(inv_id)
+        if not rows:
             return None
         from app.services.provider_branding import normalize_anyrun_branding
-        return normalize_anyrun_branding(report.report_json)
+        from app.services.verdict_history_service import from_reports
+
+        latest = rows[-1]
+        payload = dict(normalize_anyrun_branding(latest.report_json) or {})
+        payload["superseded"] = from_reports(rows).as_json()
+        return payload

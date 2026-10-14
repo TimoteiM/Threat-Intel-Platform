@@ -21,9 +21,22 @@
 # process — which is how a two-hour staleness stayed invisible on
 # 2026-10-12.
 #
+# It checks two kinds of drift, because both have bitten and both are
+# invisible without asking:
+#
+#   CODE drift   the api reloads on a file change, the Celery worker does not.
+#   ENV  drift   `env_file:` is read when a container is CREATED. `restart`
+#                reuses the old environment, and `up -d` often sees no config
+#                change and exits 0 having done nothing. Three variables have
+#                now been in .env and in no container — SPAMHAUS_API_KEY on
+#                2026-10-14 being the third. `docs/deploy/schema-changes.md`
+#                has carried that row the whole time and prevented none of
+#                them, because a row is something you have to remember.
+#
 # Usage:  scripts/liveness.sh
-# Output: tree clean, pushed · api 6cdf5513 · worker 6cdf5513 · in sync
-#     or: tree clean, pushed · api 6cdf5513 · worker 1a2b3c4d · SKEWED — restart worker
+# Output: tree clean, pushed · api 6cdf5513 · worker 6cdf5513 · in sync · env ok
+#     or: ... · worker 1a2b3c4d · SKEWED — restart worker
+#     or: ... · in sync · ENV DRIFT: 1 var in .env not in api — recreate
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -68,6 +81,56 @@ except Exception as exc:
 
 short() { [[ -n "${1:-}" && "$1" != unreachable* ]] && echo "${1:0:8}" || echo "${1:-unknown}"; }
 
+# ── env drift ─────────────────────────────────────────────────────────────
+# Compare the env NAMES each service is DECLARED to have against the names
+# its container actually has.
+#
+# The expectation comes from `docker compose config`, which resolves
+# `env_file:` plus each service's own `environment:` block — not from .env
+# directly. That distinction matters: a variable deliberately given to one
+# service and not another is not drift, and comparing against raw .env would
+# report it as such on every run. A check that cries wolf is a check people
+# stop reading, which is the failure the per-verdict coverage work already
+# made once.
+#
+# Names only, throughout. No value is ever read, compared, printed or
+# logged, so a credential cannot reach a terminal or a commit through this.
+env_note=""
+env_bad=0
+_names_py='
+import json,sys
+cfg = json.load(sys.stdin)
+env = (cfg.get("services", {}).get(sys.argv[1], {}) or {}).get("environment") or {}
+names = sorted(env.keys()) if isinstance(env, dict) else sorted(
+    str(e).split("=", 1)[0] for e in env)
+print("\n".join(n for n in names if n))
+'
+_compose_json=$(docker compose config --format json 2>/dev/null || true)
+if [[ -n "$_compose_json" ]]; then
+    for svc in api worker beat; do
+        want=$(printf '%s' "$_compose_json" \
+               | python3 -c "$_names_py" "$svc" 2>/dev/null | sort -u)
+        have=$(docker compose exec -T "$svc" sh -lc \
+                 'env | grep -oE "^[A-Za-z_][A-Za-z0-9_]*="' 2>/dev/null \
+               | tr -d '=' | sort -u)
+        if [[ -z "$want" ]]; then
+            continue                      # service not declared; nothing to check
+        fi
+        if [[ -z "$have" ]]; then
+            # Not running, or unreachable. Absence is not agreement.
+            env_note="$env_note ${svc}=unreachable"
+            env_bad=1
+            continue
+        fi
+        missing=$(comm -23 <(echo "$want") <(echo "$have"))
+        n=$(echo "$missing" | grep -c . || true)
+        if (( n > 0 )); then
+            env_note="$env_note ${svc}=${n}"
+            env_bad=1
+        fi
+    done
+fi
+
 line="$tree, $push · api $(short "$api") · worker $(short "$worker")"
 
 if [[ -z "$api" || -z "$worker" ]]; then
@@ -79,6 +142,14 @@ else
     line="$line · SKEWED — docker compose restart worker beat"
 fi
 
+if (( env_bad )); then
+    # Counts on the line, names underneath — the line stays scannable and
+    # the actionable detail is still right there, not in another command.
+    line="$line · ENV DRIFT:${env_note} — docker compose up -d --force-recreate"
+else
+    line="$line · env ok"
+fi
+
 # A commit that has not reached the running process is the case this exists
 # for, so say it even when the fingerprints agree with each other.
 if [[ "$push" != "pushed" || "$tree" != "tree clean" ]]; then
@@ -87,6 +158,21 @@ fi
 
 echo "$line"
 
-# Exit non-zero on skew or on a fingerprint we could not read, so this can
-# gate something later. A check that cannot fail is decoration.
+if (( env_bad )) && [[ -n "$_compose_json" ]]; then
+    for svc in api worker beat; do
+        want=$(printf '%s' "$_compose_json" \
+               | python3 -c "$_names_py" "$svc" 2>/dev/null | sort -u)
+        have=$(docker compose exec -T "$svc" sh -lc \
+                 'env | grep -oE "^[A-Za-z_][A-Za-z0-9_]*="' 2>/dev/null \
+               | tr -d '=' | sort -u)
+        [[ -n "$want" && -n "$have" ]] || continue
+        missing=$(comm -23 <(echo "$want") <(echo "$have") | tr '\n' ' ')
+        [[ -n "${missing// /}" ]] && echo "    $svc declared-but-absent: $missing"
+    done
+fi
+
+# Exit non-zero on code skew, env drift, or a fingerprint we could not read,
+# so this can gate something later. A check that cannot fail is decoration,
+# and "could not read it" is not "it matches".
 [[ -n "$api" && "$api" == "$worker" ]] || exit 1
+(( env_bad == 0 )) || exit 1

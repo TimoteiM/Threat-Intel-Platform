@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from app.services.absence import UNCLASSIFIED, absent
 from sqlalchemy import case as sql_case
 from sqlalchemy import desc as sa_desc
 from sqlalchemy import false as sa_false
@@ -655,6 +656,9 @@ async def create_feedback(request: AnalystFeedbackCreate, db: DBSession) -> dict
         note=(request.note or "").strip() or None,
         analyst=(request.analyst or "").strip() or None,
         **snapshot,
+        **_snapshot_from_declaration(
+            request.platform_classification, request.platform_risk_score
+        ),
     )
     db.add(row)
     await db.commit()
@@ -763,40 +767,82 @@ async def get_feedback_for(subject_type: str, subject_id: str, db: DBSession) ->
 # ── Internals ─────────────────────────────────────────────────────────────────
 
 
-async def _subject_snapshot(db: DBSession, subject_type: str, subject_id) -> dict[str, Any] | None:
-    """
-    What the platform concluded, copied onto the feedback row.
+def _snapshot_from_declaration(
+    classification: str | None, risk_score: int | None
+) -> dict[str, Any]:
+    """What the analyst saw, as the caller reported it — or nothing.
 
-    Copied rather than joined because a run can be re-analysed later: the
-    feedback is about the answer as it was given, not as it now stands.
+    Deliberately not derived. The server cannot know what was on screen, and
+    the version of this that guessed by reading current state is the defect
+    this replaces: it produced a plausible record of the present.
+
+    `None` here means "not recorded", and `_serialize` renders that as an
+    absence with its reason rather than as a blank.
+    """
+    cls = (classification or "").strip().lower() or None
+    return {
+        "platform_classification": cls,
+        "platform_risk_score": (
+            int(risk_score) if isinstance(risk_score, (int, float)) else None
+        ),
+    }
+
+
+async def _subject_snapshot(db: DBSession, subject_type: str, subject_id) -> dict[str, Any] | None:
+    """Confirm the subject exists, and collect the facts that cannot change.
+
+    **No longer reads the subject's current verdict.** It used to copy
+    `investigation.classification` / `run.overall_verdict` onto the row at
+    insert time, while its own docstring said the feedback is "about the
+    answer as it was given, not as it now stands". The implementation did the
+    opposite of the comment.
+
+    Why that mattered more than a wrong verdict: `detection_quality_service`
+    reads `platform_classification` against the analyst's call to count
+    missed detections and over-flags. Ground truth stamped from current state
+    re-grades the history it exists to anchor — and `create_feedback` never
+    re-snapshots an existing row, so a row written after a verdict changed
+    could not be repaired through the API at all.
+
+    `detection_rule_id` stays, because a run's rule does not change.
     """
     if subject_type == "investigation":
         investigation = await db.get(Investigation, subject_id)
         if investigation is None:
             return None
-        return {
-            "platform_classification": investigation.classification,
-            "platform_risk_score": investigation.risk_score,
-            "detection_rule_id": None,
-        }
+        return {"detection_rule_id": None}
 
     run = await db.get(AlertBodyInvestigationRun, subject_id)
     if run is None:
         return None
-    return {
-        "platform_classification": run.overall_verdict,
-        "platform_risk_score": run.indicator_risk_score,
-        "detection_rule_id": run.detection_rule_id,
-    }
+    return {"detection_rule_id": run.detection_rule_id}
+
+
+#: Why a feedback row carries no record of what the platform had said.
+#: Rows written before 2026-10-14 were stamped from the subject's *current*
+#: verdict, so they are not reliable either — but they are not blank, and
+#: this absence is only emitted where nothing was recorded at all.
+_SNAPSHOT_UNRECORDED = (
+    "What the platform had concluded when this judgement was made was not "
+    "recorded. The client did not declare it, and the server deliberately "
+    "does not guess by reading the subject's current verdict — verdicts "
+    "change here, and a guess would silently re-grade the history this "
+    "feedback exists to anchor. Recover it from the subject's report "
+    "iterations around this row's created_at if it is needed."
+)
 
 
 def _serialize(row: AnalystFeedback) -> dict[str, Any]:
+    recorded = row.platform_classification
     return {
         "id": str(row.id),
         "subject_type": row.subject_type,
         "subject_id": str(row.subject_id),
         "verdict": row.verdict,
-        "platform_classification": row.platform_classification,
+        "platform_classification": (
+            recorded if recorded
+            else absent(UNCLASSIFIED, _SNAPSHOT_UNRECORDED).as_json()
+        ),
         "platform_risk_score": row.platform_risk_score,
         "detection_rule_id": row.detection_rule_id,
         "note": row.note,
