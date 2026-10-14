@@ -154,8 +154,26 @@ to be.
 * Threshold, from the distribution rather than chosen: **fewer than 17
   cases**, with the prevalence shown beside every pivot.
 
-Next: resolve the overlapping-session question, then store the run→case
-link, then the index.
+**The tail decomposes into three causes and only one is prevalence.** 15
+values of 2,114 carry 23.8% of all case-pairs: tenant identity
+(`expertware.net`, 782 cases), version-strings-as-addresses, schema URLs and
+a degenerate hash. Extraction defects must be **quarantined at extraction**,
+not hidden by a threshold — a threshold that hides them guarantees they are
+never found. Tenant identity is a profile exclusion derived from
+`clients.domain`/`aliases`, true for every tenant onboarded.
+
+Removing them moves the threshold barely (p99 17 → 16) but the head
+massively (max 778 → 85): the defects are few and huge, and percentiles are
+insensitive to a handful of extremes.
+
+**New defect found by the decomposition:** 96 stored values of the form
+`::ffff:N` and **zero** full IPv4-mapped addresses — every one truncated at
+the first dot (`::ffff:192.168.1.1` → `::ffff:192`). Tenth delimiter-boundary
+instance, and a prevalence threshold would have cut all four silently.
+
+Next: quarantine the extraction defects, add the tenant-identity exclusion,
+resolve the overlapping-session question, then store the run→case link, then
+the index.
 
 ---
 
@@ -239,6 +257,28 @@ Enrichment shipped 2026-10-14. Ingest did not, and deliberately:
   is a detection nobody will ever see. One query per field, on configuration
   or on a schedule. The answer-rate registration is a backstop measured in
   weeks; this is the check measured in seconds.
+
+---
+
+## 10. The estate lookup: two standing absences
+
+From the OpenSearch recon (`docs/design/phase-3-ioc-prevalence-recon.md`).
+Both are **absences to report, not gaps to paper over**:
+
+* **No proxy logs anywhere.** `data.proxy.url` and `data.http.url` are 0,
+  and `data.url` comes from a single appliance. **The estate question cannot
+  be answered at URL grain at all** — only domain (Sysmon DNS, 97.2% of
+  hosts) and address (perimeter). A URL-grain lookup returns an absence
+  naming this, never an empty result.
+* **120-day retention**, oldest document 2026-06-16. Any case older returns
+  **unknown**, never *no contact*. A backfill treating an aged-out window as
+  clean reproduces the seven-month feed bug by a different mechanism.
+
+And a design rule for the lookup itself: **`queryName` and `dstip` answer
+different questions and must never be merged.** A host resolving a domain and
+the perimeter seeing an address are distinct facts; the 2.07bn-to-2.6M
+document ratio is the gravity well that makes them look like one. A perimeter
+hit with no corresponding host query is interesting in its own right.
 
 ---
 

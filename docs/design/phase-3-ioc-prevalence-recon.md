@@ -116,6 +116,86 @@ number, an all-zero hash, and the client's own domain. Yesterday's
 shared-provider apexes are the same shape one system over: `discord.com`
 would pivot into every case that ever touched Discord.
 
+## 3b. The tail decomposes into three causes, and only one is prevalence
+
+The head is not one phenomenon. Classified — tenant identity derived from the
+`clients` and `tenants` tables, degenerate hashes structurally, and anything
+a structural rule could not decide left **unclassified** so the residual is a
+floor rather than a number flattered by guessing:
+
+| cause | values | case-pairs | max |
+|---|---|---|---|
+| **tenant identity** | 3 | **784** | 782 |
+| **extraction: version-as-address** | 7 | 108 | 75 |
+| **extraction: schema URL** | 4 | 88 | 85 |
+| **extraction: degenerate hash** | 1 | 50 | 50 |
+| residual — genuinely shared | **2,099** | 3,295 | 85 |
+
+**15 values out of 2,114 carry 1,030 of 4,325 case-pairs — 23.8% of all
+prevalence from 0.7% of values.** `expertware.net` alone is 782.
+
+Only the residual is a prevalence problem:
+
+* **Extraction defects** are `no_field_map`-class failures. A threshold
+  *hides* them and nobody ever fixes them — they belong quarantined at
+  extraction, where this platform already has the convention.
+* **Tenant identity** is not a ubiquitous indicator, it is the estate. That
+  is a tenant-profile exclusion, derivable from `clients.domain` and
+  `aliases`, and it will be true for **every** tenant onboarded. Deriving it
+  statistically would mean rediscovering each new customer's own domain from
+  its prevalence, after it had already polluted their pivots.
+
+### The residual, and a prediction that did not hold
+
+| | full | residual |
+|---|---|---|
+| in exactly one case | 85.7% | **85.9%** |
+| p95 | 3 | 3 |
+| **p99** | **17** | **16** |
+| p99.9 | 85 | 40 |
+| **max** | **778** | **85** |
+
+The expectation was that the residual would be cleaner than p99 = 17
+suggests. **It is not — the threshold barely moves.** What moves is the
+*magnitude* of the head: the maximum falls from 778 to 85, a 9× reduction,
+and p99.9 halves.
+
+The reason is worth keeping: percentiles are insensitive to a handful of
+extreme values, and the defects are **few and huge** — 15 values. So removing
+them transforms what the head *is* without shifting where it *begins*.
+
+Both halves matter. Calibrating against noise is wrong as a principle and
+would have been wrong here if the defects had been numerous; it happens that
+this particular cut is robust to them. **The threshold stands at ~16 cases,
+and the defects still have to be fixed at extraction** — not because the
+threshold needs it, but because a threshold that hides them guarantees they
+are never found.
+
+The residual head is what a prevalence cut is actually for: `onenet.be` (85,
+the ISP), `microsoft.net` (51), `https://login.lineas.net` (40),
+`appsec.com` (31) — shared infrastructure, correctly identified as such.
+
+### A new extraction defect, found by the decomposition
+
+`::ffff:192`, `::ffff:172`, `::ffff:10` sat in the version-as-address bucket.
+They are neither:
+
+```
+::ffff:10    54 occurrences
+::ffff:192   22
+::ffff:172   18
+::ffff:52     2
+```
+
+**96 stored values of the form `::ffff:N`, and zero full IPv4-mapped
+addresses in the entire corpus.** Every one is truncated at the first dot:
+`::ffff:192.168.1.1` became `::ffff:192`. The values are the leading octets
+of the RFC1918 ranges, which is why they cluster on 10, 172 and 192.
+
+Tenth instance of the delimiter-boundary family, and it was invisible until
+the tail was decomposed — a prevalence threshold would have cut all four and
+nobody would have asked why an address had one octet.
+
 ## 4. What a pivot costs today
 
 Measured with `EXPLAIN ANALYZE` on the live table (16,960 rows, 482 MB).
@@ -250,6 +330,34 @@ domain" is a real question with a real answer. Per-host IP egress is thin —
 |---|---|---|
 | `www.google.com` over 7 days | 44,669 docs, 5 hosts | **209 ms** |
 | a domain with no hits | 0 docs | **28 ms** |
+
+### `queryName` and `dstip` answer different questions and must never merge
+
+A host resolving a domain and the perimeter seeing an address are two
+distinct facts. The two-order-of-magnitude document count on `data.dstip`
+(2.07bn against 2.6M) is exactly the gravity well that makes them look like
+one answer, and collapsing them would produce a single "yes" that means
+neither.
+
+**A perimeter hit with no corresponding host query is interesting in its own
+right** — traffic to an address that no endpoint resolved is a different and
+more suspicious shape than traffic to one that was. An estate lookup should
+return both facts separately, with the host set for the DNS answer and the
+appliance for the perimeter one, and should never report their union.
+
+### Two standing absences, not gaps to paper over
+
+**No proxy logs anywhere** — `data.proxy.url` and `data.http.url` are both 0,
+and `data.url` comes from one appliance. So **the estate question cannot be
+answered at URL grain at all.** Only domain (via Sysmon DNS, 97.2% of hosts)
+and address (via the perimeter). A URL-grain lookup must return an absence
+naming this, never an empty result.
+
+**120-day retention.** Oldest document 2026-06-16. Any case older than that
+window returns **unknown**, never *no contact*. If a backfill treats an
+aged-out window as clean it reproduces the seven-month feed bug through a
+different mechanism — an absence read as a negative, with the absence this
+time belonging to the log store rather than to a credential.
 
 ### And the field types are exact
 
