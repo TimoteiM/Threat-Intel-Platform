@@ -360,18 +360,68 @@ hit with no corresponding host query is interesting in its own right.
 the Windows identity labels. `Account Name`, `SAM Account Name`,
 `Display Name`, `User Principal Name` and `Security ID` have no entry, so the
 graph never reads them however well they parse. The **eighth** silent
-registry: no error, the field is simply never read.
+registry: no error, the field is simply never read. **4,805 account nodes
+(19.1% of 25,189)** sit on a body carrying an unaliased identity label.
 
-Measured: **4,805 account nodes (19.1% of 25,186)** sit on a body carrying an
-unaliased identity label. Adding aliases would recover **554 substantive
-values over 346 bodies** — 343 Security IDs, 106 account names, 105 account
-domains (the other 91.5% of candidates are Windows' `-` placeholder and
-recover nothing).
+### Do not implement it as an alias. The prediction says it makes things worse.
 
-Not a parser change — a node-identity change. 343 of those are SIDs, and the
-Account merge key is `account:sid:` when a SID is present, so adding the
-alias would re-key nodes that currently fragment by username. That is a graph
-re-materialisation with moving merge keys, so it needs its own before/after
-measurement of which nodes merge, which split, and whether any analyst-facing
-graph changes shape. Evidence:
-[the-key-collapse-that-was-not-there.md](problems/the-key-collapse-that-was-not-there.md).
+The merge count was named before building, because re-keying by SID collapses
+identities that fragment by username and a falling node count reads as data
+loss to anyone who did not predict it. **The count does not fall. It rises.**
+
+| | distinct account merge keys |
+|---|---|
+| now | 756 |
+| projected under the alias | **763** |
+| predicted change | **+7, not a fall** |
+
+Of the 24 rows the alias would re-key, the outcome is exactly even:
+
+| outcome | rows | share |
+|---|---|---|
+| **SPLIT** — brand-new SID key, siblings stay on the username | 12 | 50.0% |
+| MERGE — the SID key already exists | 12 | 50.0% |
+
+The splits are the damage. `account:povgrp\did24` holds 7 rows; the alias
+moves one of them to a SID key and leaves 6 behind, so one human becomes two
+nodes. **Whether a row gets a SID key depends on whether that row's own body
+happened to carry the SID, not on who the account is** — so a partial SID
+source fragments identity rather than consolidating it. Partial coverage is
+worse here than none.
+
+### Two traps the prediction surfaced, both load-bearing
+
+**1. Most recovered `Security ID` values are not principals.** Of the
+candidates the alias would read: **234 are `S-1-0-0`** (NULL SID — Windows'
+way of writing *no principal*, so absence spelled as a value) and **49 are
+`S-1-5-18`** (LOCAL SYSTEM — a role true of every actor operating through the
+machine). Only **24 are individual domain principals**. The first pass of this
+prediction excluded only NULL and ANONYMOUS and still produced
+`account:sid:s-1-5-18` absorbing five distinct human accounts — `povgrp\c0109`,
+`c0112`, `c0307`, `c0401`, `did09` — which is a tautological discriminator
+used as an identity. Any implementation needs the well-known set excluded as a
+**precondition**, not a refinement: `S-1-0-0`, `S-1-1-0`, `S-1-5-7`,
+`S-1-5-11`, `S-1-5-18/19/20`, `S-1-5-113/114`, `S-1-5-32-*`, `S-1-16-*`.
+
+This also corrects a number in
+[the-key-collapse-that-was-not-there.md](problems/the-key-collapse-that-was-not-there.md):
+the "343 Security IDs recovered" offered as the reason to do this work was
+itself absence-as-value. 234 of them are the NULL SID. The honest figure is
+**24**.
+
+**2. `Security ID` is section-scoped, so the label alone is ambiguous.**
+**235 bodies carry more than one distinct SID.** A Windows 4720 has
+`Subject: Security ID: <admin>` followed by `New Account: Security ID: <the
+account created>`; first-occurrence-wins returns the actor, not the subject of
+the event. The label needs the enclosing section (`Subject`, `New Account`,
+`Target Account`) to mean anything — which is the same structure the
+absorption bug exposed, where `An account was successfully logged on.
+Subject` became a mega-label holding the whole section.
+
+### What the work actually is
+
+Not an alias. A **SID ↔ username resolution table**, so every row for a known
+account keys the same way whether or not its own body carried the SID. That
+removes the fragmentation rather than redistributing it, and it is the only
+version where the node count moves in the direction a consolidation should.
+The 24 individual principals are the seed data for it, not the deliverable.

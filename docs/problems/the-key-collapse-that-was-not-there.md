@@ -128,12 +128,31 @@ the corpus carries six, and **4,805 account nodes (19.1%) sit on a body
 carrying an identity label that nothing maps.** No error is raised; the field
 is simply never read, which is the failure shape every entry on that list has.
 
-That is a real finding and a different piece of work from the parser: adding
-aliases changes which fields become nodes and which nodes merge, so it needs
-its own measurement of what moves before anything is re-materialised. Filed
-rather than done, because the 554 substantive values it would recover are
-worth having and the 343 SIDs among them could re-key nodes that currently
-fragment by username.
+That is a real finding and a different piece of work from the parser. It was
+filed rather than done, and then the before/after was predicted rather than
+discovered — which killed the design.
+
+**Correction to the number above.** The "343 Security IDs" counted as
+substantive recovery was absence-as-value in my own measurement: the filter
+excluded `-` and the empty string, and **234 of the 343 are `S-1-0-0`**, the
+NULL SID, which is precisely how Windows writes *no principal*. A further 49
+are `S-1-5-18` (LOCAL SYSTEM), a role true of every actor operating through
+the machine. **Only 24 are individual domain principals.** I offered the
+inflated figure as the reason to do the work, in the same report that named
+mass-before-count as the error to avoid.
+
+**And the predicted node count moves the wrong way.** Distinct account merge
+keys now 756, projected under the alias **763** — it rises by 7. Of the 24
+re-keyed rows, 12 merge and 12 **split**: `account:povgrp\did24` holds 7 rows,
+one moves to a SID key, 6 stay, and one human becomes two nodes. Whether a row
+gets a SID key depends on whether its own body carried the SID, not on who the
+account is, so a partial SID source fragments identity rather than
+consolidating it. The first version of the prediction, excluding only NULL and
+ANONYMOUS, produced `account:sid:s-1-5-18` absorbing five distinct human
+accounts — a tautological discriminator used as an identity.
+
+The work is therefore a SID↔username resolution table, not an alias. Full
+reasoning and the exclusion set in [backlog 11](../BACKLOG.md).
 
 ## What this cost and what it bought
 

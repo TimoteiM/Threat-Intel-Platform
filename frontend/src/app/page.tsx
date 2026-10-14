@@ -946,7 +946,7 @@ export default function HomePage() {
           before anything you could type into. Header, then the form. */}
       <PageHeader
         title="New investigation"
-        subtitle="Submit a domain, IP, URL, file hash or email address for a full analyst report."
+        subtitle="Submit a domain, IP, URL, file hash for a full analyst report."
         meta={
           stats.total > 0 ? (
             <>

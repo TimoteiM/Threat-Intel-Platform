@@ -227,6 +227,16 @@ Fourteen rules that were learned expensively and are not obvious from the code:
   from the registry** rather than listing it: `otx` was missing from the
   check built to find dead sources while being 70% dead.
 
+  **The derivation discipline belongs wherever a hand-kept list exists, not
+  only where one has already bitten.** The eighth was found at 19.1% of
+  account nodes while nobody was looking for it, and an unenumerated set only
+  grows — so they are now named in
+  [docs/design/silent-registries.md](docs/design/silent-registries.md), the
+  same way the tolerated test failures are. Derive the list from what it is a
+  list of, or guard it with a test that fails when it is incomplete; a
+  hand-kept list is fine only where omission fails loudly, which is why
+  `APP_NAV_SECTIONS` stays as it is.
+
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow
   layout renders at thumbnail scale. A property of fit-against-aspect, not of
