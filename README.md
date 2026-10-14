@@ -240,6 +240,27 @@ Fourteen rules that were learned expensively and are not obvious from the code:
   the endpoint called by hand; the route the consumer hits, not the one that
   looks canonical.
 
+  **The fifth instance was inside the instrument built for the fourth.**
+  `scripts/liveness.sh` read the api fingerprint with `docker compose exec api
+  python` — a fresh interpreter that imports the files on disk — while its own
+  comment forbids exactly that for the worker. With `./backend:/app` bind
+  mounted and the api running **without `--reload`** (decided 2026-10-13),
+  disk and process diverge the moment anybody edits backend code. Measured:
+  the serving process was `c94ab098` over 260 files while the script printed
+  `b018dd56` over 263 and called it `in sync`, and the api had been serving
+  code **3h11m older** than the commit it was supposedly running. The
+  integrations card rendering under "Other" was that staleness, not the key
+  mismatch it looked like — the payload the page received genuinely had no
+  `category`, so the component was right.
+
+  Two corrections followed. The api fingerprint now comes from the serving
+  process over HTTP. And the dirty-tree skew exemption added that same morning
+  was **removed**, because its premise — "any edit moves the api's hash" — was
+  only true of the misreading: with both values read from the running
+  processes, an edit moves neither, verified by adding and removing a module
+  and watching the api's value hold. A workaround built on an unverified
+  premise outlived the bug it was masking by half a day.
+
   **The derivation discipline belongs wherever a hand-kept list exists, not
   only where one has already bitten.** The eighth was found at 19.1% of
   account nodes while nobody was looking for it, and an unenumerated set only

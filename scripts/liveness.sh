@@ -65,10 +65,45 @@ fi
 # Both read at the same moment. `code_fingerprint` is a content hash of the
 # loaded *.py taken at import time, so it identifies the process and not the
 # file on disk.
-api=$(docker compose exec -T -e PYTHONPATH=/app api python -c '
-from app.code_version import code_version
-print(code_version().get("code_fingerprint") or "none")
-' 2>/dev/null | tr -d "\r" | grep -oE "^[0-9a-f]{64}$" || true)
+#
+# The api fingerprint is read over HTTP, from the serving process, and NOT
+# with `docker compose exec api python` — which is what this did until
+# 2026-10-14 and is the very thing the worker comment below forbids. `exec
+# python` spawns a fresh interpreter that imports whatever is on disk, so with
+# the bind mount at ./backend:/app it always reported the files, never the
+# process. The api runs WITHOUT `--reload` (decided 2026-10-13), so those two
+# diverge the moment anybody edits backend code.
+#
+# Measured when this was fixed: the serving process was c94ab098 over 260
+# files while `exec python` reported b018dd56 over 263 — and the script had
+# been printing the second and calling it "in sync". The api had been serving
+# code 3h11m older than the commit it was supposedly running, which is the
+# same failure this script exists to catch, with the hole on the api side.
+#
+# The fingerprint lives behind the diagnostics header on /api/health. The
+# token is read from .env into a variable and passed as a header; it is never
+# echoed, and a missing one is reported rather than treated as agreement.
+_diag_token=$(grep -E '^GRAPH_DEBUG_TOKEN=' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env" 2>/dev/null \
+              | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '\r' | head -1)
+api=""
+api_why=""
+if [[ -z "$_diag_token" ]]; then
+    api_why="no GRAPH_DEBUG_TOKEN — cannot read the serving process"
+else
+    api=$(curl -s --max-time 10 -H "x-graph-debug: ${_diag_token}" \
+              http://localhost:3000/api/health 2>/dev/null \
+          | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+code = (d.get("diagnostics") or {}).get("code") or {}
+print(code.get("code_fingerprint") or "")
+' 2>/dev/null | grep -oE "^[0-9a-f]{64}$" || true)
+    [[ -z "$api" ]] && api_why="api did not return a fingerprint"
+fi
+unset _diag_token
 
 worker=$(docker compose exec -T -e PYTHONPATH=/app api python -c '
 from app.tasks.celery_app import celery_app
@@ -214,23 +249,26 @@ line="$tree, $push · api $(short "$api") · worker $(short "$worker")"
 
 if [[ -z "$api" || -z "$worker" ]]; then
     line="$line · CANNOT VERIFY — a missing fingerprint is not a match"
+    [[ -n "$api_why" ]] && line="$line ($api_why)"
 elif [[ "$api" == "$worker" ]]; then
     line="$line · in sync"
-elif [[ "$tree" != "tree clean" ]]; then
-    # Separated deliberately. `code_fingerprint` hashes every *.py under the
-    # root at import time, and the api runs --reload, so ANY edit — including
-    # a new file nothing imports — moves the api's hash and not the worker's.
-    # On a box where someone is editing, an undifferentiated SKEWED is
-    # therefore permanently red, which is how a monitor stops being read.
-    # This case is implied by the dirty tree and is not independently
-    # actionable; the next line says the edits are not running anywhere.
-    line="$line · skew expected (tree dirty, api reloads)"
 else
-    # The dangerous case, and the one this exists for: the tree is clean, so
-    # the api is running committed code and the worker is running something
-    # older. This is the shape that left a pre-fix decision_engine serving
-    # verdicts for 92 minutes after the fix was committed.
-    line="$line · SKEWED — worker behind committed code — docker compose restart worker beat"
+    # No dirty-tree exemption, and the reason it was removed matters.
+    #
+    # This morning it read "skew expected (tree dirty, api reloads)", on the
+    # premise that any edit moves the api's hash and not the worker's. That
+    # premise was false, and it was false because of the bug fixed above: the
+    # api fingerprint was being read with `exec python`, which DOES track the
+    # files, so editing did move it. Both fingerprints now come from the
+    # running processes, and neither moves when a file changes — measured by
+    # adding and removing a module and watching the api's value stay at
+    # c94ab098/260 across both.
+    #
+    # So a mismatch is never explained by a dirty tree. It means the two
+    # processes started on different code, which is actionable whatever the
+    # working tree looks like, and is the shape that left a pre-fix
+    # decision_engine serving verdicts for 92 minutes.
+    line="$line · SKEWED — processes on different code — docker compose restart api worker beat"
 fi
 
 if (( fe_bad )); then
@@ -272,21 +310,20 @@ fi
 # so this can gate something later. A check that cannot fail is decoration,
 # and "could not read it" is not "it matches".
 #
-# A dirty tree is exempted from the skew exit for the reason given above — not
-# to make the check quieter, but because that red could not be cleared while
-# anyone was editing, and a signal that cannot go green is not a signal. Env
-# drift and an unreadable fingerprint still fail, and so does skew on a clean
-# tree, which is the condition this was built to catch.
+# Process-to-process skew fails regardless of the working tree, because an
+# edit moves neither process's fingerprint. The earlier dirty-tree exemption
+# existed only to mask the `exec python` misreading that is now fixed.
 if [[ -z "$api" || -z "$worker" ]]; then
     exit 1
-elif [[ "$api" != "$worker" && "$tree" == "tree clean" ]]; then
+elif [[ "$api" != "$worker" ]]; then
     exit 1
 fi
 
-# The frontend is exempted while the tree is dirty, for the same reason the
-# worker is: an edit moves the source hash and no rebuild has happened yet, so
-# the red could not be cleared while anyone was working. On a clean tree a
-# stale frontend is the three-hour 404 and fails.
+# The frontend exemption stays, and unlike the code one it is correctly
+# premised: the expected value here IS recomputed from the working tree, so an
+# edit genuinely does move it before any rebuild could. That red could not be
+# cleared while anyone was working. On a clean tree a stale frontend is the
+# three-hour 404 and fails.
 if (( fe_bad )) && [[ "$tree" == "tree clean" ]]; then
     exit 1
 fi
