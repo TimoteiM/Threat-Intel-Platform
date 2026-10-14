@@ -192,3 +192,72 @@ is four sources in one array. The aggregate said "0% of 2,286" and the grain
 that mattered was per source and per run status: two sources rate-limited, one
 never authenticated, one never configured, and a collector that raised before
 any of them could be read.
+
+
+---
+
+## Addendum, 2026-10-14: the Spamhaus half is blocked on a subscription, not a key
+
+`SPAMHAUS_API_KEY` arrived in `.env` and the re-query was expected to be
+unblocked. It is not, and the reason is specific enough to act on.
+
+Three auth paths tested against `api.spamhaus.org`, reporting the server's own
+message rather than inferring from "401":
+
+| what was tried | result |
+|---|---|
+| `SPAMHAUS_SIA_TOKEN` as `Authorization: Bearer` | 401 |
+| `SPAMHAUS_API_KEY` as `Authorization: Bearer` | 401 — *"token contains an invalid number of segments"* |
+| `SPAMHAUS_API_KEY` as `Authorization:` raw | 401 — *"auth header is invalid"* |
+| `SPAMHAUS_API_KEY` as `x-api-key` / `Api-Key` | 401 — *"auth header is empty"* |
+| `POST /api/v1/login`, realm `intel` | 401 — **"no subscriptions found"** |
+| `POST /api/v1/login`, realms `dqs` / `sia` | 422 — "Wrong input parameters" |
+
+And the stored token explains the original fault exactly. It is a JWT, and
+its claims decode to:
+
+```
+exp: 2026-05-12T11:23:24+00:00    expired: True
+```
+
+**The SIA token expired on 2026-05-12** — the same day the SIA step was
+committed — and the collector has been 401ing ever since. The last
+`completed` intel run was 2026-05-04. The 98 days of failure were a token
+that outlived its own deployment by zero days.
+
+### Two different Spamhaus products, and only one of them is the blocklist
+
+This is the distinction that matters, and it was blurred:
+
+* **SIA**, the Intelligence API over HTTP, is the `spamhaus_sia` evidence
+  field. The login says *"no subscriptions found"*, so the account
+  authenticates and is simply not entitled. That is **procurement, not
+  configuration** — no credential change fixes it, and refreshing the
+  expired token cannot work either.
+* **DQS**, the Data Query Service over DNS, is what `dbl.spamhaus.org`
+  becomes when authenticated: `<key>.dbl.dq.spamhaus.net`. **This is the
+  blocklist half** — the one that lists infrastructure rather than hosted
+  payloads, and the one worth re-querying. It is blocked by the
+  `127.255.255.254` *"query via public/open resolver"* refusals measured on
+  2026-10-13, and a DQS key is precisely the fix for that refusal.
+
+`SPAMHAUS_API_KEY` is neither. It is 107 alphanumeric characters — too long
+for a DNS label, so it cannot be a DQS key (the query would exceed the 63-byte
+limit, and does: Python raises `UnicodeError: label empty or too long`), and
+not JWT-shaped, so it is not an SIA bearer token.
+
+### So the outstanding ask is narrower than "a Spamhaus credential"
+
+**A DQS key** (Spamhaus offers a free tier for low query volumes) would
+unblock the blocklist re-query and simultaneously fix the DNSBL refusals that
+make `SURBL` and `Spamhaus DBL` unanswerable from this deployment. An SIA
+subscription would only restore the `spamhaus_sia` field, which no decision
+reads.
+
+Also found on the way: `SPAMHAUS_API_KEY` is in `.env` and **present in no
+container**. `env_file: .env` is read at container *creation*, and the
+containers have only been `restart`ed — the standing note in
+`docs/deploy/schema-changes.md` that an `.env` change is not a restart,
+reaching a third variable. It is moot here because the value does not
+authenticate anyway, but a key that works would have looked broken for the
+same reason.
