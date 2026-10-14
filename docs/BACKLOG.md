@@ -179,10 +179,25 @@ values in `iocs` and 17 in `ioc_values`, including four classes nobody had
 named (IPv6 stored as a domain, values carrying their own `cert_sha256:`
 prefix, a TLS subject DN as a domain, an mDNS address as a hash).
 
-**The semantic half is not, and cannot be structural.** `6.0.4.27` is a valid
-public IPv4 address and `http://schemas.microsoft.com/...` is a well-formed
-URL — both conform, and both are in the prevalence head. Distinguishing them
-needs context from the alert body or non-resolvability, not shape.
+**The semantic half needs field provenance, per format.** `6.0.4.27` is a
+valid public IPv4 address and `http://schemas.microsoft.com/...` is a
+well-formed URL — both conform structurally. But measured against the real
+bodies, both are definitionally attributable:
+
+* `6.0.4.27` — **97 of 97 bodies** have it in **CEF field 4**, which the
+  format defines as Device Version;
+* the schema URL — **391 of 392** inside an `xmlns=` attribute.
+
+So the work is per-format field extraction (CEF by position, Windows Event
+XML by `Data Name=`, JSON by key, label prose by label), not one heuristic.
+A nearest-preceding-key rule was measured and **misattributes both** —
+`detailEntry` and `errorNumber`, adjacent keys from other log lines — so it
+must refuse rather than guess.
+
+Honest limit: this reaches only values from a recognised format. Body shapes
+of 16,969: JSON keys 33.3%, label prose 7.3%, Windows Event XML 2.3%, CEF
+1.5%. Anything regex-scraped from genuine free text has no field provenance
+and the semantic question stays per-case there.
 
 Next: quarantine the extraction defects at entry (the same predicate, the
 other consumer), add the tenant-identity exclusion,
