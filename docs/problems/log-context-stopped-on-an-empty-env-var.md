@@ -69,6 +69,42 @@ from `.env` takes effect at the next recreate and not at the edit — which is
 exactly the standing rule, biting in the direction that removes a value
 rather than adds one.
 
+## The fix landed on the wrong process first — 2026-10-14 14:21
+
+`OPENSEARCH_TENANT_VALUES` was added to `.env` and the **api** was recreated
+at 14:21:47. `liveness.sh` immediately reported what was still wrong, which is
+the first time the env-drift limb has fired on a real condition:
+
+    ENV DRIFT: worker=1 beat=1 — docker compose up -d --force-recreate
+        worker declared-but-absent: OPENSEARCH_TENANT_VALUES
+        beat   declared-but-absent: OPENSEARCH_TENANT_VALUES
+
+Measured per container: **api SET** (started 14:21:47), **worker ABSENT**
+(10:57:51), **beat ABSENT** (10:52:52).
+
+**Log context is collected in the worker, not the api.** Both call sites
+dispatch with `.delay()` —
+`api/alert_investigations.py:748` and `:1565` — so `alert_body_task` runs in
+the Celery worker, and `_collect_log_context` with it. An api that has the
+variable changes nothing about whether a new alert gets log context.
+
+This is the api/worker split that cost 92 minutes on a pre-fix
+`decision_engine` and 3h11m on a stale integrations payload, appearing a third
+time in the direction that is hardest to notice: **the fix looks applied.**
+The api is the process you can ask over HTTP, it answers correctly, and the
+process that actually does the work is the one still missing the value.
+
+**So the remaining step is `docker compose up -d --force-recreate worker beat`**
+— and `restart` will not do it, because `env_file` is read when a container is
+created. Until then the integrations page correctly shows the log store as
+`stopped`, which is now an accurate reading rather than a silent
+`not_configured`.
+
+Not yet confirmable from data: zero alert runs have arrived since 14:21:47, so
+the conclusion above is from the dispatch code and the per-container
+environment, not from a restored row. The check that settles it is one
+`alert_log_context` row appearing after the worker is recreated.
+
 ## The fix, which is one line and not mine to apply
 
     OPENSEARCH_TENANT_VALUES=wm-c00.siembiot.int
