@@ -82,13 +82,60 @@ reason (backlog 17). One line fixes both.
 
 ## Two defects this exposed, worth their own fixes
 
-**1. A missing tenant pin is silent.** The platform ran for two days with log
-enrichment entirely off and nothing said so. `collect_for_alert` reports
-`status='unavailable'` honestly, and then nothing is persisted, so the
-honest status reaches no surface that anybody watches. An integration that is
-*configured but unusable* needs to appear on the integrations page in the
-`verified_failing` state, and `opensearch_tenant_values` being empty while
-nodes and credentials are present is precisely that state.
+**1. A missing tenant pin was silent — fixed, and the first fix was wrong.**
+The platform ran for two days with log enrichment entirely off and nothing
+said so.
+
+The obvious fix was `verified_failing` on the integrations page: configured but
+unusable. **That would not have caught this**, and the reason is the sharpest
+part of the whole incident — *the defect removes the state that would have been
+red.* An integration whose tenant pin has vanished does not read as
+configured-but-broken. It reads as **`not_configured`**, and on a page listing
+unconfigured tools that is invisible.
+
+Two things were needed instead:
+
+* **The log store was not on the page at all.** The catalogue derived only
+  from `COLLECTOR_REGISTRY` entries declaring `integration = True`, and the
+  log store is not a collector — so the integration carrying 154M documents
+  and feeding every alert's context had no row for any state to be red on. It
+  now declares itself through `opensearch_tenants.INTEGRATION_SPEC`, beside
+  the thing it describes rather than in a list inside the consumer.
+* **A sixth state, `stopped`, and `last_succeeded_at` beside it.** The
+  distinguishing fact was already stored — `alert_log_context` rows up to
+  2026-10-12 and none after — and nothing read it. A tool that is not working
+  *and has a last success* is an outage; one that never worked is an absence.
+  `stopped` is first in `STATES` because the overall badge is the worst
+  direction, so a stopped direction cannot hide behind a healthy one.
+
+Verified against live data, which is the only test that matters here — would
+the row an operator reads on 2026-10-14 have said so?
+
+| tool | state | stopped | silent | last success |
+|---|---|---|---|---|
+| falcon | `verified_ok` | False | 0.6h | 2026-10-14 13:38 |
+| **opensearch** | **`stopped`** | **True** | **49.8h** | **2026-10-12 12:26:33** |
+
+That timestamp is the forensic figure exactly, and falcon is the control: the
+mechanism discriminates rather than flagging everything. The page would have
+shown this red within minutes.
+
+**And it was half-wired at first, caught by a test rather than by review.**
+`continuity` was attached in `for_tenant` (the card grid) and not in
+`matrix()` (the cross-tenant view), so a stopped integration still read as
+`not_configured` in the view whose entire job is *who has nothing working* —
+the same invisibility, surviving in the other half of the page. The join test
+written the day before found it: the component reads `t.continuity`, one
+payload branch did not carry it, and the test's job is exactly that the two
+sides agree. Both views attach it now, and a test asserts neither builds a
+tool entry without it.
+
+**This is the fourth time this week the fix has been to split one state into
+two** — checked from listed, failed from not_attempted, verified from
+consulted, and now never-configured from configured-and-stopped. The general
+form: an addition that does not take effect fails loudly because somebody is
+watching the new thing, and a value that disappears fails silently because
+nobody is watching the old one.
 
 **2. The panel collapses the absence distinction.** "No surrounding events
 were retrieved" and "log retrieval is not available for this alert" are

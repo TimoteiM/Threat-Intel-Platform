@@ -46,6 +46,64 @@ logger = logging.getLogger(__name__)
 _SAFE = re.compile(r"[^A-Z0-9]+")
 
 
+#: How this integration appears on the integrations page.
+#:
+#: Declared **here**, beside the thing it describes, for the same reason a
+#: collector declares `integration_category` on itself: the integrations
+#: catalogue must be derived and not hand-listed in its consumer. A list of
+#: tools inside `integration_status_service` is the position the eighth silent
+#: registry occupied, and two separate tests refuse it.
+#:
+#: The log store needed this because it is not a collector and was therefore
+#: **absent from the integrations page entirely** — the one integration
+#: carrying 154M documents and feeding every alert's log context. When it
+#: stopped on 2026-10-12 there was no row for any state to be red on.
+INTEGRATION_SPEC: dict[str, object] = {
+    "tool": "opensearch",
+    "label": "OpenSearch / Wazuh log store",
+    "category": "siem",
+    "directions": ("enrichment",),
+    "config_fields": {
+        "nodes": "Cluster node URLs, from deployment configuration.",
+        "index_pattern": "Which indices to search, e.g. wazuh-alerts-4.x-*",
+        "tenant_field": "The field that pins a query to this customer.",
+        "tenant_values": (
+            "The value(s) identifying this customer's manager. EMPTY MEANS "
+            "UNPINNED, and the platform refuses to query rather than reach "
+            "across tenants — so an empty value reads as not configured."
+        ),
+    },
+    "secret_fields": {},
+}
+
+
+async def last_success(db: Any, tenant_id: str) -> Any:
+    """When this log store last actually produced context for this tenant.
+
+    Lives here rather than in `integration_status_service` because that module
+    may not branch on a tool's name — a `if tool == "opensearch"` there is the
+    same hand-listing its catalogue tests refuse, and its own guard caught the
+    first version of this function sitting in it.
+
+    The evidence is the `alert_log_context` rows. They ran until 2026-10-12
+    12:26:32 and then stopped, which is the fact that tells "the configuration
+    vanished" apart from "it was never configured" — and the fact nothing was
+    reading while log enrichment was off for two days.
+
+    `None` means no evidence of ever having worked, which the caller renders as
+    a named absence and never as a date.
+    """
+    from sqlalchemy import text as _text
+
+    result = await db.execute(_text("""
+        select max(c.created_at)
+        from alert_log_context c
+        join alert_body_investigation_runs r on r.id = c.run_id
+        where r.tenant_id = :tid and c.status in ('collected', 'partial')
+    """), {"tid": tenant_id})
+    return result.scalar()
+
+
 def _env_key(tenant_id: str, suffix: str) -> str:
     return f"OPENSEARCH_TENANT_{_SAFE.sub('_', str(tenant_id).upper())}_{suffix}"
 

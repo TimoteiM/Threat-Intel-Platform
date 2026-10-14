@@ -70,6 +70,13 @@ def _all_branch_keys() -> set[str]:
         st.status_of(spec, _Row(), "falcon"),     # configured
     ):
         keys |= set(payload)
+    # Keys the VIEW attaches rather than `status_of`. `continuity` is added by
+    # `for_tenant` and `matrix` after the fact, and the component reads it —
+    # so enumerating only `status_of`'s keys made this test flag a real field
+    # as drift. Named explicitly, because the point of the test is that the
+    # component and the payload agree, and a view-attached key is still part
+    # of the payload the component receives.
+    keys |= {"continuity"}
     return keys
 
 
@@ -172,4 +179,26 @@ def test_the_tenant_key_allowance_matches_the_real_matrix_payload():
         assert f'"{key}"' in src, (
             f"the join test allows t.{key} as a matrix tenant key, but "
             f"matrix() no longer builds it"
+        )
+
+
+def test_both_views_attach_continuity_or_one_of_them_hides_a_stopped_tool():
+    """`continuity` upgrades `not_configured` to `stopped`.
+
+    A view that does not attach it shows the un-upgraded state, which is the
+    exact invisibility the state was added to fix. Asserted by source, because
+    both views are async and DB-backed: the cheap check is that neither builds
+    its payload without it.
+    """
+    import inspect
+
+    for fn in (st.for_tenant, st.matrix):
+        src = inspect.getsource(fn)
+        assert "continuity" in src, (
+            f"{fn.__name__} builds tool entries without continuity, so a "
+            f"stopped integration reads as not_configured there"
+        )
+        assert "last_success_for" in src, (
+            f"{fn.__name__} does not resolve a last success, so continuity "
+            f"would always report never-worked"
         )

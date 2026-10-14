@@ -56,7 +56,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import tenant_scope
-from app.services.absence import OUT_OF_SCOPE, absent
+from app.services.absence import NEVER_OBSERVED, OUT_OF_SCOPE, absent
 
 #: The five states. Ordered worst-known-first for a UI that sorts by concern;
 #: `not_implemented` last because it is not a fault, it is an absence of
@@ -67,8 +67,83 @@ NOT_CONFIGURED = "not_configured"
 VERIFIED_OK = "verified_ok"
 NOT_IMPLEMENTED = "not_implemented"
 
-STATES = (VERIFIED_FAILING, CONFIGURED_UNVERIFIED, NOT_CONFIGURED,
-          VERIFIED_OK, NOT_IMPLEMENTED)
+#: Worked before, and is not working now. **The state the defect removes.**
+#:
+#: `verified_failing` catches "configured but unusable". It does not catch a
+#: configuration that *vanished*: SIEM log enrichment stopped on 2026-10-12
+#: because `OPENSEARCH_TENANT_VALUES` went empty, which makes the integration
+#: read as `not_configured` — and on a page listing unconfigured tools that is
+#: invisible. Two days passed.
+#:
+#: So the distinguishing fact goes beside the status. It was already stored:
+#: `alert_log_context` rows up to 2026-10-12 and none after. A tool that is
+#: not working **and has a last success** is an incident; one that never
+#: worked is an absence. First in STATES because the overall badge is the
+#: worst direction by this index, and a stopped direction must not hide behind
+#: a healthy one.
+STOPPED = "stopped"
+
+STATES = (
+    STOPPED,
+    VERIFIED_FAILING,
+    CONFIGURED_UNVERIFIED,
+    NOT_CONFIGURED,
+    VERIFIED_OK,
+    NOT_IMPLEMENTED,
+)
+
+
+#: States in which a last success means the tool has STOPPED rather than
+#: merely being absent. `not_implemented` is excluded deliberately: no
+#: connector exists, so there is nothing that could have stopped.
+_CAN_HAVE_STOPPED = frozenset({
+    NOT_CONFIGURED, VERIFIED_FAILING, CONFIGURED_UNVERIFIED,
+})
+
+
+def continuity(
+    *,
+    state: str,
+    last_succeeded_at: Any = None,
+    now: Any = None,
+) -> dict[str, Any]:
+    """Split "never worked" from "worked until Monday".
+
+    Returns the state possibly upgraded to `stopped`, plus how long it has
+    been silent, plus `last_success` as a value or a named absence — never as
+    a zero date, because a rendered epoch reads as a measurement.
+    """
+    from datetime import datetime, timezone
+
+    at = now or datetime.now(timezone.utc)
+    if last_succeeded_at is None:
+        return {
+            "state": state,
+            "stopped": False,
+            "silent_for_hours": None,
+            "last_success": absent(
+                NEVER_OBSERVED,
+                "This integration has never produced a result, so there is "
+                "nothing it could have stopped doing. Absence of "
+                "configuration, not an outage.",
+            ).as_json(),
+        }
+
+    delta = at - last_succeeded_at
+    # Clamped at zero: clock skew must not make a stopped tool look recent,
+    # and a negative duration would sort as the freshest thing on the page.
+    hours = max(0.0, delta.total_seconds() / 3600.0)
+    stopped = state in _CAN_HAVE_STOPPED
+    return {
+        "state": STOPPED if stopped else state,
+        "stopped": stopped,
+        "silent_for_hours": round(hours, 1),
+        "last_success": last_succeeded_at.isoformat(),
+        "note": (
+            f"Last produced a result {round(hours, 1)}h ago. It worked before, "
+            f"so this is an outage and not an absence of configuration."
+        ) if stopped else None,
+    }
 
 #: States in which this tool is not known to be working. Deliberately
 #: includes `configured_unverified`: a saved credential nobody has exercised
@@ -107,15 +182,45 @@ class ToolSpec:
         }
 
 
+#: Integrations that are not collectors, and so cannot declare themselves
+#: through `COLLECTOR_REGISTRY`. Each module that owns one exposes an
+#: `INTEGRATION_SPEC`, so the declaration lives beside the thing it describes
+#: and this module carries no tool names, labels or categories of its own —
+#: which is what the catalogue-derivation tests require.
+_SPEC_MODULES = ("app.services.opensearch_tenants",)
+
+
+def _declared_elsewhere() -> dict[str, dict[str, Any]]:
+    """`INTEGRATION_SPEC` from every module that declares one."""
+    import importlib
+
+    out: dict[str, dict[str, Any]] = {}
+    for path in _SPEC_MODULES:
+        spec = getattr(importlib.import_module(path), "INTEGRATION_SPEC", None)
+        if isinstance(spec, dict) and spec.get("tool"):
+            out[str(spec["tool"])] = spec
+    return out
+
+
 def catalogue() -> dict[str, ToolSpec]:
-    """Every implemented integration, derived from the collector registry.
+    """Every implemented integration, derived rather than enumerated.
 
     Adding a connector that sets `integration = True` adds a tool here with
-    nothing to update. Nothing enumerates tool names.
+    nothing to update. Integrations that are not collectors come from
+    `NON_COLLECTOR_INTEGRATIONS`, which declares the same fields.
     """
     from app.collectors.registry import COLLECTOR_REGISTRY
 
     out: dict[str, ToolSpec] = {}
+    for name, decl in _declared_elsewhere().items():
+        out[name] = ToolSpec(
+            tool=name,
+            label=str(decl["label"]),
+            category=str(decl["category"]),
+            directions=tuple(decl["directions"]),
+            config_fields=dict(decl.get("config_fields") or {}),
+            secret_fields=dict(decl.get("secret_fields") or {}),
+        )
     for name, cls in sorted(COLLECTOR_REGISTRY.items()):
         if not getattr(cls, "integration", False):
             continue
@@ -132,6 +237,53 @@ def catalogue() -> dict[str, ToolSpec]:
             secret_fields=dict(getattr(cls, "integration_secret_fields", {}) or {}),
         )
     return out
+
+
+async def last_success_for(
+    db: AsyncSession, tenant_id: str, tool: str, row: Any = None
+) -> Any:
+    """When this integration last actually produced something, or None.
+
+    Derived from evidence the platform already stores, never from a flag, and
+    **this module names no tool**: an integration that knows what its own
+    evidence looks like exposes `last_success(db, tenant_id)` from the module
+    that owns it. The first version of this branched on `tool == "opensearch"`
+    and the catalogue's own source guard rejected it, correctly — that branch
+    is the hand-listing the derivation rules exist to prevent.
+
+    Returns None for "no evidence of ever having worked", which `continuity()`
+    turns into a named absence rather than a date.
+    """
+    import importlib
+
+    for path in _SPEC_MODULES:
+        module = importlib.import_module(path)
+        spec = getattr(module, "INTEGRATION_SPEC", None)
+        resolver = getattr(module, "last_success", None)
+        if isinstance(spec, dict) and spec.get("tool") == tool and resolver:
+            return await resolver(db, tenant_id)
+
+    # Everything else records its own verification outcomes on the row, keyed
+    # by direction. The newest passing one is the last success.
+    health = getattr(row, "health", None) or {}
+    if not isinstance(health, dict):
+        return None
+    from datetime import datetime
+
+    best = None
+    for entry in health.values():
+        if not isinstance(entry, dict) or entry.get("state") != VERIFIED_OK:
+            continue
+        stamp = entry.get("checked_at")
+        if not stamp:
+            continue
+        try:
+            when = datetime.fromisoformat(str(stamp))
+        except ValueError:
+            continue
+        if best is None or when > best:
+            best = when
+    return best
 
 
 def _state_for_direction(row: Any, direction: str) -> dict[str, Any]:
@@ -267,7 +419,17 @@ async def for_tenant(
     rows = {r.tool: r for r in await _rows(db, scope=scope, tenant_id=tenant_id)}
     cat = catalogue()
 
-    tools = [status_of(cat.get(t), rows.get(t), t) for t in sorted(cat)]
+    tools = []
+    for t in sorted(cat):
+        entry = status_of(cat.get(t), rows.get(t), t)
+        # The fact that splits "never worked" from "worked until Monday".
+        # Attached to every tool, because the state it upgrades is
+        # `not_configured` — the one a vanished configuration produces, and
+        # the one that is invisible on a page of unconfigured tools.
+        last = await last_success_for(db, tenant_id, t, rows.get(t))
+        entry["continuity"] = continuity(state=entry["overall"], last_succeeded_at=last)
+        entry["overall"] = entry["continuity"]["state"]
+        tools.append(entry)
     # A row for a tool no connector implements any more — a connector
     # removed while its configuration remains. Surfaced rather than hidden,
     # because a stored credential nothing can use is worth knowing about.
@@ -306,13 +468,24 @@ async def matrix(
         by_tenant.setdefault(r.tenant_id, {})[r.tool] = r
 
     cat = catalogue()
-    cells = {
-        t["tenant_id"]: {
-            tool: status_of(cat.get(tool), by_tenant.get(t["tenant_id"], {}).get(tool), tool)
-            for tool in sorted(cat)
-        }
-        for t in tenants
-    }
+    # Continuity here too, not only on the card grid. Attaching it to one view
+    # and not the other is how a stopped integration keeps reading as
+    # `not_configured` in the matrix — the same invisibility, surviving in the
+    # view whose whole job is "who has nothing working". The join test caught
+    # this: the component reads `continuity` and one payload branch lacked it.
+    cells: dict[str, dict[str, Any]] = {}
+    for t in tenants:
+        tid = t["tenant_id"]
+        row_for = by_tenant.get(tid, {})
+        cells[tid] = {}
+        for tool in sorted(cat):
+            entry = status_of(cat.get(tool), row_for.get(tool), tool)
+            last = await last_success_for(db, tid, tool, row_for.get(tool))
+            entry["continuity"] = continuity(
+                state=entry["overall"], last_succeeded_at=last
+            )
+            entry["overall"] = entry["continuity"]["state"]
+            cells[tid][tool] = entry
     return {
         "tenants": sorted(tenants, key=lambda t: t["tenant_id"]),
         "tools": [cat[t].as_json() for t in sorted(cat)],

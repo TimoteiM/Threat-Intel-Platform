@@ -59,6 +59,15 @@ const STATE_META: Record<
     border: "rgba(74,201,126,0.22)",
     meaning: "A real authenticated call succeeded.",
   },
+  stopped: {
+    label: "STOPPED",
+    color: "var(--red, #f07050)",
+    bg: "rgba(240,112,80,0.10)",
+    border: "rgba(240,112,80,0.45)",
+    meaning:
+      "This worked before and is not working now. An outage, not an absence " +
+      "of configuration — the date it last produced a result is below.",
+  },
   verified_failing: {
     label: "FAILING",
     color: "var(--red, #f07050)",
@@ -547,6 +556,37 @@ export default function IntegrationsPage() {
                 <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
                   {meta.meaning}
                 </div>
+
+                {/* "Never worked" and "worked until Monday" are different
+                    rows, and only the second is an incident. Without this a
+                    configuration that disappears looks identical to one that
+                    was never made — which is exactly how SIEM log enrichment
+                    stayed off for two days reading as `not_configured`. */}
+                {t.continuity && (
+                  <div style={{ fontSize: 11, marginTop: 6 }}>
+                    {t.continuity.stopped ? (
+                      <div style={{ color: "var(--red)" }}>
+                        Last worked{" "}
+                        {new Date(t.continuity.last_success).toLocaleString()}
+                        {" — silent "}
+                        {t.continuity.silent_for_hours < 48
+                          ? `${t.continuity.silent_for_hours}h`
+                          : `${Math.floor(t.continuity.silent_for_hours / 24)} days`}
+                        .
+                      </div>
+                    ) : typeof t.continuity.last_success === "string" ? (
+                      <div style={{ color: "var(--text-muted)" }}>
+                        Last produced a result{" "}
+                        {new Date(t.continuity.last_success).toLocaleString()}
+                      </div>
+                    ) : (
+                      <div style={{ color: "var(--text-muted)" }}>
+                        {/* The absence, rendered as one. Never a zero date. */}
+                        Has never produced a result.
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Both directions, never one badge: a tool that answers
                     queries and delivers no detections is healthy by one

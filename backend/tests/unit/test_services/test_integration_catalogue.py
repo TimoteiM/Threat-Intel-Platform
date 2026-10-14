@@ -26,14 +26,60 @@ from app.services import integration_status_service as st
 
 # ─── derived, not listed ─────────────────────────────────────────────────
 
-def test_the_catalogue_comes_from_the_collector_registry():
+def test_every_catalogue_entry_declares_itself_somewhere_it_is_not_listed():
+    """Broadened, not weakened.
+
+    The original form asserted every tool is a collector with
+    `integration = True`. That invariant was too narrow: the log store is an
+    integration and not a collector, so it was absent from the page entirely —
+    the one carrying 154M documents and feeding every alert's log context, and
+    when it stopped on 2026-10-12 there was no row for any state to be red on.
+
+    The property that actually matters is unchanged and still enforced here:
+    **no tool is listed in `integration_status_service` itself.** Each entry
+    comes either from a collector declaring `integration = True` or from a
+    module exposing its own `INTEGRATION_SPEC`. A list of tools inside the
+    consumer is the position the eighth silent registry occupied, and
+    `test_the_catalogue_names_no_tool_in_the_service_source` below refuses it
+    by reading the source.
+    """
     from app.collectors.registry import COLLECTOR_REGISTRY
 
     cat = st.catalogue()
-    assert cat, "the catalogue is empty; no connector declares itself"
+    assert cat, "the catalogue is empty; nothing declares itself"
     for tool in cat:
-        assert tool in COLLECTOR_REGISTRY
-        assert getattr(COLLECTOR_REGISTRY[tool], "integration", False) is True
+        from_collector = (
+            tool in COLLECTOR_REGISTRY
+            and getattr(COLLECTOR_REGISTRY[tool], "integration", False) is True
+        )
+        from_own_module = tool in st._declared_elsewhere()
+        assert from_collector or from_own_module, (
+            f"{tool!r} is in the catalogue but declares itself nowhere — "
+            f"which means it is hand-listed in the service"
+        )
+
+
+def test_the_catalogue_names_no_tool_in_the_service_source():
+    """The invariant the narrower test was protecting, asserted directly.
+
+    Tokenised so a tool name in a comment or docstring does not count: this
+    module's docstrings discuss `opensearch` and `falcon` at length, and a
+    plain substring search would pass or fail for the wrong reason.
+    """
+    import io
+    import pathlib as _p
+    import tokenize
+
+    src = _p.Path(st.__file__).read_text()
+    literals: set[str] = set()
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type == tokenize.STRING:
+            literals.add(tok.string.strip("\"'"))
+    for tool in st.catalogue():
+        assert tool not in literals, (
+            f"{tool!r} is a string literal in integration_status_service; "
+            f"tools declare themselves, they are not listed in the consumer"
+        )
 
 
 def test_a_newly_registered_integration_appears_with_nothing_to_update(monkeypatch):
@@ -133,13 +179,27 @@ def test_the_no_list_guard_can_fail():
 
 # ─── the five states, each derived from a fact ───────────────────────────
 
-def test_there_are_five_states_and_enabled_is_not_one_of_them():
-    assert len(st.STATES) == 5
+def test_there_are_six_states_and_enabled_is_not_one_of_them():
+    """`stopped` is the sixth, added 2026-10-14 and deliberately.
+
+    The count is pinned so a state cannot be added without someone stating
+    why. `stopped` exists because `verified_failing` catches "configured but
+    unusable" and does NOT catch a configuration that vanished — which reads
+    as `not_configured`, and on a page of unconfigured tools is invisible.
+    That is the two-day log-context outage.
+
+    And `enabled` is still not among them, which is the original point: every
+    state here is derived from a fact, never from a flag somebody set.
+    """
+    assert len(st.STATES) == 6
     assert "enabled" not in st.STATES
     assert set(st.STATES) == {
         "not_implemented", "not_configured", "configured_unverified",
-        "verified_ok", "verified_failing",
+        "verified_ok", "verified_failing", "stopped",
     }
+    # Worst first: the overall badge is min() by this index, so a stopped
+    # direction must not be able to hide behind a healthy one.
+    assert st.STATES[0] == st.STOPPED
 
 
 def test_a_tool_no_connector_implements_is_not_implemented():
