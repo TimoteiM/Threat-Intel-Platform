@@ -105,6 +105,42 @@ print(code.get("code_fingerprint") or "")
 fi
 unset _diag_token
 
+# ── the serving api against the FILES, which is a third comparison ────────
+# The limbs above compare process to process. Neither answers the question
+# that made a verification invalid on 2026-10-14: **is the serving api
+# running the code that is on disk?**
+#
+# The api runs without `--reload`, so a backend edit moves the files and not
+# the process. `docker compose exec api python` spawns a fresh interpreter and
+# therefore reports the FILES — which is why reading the api's fingerprint
+# that way was a bug, and is exactly why it is the right way to measure disk
+# here. The serving value comes over the socket; the disk value comes from a
+# fresh interpreter; the comparison is the point.
+#
+# This is reported as a control rather than written down as a rule, because a
+# rule you have to remember to consult is not a control — the same argument
+# that put the env-drift and frontend limbs here.
+disk=$(docker compose exec -T -e PYTHONPATH=/app api python -c '
+from app.code_version import code_version
+print(code_version().get("code_fingerprint") or "")
+' 2>/dev/null | tr -d "\r" | grep -oE "^[0-9a-f]{64}$" || true)
+
+serve_note=""
+serve_bad=0
+if [[ -z "$api" || -z "$disk" ]]; then
+    serve_note="serving-vs-disk unknown"
+elif [[ "$api" != "$disk" ]]; then
+    # On a dirty tree this is expected: an edit moves the files and the api
+    # does not reload. Reported either way, because the INFORMATION is what
+    # was missing — a claim about running behaviour made while this differs
+    # is a claim about the files. Only failed on a clean tree, for the same
+    # reason the frontend limb is exempted while dirty: this premise was
+    # verified, by adding and removing a module and watching the serving
+    # value hold.
+    serve_note="api SERVING code older than the files — restart before trusting any live check"
+    serve_bad=1
+fi
+
 worker=$(docker compose exec -T -e PYTHONPATH=/app api python -c '
 from app.tasks.celery_app import celery_app
 try:
@@ -271,6 +307,10 @@ else
     line="$line · SKEWED — processes on different code — docker compose restart api worker beat"
 fi
 
+if [[ -n "$serve_note" ]]; then
+    line="$line · ${serve_note}"
+fi
+
 if (( fe_bad )); then
     line="$line · fe $(short "${fe_served:-none}") · ${fe_note}"
 else
@@ -325,6 +365,10 @@ fi
 # cleared while anyone was working. On a clean tree a stale frontend is the
 # three-hour 404 and fails.
 if (( fe_bad )) && [[ "$tree" == "tree clean" ]]; then
+    exit 1
+fi
+
+if (( serve_bad )) && [[ "$tree" == "tree clean" ]]; then
     exit 1
 fi
 (( env_bad == 0 )) || exit 1

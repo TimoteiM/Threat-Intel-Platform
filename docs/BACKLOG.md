@@ -758,3 +758,44 @@ The fix is one line plus `docker compose up -d --force-recreate` (not
 **The same value unblocks the estate lookup**, which refuses for the same
 reason. Left for a human because it recreates the api on a box carrying live
 traffic.
+
+## 18. Falcon's silence expectation is conditional, not a number
+
+`continuity()` needs a declared `expected_interval_hours` before it will call
+an integration stopped, and with none declared it makes no claim. The log
+store declares 6h because it produces one `alert_log_context` row per
+analysed alert. **Falcon must not declare one**, and the reason is worth
+keeping rather than fixing with a plausible number:
+
+Falcon enriches **on escalation, not on a clock.** A quiet estate produces no
+Falcon queries, so any fixed interval would manufacture outages on exactly
+the days when nothing is wrong — and `6h` would be a guess dressed as a
+declaration, which is worse than the honest absence because it carries a
+verdict.
+
+**But name what "no claim" costs**, because that is the part an absence
+convention is supposed to make explicit: **a Falcon outage is currently
+indistinguishable from a quiet day.** The card shows its last success and no
+verdict, and nothing will ever go red.
+
+**The right expectation is conditional:** silent *since the last verdict that
+should have queried it.* That is a different shape from a duration — it needs
+the set of verdicts whose decision path includes a Falcon lookup, and then
+the question is whether any of those produced a Falcon result. A verdict that
+should have queried Falcon and has no Falcon evidence is the outage signal;
+elapsed time is not.
+
+So the work is:
+
+1. Identify the verdicts whose path includes a Falcon enrichment — the
+   `decision_engine` already records which sources were consulted, and
+   `source_answer_rate_service` already derives the expected source set from
+   the registry rather than a list.
+2. Express the expectation as "N consecutive qualifying verdicts with no
+   result" rather than "H hours of silence".
+3. Generalise `continuity()` to accept a conditional expectation, since any
+   on-demand integration has this shape and a clock-based one is the special
+   case rather than the rule.
+
+Until then Falcon's honest state is: last success reported, no silence
+verdict, and this entry as the record of what that omits.
