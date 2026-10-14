@@ -123,6 +123,46 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("THREATFOX_ENABLED"),
     )
+    # The brand-reference signal, off by default as of 2026-10-14.
+    #
+    # `http_collector` flagged "Third-party brand reference: '<brand>' on
+    # non-<brand> domain" whenever a brand word appeared anywhere in the
+    # response body and `brand_slug not in own_host_lower`. Measured before
+    # disabling, grain one row per investigation:
+    #
+    #   carried the signal            1,651 of 2,430 rows (67.9%)
+    #   prevalence, suspicious         83.5%  (1.23x base -- and endogenous,
+    #                                          the signal feeds http_score)
+    #   prevalence, benign             36.5%  (0.54x)
+    #   prevalence, MALICIOUS          47.6%  (0.70x)
+    #
+    # The malicious row is the informative one: `malicious` is reached
+    # through clauses that never consult this signal, and among the domains
+    # they condemned it is *below* base rate. A detector pointing backwards.
+    #
+    # 90.7% of the Google flags co-occur with a Google/gstatic external
+    # resource, so two thirds of the whole signal is "this page uses Google
+    # Fonts, Analytics or reCAPTCHA" -- the match ran against the raw body,
+    # including `<script src>`.
+    #
+    # Removing it moves 833 of 1,651 carriers to a milder class (828
+    # suspicious->benign, 5 malicious->suspicious). The 5 that lose severity
+    # are `googlebot.com`, `www.google.com/bot.html`,
+    # `www.apple.com/go/applebot`, an attack.mitre.org technique page and
+    # `otar.nl` -- every one a false positive at malicious/82. So the
+    # detection cost of disabling is zero.
+    #
+    # Deliberately a switch and not a rewrite: the ownership test is inverted
+    # in its *use*, not only its method. `paypal-secure-login-update-
+    # account.xyz` contains "paypal", so the rule concludes PayPal owns it
+    # and skips -- while "contains the brand word and is not the brand's" is
+    # the actual detection. The condition the code uses to exclude is the
+    # condition that should include. A replacement has to start there, and it
+    # must not be a ninth hand-maintained list.
+    brand_reference_signal_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("BRAND_REFERENCE_SIGNAL_ENABLED"),
+    )
     # The case-graph debug route (app/api/graph_debug.py). Off unless both
     # are set: a flag that defaults to off, and a secret compared in constant
     # time. It exists because the real endpoint is behind the session and

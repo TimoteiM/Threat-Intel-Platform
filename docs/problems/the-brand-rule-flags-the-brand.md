@@ -116,6 +116,78 @@ sharepointonline.com                        contains 'sharepoint' (legitimate)
 The first is a textbook phishing hostname. The rule's one job is to notice
 that shape, and the shape is precisely what it exempts.
 
+## The exemption is the whole defect, in one line
+
+My three alternatives below all improve the *method* of the ownership test.
+That misses it. **The ownership test is inverted in its use, not just its
+method.**
+
+> `paypal-secure-login-update-account.xyz` contains "paypal", so the rule
+> concludes PayPal owns it and skips.
+
+The detection worth having is **"contains the brand word and isn't the
+brand's"** — and that is the exact condition the code uses to *exclude*.
+Containment of the brand word is being read as evidence of ownership when it
+is evidence of the opposite. No improvement to how ownership is determined
+fixes a predicate that is pointed the wrong way.
+
+## Blast radius, measured before flipping anything
+
+A bulk silent downgrade on a SOC platform is its own event, so this was
+measured first. Each stored evidence row was run through the production
+`build_decision_report` twice — as stored, and with every brand-reference
+entry stripped.
+
+The control: rows **not** carrying the signal must come out identical.
+**0 of 779 moved**, so the table is measuring the signal and not the harness.
+
+| change | rows |
+|---|---|
+| suspicious → benign | **828** |
+| suspicious, same class, medium/50 → low/40 | 350 |
+| suspicious, same class, medium/65 → low/40 | 11 |
+| suspicious, same class, low/40 → medium/50 | 6 |
+| **malicious → suspicious** | **5** |
+| unchanged entirely | 451 |
+
+**833 of 1,651 carriers change class — 50.5% of carriers, 34.3% of every row
+in the corpus.**
+
+Among them: `https://attack.mitre.org/techniques/T1569/002/` and nine other
+ATT&CK technique pages, which are suspicious because MITRE's own technique
+descriptions say "microsoft"; `tarom.ro`, the Romanian national airline;
+`pragma-core.com`; `bizinfo.ro`; `dataforseo.com`.
+
+### The detection cost of disabling is zero
+
+The five rows that lose severity, named rather than counted:
+
+| observable | before | after |
+|---|---|---|
+| `googlebot.com` | malicious / medium / 82 | suspicious / 65 |
+| `http://www.google.com/bot.html` | malicious / medium / 82 | suspicious / 65 |
+| `http://www.apple.com/go/applebot` | malicious / medium / 82 | suspicious / 65 |
+| `https://attack.mitre.org/techniques/T1036/008/` | malicious / medium / 82 | suspicious / 65 |
+| `otar.nl` | malicious / medium / 82 | suspicious / 65 |
+
+Google's own crawler domain, Google's own bot documentation, Apple's own bot
+documentation, and a MITRE page — all currently rated **malicious at risk
+82**. Every row that loses severity is itself a false positive. Disabling
+loses no true positive and fixes five more.
+
+## Switched off
+
+`Settings.brand_reference_signal_enabled`, default `False`, gating the emit
+in `http_collector`. The rule is kept rather than deleted so the switch
+carries its measurements and re-enabling is one setting if a replacement is
+not ready.
+
+**Not retroactive.** New analyses use the corrected logic; historical
+verdicts keep their stored classification and will carry a `superseded`
+record as they are naturally re-analysed — which is how `live.com` corrected
+itself. A sweep that silently re-graded a third of the corpus would be the
+event, not the fix.
+
 ## What a fix has to avoid
 
 The obvious repair — add the missing domains to a brand-ownership list — is
@@ -133,8 +205,20 @@ to be investigated. The alternatives worth weighing:
   mentions a brand"* (true of most of the web, worth no score) from *"this
   hostname imitates a brand"* (the lookalike shape, currently exempted).
 
-Measuring first, as instructed, rather than fixing: the numbers above change
-which of those is worth building.
+Of the three, **rendered text or form action first**: it is the only one that
+needs no list at all, and it kills two-thirds of the signal outright — the
+Google Fonts/Analytics/reCAPTCHA matches are `<script src>` hits that vanish
+the moment the match stops running against the raw body.
+
+**Ownership-by-evidence needs a third state.** Anything behind a CDN reads
+`Cloudflare` in `asn_org`, so "no evidence of ownership" must mean
+**unknown**, not *not-owned* — otherwise the same inversion returns wearing
+better evidence.
+
+**Splitting "mentions" from "imitates" should happen regardless.** They are
+one field carrying two claims, and only one of them is a detection.
+
+And whatever is built must not be list number nine.
 
 ## The rule
 

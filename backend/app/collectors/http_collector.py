@@ -347,18 +347,43 @@ class HTTPCollector(BaseCollector):
         except Exception:
             pass
 
-        # Brand reference: known brand name in page but domain doesn't belong to it.
-        # Legitimate partner/integration pages often mention third-party brands.
-        own_host_lower = own_host.lower() if own_host else ""
-        for brand in KNOWN_BRANDS:
-            if brand in body_lower:
-                # Only flag if the domain clearly doesn't belong to that brand
-                brand_slug = brand.split()[0]  # e.g. "microsoft", "google", "paypal"
-                if brand_slug not in own_host_lower:
-                    evidence.phishing_indicators.append(
-                        f"Third-party brand reference: '{brand}' on non-{brand_slug} domain"
-                    )
-                    break  # one brand match is enough to flag
+        # Brand reference. OFF by default since 2026-10-14 — see
+        # `Settings.brand_reference_signal_enabled` for the measurements.
+        #
+        # The ownership test below, `brand_slug not in own_host_lower`, is a
+        # substring test of the brand word against the hostname, and it is
+        # **inverted in its use**: a hostname that contains the brand word is
+        # treated as belonging to the brand and skipped, when containing a
+        # brand word while not being that brand is the thing worth
+        # detecting. `paypal-secure-login-update-account.xyz` was exempted on
+        # exactly that reasoning, and `live.com` — Microsoft's own domain —
+        # was flagged because the string "microsoft" is not inside it.
+        #
+        # Two claims are also conflated in one field: "this page mentions a
+        # brand", which is true of most of the web and worth no score, and
+        # "this hostname imitates a brand", which is the lookalike shape and
+        # is currently the excluded case. A replacement separates them,
+        # matches rendered text or a form action rather than the raw body
+        # (which removes the `<script src>` hits that are two thirds of this
+        # signal and needs no list at all), and treats "no evidence of
+        # ownership" as **unknown** rather than not-owned — anything behind a
+        # CDN reads "Cloudflare" in `asn_org`.
+        #
+        # Kept rather than deleted so the switch is a decision with its
+        # measurements attached, and so re-enabling is one setting if the
+        # replacement is not ready.
+        from app.config import get_settings
+
+        if get_settings().brand_reference_signal_enabled:
+            own_host_lower = own_host.lower() if own_host else ""
+            for brand in KNOWN_BRANDS:
+                if brand in body_lower:
+                    brand_slug = brand.split()[0]
+                    if brand_slug not in own_host_lower:
+                        evidence.phishing_indicators.append(
+                            f"Third-party brand reference: '{brand}' on non-{brand_slug} domain"
+                        )
+                        break  # one brand match is enough to flag
 
         # ── Content analysis: external resources ──
         resource_domains: set[str] = set()
