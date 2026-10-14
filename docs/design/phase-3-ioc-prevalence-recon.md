@@ -328,7 +328,19 @@ domain" is a real question with a real answer. Per-host IP egress is thin —
 
 | lookup | result | time |
 |---|---|---|
-| `www.google.com` over 7 days | 44,669 docs, 5 hosts | **209 ms** |
+| `www.google.com` over 7 days | 44,669 docs, ~~5 hosts~~ **109 hosts** | **209 ms** |
+
+**Correction, 2026-10-14.** The host figure in the row above was wrong by a
+factor of 20 and is corrected here rather than quietly. Re-measured through
+the estate lookup against the same query and window: **42,477 docs across 109
+distinct `agent.name` values**, with the cluster carrying **179 distinct
+agents in 7 days**. 109 of 179 hosts resolving `www.google.com` over a week is
+the plausible figure; 5 was not, and it was the number that would have
+calibrated a reader's sense of what a host count means on this panel.
+
+It was caught by the lookup disagreeing with this document, not by re-reading
+it — which is the argument for verifying a design figure by building on it
+rather than by citing it.
 | a domain with no hits | 0 docs | **28 ms** |
 
 ### `queryName` and `dstip` answer different questions and must never merge

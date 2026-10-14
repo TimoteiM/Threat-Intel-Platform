@@ -587,7 +587,7 @@ Cross-reference: [backlog 12](#12-falcon-device_id--agent_id-as-merge-keys--deci
 is the other thing the ingest pass must not be written without. Both are the
 same category — a decision that is cheap now and silent later.
 
-## 16. An intermittent test-isolation failure in graph collapse
+## 16. CLOSED as unexplained: an intermittent graph-collapse failure, 1 in 9
 
 `test_graph_extraction.py::test_identical_leaves_collapse_into_one_counted_node`
 failed once in the full suite and has not reproduced. **Not a product defect
@@ -657,7 +657,7 @@ measurement:**
   false. The failing run executed 12:56:44→12:59:56; the two edits were
   12:55:21 and 12:55:55, both before it started.
 
-**Observed rate: 1 failure in 8 full runs.** Seeds 1, 2 and 3 all passed with
+**Observed rate: 1 failure in 9 full runs.** Seeds 1, 2 and 3 all passed with
 `PYTHONHASHSEED` pinned, and two concurrent full suites both passed.
 
 **A note on that concurrency attempt, because it is the kind of result that
@@ -667,14 +667,20 @@ single-threaded pytest processes produced **no contention at all.** The run
 proves nothing about load, and its own elapsed times are what say so. Treating
 it as "load ruled out" would have been a false negative from an instrument
 incapable of returning the positive, which is the defect class this project
-tracks most often. Load was retested under 12 spinning CPU hogs, which is the
-only version of that experiment worth quoting.
+tracks most often. Load was retested under 12 spinning CPU hogs on
+the 8-core box (loadavg 10.2–12.8): the suite took **250.47s against the
+~192s baseline**, a 30% slowdown, which is what says the contention was real
+this time. Result: 14 failed, 2780 passed, collapse test passed. **Load is
+eliminated.** A mid-flight correction was needed there too — the first
+generators had a 480s deadline while `tests/unit/test_services/` runs in the
+latter half, so the test in question would have executed after the load
+lifted; longer-lived generators went in before the run reached it.
 
 Bisection was deliberately **not** used and still should not be: it assumes
 determinism, and at this rate a passing prefix eliminates nothing.
 
-**State: unexplained, with every variable controllable from here held fixed
-and passing** — input, data clock, execution clock, hash seed, test order,
+**CLOSED as unexplained**, with every variable controllable from here held
+fixed and passing — input, data clock, execution clock, hash seed, test order,
 test composition, parallelism, concurrent source edits. That is a worse
 outcome than a diagnosis but a more honest one than a mechanism nobody has
 demonstrated.
@@ -687,6 +693,40 @@ not in collapse, so `b.quarantine` entries are the first place to look: a
 quarantined account would explain the missing member and would name its own
 reason.
 
+**Proportionality, stated so reopening this is a decision rather than a
+reflex.** This is an in-memory test with pinned inputs failing one run in nine
+on a count assertion. **Whether it corresponds to anything in production is
+unestablished** — a production drop would need a different mechanism than a
+test whose inputs do not vary. It gets a line in this file, not an
+investigation, unless it recurs with the node and quarantine lists captured.
+
 Worth keeping because it is one of the two things that made the name-for-name
 diff worth having: a count-only check would have read 15 as "the same
 tolerated set, one bigger".
+
+## 17. The c00 log-store integration has no tenant pin configured
+
+`opensearch_tenant_field` is `manager.name` and
+`opensearch_tenant_value_list` is **empty**, so there is no value to pin to.
+The estate lookup refuses to query in that state rather than running unpinned,
+which means the feature is built and tested but not live until this is set:
+
+    OPENSEARCH_TENANT_C00_TENANT_VALUES=wm-c00.siembiot.int
+
+**Not currently a leak, and measured rather than assumed.** The cluster holds
+exactly one `manager.name` value — `wm-c00.siembiot.int`, all 154,208,627
+documents over 7 days — so today an unpinned query and a pinned one return the
+same set. The pinned and unpinned runs agree to within noise (42,477 against
+42,467 docs). It becomes a leak the day a second manager ships to this
+cluster, silently and with no error, which is why the adapter refuses instead
+of defaulting.
+
+This is a deployment change, not a code one: `.env` is read when a container
+is created, so it needs `docker compose up -d --force-recreate` and not a
+restart — see the standing rule on that. Left for a human because it recreates
+the api on a box carrying live traffic.
+
+Note for whoever does it: the same empty list is what the existing
+alert-log-context queries pin on, so check whether those have been running
+unpinned too. They use the same `tenant_field` / `tenant_values` idiom, and
+on a single-tenant cluster the symptom is invisible.
