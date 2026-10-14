@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Fifteen rules that were learned expensively and are not obvious from the code:
+Sixteen rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -302,6 +302,45 @@ Fifteen rules that were learned expensively and are not obvious from the code:
   labelled as untested rather than counted as covered: seven of those
   seventeen labels never occur in this corpus, so the measurement says
   nothing about them in either direction.
+
+- **Name the other world that produces the same observation.**
+
+  Four defects on 2026-10-14 had one shape, and it is not "an absence read as
+  a value" — that covers some of them and inverts on others. The form that
+  covers all four: **the verdict collapsed two states that produce identical
+  observations, and the code chose one without establishing it could tell
+  them apart.**
+
+  | observation | world A | world B |
+  |---|---|---|
+  | empty result set | found nothing | asked nothing |
+  | no config row | never configured | configuration vanished |
+  | wrong output | wrong key | right key, in a process that never read it |
+  | silence | broken | quiet |
+
+  Note the directions disagree, which is why the narrower rule fails: `not
+  hits` conflated **two absences** (nothing found, nothing asked); twelve
+  minutes of silence read as an outage was an **absence read as an event**,
+  the opposite of an event read as an absence. Only the collapse is common to
+  all of them.
+
+  **So the question to ask of any verdict is: name the other world that
+  produces this same observation.** If you cannot name one, you have not
+  looked yet. If you can, you need evidence that separates them — and if
+  there is none, *the verdict has to say so*. That third option is the one
+  this codebase keeps rediscovering: it is what the absence convention does
+  for data (`never_observed` is not `0`), and what `continuity()` now does
+  for time — Falcon declares no silence interval because a quiet estate and a
+  broken Falcon look identical, so it reports the last success and refuses a
+  verdict rather than inventing a threshold.
+
+  **And a note on how this rule was got wrong first.** My initial version was
+  "what would this look like if the thing had been working yesterday?" — which
+  catches the two history-dependent cases and misses silence entirely, because
+  silence has nothing to do with yesterday. A generalisation fitted to three of
+  the four cases that produced it is the same mistake as a measurement fitted
+  to its sample, and it is worth more care precisely when the rule seems good:
+  the version that fits is the version nobody re-derives.
 
 - **[A fitted graph can still be unreadable](docs/problems/graph-fit-density.md)**
   — `cy.fit()` scales to whichever dimension binds first, so a tall narrow

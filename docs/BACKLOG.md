@@ -735,11 +735,22 @@ to refuse; see the commit. **Absence-as-value inside a security boundary** is
 the general form, and the whole class is invisible while one tenant exists
 because unpinned and pinned return the same set.
 
-**Before the second customer:** audit every query path for the same shape —
-`alert_log_context_service` and `alert_log_selection` both pin on
-`tenant_field` / `tenant_values` and would have the same hole. A test that
-asserts no OpenSearch body is ever sent without a `terms` filter on the tenant
-field would cover the class rather than the instances.
+**Before the second customer:** a test that asserts **no OpenSearch body is
+ever sent without a `terms` filter on the tenant field.** Written against the
+body-construction path rather than against a list of call sites, because that
+is what catches the call sites that do not exist yet — enumerating the two
+known ones (`alert_log_context_service` and `alert_log_selection`, which pin
+on the same `tenant_field` / `tenant_values` idiom and have the same hole)
+would pass on the day somebody adds a third.
+
+Shape of the check: intercept at the lowest shared point every query goes
+through — `OpenSearchClient._request`, since both the log-context queries and
+the estate adapter reach the cluster through it — and assert that any
+`_search` body carries a tenant `terms` clause in its `filter`. A query that
+cannot name its tenant should raise there rather than be filtered out, for the
+reason the estate adapter already refuses: an unpinned query on a shared
+cluster is the isolation boundary gone, and refusing is the only behaviour that
+stays correct when a second manager ships.
 
 ### And the live consequence today, which is a configuration absence
 
