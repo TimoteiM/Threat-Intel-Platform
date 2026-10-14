@@ -171,7 +171,21 @@ insensitive to a handful of extremes.
 the first dot (`::ffff:192.168.1.1` → `::ffff:192`). Tenth delimiter-boundary
 instance, and a prevalence threshold would have cut all four silently.
 
-Next: quarantine the extraction defects, add the tenant-identity exclusion,
+**The structural half is done** —
+`app/services/ioc_conformance_service.py` and
+`docs/problems/stored-values-that-do-not-parse.md`. One check over the
+corpus, replacing an indefinite series of discoveries: 103 nonconforming
+values in `iocs` and 17 in `ioc_values`, including four classes nobody had
+named (IPv6 stored as a domain, values carrying their own `cert_sha256:`
+prefix, a TLS subject DN as a domain, an mDNS address as a hash).
+
+**The semantic half is not, and cannot be structural.** `6.0.4.27` is a valid
+public IPv4 address and `http://schemas.microsoft.com/...` is a well-formed
+URL — both conform, and both are in the prevalence head. Distinguishing them
+needs context from the alert body or non-resolvability, not shape.
+
+Next: quarantine the extraction defects at entry (the same predicate, the
+other consumer), add the tenant-identity exclusion,
 resolve the overlapping-session question, then store the run→case link, then
 the index.
 
