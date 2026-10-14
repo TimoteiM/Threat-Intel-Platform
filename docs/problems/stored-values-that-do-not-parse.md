@@ -199,6 +199,17 @@ what made 44.4% look like coverage:
 overwhelmingly two shapes I had not tested for — label-value with a single
 space (43.5%) and bare `key=value` pairs (15.9%).
 
+One caveat belongs on this table rather than further down, because the
+headline figure rests on it: **the `embedded JSON keys` row over-matches.**
+Measured afterwards (below), only 394 of the 5,666 bodies carrying a quoted
+key hold an object that actually parses; the rest read as label-value prose
+in which a quoted word before a colon is punctuation, not a key. Ordering the
+classifiers made the shares sum, which was the defect being fixed, and it did
+nothing to make each classifier *correct* — so 31.1% is an upper bound on that
+row and most of its mass likely belongs to the label-value rows above it. The
+99.9% survives either way, since both candidate shapes are parseable; the
+per-shape split does not.
+
 And the 10 that remain are not free text either. Six of the first six
 sampled are **double-escaped JSON** — `"{\"approxLogTime\":...}"` — which
 my own key regex missed because the quotes arrive as `\"`. Two are genuine
@@ -234,6 +245,89 @@ parser hand-scans for unescaped separators, and
 `test_an_escaped_pipe_in_field_3_does_not_shift_field_4` asserts both that
 the parser is right *and* that `split("|")` is wrong, so the test is not
 passing for want of a failure mode.
+
+### What "0 of 400 parse as JSON" actually measured
+
+That figure justified the whole regex approach, so it was worth asking what
+the instrument could and could not return. The check was `json.loads(raw)` in
+a `try/except`, counting the non-raising cases — and a **double-escaped body**
+`"{\"approxLogTime\":...}"` does not raise. `json.loads` returns a `str`. Such
+a body would have counted as *parseable* while yielding no fields at all:
+`::ffff:192` one level up, a value that parses as something else and is
+therefore silent.
+
+Classified by what `json.loads` actually returns, over all 16,969 bodies:
+
+| outcome | bodies | share |
+|---|---|---|
+| `raises` | 16,908 | 99.6% |
+| `returns dict` | 61 | 0.4% |
+| **`returns str`** | **0** | **0.0%** |
+
+So the original measurement was right — but nothing in it established *why*,
+and it would have read identically if it had been wrong. The methodological
+point stands independently of the result: an instrument that cannot
+distinguish "parsed to nothing useful" from "parsed" is not measuring what it
+is quoted for.
+
+### The balanced-object upgrade, which is much smaller than hoped
+
+The follow-up was worth running for what it could buy: a complete object —
+balanced from the first `{` to its match — needs **no key regex at all**, and
+would move the second-largest shape from heuristic to definitional. Bracket
+matching has to be quote- and escape-aware, because a brace inside a string
+literal is not a brace; the same class of mistake as splitting CEF on an
+escaped pipe.
+
+Of the **5,666 bodies carrying a quoted JSON key**:
+
+| outcome | bodies | share of keyed |
+|---|---|---|
+| balanced but unparseable | 5,261 | 92.9% |
+| **balanced and parses to a dict** | **394** | **7.0%** |
+| never balanced | 11 | 0.2% |
+
+**394 bodies — 2.3% of the corpus** — yield definitional field names, 349
+distinct ones (`detectionTime`, `endpoint`, `productName`, `entityName`,
+`severity`, `actor`, `client`…). Worth having, and far short of the 31.1% the
+census put in `json_keys_embedded`.
+
+Which is the finding, and it points back at the census rather than forward at
+the parser: **samples of the 92.9% read as label-value prose**, where a quoted
+word followed by a colon is ordinary punctuation and not a JSON key. So the
+`json_keys_embedded` bucket over-matches, and the census shares in the section
+above need the same scepticism as the 44.4% they replaced. An ordered
+classifier makes shares sum; it does not make each classifier correct.
+
+### `Label: value` — the eleventh instance, in the largest format
+
+`app/services/label_value_service.py`. **7,386 of 16,969 bodies (43.5%)**, the
+biggest shape there is, parsed by a rule that cannot tell where a value ends
+once the value contains a space — a file path, a command line, a display name,
+a process argument:
+
+    Account Name:  adm_lbyfszaa   Display Name:  Zakaria El Bouyafsakh adm
+
+"Value is everything up to the next whitespace" returns `Zakaria`. The
+discarded tail is then available to be read as the *next label*, so
+`El Bouyafsakh adm   Home Directory:  -` can yield a field named after the
+wreckage with the real label swallowed into it.
+
+**The fix: a value ends where the next label begins, never at a space.**
+Labels are located first and each value is the text between its own colon and
+the start of the next label — so nothing is split on a character, and a value
+carrying spaces, a Windows path, or a time like `09:38:44` survives whole. A
+label is deliberately narrow (one to four capitalised words, colon, then
+whitespace), which is what excludes `C:\Windows` and the `https:` in a URL.
+
+Its test was written before the parser, and the control that asserts the naive
+reading fails is where the real severity showed up. On the sample body the
+naive parse does not merely truncate: multi-word labels collapse to their last
+word, so `Account Name`, `SAM Account Name`, `Display Name` and `User
+Principal Name` all become `name` and overwrite each other. **Eight fields
+recovered from a body carrying twelve, and `Zakaria El Bouyafsakh adm` absent
+from the output entirely** — not truncated, gone. A delimiter bug in the
+largest format does not produce visibly bad values; it produces fewer values.
 
 ## The statistic, and a prediction that failed informatively
 

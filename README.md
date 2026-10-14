@@ -46,7 +46,7 @@ the answer existed as soon as somebody looked.
 
 ## Read these before changing anything
 
-Thirteen rules that were learned expensively and are not obvious from the code:
+Fourteen rules that were learned expensively and are not obvious from the code:
 
 - **[A rename is not a deployment](docs/deploy/schema-changes.md)** —
   `alembic upgrade head` changes the database for every container at once;
@@ -95,6 +95,19 @@ Thirteen rules that were learned expensively and are not obvious from the code:
   clean one, one level up. Its sibling is
   [the grain rule](docs/deploy/measuring.md): a number states its
   population, an absence states its scope.
+
+- **Proportions quoted as coverage have to sum.** Four body-format
+  classifiers matched 44.4% of alert bodies between them, and that figure was
+  reported as coverage — leaving 55.6% described as free text. But the four
+  overlapped: they were counted as if they partitioned the corpus, and shares
+  that don't sum to 100 aren't shares. The honest version needs an ordered
+  classifier where first match wins, every body counted exactly once, and an
+  explicit `unclassified` bucket carrying the remainder; run that way the
+  answer was **99.9% parseable, 10 unclassified** — the opposite conclusion.
+  Two tests before quoting a share: do the parts sum to the whole, and is
+  there a named bucket for what matched nothing. A set of overlapping
+  positives has no complement, so the number you take from it by subtraction
+  is not measuring anything.
 
 - **When comparing two periods, state both lengths.** The specific form of
   compare-like-with-like that keeps recurring here: `alerts_at_close` counted
