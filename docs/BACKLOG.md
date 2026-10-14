@@ -144,7 +144,30 @@ Nothing should be built on cross-case `ioc_values` before that measurement.
 
 ---
 
-## 7. No credential in this system has an expiry check
+## 7. Tenant scoping is exercised by nobody — before the second tenant
+
+**Trigger condition, not a date: before a second real tenant is onboarded.**
+
+All 28 users have `all_tenants = true` and `tenant_ids = []`. Tenant scoping
+exists in the schema, has a service (`app/services/tenant_scope.py`), is
+applied by every alert-run read and every integrations read — and no
+principal is actually restricted by it.
+
+Today that is harmless: there is one tenant, so an unfiltered query and a
+filtered one return the same rows. **The day a second tenant exists, every
+one of those 28 accounts can see it**, and nothing in the system will say so
+because no test and no user exercises the restriction.
+
+What closing it means: at least one real principal with
+`all_tenants = false` and a non-empty `tenant_ids`, reading the product
+through the UI. Until then the only thing standing between the design and a
+cross-tenant read is
+`backend/tests/unit/test_security/test_integration_isolation.py`, which
+constructs a restricted principal precisely because nothing else does.
+
+---
+
+## 8. No credential in this system has an expiry check
 
 **From the Spamhaus forensics, 2026-10-14.** The stored
 `SPAMHAUS_SIA_TOKEN` is a JWT whose `exp` claim decodes to
@@ -154,6 +177,12 @@ collector then failed on 2,198 consecutive runs for 98 days.
 The expiry was **in the token, in the database, readable, and nothing read
 it.** Same shape as `meta.status`, `feeds_skipped` and `sources_checked`: the
 information was there and no consumer existed.
+
+**Partly done, 2026-10-14.** `app/services/credential_expiry_service.py` is
+the central register the Falcon integration reports its OAuth token expiry
+to. What remains is every *other* credential this platform holds —
+`.env`-based provider keys with no expiry visible, and the Spamhaus SIA token
+itself, which is still expired.
 
 **Natural home:** `source_answer_rate_service`, which already distinguishes
 *never answered* from *never asked* from *never present*. An expired
@@ -166,6 +195,28 @@ Report, do not alarm, and do not log any part of a credential.
 
 Evidence: the addendum in
 `docs/problems/the-intel-collector-was-dead-for-98-days.md`.
+
+---
+
+## 9. Falcon ingest, and what it brings with it
+
+Enrichment shipped 2026-10-14. Ingest did not, and deliberately:
+
+* **`_create_alert_run` must be extracted** from
+  `app/api/alert_investigations.py` into a service first. Five endpoints
+  funnel through it, it is a private function in an API module, and a Celery
+  poller would be a sixth caller importing from the API layer.
+* **A Falcon field map**, where unmapped fields are quarantined as
+  `no_field_map` and never inferred.
+* **Falcon's MITRE attributions are a third technique namer** and must not
+  quietly join `rule_only`.
+* **The tenant does not reach an investigation yet** — see
+  `docs/design/integrations.md`. `spawn_investigation` accepts it;
+  `alert_body_investigation_service` never sees it.
+* And **the Alerts API accepts unknown FQL field names silently** (measured:
+  twelve fields including an invented one, all HTTP 200 with zero
+  resources). A wrong field reads as "the EDR has nothing" for ever. The
+  answer-rate registration is the backstop, not the fix.
 
 ---
 
@@ -184,6 +235,11 @@ Evidence: the addendum in
   **0 of 779 non-carriers moved.**
 * **The intel collector** — 98 days dead from one unguarded credential call;
   guarded, with per-source `sources_checked`/`sources_skipped`.
+* **Per-tenant integrations, enrichment** — tenant-keyed, five-state status
+  derived rather than flagged, secrets encrypted and write-only with a
+  rotation path, catalogue derived from the connectors, and CrowdStrike
+  Falcon `verified_ok` against the live API. See
+  `docs/design/integrations.md`.
 * **Spamhaus** — not a credential problem. `login realm=intel` returns
   *"no subscriptions found"*; the ask is a **DQS** key, which also fixes the
   SURBL/DBL public-resolver refusals. An SIA subscription would only restore

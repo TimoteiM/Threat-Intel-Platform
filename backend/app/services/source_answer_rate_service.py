@@ -109,6 +109,37 @@ SOURCES: dict[str, str] = {
     "subdomains": "evidence_json->'subdomains'",
 }
 
+
+def _integration_sources() -> dict[str, str]:
+    """Per-tenant integrations, registered from the catalogue rather than listed.
+
+    The brief for the integrations work was that every integration registers
+    itself as a source here, so a tenant's EDR going quiet is caught by this
+    machinery rather than by somebody noticing. Derived from
+    `integration_status_service.catalogue()` — itself derived from the
+    collectors that declare `integration = True` — so a new connector appears
+    in the answer-rate check with nothing to update.
+
+    The path is `status.asked`, not the result. An EDR answering "no
+    detections" **is** answering, and `detections: []` is the correct result
+    for most hosts; what distinguishes asked from not-asked is the
+    `status.asked` flag the collector sets only after a real reply. Pointing
+    this at `detections` would report a healthy EDR as 0% for ever — the
+    tautological-discriminator shape, applied to an instrument.
+    """
+    try:
+        from app.services.integration_status_service import catalogue
+
+        return {
+            tool: f"evidence_json->'{tool}'->'status'->'asked'"
+            for tool in catalogue()
+        }
+    except Exception:  # noqa: BLE001 - the check must not fail to run
+        return {}
+
+
+SOURCES.update(_integration_sources())
+
 #: The collector whose `meta.status` decides whether each source was in a
 #: position to answer at all. A source with no entry here is not gated —
 #: stated as an omission rather than left to be inferred from the dict, and
@@ -127,6 +158,8 @@ COLLECTOR_OF: dict[str, str] = {
     "urlscan": "urlscan",
     "intel_blocklists": "intel",
 }
+# Each integration's collector is its own gate: `falcon.meta.status`.
+COLLECTOR_OF.update({tool: tool for tool in _integration_sources()})
 
 
 @dataclass(frozen=True)

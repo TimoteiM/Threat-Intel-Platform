@@ -102,6 +102,32 @@ class Settings(BaseSettings):
             "ABUSECH_AUTH_KEY", "ABUSE_CH_AUTH_KEY", "THREATFOX_AUTH_KEY"
         ),
     )
+    # Encryption at rest for per-tenant integration credentials.
+    #
+    # Separate from `session_secret` deliberately: rotating session signing
+    # must not force re-encrypting every stored credential, and vice versa.
+    #
+    # **If this key is lost, every stored integration credential is
+    # unrecoverable.** There is no escrow and no recovery path — that is what
+    # encrypting them means. Keep it wherever the deployment keeps things it
+    # cannot regenerate. Generate one with
+    # `python -c "from app.security.secret_box import generate_key; print(generate_key())"`.
+    #
+    # Unset, credentials are **refused** rather than stored in the clear. An
+    # outage and a breach must not share a code path.
+    integration_encryption_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("INTEGRATION_ENCRYPTION_KEY"),
+    )
+    #: Retired keys, comma-separated, kept only long enough to re-encrypt.
+    #: Every key here can decrypt; only the primary encrypts. That is the
+    #: rotation path: add the new key as primary, move the old one here, run
+    #: the sweep, then remove it. `SecretBox.needs_rotation` makes "every row
+    #: re-encrypted" a query rather than a claim.
+    integration_encryption_keys_retired: str = Field(
+        default="",
+        validation_alias=AliasChoices("INTEGRATION_ENCRYPTION_KEYS_RETIRED"),
+    )
     # ThreatFox, off by default as of 2026-10-13.
     #
     # Not a judgement call any more. Measured benefit over seven months of

@@ -83,6 +83,7 @@ export const APP_NAV_LINKS = [
   { href: "/ip-lookup", label: "IP Lookup", group: "tools", icon: "ip" },
   { href: "/assistant", label: "AI Assistant", group: "tools", icon: "assistant" },
   { href: "/clients", label: "Clients", group: "tools", icon: "clients" },
+  { href: "/integrations", label: "Integrations", group: "tools", icon: "settings" },
   { href: "/settings", label: "Settings", group: "tools", icon: "settings" },
 ] as const;
 

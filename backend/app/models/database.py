@@ -1509,3 +1509,100 @@ class WatchHeartbeat(Base):
     #: fresh `last_ok_at` with a non-zero count is a flapping task — which
     #: neither field says on its own.
     failures_since: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class TenantIntegration(Base):
+    """One security tool configured for one tenant.
+
+    Keyed on `tenant_id`, not on a client. Credentials have to live on the
+    axis that carries authorisation: `users.tenant_ids`, `users.all_tenants`
+    and `api_keys.tenant_ids` all scope by tenant, and nothing in this schema
+    authorises on `clients`. A secret on an axis with no access control is a
+    cross-tenant leak by default rather than by bug — "may this user see this
+    credential?" would have no answer in the data, only an invented join.
+
+    What this row deliberately does not have
+    ----------------------------------------
+    **No `enabled` column.** "Enabled" is the word that cost seven months: a
+    ThreatFox integration that was enabled, configured, and answering 401 on
+    every single call looked healthy by every flag the platform had. Status is
+    *derived* — from whether a connector exists in the code, whether a
+    credential is stored here, and what the last real authenticated call
+    returned — and never asserted by a boolean somebody set.
+
+    **No plaintext.** `secret_ciphertext` is Fernet output from
+    `app/security/secret_box.py`; `secret_key_id` names the key that sealed
+    it so a rotation can count the rows it has not reached yet. Nothing
+    serialises this column — `test_integration_secrets.py` asserts no
+    response model carries it.
+
+    `health` is keyed by direction
+    -----------------------------
+    `{"enrichment": {...}, "ingest": {...}}`, because an integration that
+    answers queries and has stopped delivering detections is healthy by one
+    measure and dead by the other, and a single status would show green
+    through exactly that. The set of directions comes from the connector, so
+    it is derived like the catalogue; JSONB means the ingest pass needs no
+    migration.
+    """
+
+    __tablename__ = "tenant_integrations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "tool", name="uq_tenant_integration"),
+        Index("idx_tenant_integrations_tenant", "tenant_id"),
+        Index("idx_tenant_integrations_key", "secret_key_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Non-secret settings only — base URL, region, cloud name.
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    #: Nullable: a connector may legitimately need no secret.
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secret_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    secret_set_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    health: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    configured_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class IntegrationAudit(Base):
+    """Who configured which tool for which tenant, and when.
+
+    No foreign key to `tenant_integrations`, deliberately. The audit of a
+    configuration has to outlive the configuration being removed — the
+    property that let a deleted investigation's alert run survive on
+    2026-10-13 and remain the only inspectable record of a wrong verdict.
+
+    `detail` records *what changed*, never what it changed to. A secret never
+    reaches this table, and `test_integration_secrets.py` asserts it.
+    """
+
+    __tablename__ = "integration_audit"
+    __table_args__ = (
+        Index("idx_integration_audit_subject", "tenant_id", "tool", "at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: configured | secret_set | removed | verified | rotated
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

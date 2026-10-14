@@ -39,6 +39,46 @@ class BaseCollector(abc.ABC):
     # Observable types this collector can handle (subclasses override)
     supported_types: frozenset[str] = frozenset({"domain"})
 
+    # ── Per-tenant integration declaration ───────────────────────────────
+    #
+    # A collector that needs a credential *per tenant* — an EDR, an email
+    # security product, anything covering one customer's estate rather than
+    # the open internet — says so here. The integrations catalogue is then
+    # **derived** from whatever declares itself, so adding a connector adds a
+    # tool to the page with no list to update.
+    #
+    # This is deliberately a property a connector opts into rather than a
+    # registry of tool names. A list of tools would be the ninth
+    # hand-maintained list in this codebase, and the eight before it each
+    # swallowed a feature silently — a connector absent from such a list
+    # would be unconfigurable with nothing to say so.
+    #
+    # Platform-wide providers (VirusTotal, urlscan, abuse.ch) leave this
+    # False: one key serves every tenant and it lives in `.env`.
+    integration: bool = False
+
+    #: Which health directions this integration has. An integration that
+    #: answers queries and has stopped delivering detections is healthy by
+    #: one measure and dead by the other, so the two are tracked separately
+    #: and a connector states which it actually does.
+    #:   "enrichment" — queried during an investigation
+    #:   "ingest"     — delivers alerts or detections into the pipeline
+    integration_directions: tuple[str, ...] = ()
+
+    #: Human label for the integrations page. The class name and the evidence
+    #: key are both wrong to show an operator.
+    integration_label: str = ""
+
+    #: Non-secret config fields this integration needs, as
+    #: {field: human description}. Rendered as inputs; stored in
+    #: `tenant_integrations.config`.
+    integration_config_fields: dict[str, str] = {}
+
+    #: Secret fields, as {field: human description}. Write-only everywhere:
+    #: settable through the API, never returned, never logged. Sealed by
+    #: `app/security/secret_box.py` before storage.
+    integration_secret_fields: dict[str, str] = {}
+
     def __init__(
         self,
         domain: str,

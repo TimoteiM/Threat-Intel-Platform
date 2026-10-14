@@ -162,6 +162,33 @@ class IntelHit(BaseModel):
     details: Optional[str] = None
 
 
+class FalconEvidence(BaseModel):
+    """What this tenant's CrowdStrike Falcon knows about the observable.
+
+    `status` is the field that matters and the one the seven-month ThreatFox
+    silence had no way to express. `detections: []` with
+    `status = {"asked": True}` is the EDR answering "nothing" — a real
+    negative. `detections: []` with an `Absent` in `status` is one of: no
+    tenant, not configured for this tenant, a credential that would not open,
+    or a query that did not complete. Those are four different claims and
+    none of them is "the EDR has nothing on this host".
+
+    Per `app/services/absence.py`: the absence sits **on the field** rather
+    than in a side channel, so a renderer handed it has nothing to show but
+    the reason.
+    """
+
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="falcon"))
+    #: True only when Falcon was asked and returned something.
+    found: bool = False
+    detections: list[dict] = []
+    hosts: list[dict] = []
+    queried_at: Optional[str] = None
+    #: `{"asked": True, ...}` or an `Absent.as_json()`. Never absent itself.
+    status: dict[str, Any] = {}
+    notes: list[str] = []
+
+
 class IntelEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="intel"))
     #: Which of the four sources behind `blocklist_hits` actually answered,

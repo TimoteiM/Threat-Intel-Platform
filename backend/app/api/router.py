@@ -19,6 +19,7 @@ from app.api.watchlist import router as watchlist_router
 from app.api.exclusions import router as exclusions_router
 from app.api.detections import router as detections_router
 from app.api.cost import router as cost_router
+from app.api.integrations import router as integrations_router
 from app.api.whois_history import router as whois_history_router
 from app.api.geo import router as geo_router
 from app.api.ip_lookup import router as ip_lookup_router
@@ -60,6 +61,9 @@ api_router.include_router(detections_router)
 api_router.include_router(anyrun_router)
 api_router.include_router(cape_router)
 api_router.include_router(cost_router)
+# Per-tenant integrations. Admin-only writes, tenant-scoped reads, and
+# write-only secrets -- see app/api/integrations.py.
+api_router.include_router(integrations_router)
 api_router.include_router(whois_history_router)
 api_router.include_router(geo_router)
 api_router.include_router(ip_lookup_router)

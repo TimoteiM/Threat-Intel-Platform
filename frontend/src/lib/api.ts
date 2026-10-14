@@ -2088,3 +2088,54 @@ export function closeCaseManually(
     body: JSON.stringify(body),
   });
 }
+
+// ── Per-tenant integrations ──────────────────────────────────────────────
+//
+// Secrets are write-only: `configureIntegration` sends them and nothing here
+// reads one back. The status payload carries `secret_set: boolean`, never a
+// value — see backend/app/api/integrations.py.
+
+export function getIntegrationCatalogue() {
+  return request<any>("/api/integrations/catalogue");
+}
+
+export function getIntegrationMatrix() {
+  return request<any>("/api/integrations/matrix");
+}
+
+export function getTenantIntegrations(tenantId: string) {
+  return request<any>(`/api/integrations/${encodeURIComponent(tenantId)}`);
+}
+
+export function getIntegrationAudit(tenantId: string, limit = 50) {
+  return request<any>(
+    `/api/integrations/${encodeURIComponent(tenantId)}/audit?limit=${limit}`
+  );
+}
+
+export function configureIntegration(
+  tenantId: string,
+  tool: string,
+  body: { config?: Record<string, any>; secrets?: Record<string, string> },
+  verify = true
+) {
+  return requestLongRunning<any>(
+    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}` +
+      `?verify=${verify ? "true" : "false"}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
+}
+
+export function verifyIntegration(tenantId: string, tool: string) {
+  return requestLongRunning<any>(
+    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}/verify`,
+    { method: "POST" }
+  );
+}
+
+export function removeIntegration(tenantId: string, tool: string) {
+  return request<any>(
+    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}`,
+    { method: "DELETE" }
+  );
+}

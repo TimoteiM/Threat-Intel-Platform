@@ -1,0 +1,266 @@
+"""The tool catalogue is derived, and must not become list number nine.
+
+Eight hand-maintained lists in this codebase have swallowed a feature with no
+error. A list of integration *tool names* would be the ninth, and the failure
+would be the worst kind: a connector absent from it would be unconfigurable
+with nothing to say so.
+
+So the catalogue is derived from the collectors that declare
+`integration = True`, and this file fails if a hard-coded list appears —
+the same guard as `test_brand_reference_signal.py`'s `BRAND_OWNERS` check.
+
+Also here: the five states, and the two-direction rule. "Enabled" is the word
+that cost seven months, so every assertion below is about a state being
+*derived* from a fact rather than asserted by a flag.
+"""
+
+from __future__ import annotations
+
+import inspect
+from types import SimpleNamespace
+
+import pytest
+
+from app.services import integration_status_service as st
+
+
+# ─── derived, not listed ─────────────────────────────────────────────────
+
+def test_the_catalogue_comes_from_the_collector_registry():
+    from app.collectors.registry import COLLECTOR_REGISTRY
+
+    cat = st.catalogue()
+    assert cat, "the catalogue is empty; no connector declares itself"
+    for tool in cat:
+        assert tool in COLLECTOR_REGISTRY
+        assert getattr(COLLECTOR_REGISTRY[tool], "integration", False) is True
+
+
+def test_a_newly_registered_integration_appears_with_nothing_to_update(monkeypatch):
+    """The property that makes it a derivation. A connector added to the
+    registry is configurable immediately — no list, no migration, no enum."""
+    from app.collectors import registry
+    from app.collectors.base import BaseCollector
+
+    class _Newcomer(BaseCollector):
+        name = "newcomer_edr"
+        supported_types = frozenset({"domain"})
+        integration = True
+        integration_label = "Newcomer EDR"
+        integration_directions = ("enrichment", "ingest")
+        integration_secret_fields = {"api_key": "its key"}
+
+    monkeypatch.setitem(registry.COLLECTOR_REGISTRY, "newcomer_edr", _Newcomer)
+    cat = st.catalogue()
+    assert "newcomer_edr" in cat
+    assert cat["newcomer_edr"].label == "Newcomer EDR"
+    assert cat["newcomer_edr"].directions == ("enrichment", "ingest")
+
+
+def test_a_platform_wide_provider_is_not_an_integration():
+    """VirusTotal, urlscan and abuse.ch use one key for every tenant and it
+    lives in `.env`. They must not appear as per-tenant integrations."""
+    cat = st.catalogue()
+    for tool in ("vt", "urlscan", "threat_feeds", "intel", "dns", "http"):
+        assert tool not in cat
+
+
+def _code_only(module) -> str:
+    """A module's source with comments and string literals removed.
+
+    The first version of the guard below scanned raw source and failed on
+    this file's own docstring — the one explaining why not to branch on a
+    tool name. A source-text assertion cannot tell code from the comment
+    describing it, which is the second time today that caught me out (the
+    first was `_subject_snapshot`). So the text is tokenised and the prose
+    dropped before anything is matched.
+    """
+    import io
+    import tokenize
+
+    src = inspect.getsource(module)
+    out: list[str] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            out.append(tok.string)
+    except tokenize.TokenError:            # pragma: no cover - malformed source
+        return src
+    return " ".join(out)
+
+
+def test_no_hard_coded_tool_list_exists():
+    """The ninth-list guard. A dict or tuple of tool names anywhere in the
+    integrations modules is the failure this derivation exists to prevent."""
+    import app.api.integrations as api
+    import app.services.integration_credential_service as creds
+
+    for module in (st, api, creds):
+        code = _code_only(module)
+        for banned in ("TOOL_LIST", "KNOWN_TOOLS", "INTEGRATION_TOOLS",
+                       "SUPPORTED_TOOLS", "TOOL_CATALOGUE"):
+            assert banned not in code, (
+                f"{module.__name__} declares {banned!r} — the catalogue is "
+                "derived from the collectors precisely so no list exists"
+            )
+        # And no branch on a specific tool name, which is a list wearing an
+        # if-statement. Checked against code with the prose removed.
+        assert "falcon" not in code, (
+            f"{module.__name__} names a specific tool in code; the catalogue "
+            "is derived so that none of these modules knows one"
+        )
+
+
+def test_the_no_list_guard_can_fail():
+    """What that guard would print if a list appeared. A guard that passes
+    for want of a failure mode is decoration."""
+    import types
+
+    fake = types.ModuleType("fake")
+    fake.__dict__["__source__"] = ""
+    src = 'KNOWN_TOOLS = ["falcon"]\nif tool == "falcon":\n    pass\n'
+
+    import io
+    import tokenize
+
+    code = " ".join(
+        t.string for t in tokenize.generate_tokens(io.StringIO(src).readline)
+        if t.type not in (tokenize.COMMENT, tokenize.STRING)
+    )
+    assert "KNOWN_TOOLS" in code, "the guard would not notice a declared list"
+
+
+# ─── the five states, each derived from a fact ───────────────────────────
+
+def test_there_are_five_states_and_enabled_is_not_one_of_them():
+    assert len(st.STATES) == 5
+    assert "enabled" not in st.STATES
+    assert set(st.STATES) == {
+        "not_implemented", "not_configured", "configured_unverified",
+        "verified_ok", "verified_failing",
+    }
+
+
+def test_a_tool_no_connector_implements_is_not_implemented():
+    out = st.status_of(None, None, "sentinel_one")
+    assert out["overall"] == st.NOT_IMPLEMENTED
+    # And it says why, as an absence rather than an error.
+    assert out["note"]["absent"] is True
+    assert out["note"]["kind"] == "out_of_scope"
+
+
+def test_a_tool_with_no_row_is_not_configured():
+    spec = st.catalogue()["falcon"]
+    out = st.status_of(spec, None, "falcon")
+    assert out["overall"] == st.NOT_CONFIGURED
+    assert out["configured"] is False
+    assert out["directions"]["enrichment"]["state"] == st.NOT_CONFIGURED
+
+
+def test_a_stored_credential_never_verified_is_its_own_state():
+    """The state that did not exist before and matters most: saved is not
+    working, and the old vocabulary had no way to say so."""
+    spec = st.catalogue()["falcon"]
+    row = SimpleNamespace(tool="falcon", health={}, secret_ciphertext="x",
+                          secret_set_at=None, config={}, configured_by="a",
+                          updated_at=None)
+    out = st.status_of(spec, row, "falcon")
+    assert out["overall"] == st.CONFIGURED_UNVERIFIED
+    # The state, not the prose: asserting on wording makes the test brittle
+    # against the message it is meant to accompany.
+    assert out["directions"]["enrichment"]["checked_at"] is None
+    assert out["directions"]["enrichment"]["reason"]
+
+
+def test_a_verified_failing_tool_keeps_its_reason_and_timestamp():
+    spec = st.catalogue()["falcon"]
+    row = SimpleNamespace(
+        tool="falcon", secret_ciphertext="x", secret_set_at=None, config={},
+        configured_by="a", updated_at=None,
+        health={"enrichment": {"state": "verified_failing",
+                               "checked_at": "2026-10-14T10:00:00+00:00",
+                               "reason": "HTTP 401", "failure_kind": "credential"}},
+    )
+    out = st.status_of(spec, row, "falcon")
+    assert out["overall"] == st.VERIFIED_FAILING
+    assert out["directions"]["enrichment"]["reason"] == "HTTP 401"
+    assert out["directions"]["enrichment"]["failure_kind"] == "credential"
+
+
+def test_an_unrecognised_stored_state_is_not_read_as_working():
+    """A stored value this code does not know must not default to healthy —
+    the absence convention's own failure mode, committed inside it."""
+    spec = st.catalogue()["falcon"]
+    row = SimpleNamespace(
+        tool="falcon", secret_ciphertext="x", secret_set_at=None, config={},
+        configured_by="a", updated_at=None,
+        health={"enrichment": {"state": "fine", "checked_at": "2026-10-14T10:00:00+00:00"}},
+    )
+    out = st.status_of(spec, row, "falcon")
+    assert out["overall"] == st.VERIFIED_FAILING
+    assert out["directions"]["enrichment"]["failure_kind"] == "unrecognised"
+
+
+# ─── two directions, never one badge ─────────────────────────────────────
+
+def test_a_tool_healthy_one_way_and_dead_the_other_does_not_read_green(monkeypatch):
+    """The specific failure one status would hide: an integration answering
+    queries while delivering no detections."""
+    from app.collectors import registry
+    from app.collectors.base import BaseCollector
+
+    class _Both(BaseCollector):
+        name = "both_ways"
+        integration = True
+        integration_label = "Both Ways"
+        integration_directions = ("enrichment", "ingest")
+
+    monkeypatch.setitem(registry.COLLECTOR_REGISTRY, "both_ways", _Both)
+    spec = st.catalogue()["both_ways"]
+    row = SimpleNamespace(
+        tool="both_ways", secret_ciphertext="x", secret_set_at=None, config={},
+        configured_by="a", updated_at=None,
+        health={
+            "enrichment": {"state": "verified_ok",
+                           "checked_at": "2026-10-14T10:00:00+00:00"},
+            "ingest": {"state": "verified_failing",
+                       "checked_at": "2026-10-14T10:00:00+00:00",
+                       "reason": "no detections delivered in 14 days"},
+        },
+    )
+    out = st.status_of(spec, row, "both_ways")
+    assert out["overall"] == st.VERIFIED_FAILING, (
+        "a tool answering queries while delivering nothing read as healthy"
+    )
+    assert out["directions"]["enrichment"]["state"] == st.VERIFIED_OK
+    assert out["directions"]["ingest"]["state"] == st.VERIFIED_FAILING
+
+
+def test_a_tool_reports_no_status_for_a_direction_it_does_not_have():
+    """Falcon is enrichment-only this pass. It must not be `not_configured`
+    for ingest — it does not have ingest."""
+    spec = st.catalogue()["falcon"]
+    row = SimpleNamespace(tool="falcon", health={}, secret_ciphertext="x",
+                          secret_set_at=None, config={}, configured_by="a",
+                          updated_at=None)
+    out = st.status_of(spec, row, "falcon")
+    assert set(out["directions"]) == {"enrichment"}
+    assert "ingest" not in out["directions"]
+
+
+def test_both_directions_green_is_the_only_green():
+    """The control for the worst-direction rule."""
+    spec = st.catalogue()["falcon"]
+    row = SimpleNamespace(
+        tool="falcon", secret_ciphertext="x", secret_set_at=None, config={},
+        configured_by="a", updated_at=None,
+        health={"enrichment": {"state": "verified_ok",
+                               "checked_at": "2026-10-14T10:00:00+00:00"}},
+    )
+    assert st.status_of(spec, row, "falcon")["overall"] == st.VERIFIED_OK
+
+
+def test_configured_unverified_counts_as_not_working():
+    assert st.CONFIGURED_UNVERIFIED in st.NOT_WORKING
+    assert st.VERIFIED_OK not in st.NOT_WORKING

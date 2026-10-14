@@ -25,6 +25,7 @@ from app.collectors.urlscan_collector import URLScanCollector
 from app.collectors.hybrid_analysis_collector import HybridAnalysisCollector
 from app.collectors.opencti_collector import OpenCTICollector
 from app.collectors.cape_collector import CapeCollector
+from app.collectors.falcon_collector import FalconCollector
 
 
 COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
@@ -41,6 +42,10 @@ COLLECTOR_REGISTRY: dict[str, Type[BaseCollector]] = {
     "hybrid_analysis": HybridAnalysisCollector,
     "opencti":         OpenCTICollector,
     "cape":            CapeCollector,
+    # Per-tenant integration: declares `integration = True`, so the
+    # integrations catalogue and `source_coverage_service`'s expected set
+    # both derive it from here with no list to update.
+    "falcon":          FalconCollector,
 }
 
 
