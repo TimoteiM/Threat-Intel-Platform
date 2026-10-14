@@ -31,6 +31,8 @@ credential that fails verification stays saved and is shown as failing.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import logging
 from typing import Any
 
@@ -221,6 +223,22 @@ async def configure(
     configured-and-fine, and never thrown away — the reason is what an
     operator needs to fix it.
     """
+    # Deployment-managed integrations have no credential row to write, and a
+    # write here takes no effect — a real operator saved
+    # `{"tenant_field": "c00"}` for the log store on 2026-10-14, where `c00`
+    # is a tenant id in the slot a field name belongs, and nothing read it.
+    # Refused at the endpoint rather than hidden in one client, because the
+    # client is not the boundary.
+    _spec = status.catalogue().get(tool)
+    if _spec is not None and _spec.managed == "deployment":
+        raise HTTPException(
+            400,
+            f"{tool!r} is configured by the deployment, not through this API. "
+            f"Its settings come from the environment and a row written here "
+            f"would never be read. Change the deployment configuration and "
+            f"recreate the containers instead.",
+        )
+
     identity = _require_admin(request)
     scope = _scope(request)
     actor = str(identity.get("username") or identity.get("kind") or "unknown")
@@ -292,6 +310,30 @@ async def _verify_now(
     spec = status.catalogue().get(tool)
     if spec is None:
         raise HTTPException(400, f"No connector implements {tool!r}.")
+
+    # Deployment-configured integrations have no credential row to open, and
+    # asking the store about one returns "not configured" for something that
+    # is configured — which is exactly what "Test connection" on the log store
+    # did. Dispatched to the module that owns the integration, not branched on
+    # the tool name here.
+    if spec.managed == "deployment":
+        verifier = status.deployment_verifier_for(tool)
+        if verifier is None:
+            raise HTTPException(
+                400,
+                f"{tool!r} is configured by the deployment and provides no "
+                f"verifier, so there is nothing to test from here.",
+            )
+        outcome = await verifier(tenant_id)
+        return {
+            "tool": tool,
+            "direction": spec.directions[0] if spec.directions else "enrichment",
+            "state": status.VERIFIED_OK if outcome.get("ok") else status.VERIFIED_FAILING,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "reason": outcome.get("reason"),
+            "detail": {k: v for k, v in outcome.items()
+                       if k not in ("ok", "reason")},
+        }
 
     try:
         opened = await creds.open_for_tenant(db, tenant_id, tool, scope=scope)

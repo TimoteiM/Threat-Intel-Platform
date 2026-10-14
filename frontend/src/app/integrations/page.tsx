@@ -553,8 +553,14 @@ export default function IntegrationsPage() {
                   <StateBadge state={t.overall} />
                 </div>
 
+                {/* The payload's own reason wins where it exists. The
+                    generic per-state copy said "A credential is stored" on
+                    the log-store card, two lines above a footer saying "no
+                    credential stored" — false by construction for an
+                    integration configured from the deployment. */}
                 <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
-                  {meta.meaning}
+                  {(Object.values(t.directions || {})[0] as any)?.reason ||
+                    meta.meaning}
                 </div>
 
                 {/* "Never worked" and "worked until Monday" are different
@@ -562,6 +568,26 @@ export default function IntegrationsPage() {
                     configuration that disappears looks identical to one that
                     was never made — which is exactly how SIEM log enrichment
                     stayed off for two days reading as `not_configured`. */}
+                {t.stray_credential_row && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: "6px 8px",
+                      fontSize: 10,
+                      color: "var(--amber, #f0b050)",
+                      border: "1px solid rgba(240,176,80,0.25)",
+                      borderRadius: 3,
+                    }}
+                  >
+                    A saved configuration exists here and is <strong>not read</strong>
+                    {t.stray_credential_row.configured_by
+                      ? ` (saved by ${t.stray_credential_row.configured_by})`
+                      : ""}
+                    . This tool reads the deployment's settings, so nothing saved
+                    through this page takes effect. Safe to remove.
+                  </div>
+                )}
+
                 {t.continuity && (
                   <div style={{ fontSize: 11, marginTop: 6 }}>
                     {t.continuity.stopped ? (
@@ -610,7 +636,11 @@ export default function IntegrationsPage() {
 
                 {t.configured && (
                   <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8 }}>
-                    {t.secret_set ? "credential set" : "no credential stored"}
+                    {t.secret_set === null || t.secret_set === undefined
+                      ? "no credential needed — deployment-configured"
+                      : t.secret_set
+                        ? "credential set"
+                        : "no credential stored"}
                     {t.configured_by && ` · by ${t.configured_by}`}
                     {t.config && Object.keys(t.config).length > 0 && (
                       <> · {Object.entries(t.config).map(([k, v]) => `${k}=${v}`).join(", ")}</>
@@ -631,26 +661,44 @@ export default function IntegrationsPage() {
                   </div>
                 )}
 
+                {spec?.managed === "deployment" && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      fontSize: 10,
+                      color: "var(--text-muted)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    Configured by the deployment (.env), not through this page.
+                    Test connection runs a real query from the api process.
+                  </div>
+                )}
+
                 {spec && canWrite && (
                   <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                    <Button
-                      onClick={() => {
-                        setEditing(editing === t.tool ? null : t.tool);
-                        setForm({});
-                      }}
-                      disabled={busy === t.tool}
-                    >
-                      {t.configured ? "Edit" : "Configure"}
-                    </Button>
-                    {t.configured && (
-                      <>
-                        <Button onClick={() => onVerify(t.tool)} disabled={busy === t.tool}>
-                          {busy === t.tool ? "Testing…" : "Test connection"}
-                        </Button>
-                        <Button onClick={() => onRemove(t.tool)} disabled={busy === t.tool}>
-                          Remove
-                        </Button>
-                      </>
+                    {spec?.managed !== "deployment" && (
+                      <Button
+                        onClick={() => {
+                          setEditing(editing === t.tool ? null : t.tool);
+                          setForm({});
+                        }}
+                        disabled={busy === t.tool}
+                      >
+                        {t.configured ? "Edit" : "Configure"}
+                      </Button>
+                    )}
+                    {/* A deployment-configured tool has no stored credential,
+                        so it is always testable and never removable. */}
+                    {(t.configured || spec?.managed === "deployment") && (
+                      <Button onClick={() => onVerify(t.tool)} disabled={busy === t.tool}>
+                        {busy === t.tool ? "Testing…" : "Test connection"}
+                      </Button>
+                    )}
+                    {t.configured && spec?.managed !== "deployment" && (
+                      <Button onClick={() => onRemove(t.tool)} disabled={busy === t.tool}>
+                        Remove
+                      </Button>
                     )}
                   </div>
                 )}

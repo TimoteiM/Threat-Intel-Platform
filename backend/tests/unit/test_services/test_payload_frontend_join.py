@@ -64,10 +64,17 @@ def _all_branch_keys() -> set[str]:
     """
     spec = st.catalogue()["falcon"]
     keys: set[str] = set()
+    deployment_spec = st.catalogue()["opensearch"]
     for payload in (
         st.status_of(spec, None, "falcon"),       # implemented, unconfigured
         st.status_of(None, None, "sentinelone"),  # no connector
         st.status_of(spec, _Row(), "falcon"),     # configured
+        # Deployment-managed, with and without a stray credential row. This
+        # branch was missing and the test flagged `stray_credential_row` as
+        # drift — correctly, since an unenumerated branch is a branch whose
+        # agreement with the component nobody has checked.
+        st.status_of(deployment_spec, None, "opensearch"),
+        st.status_of(deployment_spec, _Row(), "opensearch"),
     ):
         keys |= set(payload)
     # Keys the VIEW attaches rather than `status_of`. `continuity` is added by

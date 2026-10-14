@@ -63,6 +63,19 @@ INTEGRATION_SPEC: dict[str, object] = {
     "label": "OpenSearch / Wazuh log store",
     "category": "siem",
     "directions": ("enrichment",),
+    # Read-only from the API: these values come from the deployment's
+    # environment, not from a per-tenant credential row. "Test connection"
+    # returned HTTP 400 "not configured" until this was declared, because the
+    # verify path asked the credential store about an integration that is not
+    # kept there.
+    "managed": "deployment",
+    # How often this should produce a result, so silence can be judged rather
+    # than guessed. One alert_log_context row is written per analysed alert
+    # and alerts do not arrive on a schedule; measured arrival over the last
+    # five days is 1,601 runs, roughly 13/hour in working hours and sparse
+    # overnight. 6h is comfortably longer than any observed quiet period and
+    # far shorter than the 49h outage this is meant to catch.
+    "expected_interval_hours": 6,
     "config_fields": {
         "nodes": "Cluster node URLs, from deployment configuration.",
         "index_pattern": "Which indices to search, e.g. wazuh-alerts-4.x-*",
@@ -75,6 +88,82 @@ INTEGRATION_SPEC: dict[str, object] = {
     },
     "secret_fields": {},
 }
+
+
+async def verify(tenant_id: str) -> dict[str, Any]:
+    """A real call to this tenant's cluster, from whichever process asks.
+
+    Deployment-configured, so there is no stored credential to open — the
+    verify path must come here rather than to `tenant_integrations`, which
+    has no row for this tool and never will.
+
+    **This result is about the process that ran it, and says so.** The HTTP
+    route runs in the **api**; alert log context is collected in the
+    **worker** (`alert_body_task` is dispatched with `.delay()`). On
+    2026-10-14 the api was recreated with `OPENSEARCH_TENANT_VALUES` and the
+    worker was not, so a green answer here would have been true of the api
+    and false of the pipeline. A verifier that cannot tell those apart
+    reports exactly the false comfort this platform keeps being bitten by, so
+    the reason names the process and declines to generalise.
+    """
+    from app.services import opensearch_client as osc
+
+    integration = integration_for(tenant_id)
+    if integration is None:
+        return {
+            "ok": False,
+            "reason": (
+                f"No log-store configuration resolves for tenant "
+                f"{tenant_id!r}. Checked the per-tenant environment "
+                f"({_env_key(tenant_id, 'NODES')}) and the global "
+                f"OPENSEARCH_* values."
+            ),
+        }
+
+    if not integration.opensearch_tenant_value_list:
+        return {
+            "ok": False,
+            "reason": (
+                "Nodes and credentials are present but OPENSEARCH_TENANT_VALUES "
+                "is empty, so no query can be pinned to this customer. The "
+                "platform refuses to run an unpinned query rather than reach "
+                "across tenants, which is why log enrichment is off. Set it "
+                "and recreate the containers — `up -d --force-recreate`, not "
+                "`restart`, because env_file is read at container creation."
+            ),
+        }
+
+    client = osc.safe_client(integration)
+    if client is None:
+        return {"ok": False, "reason": "No usable client for this tenant."}
+
+    try:
+        info = client.ping()
+    except Exception as exc:
+        return {"ok": False, "reason": f"{type(exc).__name__}: {str(exc)[:160]}"}
+
+    return {
+        "ok": True,
+        "reason": (
+            "A real query answered, from THIS process only. The HTTP route "
+            "runs in the api; alert log context is collected in the worker, "
+            "which reads its own copy of the environment — so this green does "
+            "not establish that new alerts will get context. Check "
+            "`scripts/liveness.sh` for env drift between the two."
+        ),
+        # `ping()` returns {cluster, node, version}. The first version read
+        # `cluster_name` and rendered a null beside a claim that a cluster had
+        # answered — a field asserted and not supplied.
+        "cluster": str((info or {}).get("cluster") or "")[:64] or None,
+        "node": str((info or {}).get("node") or "")[:120] or None,
+        "version": str((info or {}).get("version") or "")[:32] or None,
+        "index_pattern": integration.opensearch_index_pattern or None,
+        "tenant_filter": {
+            "field": integration.opensearch_tenant_field,
+            "values": list(integration.opensearch_tenant_value_list),
+        },
+        "verified_in_process": "api",
+    }
 
 
 async def last_success(db: Any, tenant_id: str) -> Any:

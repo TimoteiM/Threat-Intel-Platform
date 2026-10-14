@@ -56,7 +56,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import tenant_scope
-from app.services.absence import NEVER_OBSERVED, OUT_OF_SCOPE, absent
+from app.services.absence import (
+    NEVER_OBSERVED,
+    OUT_OF_SCOPE,
+    TOO_LITTLE_HISTORY,
+    absent,
+)
 
 #: The five states. Ordered worst-known-first for a UI that sorts by concern;
 #: `not_implemented` last because it is not a fault, it is an absence of
@@ -101,11 +106,19 @@ _CAN_HAVE_STOPPED = frozenset({
 })
 
 
+#: How much longer than its own expectation an integration must be silent
+#: before this calls it stopped. 3x, so ordinary jitter in alert arrival does
+#: not produce an outage: the log store produces a row per analysed alert, and
+#: alerts do not arrive on a schedule.
+SILENCE_MULTIPLIER = 3.0
+
+
 def continuity(
     *,
     state: str,
     last_succeeded_at: Any = None,
     now: Any = None,
+    expected_interval_hours: float | None = None,
 ) -> dict[str, Any]:
     """Split "never worked" from "worked until Monday".
 
@@ -121,6 +134,9 @@ def continuity(
             "state": state,
             "stopped": False,
             "silent_for_hours": None,
+            "expected_interval_hours": expected_interval_hours,
+            "threshold_hours": None,
+            "silence_verdict": None,
             "last_success": absent(
                 NEVER_OBSERVED,
                 "This integration has never produced a result, so there is "
@@ -133,15 +149,49 @@ def continuity(
     # Clamped at zero: clock skew must not make a stopped tool look recent,
     # and a negative duration would sort as the freshest thing on the page.
     hours = max(0.0, delta.total_seconds() / 3600.0)
-    stopped = state in _CAN_HAVE_STOPPED
+
+    # `stopped` requires actual SILENCE, not merely a state that is not
+    # verified_ok. The first version asserted stopped as soon as a last
+    # success existed, which put STOPPED ("an outage") directly above "silent
+    # 0.2h" on the log-store card — twelve minutes reported as an outage. Both
+    # numbers were right; the model joining them was wrong, and a badge that
+    # goes red while the thing works is the cry-wolf failure the
+    # source-coverage work already paid for once.
+    threshold = (
+        None if expected_interval_hours is None
+        else float(expected_interval_hours) * SILENCE_MULTIPLIER
+    )
+    if threshold is None:
+        # No declared expectation, so no claim. Guessing an interval would
+        # invent outages, and "I do not know how often this should produce"
+        # is an absence rather than a verdict of healthy.
+        silence_verdict: Any = absent(
+            TOO_LITTLE_HISTORY,
+            "This integration does not declare how often it should produce a "
+            "result, so whether this silence is an outage cannot be judged "
+            "from it. The last success date is reported; the verdict is not.",
+        ).as_json()
+        stopped = False
+    else:
+        stopped = state in _CAN_HAVE_STOPPED and hours > threshold
+        silence_verdict = (
+            f"Silent {round(hours, 1)}h against an expected {expected_interval_hours}h "
+            f"(flagged beyond {round(threshold, 1)}h)."
+        )
+
     return {
         "state": STOPPED if stopped else state,
         "stopped": stopped,
         "silent_for_hours": round(hours, 1),
+        "expected_interval_hours": expected_interval_hours,
+        "threshold_hours": None if threshold is None else round(threshold, 1),
+        "silence_verdict": silence_verdict,
         "last_success": last_succeeded_at.isoformat(),
         "note": (
-            f"Last produced a result {round(hours, 1)}h ago. It worked before, "
-            f"so this is an outage and not an absence of configuration."
+            f"Last produced a result {round(hours, 1)}h ago, past the "
+            f"{round(threshold, 1)}h this integration should never exceed. It "
+            f"worked before, so this is an outage and not an absence of "
+            f"configuration."
         ) if stopped else None,
     }
 
@@ -166,6 +216,22 @@ class ToolSpec:
     #: `edr` | `firewall` | `email` | ... — see CollectorBase. Grouping key
     #: for the page, derived from the connector's own declaration.
     category: str = "other"
+    #: Where this integration's configuration lives.
+    #:
+    #: `credential_store` — a per-tenant `tenant_integrations` row, written
+    #: through the API, verified by opening the stored secret.
+    #: `deployment` — the deployment's own environment, read-only from the
+    #: API. The log store is this: its config is the global `OPENSEARCH_*`
+    #: values, there is no row to open, and "Test connection" returned HTTP
+    #: 400 "not configured" because it asked the credential store about an
+    #: integration that is not kept there. The UI uses this to decide whether
+    #: to offer a form at all.
+    managed: str = "credential_store"
+    #: How often this integration should produce a result, in hours. Declared
+    #: by the integration, because only it knows. `None` means "no claim",
+    #: and `continuity()` then reports the last success without a verdict —
+    #: a guessed interval invents outages.
+    expected_interval_hours: float | None = None
     config_fields: dict[str, str] = field(default_factory=dict)
     secret_fields: dict[str, str] = field(default_factory=dict)
 
@@ -174,6 +240,8 @@ class ToolSpec:
             "tool": self.tool,
             "label": self.label,
             "category": self.category,
+            "managed": self.managed,
+            "expected_interval_hours": self.expected_interval_hours,
             "directions": list(self.directions),
             "config_fields": dict(self.config_fields),
             # Names and descriptions only. A secret field is declared so the
@@ -217,6 +285,8 @@ def catalogue() -> dict[str, ToolSpec]:
             tool=name,
             label=str(decl["label"]),
             category=str(decl["category"]),
+            managed=str(decl.get("managed") or "deployment"),
+            expected_interval_hours=decl.get("expected_interval_hours"),
             directions=tuple(decl["directions"]),
             config_fields=dict(decl.get("config_fields") or {}),
             secret_fields=dict(decl.get("secret_fields") or {}),
@@ -237,6 +307,23 @@ def catalogue() -> dict[str, ToolSpec]:
             secret_fields=dict(getattr(cls, "integration_secret_fields", {}) or {}),
         )
     return out
+
+
+def deployment_verifier_for(tool: str) -> Any:
+    """The `verify` coroutine from the module that owns this integration.
+
+    Resolved by import, like `last_success_for` and for the same reason: a
+    `if tool == "opensearch"` here is the hand-maintained list wearing an
+    if-statement, and this module's own source guard refuses it.
+    """
+    import importlib
+
+    for path in _SPEC_MODULES:
+        module = importlib.import_module(path)
+        spec = getattr(module, "INTEGRATION_SPEC", None)
+        if isinstance(spec, dict) and spec.get("tool") == tool:
+            return getattr(module, "verify", None)
+    return None
 
 
 async def last_success_for(
@@ -351,6 +438,60 @@ def status_of(spec: ToolSpec | None, row: Any, tool: str) -> dict[str, Any]:
             ).as_json(),
         }
 
+    # Deployment-managed: the verdict comes from the deployment, row or no
+    # row. Branching on `row is None` meant a stray credential row — one a
+    # real operator created through a form that should never have been
+    # offered — flipped this back to credential-store rules and the false
+    # claim that a credential is stored.
+    if spec.managed == "deployment":
+        # No `tenant_integrations` row, and there never will be: this
+        # integration is configured from the deployment. Judging it by
+        # credential rules produced `configured_unverified`, whose meaning is
+        # "a credential is stored" — false by construction — and a footer
+        # saying "no credential stored" two lines below it. Its state comes
+        # from whether the deployment config is usable, which only its own
+        # verifier can answer, so until one runs this is unverified *without*
+        # claiming anything about a secret.
+        per_direction = {
+            d: {
+                "state": CONFIGURED_UNVERIFIED,
+                "checked_at": None,
+                "reason": (
+                    "Configured by the deployment (.env). No test call has "
+                    "been made from this process yet — there is no stored "
+                    "credential involved either way."
+                ),
+            }
+            for d in spec.directions
+        }
+        return {
+            "tool": spec.tool,
+            "label": spec.label,
+            "category": spec.category,
+            "managed": spec.managed,
+            "overall": CONFIGURED_UNVERIFIED,
+            "directions": per_direction,
+            "configured": True,
+            # Explicitly absent rather than False: this integration has no
+            # secret in the credential store, so "no credential stored" is
+            # not a finding about it.
+            "secret_set": None,
+            # A row that exists and is never read. Surfaced rather than
+            # ignored: somebody created it and believes they configured
+            # something, and silence would leave them believing it.
+            "stray_credential_row": None if row is None else {
+                "configured_by": getattr(row, "configured_by", None),
+                "config": getattr(row, "config", None),
+                "note": (
+                    "A credential-store row exists for this integration and "
+                    "is NOT read — its configuration comes from the "
+                    "deployment. Nothing here takes effect. It can be "
+                    "removed; the form that wrote it should not have been "
+                    "offered."
+                ),
+            },
+        }
+
     if row is None:
         per_direction = {
             d: {
@@ -427,7 +568,11 @@ async def for_tenant(
         # `not_configured` — the one a vanished configuration produces, and
         # the one that is invisible on a page of unconfigured tools.
         last = await last_success_for(db, tenant_id, t, rows.get(t))
-        entry["continuity"] = continuity(state=entry["overall"], last_succeeded_at=last)
+        entry["continuity"] = continuity(
+            state=entry["overall"], last_succeeded_at=last,
+            expected_interval_hours=getattr(
+                cat.get(t), "expected_interval_hours", None),
+        )
         entry["overall"] = entry["continuity"]["state"]
         tools.append(entry)
     # A row for a tool no connector implements any more — a connector
@@ -482,7 +627,9 @@ async def matrix(
             entry = status_of(cat.get(tool), row_for.get(tool), tool)
             last = await last_success_for(db, tid, tool, row_for.get(tool))
             entry["continuity"] = continuity(
-                state=entry["overall"], last_succeeded_at=last
+                state=entry["overall"], last_succeeded_at=last,
+                expected_interval_hours=getattr(
+                    cat.get(tool), "expected_interval_hours", None),
             )
             entry["overall"] = entry["continuity"]["state"]
             cells[tid][tool] = entry
