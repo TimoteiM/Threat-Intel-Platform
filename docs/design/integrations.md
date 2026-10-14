@@ -195,6 +195,16 @@ quarantined as `no_field_map` and never inferred, and Falcon's own MITRE
 attributions as a third technique namer that must not quietly join
 `rule_only`.
 
+**Falcon is verified but not consulted.** Those are different states, and the
+distinction is the one this feature's own status model exists for, one level
+up from where it was applied. `verified_ok` says a real authenticated call
+succeeded on demand. It does **not** say the connector runs during an
+investigation — and today it does not: the collector records an absence on
+every real investigation, because the tenant does not reach it.
+
+A future version of the status model should carry that too: *verified* and
+*consulted* are no more the same than *configured* and *working* were.
+
 **The tenant does not yet reach an investigation.** It lives on
 `alert_body_investigation_runs.tenant_id` and `tenant_id` appears nowhere in
 `alert_body_investigation_service`, so threading it is a multi-signature

@@ -135,12 +135,27 @@ these three.
 
 ## 6. Phase 3: cross-case pivots
 
-Parked since the watch-task work. **The `ioc_values` ceiling is still
-unscoped** — case membership via `ioc_values` was the fourth tautological
-discriminator found here, so any pivot built on it inherits that problem
-until the ceiling is measured.
+**Measured 2026-10-14** — `docs/design/phase-3-ioc-prevalence-recon.md`. The
+ceiling is no longer unscoped, and the blocker is not the one it was thought
+to be.
 
-Nothing should be built on cross-case `ioc_values` before that measurement.
+* `ioc_values` is a `text[]` **column** on `alert_body_investigation_runs`,
+  per run. `UBIQUITY_HOST_LIMIT = 10` is at **host** grain for *within*-case
+  linkage and does not answer the cross-case question.
+* Case grain, deduped: **85.7% of indicators appear in exactly one case**;
+  p95 = 3, **p99 = 17**, max = 778 (`expertware.net`). The head is a schema
+  URL, a version string parsed as an IP, an all-zero hash and the client's
+  own domain.
+* **The blocker is the run→case link, not the index.** A GIN index is 1.4 MB
+  and 215 ms and makes a selective pivot 180× faster. But runs carry no
+  `case_key`, and the derived join **fans out 90.8% of runs** because 2,044
+  spine rows have overlapping session windows — a pivot built on it would
+  report case counts 2.3× too high.
+* Threshold, from the distribution rather than chosen: **fewer than 17
+  cases**, with the prevalence shown beside every pivot.
+
+Next: resolve the overlapping-session question, then store the run→case
+link, then the index.
 
 ---
 
@@ -215,8 +230,15 @@ Enrichment shipped 2026-10-14. Ingest did not, and deliberately:
   `alert_body_investigation_service` never sees it.
 * And **the Alerts API accepts unknown FQL field names silently** (measured:
   twelve fields including an invented one, all HTTP 200 with zero
-  resources). A wrong field reads as "the EDR has nothing" for ever. The
-  answer-rate registration is the backstop, not the fix.
+  resources). A wrong field reads as "the EDR has nothing" for ever.
+
+  **Standing defence, not a note:** for every third-party query field this
+  platform relies on, assert once against the live tenant that the field
+  *can* return a non-empty result. A field that has never returned anything
+  is indistinguishable from a field that does not exist, and the difference
+  is a detection nobody will ever see. One query per field, on configuration
+  or on a schedule. The answer-rate registration is a backstop measured in
+  weeks; this is the check measured in seconds.
 
 ---
 
