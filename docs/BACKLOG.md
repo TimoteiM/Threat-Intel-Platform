@@ -704,29 +704,57 @@ Worth keeping because it is one of the two things that made the name-for-name
 diff worth having: a count-only check would have read 15 as "the same
 tolerated set, one bigger".
 
-## 17. The c00 log-store integration has no tenant pin configured
+## 17. GATE: nothing ships to a second customer until these are closed
 
-`opensearch_tenant_field` is `manager.name` and
-`opensearch_tenant_value_list` is **empty**, so there is no value to pin to.
-The estate lookup refuses to query in that state rather than running unpinned,
-which means the feature is built and tested but not live until this is set:
+Two defects share one trigger condition, and both are invisible today for the
+same reason: **there is exactly one tenant.** They are listed together because
+they are not two pieces of work to schedule independently — they are one gate
+on customer onboarding, and the day a second customer exists they both bite at
+once, silently.
 
-    OPENSEARCH_TENANT_C00_TENANT_VALUES=wm-c00.siembiot.int
+Measured, so the "one tenant" premise is not an assumption: the cluster holds
+a single `manager.name` value, `wm-c00.siembiot.int`, carrying all
+154,208,627 documents over 7 days.
 
-**Not currently a leak, and measured rather than assumed.** The cluster holds
-exactly one `manager.name` value — `wm-c00.siembiot.int`, all 154,208,627
-documents over 7 days — so today an unpinned query and a pinned one return the
-same set. The pinned and unpinned runs agree to within noise (42,477 against
-42,467 docs). It becomes a leak the day a second manager ships to this
-cluster, silently and with no error, which is why the adapter refuses instead
-of defaulting.
+### 17a. Every user carries `all_tenants = true`
 
-This is a deployment change, not a code one: `.env` is read when a container
-is created, so it needs `docker compose up -d --force-recreate` and not a
-restart — see the standing rule on that. Left for a human because it recreates
-the api on a box carrying live traffic.
+All 28 users have `all_tenants = true` and `tenant_ids = []`. Tenant scoping
+is therefore exercised by **no real principal** — `TenantScope` is tested, and
+nothing in production has ever been restricted by it. A scope that has never
+restricted anybody is indistinguishable from one that does not work.
 
-Note for whoever does it: the same empty list is what the existing
-alert-log-context queries pin on, so check whether those have been running
-unpinned too. They use the same `tenant_field` / `tenant_values` idiom, and
-on a single-tenant cluster the symptom is invisible.
+**Before the second customer:** at least one real principal restricted to one
+tenant, and a check that fails if every user is unrestricted.
+
+### 17b. A missing tenant pin silently drops the filter
+
+`getattr(integration, "tenant_values", None) or []` in the estate adapter
+turned a missing attribute into "no tenant filter" — an unpinned query, which
+on a shared cluster is the isolation boundary gone. Found 2026-10-14 and fixed
+to refuse; see the commit. **Absence-as-value inside a security boundary** is
+the general form, and the whole class is invisible while one tenant exists
+because unpinned and pinned return the same set.
+
+**Before the second customer:** audit every query path for the same shape —
+`alert_log_context_service` and `alert_log_selection` both pin on
+`tenant_field` / `tenant_values` and would have the same hole. A test that
+asserts no OpenSearch body is ever sent without a `terms` filter on the tenant
+field would cover the class rather than the instances.
+
+### And the live consequence today, which is a configuration absence
+
+`OPENSEARCH_TENANT_VALUES` is **empty in the deployed environment**, so
+`TenantIntegration.configured` is False and SIEM log enrichment has been off
+since **2026-10-12 12:26:32** — zero `alert_log_context` rows since, across
+1,601 alert runs. Full diagnosis, including why it is not a code regression
+and not today's commits, in
+[log-context-stopped-on-an-empty-env-var.md](problems/log-context-stopped-on-an-empty-env-var.md).
+
+The fix is one line plus `docker compose up -d --force-recreate` (not
+`restart` — `env_file` is read at container creation):
+
+    OPENSEARCH_TENANT_VALUES=wm-c00.siembiot.int
+
+**The same value unblocks the estate lookup**, which refuses for the same
+reason. Left for a human because it recreates the api on a box carrying live
+traffic.
