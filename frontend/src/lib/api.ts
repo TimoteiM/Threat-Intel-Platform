@@ -2096,20 +2096,20 @@ export function closeCaseManually(
 // value — see backend/app/api/integrations.py.
 
 export function getIntegrationCatalogue() {
-  return request<any>("/api/integrations/catalogue");
+  return request<any>("/integrations/catalogue");
 }
 
 export function getIntegrationMatrix() {
-  return request<any>("/api/integrations/matrix");
+  return request<any>("/integrations/matrix");
 }
 
 export function getTenantIntegrations(tenantId: string) {
-  return request<any>(`/api/integrations/${encodeURIComponent(tenantId)}`);
+  return request<any>(`/integrations/${encodeURIComponent(tenantId)}`);
 }
 
 export function getIntegrationAudit(tenantId: string, limit = 50) {
   return request<any>(
-    `/api/integrations/${encodeURIComponent(tenantId)}/audit?limit=${limit}`
+    `/integrations/${encodeURIComponent(tenantId)}/audit?limit=${limit}`
   );
 }
 
@@ -2120,7 +2120,7 @@ export function configureIntegration(
   verify = true
 ) {
   return requestLongRunning<any>(
-    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}` +
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}` +
       `?verify=${verify ? "true" : "false"}`,
     { method: "PUT", body: JSON.stringify(body) }
   );
@@ -2128,14 +2128,14 @@ export function configureIntegration(
 
 export function verifyIntegration(tenantId: string, tool: string) {
   return requestLongRunning<any>(
-    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}/verify`,
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}/verify`,
     { method: "POST" }
   );
 }
 
 export function removeIntegration(tenantId: string, tool: string) {
   return request<any>(
-    `/api/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}`,
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}`,
     { method: "DELETE" }
   );
 }

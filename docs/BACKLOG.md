@@ -459,21 +459,31 @@ Evidence for the shape:
 [the-key-collapse-that-was-not-there.md](problems/the-key-collapse-that-was-not-there.md)
 and [backlog 11](#11-_aliases-reads-one-identity-field-where-the-corpus-carries-six).
 
-## 13. `liveness.sh` does not check the frontend
+## 13. ~~`liveness.sh` does not check the frontend~~ — DONE
 
-Found while building the integrations page: the page, its nav entry and its
-API client had been committed since 07:48 and `GET /integrations` returned
-**404**, because the frontend is a built image (`build:` with no volume
-mount) and the running container was 28 hours old. From the user's side the
-feature did not exist.
+The frontend limb is in. Filed and then done the same day, because it was the
+third deployment-liveness gap this week after the api process and env drift,
+and the pieces already existed asking a person to run the comparison by hand.
 
-This is the same class as the worker skew the script *does* catch — code on
-disk that is not running, with nothing saying so — and the script has no
-frontend check at all, so it reported `env ok · in sync` while a whole page
-was missing.
+`next.config.js` hashes `src/**/*.{ts,tsx,js,jsx,css}` at build time into
+`NEXT_PUBLIC_BUILD_FINGERPRINT`; the layout renders it as
+`<meta name="x-build-fingerprint">`; `BuildStampClient` logs bundle-vs-html to
+the console and says "compare with /health for the API". An instrument that
+tells you to do the check yourself is one check short, so `liveness.sh` now
+recomputes the source fingerprint and compares it to the meta tag the running
+container serves.
 
-Add a frontend limb: compare the routes the source tree declares
-(`frontend/src/app/*/page.tsx`) against what the running container serves,
-and report any route that 404s. A built-image frontend cannot be checked by
-fingerprint the way the Python processes are, but a 404 on a declared route
-is unambiguous and needs no fingerprint.
+The reproduction is byte-exact, proved rather than assumed: before the rebuild
+the script said `frontend STALE`, after it `fe 281e1b30 in sync`, and the
+recomputed value equals the served one character for character.
+
+Six states verified with a stubbed harness, because absence must not read as
+agreement in any of them: match → in sync (exit 0); mismatch on a clean tree →
+`frontend STALE` (exit 1, the three-hour 404); mismatch on a dirty tree →
+reported but exit 0, since that red cannot be cleared mid-edit; no build stamp
+→ reported, since a page served without one is an old build; frontend
+unreachable → reported; `src` unreadable → reported.
+
+The first two harnesses silently failed to inject their variables, so the
+branch each change existed for went unexercised while the other rows passed.
+The stub generator now asserts its own injection landed.

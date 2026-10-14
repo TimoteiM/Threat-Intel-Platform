@@ -164,13 +164,56 @@ function StateBadge({ state, compact }: { state: string; compact?: boolean }) {
   );
 }
 
+/** Turn a failed call into something an analyst can act on.
+ *
+ * `ApiError.message` is the response body verbatim, so the old error box
+ * rendered `{"detail":"Not Found"}` — which tells a reader nothing about
+ * which call failed or what to do. Worse, the 404 it was reporting came from
+ * a doubled `/api` prefix in the client, and presented on screen as an empty
+ * customer list: a client-side path bug that looked like "this customer has
+ * no tools".
+ *
+ * So each message names the call, the status, and the next action — and a 404
+ * says explicitly that the request never reached the endpoint, because that
+ * is a deployment or client fault and never an empty result.
+ */
+function describeFailure(call: string, e: any): string {
+  const status = Number(e?.status) || 0;
+  const raw = String(e?.message || "").slice(0, 200);
+
+  if (status === 401) {
+    return `${call} failed: not signed in (401). The session has expired — reload the page and sign in again.`;
+  }
+  if (status === 403) {
+    return `${call} failed: not permitted (403). Reading integration status is open to analysts; changing one requires an administrator.`;
+  }
+  if (status === 404) {
+    return (
+      `${call} failed: the request did not reach the API (404). ` +
+      `This is a client or deployment fault, not an empty result — the ` +
+      `endpoint exists and is reachable when called correctly. Check the ` +
+      `API base path in src/lib/api.ts and that the frontend image is the ` +
+      `current build.`
+    );
+  }
+  if (status >= 500) {
+    return `${call} failed: the API returned ${status}. Check the api container's logs; the request was well formed.${raw ? ` Server said: ${raw}` : ""}`;
+  }
+  if (!status) {
+    return `${call} failed: no response from the API. The api container may be down or the proxy misconfigured.`;
+  }
+  return `${call} failed with ${status}.${raw ? ` Server said: ${raw}` : ""}`;
+}
+
 export default function IntegrationsPage() {
   const [catalogue, setCatalogue] = useState<any>(null);
   const [matrix, setMatrix] = useState<any>(null);
   const [tenantId, setTenantId] = useState<string>("");
   const [detail, setDetail] = useState<any>(null);
   const [audit, setAudit] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A list, not one string: several calls run in parallel and losing all but
+  // the last made a two-call failure look like one.
+  const [failures, setFailures] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
@@ -191,14 +234,21 @@ export default function IntegrationsPage() {
   }, []);
 
   const loadTop = useCallback(async () => {
-    setError(null);
+    const problems: string[] = [];
     const [cat, mx] = await Promise.all([
       getIntegrationCatalogue().catch((e: any) => {
-        setError(e?.message || "Could not load the tool catalogue");
+        problems.push(describeFailure("Loading the tool catalogue", e));
         return null;
       }),
-      getIntegrationMatrix().catch(() => null),
+      // Previously `.catch(() => null)`, which is why a failed matrix showed
+      // as an empty customer list with no explanation — absence presented as
+      // a measurement, on screen.
+      getIntegrationMatrix().catch((e: any) => {
+        problems.push(describeFailure("Loading the customer matrix", e));
+        return null;
+      }),
     ]);
+    setFailures(problems);
     setCatalogue(cat);
     setMatrix(mx);
     if (!tenantId && mx?.tenants?.length) setTenantId(mx.tenants[0].tenant_id);
@@ -206,13 +256,20 @@ export default function IntegrationsPage() {
 
   const loadTenant = useCallback(async (id: string) => {
     if (!id) return;
+    const problems: string[] = [];
     const [d, a] = await Promise.all([
       getTenantIntegrations(id).catch((e: any) => {
-        setError(e?.message || "Could not load this customer's integrations");
+        problems.push(describeFailure(`Loading integrations for ${id}`, e));
         return null;
       }),
-      getIntegrationAudit(id).catch(() => null),
+      // The audit list is supplementary, but a silent failure here meant the
+      // "Configuration history" section simply vanished.
+      getIntegrationAudit(id).catch((e: any) => {
+        problems.push(describeFailure(`Loading configuration history for ${id}`, e));
+        return null;
+      }),
     ]);
+    setFailures(problems);
     setDetail(d);
     setAudit(a);
   }, []);
@@ -227,7 +284,7 @@ export default function IntegrationsPage() {
 
   async function onSave(tool: string, spec: any) {
     setBusy(tool);
-    setError(null);
+    setFailures([]);
     try {
       const config: Record<string, string> = {};
       const secrets: Record<string, string> = {};
@@ -245,7 +302,7 @@ export default function IntegrationsPage() {
       setForm({});
       await Promise.all([loadTenant(tenantId), loadTop()]);
     } catch (e: any) {
-      setError(e?.message || "Could not save");
+      setFailures([describeFailure(`Saving ${tool}`, e)]);
     } finally {
       setBusy(null);
     }
@@ -253,12 +310,12 @@ export default function IntegrationsPage() {
 
   async function onVerify(tool: string) {
     setBusy(tool);
-    setError(null);
+    setFailures([]);
     try {
       await verifyIntegration(tenantId, tool);
       await Promise.all([loadTenant(tenantId), loadTop()]);
     } catch (e: any) {
-      setError(e?.message || "Could not verify");
+      setFailures([describeFailure(`Testing the connection to ${tool}`, e)]);
     } finally {
       setBusy(null);
     }
@@ -270,7 +327,7 @@ export default function IntegrationsPage() {
       await removeIntegration(tenantId, tool);
       await Promise.all([loadTenant(tenantId), loadTop()]);
     } catch (e: any) {
-      setError(e?.message || "Could not remove");
+      setFailures([describeFailure(`Removing ${tool}`, e)]);
     } finally {
       setBusy(null);
     }
@@ -289,7 +346,7 @@ export default function IntegrationsPage() {
         subtitle="Which security tools each customer has, and whether they are actually working."
       />
 
-      {error && (
+      {failures.length > 0 && (
         <div
           style={{
             padding: "10px 14px",
@@ -299,9 +356,20 @@ export default function IntegrationsPage() {
             borderRadius: "var(--radius-sm)",
             fontSize: 12,
             color: "var(--red)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
           }}
         >
-          {error}
+          {failures.map((f, i) => (
+            <div key={i}>{f}</div>
+          ))}
+          {/* Said once, below the list: an empty page with a failed fetch is
+              not a customer with no tools. The old box could not make that
+              distinction because it rendered the response body verbatim. */}
+          <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
+            Nothing below reflects real status while a call above is failing.
+          </div>
         </div>
       )}
 

@@ -131,6 +131,85 @@ if [[ -n "$_compose_json" ]]; then
     done
 fi
 
+
+# ── the frontend: a built image, so it does not reload ────────────────────
+# Third deployment-liveness gap this week, after the api process and env
+# drift. The integrations page, its nav entry and its API client were
+# committed at 07:48 and `GET /integrations` returned 404 for three hours:
+# `frontend` has a `build:` stanza with no volume mount, so the container
+# serves whatever was compiled when it was built, and that one was 28 hours
+# old. This script said `env ok · in sync` the whole time, because its only
+# code check was the api/worker Python fingerprint.
+#
+# The pieces for the check already existed and asked a person to do it by
+# hand: next.config.js hashes src/ at build time into
+# NEXT_PUBLIC_BUILD_FINGERPRINT, the layout renders it as a meta tag, and
+# BuildStampClient logs bundle-vs-html to the console with "compare with
+# /health for the API". An instrument that tells you to run the comparison
+# yourself is one check short, so the comparison is here.
+#
+# Reproduces sourceFingerprint() from next.config.js exactly: sha256 over
+# src/**/*.{ts,tsx,js,jsx,css}, each file contributing its path relative to
+# src, a NUL, then its bytes, with every directory entry visited in
+# name-sorted order. Content, not mtimes.
+_fe_fp_py='
+import hashlib, os, re, sys
+root = sys.argv[1]
+EXT = re.compile(r"\.(ts|tsx|js|jsx|css)$")
+d = hashlib.sha256()
+n = 0
+def walk(path):
+    global n
+    for entry in sorted(os.scandir(path), key=lambda e: e.name):
+        if entry.is_dir():
+            walk(entry.path)
+        elif EXT.search(entry.name):
+            d.update(os.path.relpath(entry.path, root).encode())
+            d.update(b"\0")
+            with open(entry.path, "rb") as fh:
+                d.update(fh.read())
+            n += 1
+try:
+    walk(root)
+except OSError as err:
+    # Named, not blank, for the same reason next.config.js names it: an empty
+    # value renders as "unknown" and reads as "fine".
+    print("unreadable", 0)
+    raise SystemExit(0)
+print(d.hexdigest(), n)
+'
+_fe_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/frontend/src"
+fe_expected=""
+fe_files=""
+if [[ -d "$_fe_src" ]]; then
+    read -r fe_expected fe_files < <(python3 -c "$_fe_fp_py" "$_fe_src" 2>/dev/null || echo "")
+fi
+
+# The meta tag, not the bundle: it arrives with the HTML, which is not cached
+# the way hashed JS is, so it describes the build this container is serving.
+fe_html=$(curl -s --max-time 10 http://localhost:3000/ 2>/dev/null || true)
+fe_served=$(printf '%s' "$fe_html" \
+            | grep -oE 'name="x-build-fingerprint" content="[^"]*"' \
+            | sed 's/.*content="//; s/"$//' | head -1)
+
+fe_note=""
+fe_bad=0
+if [[ -z "$fe_expected" || "$fe_expected" == "unreadable" ]]; then
+    fe_note="frontend src unreadable"
+    fe_bad=1
+elif [[ -z "$fe_html" ]]; then
+    fe_note="frontend unreachable"
+    fe_bad=1
+elif [[ -z "$fe_served" ]]; then
+    # A served page with no stamp is an old build from before the stamp
+    # existed, which is itself staleness — not an inconclusive result.
+    fe_note="frontend serves no build stamp"
+    fe_bad=1
+elif [[ "$fe_served" != "$fe_expected" ]]; then
+    fe_note="frontend STALE — docker compose build frontend && docker compose up -d frontend"
+    fe_bad=1
+fi
+
 line="$tree, $push · api $(short "$api") · worker $(short "$worker")"
 
 if [[ -z "$api" || -z "$worker" ]]; then
@@ -152,6 +231,12 @@ else
     # older. This is the shape that left a pre-fix decision_engine serving
     # verdicts for 92 minutes after the fix was committed.
     line="$line · SKEWED — worker behind committed code — docker compose restart worker beat"
+fi
+
+if (( fe_bad )); then
+    line="$line · fe $(short "${fe_served:-none}") · ${fe_note}"
+else
+    line="$line · fe $(short "$fe_served") in sync"
 fi
 
 if (( env_bad )); then
@@ -195,6 +280,14 @@ fi
 if [[ -z "$api" || -z "$worker" ]]; then
     exit 1
 elif [[ "$api" != "$worker" && "$tree" == "tree clean" ]]; then
+    exit 1
+fi
+
+# The frontend is exempted while the tree is dirty, for the same reason the
+# worker is: an edit moves the source hash and no rebuild has happened yet, so
+# the red could not be cleared while anyone was working. On a clean tree a
+# stale frontend is the three-hour 404 and fails.
+if (( fe_bad )) && [[ "$tree" == "tree clean" ]]; then
     exit 1
 fi
 (( env_bad == 0 )) || exit 1

@@ -227,6 +227,19 @@ Fourteen rules that were learned expensively and are not obvious from the code:
   from the registry** rather than listing it: `otx` was missing from the
   check built to find dead sources while being 70% dead.
 
+  **And the seam between two correct halves is where this keeps failing.**
+  Four times in one week a check verified each side and not the join: `exec
+  python` against the running server; the `/health` alias against the
+  decorated route; the api/worker fingerprint against a frontend that is a
+  built image; and the backend route against the client's own URL
+  construction — the integrations page asked for `/api/api/integrations/...`
+  because `request()` prefixes `BASE = "/api"` and the new call sites passed
+  `/api/...` too. Each time both halves were right and the seam was wrong,
+  and each time the verification had been done on the two halves separately.
+  So name the join and test *that*: the URL the deployed bundle builds, not
+  the endpoint called by hand; the route the consumer hits, not the one that
+  looks canonical.
+
   **The derivation discipline belongs wherever a hand-kept list exists, not
   only where one has already bitten.** The eighth was found at 19.1% of
   account nodes while nobody was looking for it, and an unenumerated set only
