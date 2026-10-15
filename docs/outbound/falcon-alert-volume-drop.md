@@ -1,5 +1,13 @@
 # CrowdStrike Falcon: alert volume dropped in mid-September, and the estate has raised nothing for seven days
 
+> **One check to run in the same pass as the console result, before this is
+> edited further:** how many *distinct devices* produced the 40-device group's
+> final 23 alerts on 21 September? If it is one or two machines, that group
+> never had a rate at all, and the "step confined to the updated group" reading
+> loses its comparator rather than merely being under-powered — the comparison
+> would then rest on a group that was never comparable. The figure is one
+> aggregation over alerts already retrieved.
+
 > **DRAFT — NOT TO BE SENT.** One check outstanding that can invalidate this
 > entire document: whether Falcon's own console shows detections after
 > 8 October 2026 that this platform's API does not return. If it does, the
