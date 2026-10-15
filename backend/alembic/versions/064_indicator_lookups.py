@@ -5,6 +5,14 @@ backfill. Code that predates this table simply does not use it, so the
 split-brain described in `docs/deploy/schema-changes.md` — where a migration
 changes every container at once and a rebuild changes one — cannot apply.
 
+**Idempotent, because `create_all` also creates tables.** `app/main.py` runs
+`Base.metadata.create_all` at startup, so whichever of the two gets there
+first wins and the other must not fail. On 2026-10-15 the api restarted before
+this migration ran, `create_all` made the table, and `alembic upgrade head`
+then died on `DuplicateTable` and left the version at 063 — the table present
+and unrecorded. Migrations 062 and 063 already guard this way; this one did
+not, which is the whole reason it is written down here.
+
 Revision ID: 064
 Revises: 063
 """
@@ -20,6 +28,13 @@ depends_on = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    existing = set(inspector.get_table_names())
+    if "indicator_lookups" in existing:
+        # Created by `create_all` already. Nothing to do, and failing here
+        # would leave the version behind the schema.
+        return
+
     op.create_table(
         "indicator_lookups",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
@@ -39,6 +54,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    if "indicator_lookups" not in set(inspector.get_table_names()):
+        return
     op.drop_index("ix_indicator_lookups_tenant_id", table_name="indicator_lookups")
     op.drop_index("idx_indicator_lookups_actor", table_name="indicator_lookups")
     op.drop_index("idx_indicator_lookups_created", table_name="indicator_lookups")
