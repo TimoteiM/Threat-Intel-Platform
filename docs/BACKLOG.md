@@ -1181,3 +1181,63 @@ string "received" anywhere in its stored result. Setting this fixes runs from
 then on; the existing ones stay `check_failed` permanently.
 
 See `docs/problems/a-first-seen-that-is-really-a-collection-start.md`.
+
+## 24. BLOCKED ON ITEM 17: free-form OpenSearch querying
+
+**Not scoped, deliberately.** A query box over this log store is cross-tenant
+exposure by construction, and the gate is item 17's tenancy test rather than a
+design document.
+
+### Why it is blocked rather than hard
+
+The store holds **2.57 billion** documents in the busiest week alone. Every
+account in this deployment currently carries `all_tenants = true`, because
+there has only ever been one customer — see item 17 and
+`one-tenant-hides-the-isolation-bugs`. And the tenant pin has been dropped
+before: `OpenSearchEstateClient.count_and_hosts` read `tenant_values`, an
+attribute that does not exist on `TenantIntegration`, and
+`getattr(..., None) or []` turned the missing attribute into *no tenant
+filter*, so the query ran across every tenant's documents. It was caught by a
+host count disagreeing with the recon — 109 against 5 — and by no test.
+
+A feature whose whole purpose is to let a caller shape a query body is the
+worst possible place to re-learn that lesson.
+
+### The precondition
+
+**No OpenSearch request body leaves this platform without a tenant `terms`
+filter, enforced server-side, and the filter is not expressible by the
+caller.** Not a review rule — a test that constructs a body through every path
+that reaches the cluster and fails if the pin is absent or caller-supplied.
+That is item 17's work and it is worth doing whether or not this feature is
+ever built, because the estate lookup, the log context and the Falcon panel all
+already send bodies.
+
+### What ships with it, if it is ever designed
+
+Three things, not negotiable separately:
+
+1. **A hard timeout and a result cap**, server-side. A retention-wide `min`
+   over `data.dstip` (2.07bn docs) already timed out during the 2026-10-15
+   verification, so this is a measured risk and not a hypothetical one.
+2. **Every query recorded with its submitter.** That is the attribution spec
+   (`docs/design/submitter-attribution.md`), so the two ship together — a query
+   log with no actor is an audit trail that cannot answer the only question it
+   will ever be asked.
+3. **A written answer to "why is this not OpenSearch Dashboards?"** Dashboards
+   exists, it is the tool for this, and it already has row-level security as a
+   product feature. Rebuilding a worse version of it inside this platform needs
+   a reason beyond convenience.
+
+### The feature that is probably actually wanted
+
+If the real need is *pivoting from an indicator in an investigation into its
+logs* — "show me the DNS events behind this estate hit" — then say so, because
+that is a different and much better feature: bounded by an indicator that is
+already on screen, bounded by the tenant of the run it belongs to, no
+caller-supplied query body, and no new exposure surface. It is also most of
+`/alert-investigations/{run_id}/logs/context`, already built, pointed at a
+different anchor.
+
+Specified separately: `docs/design/on-demand-indicator-lookup.md` covers the
+multi-source indicator lookup, which is adjacent and not blocked on this.
