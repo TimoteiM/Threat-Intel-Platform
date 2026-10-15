@@ -716,6 +716,22 @@ Measured, so the "one tenant" premise is not an assumption: the cluster holds
 a single `manager.name` value, `wm-c00.siembiot.int`, carrying all
 154,208,627 documents over 7 days.
 
+> **This justification expires at onboarding, and it is load-bearing in more
+> places than this entry.** "No other tenant's row was touched", "an unpinned
+> query returns the same set as a pinned one", "the isolation defects are not
+> live" — every one of those rests on that single `manager.name`
+> measurement, taken 2026-10-14, and every one becomes false on the day a
+> second manager ships documents to this cluster. It is a statement about
+> today's data, not a property of the code.
+>
+> So the measurement is a **precondition of the gate, not evidence the gate
+> can be skipped.** Re-run it before relying on any claim above:
+>
+>     terms agg on manager.name over the index pattern, 7 days
+>
+> More than one bucket means every "not currently a leak" in this file has
+> expired, and the items below are live defects rather than scheduled work.
+
 ### 17a. Every user carries `all_tenants = true`
 
 All 28 users have `all_tenants = true` and `tenant_ids = []`. Tenant scoping
@@ -810,3 +826,26 @@ So the work is:
 
 Until then Falcon's honest state is: last success reported, no silence
 verdict, and this entry as the record of what that omits.
+
+### A second expiry, on the warrant's scope
+
+`verified_ok` now carries a warrant — `collector_output` (worker) or
+`api_ping` (api) — because the two are different claims. The log store's
+promotion rests on collection evidence being a **superset** of what the ping
+proves, and that is true only because **there is currently no api-side
+user-facing OpenSearch query**: the sole `search_all` caller is
+`alert_log_context_service`, reached only from `alert_body_task` and
+`alert_log_followup_task`, and the api's only contact with the cluster is
+`ping()` in `GET /admin/opensearch-health`.
+
+**That expires the moment the estate lookup gets an API route**, which is the
+plan — `estate_lookup_service` already calls `_request` and has no consumer
+yet. From then on the ping is the **sole witness** for the api path, neither
+warrant subsumes the other, and a card showing only `collector_output` is
+making a narrower claim than it appears to: the worker can be answering while
+an analyst's on-demand estate lookup fails.
+
+So when that route lands, the log store needs **two** direction states rather
+than one — the collection path and the on-demand path are separate consumers
+with separate failure modes, which is the same argument that already keeps
+`enrichment` and `ingest` apart. Do not let one warrant stand in for both.
