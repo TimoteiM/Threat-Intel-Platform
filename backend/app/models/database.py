@@ -1476,6 +1476,48 @@ class CaseReadSet(Base):
     )
 
 
+class IndicatorLookup(Base):
+    """One on-demand indicator lookup, and who asked for it.
+
+    **The actor only, deliberately.** The full attribution schema
+    (`docs/design/submitter-attribution.md`) is not built yet, and waiting for
+    it would mean shipping a lookup surface with no record of who used it —
+    which is the state the free-form query console is blocked on in backlog 17.
+    So this records the one field that cannot be reconstructed later: a query
+    log with no actor answers the only question it will ever be asked.
+
+    `value` is stored because the question is the record — "who looked up
+    what" is unanswerable without it, and these are indicators under
+    investigation rather than customer content. The *results* are not stored:
+    they are re-derivable, they age, and keeping them would make this a second
+    copy of evidence with its own staleness.
+    """
+
+    __tablename__ = "indicator_lookups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    #: Who asked. From the authenticated identity, never from the request body.
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Which customer's data was asked about.
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    value: Mapped[str] = mapped_column(String(2048), nullable=False)
+    #: The detected kind, so a later reader can see which question was asked
+    #: rather than inferring it from the value.
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Which sources were actually queried, as opposed to refused by routing.
+    sources_asked: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_indicator_lookups_created", "created_at"),
+        Index("idx_indicator_lookups_actor", "actor"),
+    )
+
+
 class WatchHeartbeat(Base):
     """When each scheduled watch last *finished*, as distinct from last alarmed.
 

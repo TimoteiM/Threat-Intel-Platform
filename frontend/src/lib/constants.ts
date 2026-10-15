@@ -81,6 +81,7 @@ export const APP_NAV_LINKS = [
   { href: "/exclusions", label: "Exclusions", group: "detection", icon: "exclusions" },
   { href: "/email-investigations", label: "Email Analysis", group: "tools", icon: "email" },
   { href: "/ip-lookup", label: "IP Lookup", group: "tools", icon: "ip" },
+  { href: "/indicator-lookup", label: "Indicator Lookup", group: "tools", icon: "ip" },
   { href: "/assistant", label: "AI Assistant", group: "tools", icon: "assistant" },
   { href: "/clients", label: "Clients", group: "tools", icon: "clients" },
   { href: "/integrations", label: "Integrations", group: "tools", icon: "settings" },

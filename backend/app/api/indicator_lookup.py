@@ -1,0 +1,265 @@
+"""On-demand indicator lookup: one value, every source that can answer it.
+
+**This endpoint does not and will not accept a query body, an index, a field
+name, a filter or any other query fragment.** It takes a *value*; the server
+decides the question. That is not a simplification to be relaxed later — it is
+the property that makes the endpoint safe to expose, and the reason is written
+here rather than in a tracker because this is where the request to relax it
+will arrive.
+
+Why: the log store holds 2.57 billion documents in its busiest week, every
+account in this deployment carries `all_tenants = true`, and the platform
+authenticates to the cluster as a superuser. The tenant boundary is a `terms`
+filter the server adds, and **that filter has been omitted twice** — once
+because a configuration attribute did not exist and `or []` turned "missing"
+into "no filter", once in a path that still builds it conditionally. An
+endpoint that let a caller shape the body would make the next such defect the
+caller's to exploit rather than ours to find.
+
+So free-form querying is **backlog 17**, and it is blocked on an enforcement
+test (no body reaches the cluster without a server-side tenant filter the
+caller cannot express) plus the per-customer credential work in
+`docs/outbound/per-tenant-opensearch-credentials.md`. If you are here because
+someone asked for a query box: that is the answer, and this endpoint is the
+bounded feature that serves the real need behind it — pivoting from an
+indicator into what the platform knows about it.
+
+What it is *not* blocked on, having been parked behind both by mistake:
+`EMAIL_OWN_MTA_IDENTITIES`, which gates the "before or after this email"
+comparison — an on-demand lookup has no email and therefore no reference time
+to establish; and backlog 17 itself, which is about caller-supplied bodies.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from app.dependencies import DBSession
+from app.services import absence
+from app.services import indicator_lookup_service as ind
+from app.services import tenant_scope
+
+router = APIRouter(prefix="/api/indicator-lookup", tags=["indicator-lookup"])
+logger = logging.getLogger(__name__)
+
+
+def _actor(request: Request | None) -> str:
+    """Who is asking, from the authenticated identity only.
+
+    Never from a parameter: an actor a caller can set is not an actor. An
+    unidentified caller is recorded as such rather than as empty, because a
+    row with a blank actor and a row from an unauthenticated path would
+    otherwise be the same bytes.
+    """
+    identity = getattr(getattr(request, "state", None), "identity", None) or {}
+    for key in ("username", "label", "kind"):
+        value = str(identity.get(key) or "").strip()
+        if value:
+            return value[:255]
+    return "unidentified"
+
+
+@router.get("")
+async def lookup_indicator(
+    db: DBSession,
+    value: str = Query(..., min_length=1, max_length=2048),
+    tenant_id: str = Query(..., min_length=1),
+    days: int = Query(default=7, ge=1, le=120),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """What this platform knows about one indicator, per source.
+
+    Each source returns exactly one of three things: an answer, a named
+    absence, or a statement that it cannot be asked about this kind of
+    indicator and why. A source is never shown an empty result where the
+    third applies — see `indicator_lookup_service`.
+
+    `tenant_id` is required and never inferred. The scope check raises 404
+    rather than 403 so the endpoint does not confirm which tenants exist.
+    """
+    from app.integrations import falcon_client as falcon
+    from app.models.database import IndicatorLookup
+    from app.services import estate_lookup_service as est
+    from app.services import falcon_host_panel_service as panel
+    from app.services import integration_credential_service as creds
+
+    identity = getattr(getattr(request, "state", None), "identity", None)
+    tenant_scope.assert_can_read(tenant_scope.scope_of(identity), tenant_id)
+
+    detected = ind.detect(value)
+    kind = detected["kind"]
+    routing = ind.plan(kind)
+    observable = detected["value"]
+
+    out: dict[str, Any] = {
+        "input": str(value)[:2048],
+        "detected": detected,
+        "tenant_id": tenant_id,
+        "window_days": days,
+        "sources": {},
+    }
+
+    # --- Falcon -----------------------------------------------------------
+    falcon_decision = routing["falcon"]
+    if falcon_decision is not ind.ASK:
+        out["sources"]["falcon"] = {
+            "question": "not applicable to this kind of indicator",
+            "answer": ind.refusal(falcon_decision, raw=kind),
+        }
+    else:
+        out["sources"]["falcon"] = await _ask_falcon(
+            kind=kind, observable=observable, tenant_id=tenant_id,
+            creds=creds, falcon=falcon, panel=panel,
+        )
+
+    # --- the estate log store --------------------------------------------
+    estate_decision = routing["estate"]
+    if estate_decision is not ind.ASK:
+        section: dict[str, Any] = {
+            "question": "not applicable to this kind of indicator",
+            "answer": ind.refusal(estate_decision, raw=kind),
+        }
+        if kind == ind.URL:
+            # The narrower claim, offered and labelled rather than silently
+            # substituted for the question that was asked.
+            fallback = ind.url_fallback(observable)
+            if fallback:
+                section["narrower_claim"] = fallback
+                section["narrower_answer"] = await asyncio.to_thread(
+                    _estate, fallback["asked_instead"], ind.DOMAIN, tenant_id, days, est
+                )
+        out["sources"]["estate"] = section
+    else:
+        out["sources"]["estate"] = {
+            "question": (
+                "endpoint DNS queries for this name"
+                if kind == ind.DOMAIN else
+                "perimeter traffic to this address"
+            ),
+            "answer": await asyncio.to_thread(
+                _estate, observable, kind, tenant_id, days, est
+            ),
+        }
+
+    # --- the record, before the attribution schema exists -----------------
+    try:
+        db.add(IndicatorLookup(
+            actor=_actor(request), tenant_id=tenant_id, value=str(value)[:2048],
+            kind=kind,
+            sources_asked={s: (v is ind.ASK) for s, v in routing.items()},
+        ))
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        # The answer is still returned. A lookup that fails because its audit
+        # row failed would make the audit a denial-of-service on the feature,
+        # and the failure is reported rather than swallowed.
+        await db.rollback()
+        logger.error("indicator lookup not recorded: %s", type(exc).__name__)
+        out["recorded"] = absence.absent(
+            absence.CHECK_FAILED,
+            f"This lookup was answered but not recorded against its actor "
+            f"({type(exc).__name__}). The answer is unaffected; the audit "
+            f"trail has a gap at this timestamp.",
+        ).as_json()
+    else:
+        out["recorded"] = True
+    return out
+
+
+async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel) -> dict[str, Any]:
+    """Falcon's answer, or why it has none. Negatives carry the control."""
+    question = (
+        f"Falcon alerts whose {kind} matches this value"
+        if kind in ind.HASH_LENGTHS.values() else
+        "whether Falcon manages a host with this name"
+    )
+    try:
+        opened = await asyncio.to_thread(
+            creds.open_for_tenant_sync, tenant_id, "falcon")
+    except creds.IntegrationNotConfigured:
+        return {"question": question, "answer": absence.absent(
+            absence.CHECK_FAILED,
+            "CrowdStrike Falcon is not configured for this customer, so no "
+            "request was made. An unconfigured EDR is an absence, not a clean "
+            "answer.", raw="not_configured").as_json()}
+    except Exception as exc:  # noqa: BLE001
+        return {"question": question, "answer": absence.absent(
+            absence.CHECK_FAILED,
+            f"The stored Falcon credential could not be opened "
+            f"({type(exc).__name__}). No request was made.").as_json()}
+
+    if kind == ind.HOSTNAME:
+        try:
+            raw = await asyncio.to_thread(
+                falcon.lookup_host, hostname=observable,
+                client_id=opened.client_id, client_secret=opened.client_secret,
+                config=opened.config, days=panel.DETECTION_DAYS,
+                row_cap=panel.DETECTION_ROW_CAP)
+        except Exception as exc:  # noqa: BLE001
+            return {"question": question, "answer": absence.absent(
+                absence.CHECK_FAILED,
+                f"The Falcon query did not complete ({type(exc).__name__}: "
+                f"{falcon._redact(exc)}), so whether this host is managed is "
+                f"unknown rather than no.").as_json()}
+        return {
+            "question": question,
+            "answer": panel.panel(
+                hostname=raw["hostname"], device=raw["device"],
+                detections=raw["detections"], control=raw["control"],
+                truncated_at=raw.get("truncated_at"),
+                superseded=raw.get("superseded_devices"),
+                retention=raw.get("retention"),
+                enrolment_floor=raw.get("enrolment_floor"),
+                requested_days=panel.DETECTION_DAYS),
+        }
+
+    # A hash. The field control gates the negative, exactly as on the alert
+    # panel: the Alerts API answers an unknown field name with 200 and zero
+    # rows, so a nil result is only a negative while the control passes.
+    try:
+        found = await asyncio.to_thread(
+            falcon.lookup, observable=observable, observable_type="hash",
+            client_id=opened.client_id, client_secret=opened.client_secret,
+            config=opened.config)
+    except falcon.FalconFieldUnverified as exc:
+        return {"question": question, "answer": absence.absent(
+            absence.CHECK_FAILED, str(exc)).as_json()}
+    except Exception as exc:  # noqa: BLE001
+        return {"question": question, "answer": absence.absent(
+            absence.CHECK_FAILED,
+            f"The Falcon query did not complete ({type(exc).__name__}: "
+            f"{falcon._redact(exc)}).").as_json()}
+
+    detections = found.get("detections")
+    return {
+        "question": question,
+        "answer": {
+            "detections": detections,
+            "detection_count": len(detections) if isinstance(detections, list) else None,
+            "field": found.get("detections_field"),
+            "notes": found.get("notes") or [],
+            # No negative without its warrant. The notes carry the control's
+            # timestamp; this states plainly that the zero is interpretable.
+            "negative_is_interpretable": bool(found.get("detections_field")),
+        },
+    }
+
+
+def _estate(observable: str, kind: str, tenant_id: str, days: int, est) -> dict[str, Any]:
+    """The estate's answer. No reference time, so no before/after comparison.
+
+    `reference_time` is deliberately not passed: an on-demand lookup has no
+    email, so there is no anchor to name, and `lookup()` refuses an unnamed
+    one. The raw answer — hosts, documents, first-seen, the observation floor —
+    needs none of it.
+    """
+    client = est.estate_client_for(tenant_id)
+    return est.lookup(
+        observable,
+        kind="domain" if kind == ind.DOMAIN else "ip",
+        tenant_id=tenant_id, days=days, client=client,
+    )

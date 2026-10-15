@@ -668,8 +668,12 @@ def lookup(
                      "device")
     else:
         notes.append(
-            f"Falcon device search does not cover observable type "
-            f"{observable_type!r}, so the estate was not searched."
+            f"Falcon's own device inventory cannot be searched by "
+            f"{observable_type!r}, so no device question was asked. (This is "
+            f"about Falcon's device list, not the OpenSearch log store — in "
+            f"the indicator lookup that store is a separate source called "
+            f"'estate', and the previous wording here said 'the estate was "
+            f"not searched', which read as a claim about it.)"
         )
 
     # Detections, via the Alerts API. The field choice is a correctness risk

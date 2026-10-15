@@ -2259,3 +2259,44 @@ export function getRunFalcon(runId: string, days = 30) {
     `/alert-investigations/${runId}/falcon?days=${days}`,
   );
 }
+
+// --- On-demand indicator lookup ---------------------------------------------
+
+export interface IndicatorDetection {
+  kind: string;
+  value: string;
+  /** How detection decided — shown so a misroute can be caught by the reader. */
+  how?: string;
+  /** Why nothing could be decided. Present only when kind is "unparsed". */
+  reason?: string;
+  is_private?: boolean;
+}
+
+export interface IndicatorSourceSection {
+  question: string;
+  /** An answer, or an `Absent.as_json()`. Branch on `absent`. */
+  answer: unknown;
+  /** For a URL: the host the estate was asked about instead, labelled. */
+  narrower_claim?: { asked_instead: string; kind: string; claim: string };
+  narrower_answer?: unknown;
+}
+
+export interface IndicatorLookupResult {
+  input: string;
+  detected: IndicatorDetection;
+  tenant_id: string;
+  window_days: number;
+  sources: Record<string, IndicatorSourceSection>;
+  /** true, or an absence explaining that the actor record failed. */
+  recorded: unknown;
+}
+
+/** What this platform knows about one indicator.
+ *
+ *  Takes a value only. There is deliberately no way to pass a query, a field,
+ *  an index or a filter — free-form querying is backlog 17 and is blocked on
+ *  the tenant-pin enforcement work. See the route's docstring. */
+export function lookupIndicator(value: string, tenantId: string, days = 7) {
+  const qs = new URLSearchParams({ value, tenant_id: tenantId, days: String(days) });
+  return request<IndicatorLookupResult>(`/indicator-lookup?${qs}`);
+}
