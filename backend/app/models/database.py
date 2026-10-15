@@ -1476,6 +1476,170 @@ class CaseReadSet(Base):
     )
 
 
+#: The submitter attribution kinds, from `docs/design/submitter-attribution.md`.
+#: A single NULL or a string like "unidentified" collapses four conditions
+#: that mean different things to someone reading an investigation, which is
+#: why this is an enum and not a nullable name.
+ACTOR_HUMAN = "human"
+ACTOR_SERVICE_ACCOUNT = "service_account"
+ACTOR_AUTOMATED_INGEST = "automated_ingest"
+ACTOR_PREDATES_ATTRIBUTION = "predates_attribution"
+ACTOR_RECORDED_UNRESOLVABLE = "recorded_unresolvable"
+
+ACTOR_KINDS = (
+    ACTOR_HUMAN, ACTOR_SERVICE_ACCOUNT, ACTOR_AUTOMATED_INGEST,
+    ACTOR_PREDATES_ATTRIBUTION, ACTOR_RECORDED_UNRESOLVABLE,
+)
+
+
+class InvestigationRecord(Base):
+    """An ordered chain of claims, each with its evidence — the object three
+    surfaces produce.
+
+    Not a feature of a page. The email pipeline is already a fixed eight-step
+    chain and simply never wrote it down; the alert surface has two steps
+    nobody recorded; the indicator lookup produces one of these only on
+    escalation, because it is a fan-out and not a chain, and a benign lookup
+    must never grow a second page.
+
+    **`incomplete` is the field that keeps this honest.** The recorder is
+    fail-open in the pipeline — a recording bug must never take an
+    investigation down — but a recorder that drops three of eight steps and
+    then renders as a complete five-step chain is the defect this record
+    exists to close, one level up. So a chain that did not record fully says
+    so, above itself, and is never presented as the investigation.
+    """
+
+    __tablename__ = "investigation_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    #: Which surface produced it, and which run/alert/lookup it belongs to.
+    #: Two columns rather than a polymorphic key, because a join that has to
+    #: branch on a type column is a join nobody writes correctly twice.
+    origin_surface: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+    #: The attribution pair. Same column as the submitter attribution spec —
+    #: one column, two features, designed once rather than invented twice.
+    actor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    #: What was recorded, when it cannot be resolved to an account. Kept
+    #: because `recorded_unresolvable` means evidence exists — discarding the
+    #: string would turn it into `predates_attribution`, a different claim.
+    actor_recorded: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: One model call, at the very end, over the step records only.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Entities the summary names that no step recorded. Non-empty means the
+    #: summary is shown with them marked, and the steps remain the evidence.
+    summary_unverified_entities: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    #: Quantities the summary states that appear in no step's structured
+    #: fields. Names were not enough: "executed on five hosts" when the step
+    #: recorded two introduces no new entity and is exactly what a reader
+    #: acts on. The summary is meant to carry no quantities at all.
+    summary_unverified_numerals: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
+    #: A chain that did not record fully. See the class docstring.
+    incomplete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    incomplete_steps: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    #: The gate counters. `observables_stopped` is the prevalence shortcut's
+    #: output and is the number that justifies the gate existing.
+    steps_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    steps_escalated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    observables_stopped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("idx_inv_records_origin", "origin_surface", "origin_id"),
+        Index("idx_inv_records_created", "created_at"),
+        Index("idx_inv_records_actor", "actor_kind"),
+    )
+
+
+class InvestigationStep(Base):
+    """One claim, with the evidence for it and the warrant behind it.
+
+    A step that **could not be asked** — a 403, a `no_field_map`, an
+    `out_of_scope` — is a row here like any other, rendered as *No claim*
+    with its reason. Dropping it would silently shorten the investigation and
+    nobody could tell.
+    """
+
+    __tablename__ = "investigation_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("investigation_records.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The template key. A kind with no template renders raw JSON, which the
+    #: template-registry test exists to prevent.
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The question in plain words, so the chain reads without the templates.
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Endpoint or index — what was actually addressed.
+    target: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: The literal query. Ours, not the customer's, so it is kept verbatim.
+    query: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: Bounded, and the bound is recorded. A truncated response read as the
+    #: whole response is the floor-as-fact shape. Sanitised before storage.
+    response_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    response_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    observables_found: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    observables_selected: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    #: Field-control state, observation floor, window — whatever this source's
+    #: negative depends on. A negative without its warrant is not a negative.
+    warrant: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: Set when nothing was asked or the source refused. The kind is from
+    #: `app/services/absence.py`; the reason is rendered as the step's text.
+    absence_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    absence_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: What the step cost, by kind: quota call, sandbox credit, model call,
+    #: or nothing. Structured so the gate can be evaluated before the call.
+    cost: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_inv_steps_record", "record_id", "ordinal"),
+    )
+
+
 class IndicatorLookup(Base):
     """One on-demand indicator lookup, and who asked for it.
 
@@ -1498,8 +1662,18 @@ class IndicatorLookup(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    #: Who asked. From the authenticated identity, never from the request body.
-    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: The attribution pair, converged onto the submitter attribution shape.
+    #:
+    #: This shipped as `actor: String(255)` with `"unidentified"` for absent —
+    #: which is exactly the four-way collapse that spec exists to prevent, and
+    #: made this the weaker of two implementations of one idea on the same day
+    #: the other was written. Migrated rather than left to become the stale
+    #: second copy.
+    actor_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    actor_recorded: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: Which customer's data was asked about.
     tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     value: Mapped[str] = mapped_column(String(2048), nullable=False)
@@ -1514,7 +1688,7 @@ class IndicatorLookup(Base):
 
     __table_args__ = (
         Index("idx_indicator_lookups_created", "created_at"),
-        Index("idx_indicator_lookups_actor", "actor"),
+        Index("idx_indicator_lookups_actor", "actor_kind"),
     )
 
 

@@ -37,6 +37,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from sqlalchemy import select
 
 from app.dependencies import DBSession
 from app.services import absence
@@ -47,20 +48,46 @@ router = APIRouter(prefix="/api/indicator-lookup", tags=["indicator-lookup"])
 logger = logging.getLogger(__name__)
 
 
-def _actor(request: Request | None) -> str:
-    """Who is asking, from the authenticated identity only.
+async def _actor(request: Request | None, db: Any) -> dict[str, Any]:
+    """Who is asking, as the attribution pair rather than a name.
 
-    Never from a parameter: an actor a caller can set is not an actor. An
-    unidentified caller is recorded as such rather than as empty, because a
-    row with a blank actor and a row from an unauthenticated path would
-    otherwise be the same bytes.
+    Never from a parameter: an actor a caller can set is not an actor.
+
+    This returned a single string with `"unidentified"` for absent, which
+    collapses four conditions that mean different things — see
+    `docs/design/submitter-attribution.md`. The name is now **resolved**
+    against `users`, so a recorded actor that matches an account is `human`
+    with its id, and one that does not is `recorded_unresolvable` with the
+    string kept: an actor *was* recorded and cannot be matched, which is a
+    different claim from nobody having written one down.
     """
+    from app.models.database import (
+        ACTOR_AUTOMATED_INGEST, ACTOR_HUMAN, ACTOR_RECORDED_UNRESOLVABLE, User,
+    )
+
     identity = getattr(getattr(request, "state", None), "identity", None) or {}
+    recorded = ""
     for key in ("username", "label", "kind"):
         value = str(identity.get(key) or "").strip()
         if value:
-            return value[:255]
-    return "unidentified"
+            recorded = value[:255]
+            break
+    if not recorded:
+        # No identity on the request at all. Not "unidentified" — there was no
+        # human actor, which is what this kind means.
+        return {"actor_kind": ACTOR_AUTOMATED_INGEST, "actor_user_id": None,
+                "actor_recorded": None}
+    try:
+        user_id = (await db.execute(
+            select(User.id).where(User.username == recorded)
+        )).scalars().first()
+    except Exception:  # noqa: BLE001
+        user_id = None
+    if user_id is not None:
+        return {"actor_kind": ACTOR_HUMAN, "actor_user_id": user_id,
+                "actor_recorded": recorded}
+    return {"actor_kind": ACTOR_RECORDED_UNRESOLVABLE, "actor_user_id": None,
+            "actor_recorded": recorded}
 
 
 @router.get("")
@@ -163,7 +190,8 @@ async def lookup_indicator(
     # --- the record, before the attribution schema exists -----------------
     try:
         db.add(IndicatorLookup(
-            actor=_actor(request), tenant_id=tenant_id, value=str(value)[:2048],
+            **await _actor(request, db),
+            tenant_id=tenant_id, value=str(value)[:2048],
             kind=kind,
             sources_asked={
                 s: {"asked": v["decision"] is ind.ASK, "reading": v["reading"]}

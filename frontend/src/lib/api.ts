@@ -2316,3 +2316,61 @@ export function lookupIndicator(value: string, tenantId: string, days = 7) {
   const qs = new URLSearchParams({ value, tenant_id: tenantId, days: String(days) });
   return request<IndicatorLookupResult>(`/indicator-lookup?${qs}`);
 }
+
+// --- Investigation record ---------------------------------------------------
+
+export interface InvestigationStepView {
+  ordinal: number;
+  kind: string;
+  question: string;
+  /** The rendered sentence, from a template over structured fields. */
+  text: string;
+  /** False when the kind has no template and raw JSON is shown. Rendered as
+   *  visibly wrong rather than quietly plausible — the silent-registry shape. */
+  templated: boolean;
+  source: string | null;
+  target: string | null;
+  verdict: string | null;
+  observables_found: unknown[];
+  observables_selected: unknown[];
+  warrant: Record<string, unknown>;
+  /** Set when the step could not be asked. Rendered as "No claim", never dropped. */
+  absence_kind: string | null;
+  absence_reason: string | null;
+  duration_ms: number | null;
+  cost: Record<string, unknown>;
+  response_truncated: boolean;
+  response_bytes: number | null;
+  query: Record<string, unknown>;
+}
+
+export interface InvestigationRecordView {
+  id: string;
+  origin: { surface: string; id: string };
+  tenant_id: string | null;
+  actor: { kind: string; user_id: string | null; recorded: string | null };
+  verdict: string | null;
+  summary: string | null;
+  summary_unverified_entities: string[];
+  summary_unverified_numerals: string[];
+  /** A chain that did not record fully. Stated ABOVE the chain, and such a
+   *  chain is never presented as the investigation. */
+  incomplete: boolean;
+  incomplete_steps: Array<{ ordinal: number; kind: string; reason: string }>;
+  counters: {
+    steps_run: number;
+    steps_escalated: number;
+    observables_stopped: number;
+    model_calls: number;
+  };
+  created_at: string | null;
+  completed_at: string | null;
+  steps: InvestigationStepView[];
+}
+
+/** The chain a surface produced for one run, alert or lookup. */
+export function getInvestigationRecordByOrigin(surface: string, originId: string) {
+  return request<InvestigationRecordView>(
+    `/investigation-records/by-origin/${surface}/${encodeURIComponent(originId)}`,
+  );
+}

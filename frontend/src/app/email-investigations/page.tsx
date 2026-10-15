@@ -8,6 +8,7 @@ import {
   listEmailInvestigationHistory,
   uploadEmailInvestigation,
 } from "@/lib/api";
+import InvestigationChain from "@/components/report/InvestigationChain";
 import ConsoleModule from "@/components/ui/ConsoleModule";
 import MetadataGrid from "@/components/ui/MetadataGrid";
 import PageHero from "@/components/ui/PageHero";
@@ -767,6 +768,17 @@ export default function EmailInvestigationsPage() {
       >
       {result && (
         <div style={{ display: "grid", gap: 16 }}>
+
+          {/* ── The investigation, as an ordered chain of claims ──
+              Placed directly under the verdict rather than below the evidence
+              dump: the chain is how the verdict was reached, so it belongs
+              beside it. */}
+          {(result.run_id || result.history_id) && (
+            <InvestigationChain
+              surface="email"
+              originId={String(result.run_id || result.history_id)}
+            />
+          )}
 
           {/* ── Overall Verdict Banner ── */}
           {(() => {

@@ -102,24 +102,50 @@ def test_a_tenant_the_caller_cannot_read_is_refused_before_anything_is_asked(
 # --- the actor -------------------------------------------------------------
 
 
-def test_the_actor_comes_from_the_identity_and_not_from_a_parameter():
-    """An actor a caller can set is not an actor."""
+class _NoUsers:
+    """A db whose user lookup finds nothing."""
+
+    async def execute(self, *_a, **_k):
+        class _R:
+            def scalars(self):
+                return self
+
+            def first(self):
+                return None
+        return _R()
+
+
+def _actor_of(request):
+    import asyncio
+    return asyncio.run(route._actor(request, _NoUsers()))
+
+
+def test_a_recorded_actor_that_matches_no_account_is_not_a_bare_name():
+    """An actor a caller can set is not an actor, and a name is not an
+    attribution. A recorded name that resolves to nothing is
+    `recorded_unresolvable` WITH the string kept — evidence exists."""
     class _Req:
         class state:
             identity = {"username": "someone", "kind": "session"}
 
-    assert route._actor(_Req()) == "someone"
+    out = _actor_of(_Req())
+    assert out["actor_kind"] == "recorded_unresolvable"
+    assert out["actor_recorded"] == "someone"
+    assert out["actor_user_id"] is None
 
 
-def test_an_unidentified_caller_is_recorded_as_such_rather_than_blank():
-    """A blank actor and an unauthenticated path would otherwise be the same
-    bytes — the absence-as-value shape, in the audit trail."""
+def test_no_identity_at_all_is_automated_ingest_not_unidentified():
+    """This returned the string "unidentified", which collapses "no human was
+    involved" with "a human was involved and not recorded" — two different
+    claims about an audit trail."""
     class _Empty:
         class state:
             identity = {}
 
-    assert route._actor(_Empty()) == "unidentified"
-    assert route._actor(None) == "unidentified"
+    for req in (_Empty(), None):
+        out = _actor_of(req)
+        assert out["actor_kind"] == "automated_ingest"
+        assert out["actor_recorded"] is None
 
 
 def test_the_actor_falls_back_through_the_identity_fields_in_order():
@@ -127,7 +153,7 @@ def test_the_actor_falls_back_through_the_identity_fields_in_order():
         class state:
             identity = {"label": "ingest key 3"}
 
-    assert route._actor(_Labelled()) == "ingest key 3"
+    assert _actor_of(_Labelled())["actor_recorded"] == "ingest key 3"
 
 
 # --- the record ------------------------------------------------------------
@@ -140,11 +166,23 @@ def test_the_record_stores_the_actor_and_the_question_but_not_the_results():
     from app.models.database import IndicatorLookup
 
     columns = {c.name for c in IndicatorLookup.__table__.columns}
-    assert {"actor", "tenant_id", "value", "kind", "sources_asked",
-            "created_at"} <= columns
+    # The attribution PAIR, not a name. This shipped as `actor: String(255)`
+    # with "unidentified" for absent — the four-way collapse the submitter
+    # attribution spec exists to prevent — and converged onto that shape in
+    # migration 065. This test caught the change, which is what it is for.
+    assert {"actor_kind", "actor_user_id", "actor_recorded", "tenant_id",
+            "value", "kind", "sources_asked", "created_at"} <= columns
+    assert "actor" not in columns, (
+        "the collapsed single-column actor is back"
+    )
     assert not any(c in columns for c in ("results", "hits", "answer",
                                           "detections", "documents"))
-    assert IndicatorLookup.__table__.c.actor.nullable is False
+    assert IndicatorLookup.__table__.c.actor_kind.nullable is False
+    # And the kind must be from the declared set, not free text.
+    from app.models.database import ACTOR_KINDS
+
+    assert "recorded_unresolvable" in ACTOR_KINDS
+    assert "human" in ACTOR_KINDS
 
 
 def _underlying():

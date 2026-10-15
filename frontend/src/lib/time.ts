@@ -64,3 +64,16 @@ export function shortDate(iso: string | null | undefined): string | null {
   const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})/);
   return match ? match[1] : String(iso);
 }
+
+/** A duration in milliseconds, as a person would say it.
+ *
+ *  Added rather than reusing `durationFromHours` through a ms→hours division:
+ *  a step's duration is natively milliseconds, and routing it through hours
+ *  to reuse a helper is how "0.0 hours" ends up on a page. */
+export function durationFromMs(ms: number | null | undefined): string | null {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return null;
+  const v = Math.max(0, ms);
+  if (v < 1000) return `${Math.round(v)} ms`;
+  if (v < 60_000) return `${(v / 1000).toFixed(1)} s`;
+  return durationFromHours(v / 3_600_000);
+}

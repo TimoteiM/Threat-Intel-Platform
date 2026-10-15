@@ -109,6 +109,8 @@ def run_email_investigation(
             )
         )
 
+        _record_investigation(parsed_id, response_payload)
+
         _update_run(
             parsed_id,
             email_subject=str(response_payload.get("email_subject") or "")[:512] or None,
@@ -141,3 +143,42 @@ def run_email_investigation(
             logger.warning("Could not remove temporary email payload: %s", file_path)
 
     return run_id
+
+
+def _record_investigation(run_uuid: uuid.UUID, payload: dict) -> None:
+    """Write the investigation record. Fail-open, by contract.
+
+    A recording bug must never take an investigation down — this is a
+    narration of the pipeline, not part of it. The loud half is on the record
+    itself: `incomplete_steps` names every step that failed to record, and the
+    page says so above the chain, so a short chain is a visible gap rather
+    than a plausible investigation.
+
+    The actor is `predates_attribution`, which is the honest kind rather than a
+    placeholder: the upload endpoint does not capture a submitter yet, so an
+    actor existed and was not recorded. `automated_ingest` would claim no
+    human was involved, and a human uploaded the file.
+    """
+    try:
+        from app.models.database import ACTOR_PREDATES_ATTRIBUTION
+        from app.services.email_investigation_steps import derive
+        from app.services.investigation_recorder import (
+            InvestigationRecorder, persist_sync,
+        )
+
+        recorder = InvestigationRecorder(
+            origin_surface="email",
+            origin_id=str(run_uuid),
+            actor_kind=ACTOR_PREDATES_ATTRIBUTION,
+        )
+        derive(payload or {}, recorder)
+        resolution = (payload or {}).get("resolution") or {}
+        verdict = str(
+            resolution.get("overall_verdict")
+            or resolution.get("classification")
+            or ""
+        ) or None
+        with Session(sync_engine) as db:
+            persist_sync(recorder, db, verdict=verdict)
+    except Exception:  # noqa: BLE001
+        logger.exception("investigation record not written for %s", run_uuid)
