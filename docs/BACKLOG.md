@@ -1241,3 +1241,42 @@ different anchor.
 
 Specified separately: `docs/design/on-demand-indicator-lookup.md` covers the
 multi-source indicator lookup, which is adjacent and not blocked on this.
+
+## 25. Two schema authorities: `create_all` at startup, and Alembic
+
+**Filed 2026-10-15, not for today.**
+
+`app/main.py` runs `Base.metadata.create_all` on startup. `alembic/versions/`
+also creates tables. **Whichever runs first wins and the other must cope**, so
+every new-table migration has to be written idempotent — 062 and 063 are, 064
+was not, and this is what that cost:
+
+The api restarted before migration 064 ran. `create_all` created
+`indicator_lookups`, the migration then died on `DuplicateTable`, and
+`alembic_version` stayed at **063 with the table present**. The schema was
+ahead of the recorded version, and nothing reported it. The table worked — six
+rows were written through it — which is exactly why nobody would have noticed.
+
+**So Alembic's version is currently a partial record rather than the record.**
+It describes the migrations that happened to run, not the live schema. Any
+reasoning that starts "the database is at revision N, therefore…" is unsound
+while that is true, and `docs/deploy/schema-changes.md` — which exists because
+a rename cost 2h 38m of stopped analysis — assumes the version means something.
+
+### The work
+
+**One authority, with the other removed rather than worked around.** Removing
+`create_all` is the likelier direction: migrations can express a rename,
+`create_all` cannot, and the failure that doc records was a rename. But that
+makes `alembic upgrade head` a hard precondition for startup rather than a
+convenience, which changes the deploy sequence and the first-boot story — so it
+is a decision, not a tidy-up.
+
+**And a test that the head actually describes the live schema.** Compare
+`Base.metadata` against the live database and fail on any difference: a table
+or column present in one and not the other. Without it, "we are at 064" stays
+an assertion about which scripts ran rather than about what exists — and the
+test is what makes the chosen authority real instead of nominal.
+
+Related: `docs/deploy/schema-changes.md`, and the idempotency note in
+`alembic/versions/064_indicator_lookups.py`.

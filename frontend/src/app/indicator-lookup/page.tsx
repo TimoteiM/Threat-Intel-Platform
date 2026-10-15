@@ -150,6 +150,10 @@ function FalconAnswer({ answer }: { answer: any }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {cov.absent ? (
           <Absence kind={cov.kind} reason={cov.reason} />
+        ) : cov.conditional_finding ? (
+          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.6, color: "var(--text-dim)" }}>
+            {cov.conditional_finding}
+          </p>
         ) : cov.managed === false ? (
           <Row label="Falcon sensor" value="none on this host — this host has no EDR coverage" />
         ) : (
@@ -219,6 +223,11 @@ function Source({ name, section }: { name: string; section: IndicatorSourceSecti
         </h3>
         <p style={{ margin: "3px 0 0", fontSize: 11.5, color: "var(--text-muted)" }}>
           Asked: {section.question}
+          {section.reading_used ? (
+            <>
+              {" "}· read as <strong style={{ color: "var(--text-dim)" }}>{section.reading_used}</strong>
+            </>
+          ) : null}
         </p>
       </header>
 
@@ -229,6 +238,22 @@ function Source({ name, section }: { name: string; section: IndicatorSourceSecti
       ) : (
         <EstateAnswer answer={answer} />
       )}
+
+      {/* The other reading's refusal, so answering one does not hide the
+          other. A dotted name is both things. */}
+      {section.not_answered_for ? (
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--panel-divider-strong)", paddingTop: 10 }}>
+          <p style={{ margin: "0 0 6px", fontSize: 11, letterSpacing: 0.4, textTransform: "uppercase", color: "var(--text-muted)" }}>
+            read as {section.not_answered_for.reading} — not answered
+          </p>
+          {isFalconAbsence(section.not_answered_for.answer) ? (
+            <Absence
+              kind={section.not_answered_for.answer.kind}
+              reason={section.not_answered_for.answer.reason}
+            />
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Offered, labelled, never substituted for the question that was asked. */}
       {section.narrower_claim && (
@@ -365,6 +390,11 @@ export default function IndicatorLookupPage() {
             Detected as <strong>{detected.kind.replace(/_/g, " ")}</strong>
             {detected.how ? <span style={{ color: "var(--text-muted)" }}> — {detected.how}</span> : null}
           </div>
+          {detected.ambiguity && (
+            <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.6, color: "var(--text-dim)" }}>
+              {detected.ambiguity}
+            </p>
+          )}
           {detected.reason && (
             <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.6, color: "var(--warning)" }}>
               {detected.reason}

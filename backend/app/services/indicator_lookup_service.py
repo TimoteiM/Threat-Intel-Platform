@@ -61,22 +61,39 @@ def detect(value: str) -> dict[str, Any]:
     Order matters. Hash detection runs **first**, because a 32-character hex
     string is also a syntactically valid hostname, and a hostname is the
     reading that produces a confident wrong answer.
+
+    **`readings` is the list of kinds this value can validly be read as**,
+    primary first, and it exists because a dotted name is genuinely two
+    things. `dns1.expertware.net` is a registrable domain *and* a Wazuh agent
+    name in this estate's own EDR coverage list. Collapsing it to one reading
+    makes the page answer a narrower question than it was asked: read only as
+    a domain, Falcon is told it has no field and never asked whether it
+    manages the host; read only as a hostname, the estate is told the question
+    is out of scope and never asked whether anything resolved the name. Both
+    answers are available and both are wanted, so both readings are carried
+    and each section says which one it used.
     """
     raw = str(value or "")
     text = raw.strip()
     if not text:
-        return {"kind": UNPARSED, "value": "", "reason": "No value was given."}
+        # `readings` on every return path. The one that lacked it would have
+        # raised KeyError in the router rather than reporting an absence —
+        # caught by the test that asserts detect() only emits reading sets the
+        # table knows, which is the direction that finds a missing key rather
+        # than a wrong one.
+        return {"kind": UNPARSED, "readings": [UNPARSED], "value": "",
+                "reason": "No value was given."}
 
     # 1. Digest-shaped. Checked before anything else, and a near-miss length
     #    is refused rather than falling through to the hostname rule.
     if _HEX.match(text):
         kind = HASH_LENGTHS.get(len(text))
         if kind:
-            return {"kind": kind, "value": text.lower(),
+            return {"kind": kind, "readings": [kind], "value": text.lower(),
                     "how": f"{len(text)} hexadecimal characters"}
         if 16 <= len(text) <= 128:
             return {
-                "kind": UNPARSED, "value": text,
+                "kind": UNPARSED, "readings": [UNPARSED], "value": text,
                 "reason": (
                     f"This is {len(text)} hexadecimal characters, which is not "
                     f"a digest length — SHA-256 is 64, SHA-1 is 40, MD5 is 32. "
@@ -93,24 +110,37 @@ def detect(value: str) -> dict[str, Any]:
     except ValueError:
         parsed = None
     if parsed is not None:
-        return {"kind": IP, "value": str(parsed),
+        return {"kind": IP, "readings": [IP], "value": str(parsed),
                 "how": f"parsed as an IPv{parsed.version} address",
                 "is_private": parsed.is_private}
 
     # 3. A URL, by its scheme.
     if _SCHEME.match(text):
-        return {"kind": URL, "value": text, "how": "has a URL scheme"}
+        return {"kind": URL, "readings": [URL], "value": text,
+                "how": "has a URL scheme"}
 
     # 4. A dotted name, or a bare machine name.
     if _DOTTED.match(text):
-        return {"kind": DOMAIN, "value": text.lower(),
-                "how": "a dotted name with an alphabetic final label"}
+        # Two valid readings, not a choice. See the docstring.
+        return {
+            "kind": DOMAIN, "readings": [DOMAIN, HOSTNAME],
+            "value": text.lower(),
+            "how": "a dotted name with an alphabetic final label",
+            "ambiguous": True,
+            "ambiguity": (
+                "A dotted name is both a domain and a possible machine name. "
+                "Both readings were used: the log store was asked whether any "
+                "host resolved this name, and the EDR was asked whether it "
+                "manages a device called this. Each section says which "
+                "reading it answered."
+            ),
+        }
     if "." not in text and _BARE.match(text):
-        return {"kind": HOSTNAME, "value": text,
+        return {"kind": HOSTNAME, "readings": [HOSTNAME], "value": text,
                 "how": "no dots, so read as a machine name rather than a domain"}
 
     return {
-        "kind": UNPARSED, "value": text,
+        "kind": UNPARSED, "readings": [UNPARSED], "value": text,
         "reason": (
             "This is not a hash, an address, a URL, a dotted name or a bare "
             "machine name, so no source has a question to ask about it. It is "
@@ -221,6 +251,55 @@ def plan(kind: str) -> dict[str, Any]:
         )
     row = ROUTING[kind]
     return {source: row[source] for source in SOURCES}
+
+
+#: Reading-sets `detect` can emit. Enumerated so the test below can assert a
+#: decision exists for every one of them — a pair with no decision is the
+#: silent collapse this whole mechanism exists to prevent.
+READING_SETS: tuple[tuple[str, ...], ...] = (
+    (SHA256,), (SHA1,), (MD5,), (IP,), (URL,), (HOSTNAME,), (UNPARSED,),
+    (DOMAIN, HOSTNAME),
+)
+
+
+def plan_readings(readings: Any) -> dict[str, Any]:
+    """Per source: which reading it is asked under, or why it is not asked.
+
+    A source is asked under the **first** reading that has a question for it,
+    and the reading used travels with the decision so the section can say so.
+    A source refused by every reading carries the refusal from its *primary*
+    reading, because that is the question the analyst actually typed.
+    """
+    order = [r for r in (readings or []) if r in ROUTING]
+    if not order:
+        raise KeyError(
+            f"no routing decision for readings {readings!r} — every reading "
+            f"set needs one per source, or a section silently renders empty"
+        )
+    out: dict[str, Any] = {}
+    for source in SOURCES:
+        chosen: Any = None
+        for reading in order:
+            if ROUTING[reading][source] is ASK:
+                chosen = {"decision": ASK, "reading": reading}
+                break
+        if chosen is None:
+            primary = order[0]
+            chosen = {"decision": ROUTING[primary][source], "reading": primary}
+        elif chosen["reading"] != order[0]:
+            # Asked under a secondary reading. The PRIMARY reading's refusal is
+            # still a fact the analyst needs, and dropping it trades one
+            # collapse for another: someone typing `aka.ms` means the domain,
+            # and "Falcon has no field that holds a domain" is the sentence
+            # that stops them reading a hostname miss as "the EDR has nothing
+            # on this domain". Both are carried.
+            primary_decision = ROUTING[order[0]][source]
+            if primary_decision is not ASK:
+                chosen["also_refused_for"] = {
+                    "reading": order[0], "decision": primary_decision,
+                }
+        out[source] = chosen
+    return out
 
 
 def refusal(decision: Any, *, raw: str | None = None) -> dict[str, Any]:

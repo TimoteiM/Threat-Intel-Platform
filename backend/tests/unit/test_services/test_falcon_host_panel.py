@@ -422,3 +422,47 @@ def test_the_panel_does_not_claim_30_days_when_the_floor_is_unknown():
                    enrolment_floor=None, requested_days=30)
     assert out["window"]["covered_days"] is None
     assert out["detections"]["window"]["complete"] is None
+
+
+# --- a speculative hostname reading ---------------------------------------
+
+
+def test_an_unmanaged_speculative_host_is_not_claimed_as_a_coverage_gap():
+    """`aka.ms` read as a machine name is not a host with no EDR.
+
+    The indicator lookup reads a dotted name as both a domain and a machine
+    name. Falcon answers the hostname reading, and for a domain that answer is
+    "no device called this" — which must NOT render as the coverage finding,
+    because that finding asserts a machine is generating alerts with no
+    sensor. Asserting it about a domain is false.
+    """
+    out = fp.coverage(None, hostname="aka.ms", now=NOW, speculative=True)
+    assert out["managed"] is False
+    assert out["speculative_reading"] is True
+    assert "finding" not in out, (
+        "a coverage gap was asserted for a value that is primarily a domain"
+    )
+    # But it must not be suppressed either: `dns1.expertware.net` is a real
+    # Wazuh agent in this estate's uncovered list, and the string cannot be
+    # told apart from `aka.ms`. So the sentence covers both and commits to
+    # neither — I made each collapse in turn before arriving here.
+    both = out["conditional_finding"]
+    assert "if it is a machine in this estate, it has no EDR sensor" in both
+    assert "if it is only a domain" in both
+    assert "does not say which" in both
+
+
+def test_a_real_unmanaged_host_still_gets_the_finding():
+    """The control: the speculative flag must distinguish two cases rather
+    than suppressing the finding everywhere. `DC` is a real host."""
+    out = fp.coverage(None, hostname="DC", now=NOW, speculative=False)
+    assert "No CrowdStrike sensor" in out["finding"]
+    assert "speculative_reading" not in out
+
+
+def test_the_panel_passes_the_flag_through():
+    out = fp.panel(hostname="aka.ms", device=None, detections=[],
+                   control=PASSED, now=NOW, speculative_host=True)
+    assert out["coverage"]["speculative_reading"] is True
+    assert "finding" not in out["coverage"]
+    assert out["coverage"]["conditional_finding"]

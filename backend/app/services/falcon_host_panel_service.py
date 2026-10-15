@@ -181,7 +181,7 @@ def _parse(stamp: Any) -> datetime | None:
 
 
 def coverage(device: Any, *, hostname: str, now: datetime,
-             superseded: Any = None) -> dict[str, Any]:
+             superseded: Any = None, speculative: bool = False) -> dict[str, Any]:
     """Section A. Is there a sensor on this host, and is it reporting?
 
     `superseded` lists retired enrolments for the same hostname. 5 of 175
@@ -192,6 +192,36 @@ def coverage(device: Any, *, hostname: str, now: datetime,
     two-year-old machine otherwise reads as a brand-new asset.
     """
     if device is None:
+        if speculative:
+            # The value was read as a machine name as a SECONDARY reading, so
+            # whether it is a machine at all is unknown from the string.
+            #
+            # Both collapses are wrong here, and I made each in turn. Claiming
+            # the coverage finding asserts "a machine generating alerts has no
+            # EDR", which is false for `aka.ms`. Suppressing it hides a real
+            # gap, because `dns1.expertware.net` IS a Wazuh agent in this
+            # estate's own uncovered list. The string cannot tell them apart,
+            # so the sentence covers both readings and commits to neither.
+            return {
+                "managed": False,
+                "hostname": hostname,
+                "speculative_reading": True,
+                "conditional_finding": (
+                    f"Falcon has no device named {hostname!r}. This value was "
+                    f"read as a machine name as a second reading — it is "
+                    f"primarily a domain — so which of two things this means "
+                    f"depends on what it is: **if it is a machine in this "
+                    f"estate, it has no EDR sensor**, which is a coverage gap; "
+                    f"if it is only a domain, no device was ever expected and "
+                    f"this is not a finding. The name alone does not say "
+                    f"which."
+                ),
+                "basis": (
+                    "The Devices API validates hostnames and rejects unknown "
+                    "fields, so the absence of a match is real — what is "
+                    "unknown is whether a match should have existed."
+                ),
+            }
         return {
             "managed": False,
             "hostname": hostname,
@@ -394,6 +424,7 @@ def panel(
     now: datetime | None = None,
     truncated_at: int | None = None,
     superseded: Any = None,
+    speculative_host: bool = False,
     retention: Any = None,
     enrolment_floor: Any = None,
     requested_days: int = DETECTION_DAYS,
@@ -448,7 +479,8 @@ def panel(
         "window_days": requested_days,
         "window": window,
         "coverage": coverage(device, hostname=host, now=at,
-                             superseded=superseded),
+                             superseded=superseded,
+                             speculative=speculative_host),
         "detections": detections_section,
         "field_control": {
             "passed": passed,

@@ -206,3 +206,100 @@ def test_at_least_one_source_is_asked_for_every_usable_kind():
         assert any(v is ind.ASK for v in row.values()), (
             f"{kind} is refused by every source, so it has no answer at all"
         )
+
+
+# --- an input that is validly two kinds ------------------------------------
+#
+# `dns1.expertware.net` is a registrable domain AND a Wazuh agent name in this
+# estate's own EDR coverage list, so this arrives on first real use. If
+# detection picks one silently, the page answers a narrower question than it
+# was asked.
+
+
+AMBIGUOUS = ["dns1.expertware.net", "expgrafana001.int.expertware.net", "aka.ms"]
+
+
+@pytest.mark.parametrize("value", AMBIGUOUS)
+def test_a_dotted_name_carries_both_readings(value):
+    out = ind.detect(value)
+    assert out["readings"] == [ind.DOMAIN, ind.HOSTNAME]
+    assert out["ambiguous"] is True
+    assert "both a domain and a possible machine name" in out["ambiguity"]
+
+
+def test_a_bare_name_is_not_ambiguous():
+    """The control: the flag distinguishes two states rather than always
+    being set."""
+    out = ind.detect("EXP-22MY264")
+    assert out["readings"] == [ind.HOSTNAME]
+    assert out.get("ambiguous", False) is False
+
+
+def test_both_sources_are_asked_for_an_ambiguous_name():
+    """Neither reading is dropped. The estate answers the domain question and
+    Falcon answers the hostname one, and each says which."""
+    plan = ind.plan_readings(ind.detect("dns1.expertware.net")["readings"])
+    assert plan["estate"]["decision"] is ind.ASK
+    assert plan["estate"]["reading"] == ind.DOMAIN
+    assert plan["falcon"]["decision"] is ind.ASK
+    assert plan["falcon"]["reading"] == ind.HOSTNAME
+
+
+def test_the_primary_readings_refusal_survives_being_asked_as_a_secondary():
+    """Otherwise the ambiguity fix trades one collapse for another.
+
+    Someone typing `aka.ms` means the domain. Falcon asked as a *hostname*
+    returns a true "no such device", and reading that as "the EDR has nothing
+    on this domain" is false exculpation one reading over. The sentence that
+    prevents it — no Falcon field holds a domain — has to still be there.
+    """
+    plan = ind.plan_readings(ind.detect("aka.ms")["readings"])
+    other = plan["falcon"].get("also_refused_for")
+    assert other is not None, "the domain refusal was dropped"
+    assert other["reading"] == ind.DOMAIN
+    rendered = ind.refusal(other["decision"])
+    assert rendered["kind"] == absence.NO_FIELD_MAP
+    assert "no alert field that holds a domain" in rendered["reason"]
+
+
+def test_no_spurious_other_reading_when_the_primary_was_the_one_asked():
+    """The estate IS asked under the primary reading for a dotted name, so it
+    has no second fact to state."""
+    plan = ind.plan_readings(ind.detect("aka.ms")["readings"])
+    assert "also_refused_for" not in plan["estate"]
+
+
+def test_every_reading_set_detection_can_emit_has_a_decision_per_source():
+    """The guard the ambiguity case needed.
+
+    The earlier test covered single kinds. A *pair* with no decision would
+    silently render an empty section, which is the collapse this mechanism
+    exists to prevent, so the pairs are enumerated and asserted too.
+    """
+    for readings in ind.READING_SETS:
+        plan = ind.plan_readings(list(readings))
+        assert set(plan) == set(ind.SOURCES), f"{readings} missed a source"
+        for source, chosen in plan.items():
+            assert chosen["reading"] in readings, (
+                f"{readings} / {source}: answered under {chosen['reading']!r}, "
+                f"which is not one of its readings"
+            )
+
+
+def test_detection_only_emits_reading_sets_the_table_knows():
+    """The other direction: a reading set produced by `detect` but absent from
+    READING_SETS would pass the test above by not being tested."""
+    probes = ["a" * 64, "a" * 40, "a" * 32, "8.8.8.8", "2001:db8::1",
+              "https://x.test/a", "EXP-1", "aka.ms", "dns1.expertware.net",
+              "!!!", "", "a" * 31]
+    emitted = {tuple(ind.detect(p)["readings"]) for p in probes}
+    unknown = emitted - set(ind.READING_SETS)
+    assert not unknown, (
+        f"detect() emits reading sets with no enumerated decision: {unknown}"
+    )
+
+
+def test_an_unknown_reading_set_raises_rather_than_asking_everything():
+    with pytest.raises(KeyError) as caught:
+        ind.plan_readings(["something_new"])
+    assert "no routing decision" in str(caught.value)

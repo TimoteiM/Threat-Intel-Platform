@@ -92,7 +92,10 @@ async def lookup_indicator(
 
     detected = ind.detect(value)
     kind = detected["kind"]
-    routing = ind.plan(kind)
+    # Per READING, not per kind. A dotted name is validly a domain and a
+    # machine name, and picking one makes the page answer a narrower question
+    # than it was asked — see `indicator_lookup_service.detect`.
+    routing = ind.plan_readings(detected["readings"])
     observable = detected["value"]
 
     out: dict[str, Any] = {
@@ -104,24 +107,32 @@ async def lookup_indicator(
     }
 
     # --- Falcon -----------------------------------------------------------
-    falcon_decision = routing["falcon"]
-    if falcon_decision is not ind.ASK:
+    falcon_plan = routing["falcon"]
+    if falcon_plan["decision"] is not ind.ASK:
         out["sources"]["falcon"] = {
-            "question": "not applicable to this kind of indicator",
-            "answer": ind.refusal(falcon_decision, raw=kind),
+            "reading_used": falcon_plan["reading"],
+            "question": "not applicable to this reading of the indicator",
+            "answer": ind.refusal(falcon_plan["decision"], raw=kind),
         }
     else:
         out["sources"]["falcon"] = await _ask_falcon(
-            kind=kind, observable=observable, tenant_id=tenant_id,
-            creds=creds, falcon=falcon, panel=panel,
+            kind=falcon_plan["reading"], observable=observable,
+            tenant_id=tenant_id, creds=creds, falcon=falcon, panel=panel,
+            # A hostname reading that is not the primary one is a guess, and
+            # "this host has no EDR coverage" must not be asserted about a
+            # domain.
+            speculative=falcon_plan["reading"] != detected["readings"][0],
         )
+        out["sources"]["falcon"]["reading_used"] = falcon_plan["reading"]
+    _carry_other_reading(out["sources"]["falcon"], falcon_plan)
 
     # --- the estate log store --------------------------------------------
-    estate_decision = routing["estate"]
-    if estate_decision is not ind.ASK:
+    estate_plan = routing["estate"]
+    if estate_plan["decision"] is not ind.ASK:
         section: dict[str, Any] = {
-            "question": "not applicable to this kind of indicator",
-            "answer": ind.refusal(estate_decision, raw=kind),
+            "reading_used": estate_plan["reading"],
+            "question": "not applicable to this reading of the indicator",
+            "answer": ind.refusal(estate_plan["decision"], raw=kind),
         }
         if kind == ind.URL:
             # The narrower claim, offered and labelled rather than silently
@@ -135,22 +146,27 @@ async def lookup_indicator(
         out["sources"]["estate"] = section
     else:
         out["sources"]["estate"] = {
+            "reading_used": estate_plan["reading"],
             "question": (
                 "endpoint DNS queries for this name"
-                if kind == ind.DOMAIN else
+                if estate_plan["reading"] == ind.DOMAIN else
                 "perimeter traffic to this address"
             ),
             "answer": await asyncio.to_thread(
-                _estate, observable, kind, tenant_id, days, est
+                _estate, observable, estate_plan["reading"], tenant_id, days, est
             ),
         }
+    _carry_other_reading(out["sources"]["estate"], estate_plan)
 
     # --- the record, before the attribution schema exists -----------------
     try:
         db.add(IndicatorLookup(
             actor=_actor(request), tenant_id=tenant_id, value=str(value)[:2048],
             kind=kind,
-            sources_asked={s: (v is ind.ASK) for s, v in routing.items()},
+            sources_asked={
+                s: {"asked": v["decision"] is ind.ASK, "reading": v["reading"]}
+                for s, v in routing.items()
+            },
         ))
         await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -170,7 +186,26 @@ async def lookup_indicator(
     return out
 
 
-async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel) -> dict[str, Any]:
+def _carry_other_reading(section: dict[str, Any], plan: dict[str, Any]) -> None:
+    """State the primary reading's refusal even when a secondary was asked.
+
+    Without this the ambiguity fix trades one collapse for another: `aka.ms`
+    asked of Falcon as a *hostname* returns a true "no such device", and the
+    sentence that matters — Falcon has no field that holds a domain — would
+    vanish. Someone reading a hostname miss as "the EDR has nothing on this
+    domain" is the false-exculpation shape again, one reading over.
+    """
+    other = plan.get("also_refused_for")
+    if not other:
+        return
+    section["not_answered_for"] = {
+        "reading": other["reading"],
+        "answer": ind.refusal(other["decision"], raw=other["reading"]),
+    }
+
+
+async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel,
+                      speculative: bool = False) -> dict[str, Any]:
     """Falcon's answer, or why it has none. Negatives carry the control."""
     question = (
         f"Falcon alerts whose {kind} matches this value"
@@ -214,6 +249,7 @@ async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel) -> d
                 superseded=raw.get("superseded_devices"),
                 retention=raw.get("retention"),
                 enrolment_floor=raw.get("enrolment_floor"),
+                speculative_host=speculative,
                 requested_days=panel.DETECTION_DAYS),
         }
 

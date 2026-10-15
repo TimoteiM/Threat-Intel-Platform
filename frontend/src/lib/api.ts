@@ -2156,6 +2156,10 @@ export interface FalconCoverage {
   hostname?: string;
   basis?: string;
   finding?: string;
+  /** A dotted name read as a machine name as a *second* reading. Neither
+   *  "coverage gap" nor "expected" can be asserted, so this states both. */
+  speculative_reading?: boolean;
+  conditional_finding?: string;
   platform_name?: string;
   os_version?: string;
   os_build?: string;
@@ -2264,6 +2268,10 @@ export function getRunFalcon(runId: string, days = 30) {
 
 export interface IndicatorDetection {
   kind: string;
+  /** Every kind this value can validly be read as, primary first. */
+  readings: string[];
+  ambiguous?: boolean;
+  ambiguity?: string;
   value: string;
   /** How detection decided — shown so a misroute can be caught by the reader. */
   how?: string;
@@ -2273,6 +2281,14 @@ export interface IndicatorDetection {
 }
 
 export interface IndicatorSourceSection {
+  /** Which reading of the indicator this section answered. A dotted name is
+   *  validly a domain and a machine name, and the section says which it used
+   *  rather than letting detection collapse it. */
+  reading_used?: string;
+  /** The other reading's refusal, when this section answered a secondary
+   *  reading. Without it, "no device called aka.ms" could be read as "the EDR
+   *  has nothing on the domain aka.ms". */
+  not_answered_for?: { reading: string; answer: unknown };
   question: string;
   /** An answer, or an `Absent.as_json()`. Branch on `absent`. */
   answer: unknown;
