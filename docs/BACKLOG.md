@@ -992,22 +992,133 @@ Fix shape: give the `ResponsiveContainer`'s parent an explicit height (or a
 active rather than hiding it with CSS. Confirm by reloading the email results
 view with the console open and seeing no warning.
 
-## 22. Who effectively has root on the platform host
+## 22. RESOLVED TO FACTS: `svc-tools` is a dormant cross-host root trust
 
-`svc-tools` (uid 1001) has `/bin/bash` and is in `wheel`;
-`/etc/sudoers.d/wheel` exists. What that file grants is **unestablished** —
-`/etc/sudoers` is not readable without root.
+Not a local service account. **An unrestricted root trust from another host.**
 
-If it grants broad sudo then a second interactive account can read every
-customer artifact on the host regardless of file permissions, including the
-database exports, the preserved evidence and the Postgres data directory.
-That is a question about the host's access model, not about any one file.
+`wheel` contains only `svc-tools`. The account is password-locked, has no
+crontab, and `/etc/cron.d` holds only distro defaults — **nothing on this host
+runs as it.** It has exactly one SSH key, commented `root@exptools002`, and
+the key carries **no options**: `cut -d' ' -f3` returned the comment, which it
+could only do with no `from=` or `command=` prefix.
 
-Evidence: `svc-tools` is live — last login **2026-08-07 11:04 from
-10.45.0.91**. Found while establishing whether the 100-day world-readable
-window on the two database exports was an actual exposure (it was not: see
-`~/evidence/INVENTORY.md` — `/home/expert` is `drwxr-x---` and `svc-tools` is
-not in group `expert`).
+So: **root on `exptools002` is root on `siem-mon`**, from any address the
+firewall permits, with no forced command and no password. The escalation is
+not theoretical — the journal records it working (below).
 
-To establish, with root: what `/etc/sudoers.d/wheel` grants, whether
-`svc-tools` needs it, and whether its login on 2026-08-07 was expected.
+### Has it ever been used? No evidence of other use — in a log the key holder could have altered
+
+**The window is the host's entire life**, which is what makes the answer
+complete rather than a floor:
+
+| source | window | what it covers |
+|---|---|---|
+| journald | **2026-07-07 11:09:53 → now** (first boot; 363MB, no gap) | `Accepted publickey`, logged regardless of whether a pty is allocated — so **non-interactive use too** |
+| `wtmp` | 2026-07-07 11:09:53 → now (no rotated archives) | interactive sessions only |
+| `auth.log` | 2026-09-13 → 2026-10-15 (~32 days) | too short to speak to August |
+
+**`Accepted publickey for svc-tools` in the journal over the host's whole
+life: 1. Failed attempts: 0.**
+
+**Scope that claim to the instrument.** The session reached root at 11:04:12,
+and **root can rewrite the journal.** Forward Secure Sealing is **not
+enabled** (no FSS key — systemd's default), the journal files are
+`root:systemd-journal`, and `journalctl --verify` returning PASS establishes
+*structural integrity, not authenticity*: a rewritten file still passes.
+
+So the finding is **"no evidence of use beyond this session"**, not "used
+exactly once, ever". The practical conclusion is unchanged — nothing suggests
+other use, and the channel looks abandoned — but the claim must not be
+stronger than the thing that produced it.
+
+    2026-08-07 11:03:41  useradd: new user svc-tools, added to 'wheel'
+    2026-08-07 11:03:41  passwd: password for 'svc-tools' changed by 'root'
+    2026-08-07 11:04:10  Accepted publickey from 10.45.0.91, ED25519
+                         SHA256:8EwMOtynzh8LORTQAZ4xzFYzKcj+aV7YmL0q0DfrLrA
+    2026-08-07 11:04:12  sudo: svc-tools : USER=root ; COMMAND=/usr/bin/su
+    2026-08-07 11:04:12  su: session opened for user root(uid=0) by svc-tools
+    2026-08-07 11:08:38  Disconnected
+
+Created, authenticated 29 seconds later, **root within 2 seconds of logging
+in**, gone after **4 minutes 28 seconds**, and never used again in the 69 days
+since. Its observable activity as root was host provisioning: `apt` ran,
+several `systemctl` reloads from `session-10.scope`, and a docker/containerd
+restart at 11:05:43.
+
+**That `sudo … USER=root` succeeding is the empirical proof the `wheel` rule
+grants root** — `/etc/sudoers` is unreadable without root, so the journal is
+the evidence rather than the config.
+
+### `su` ends command-level attribution, by construction
+
+The one command `sudo` logged was `/usr/bin/su`. **After 11:04:12 nothing
+records individual commands**: `sudo` logs each invocation, but a root shell
+obtained through `su` logs one line and then nothing. The `apt`, `systemctl`
+and docker activity visible in those 4m28s is inferred from *side effects* —
+service units starting, dockerd losing containerd — not from any record of
+what was typed.
+
+**So what was done in those 4 minutes is unrecoverable from this host, by
+design rather than by accident.** That is a stronger reason than `relatime`
+for why the `.sql` question can only be answered by whoever held the key: the
+`atime` argument leaves a 24-hour blind spot, while `su` leaves no command
+record at all. Both reasons hold; this is the larger one.
+
+**So: a dormant full-root channel, not an active one.** Different problem from
+an active one, and still a full-root channel.
+
+### Does anything of ours depend on it? No.
+
+| pattern | hits in repo, deploy scripts, compose, docs |
+|---|---|
+| `svc-tools` | 4 — **all in this backlog entry**, written 2026-10-15 |
+| `exptools002` | **0** |
+| `NOPASSWD` | **0** |
+| `exptools` | 1 — `http://exptools.com.sg/…` in a phishing-URL training set, coincidental substring |
+
+**Nothing of ours connects**, so scoping the key breaks none of our
+automation. Whatever it exists for lives on `exptools002`.
+
+### Remediation — removal is the default outcome, not restriction
+
+**Nothing is applied. Nothing will be until someone claims the channel.**
+
+The earlier version of this section proposed `from=` as step one, written
+while the usage was unknown. **It is now known** — one provisioning session,
+69 days ago, nothing of ours depending on it — and that changes the default.
+A restriction preserves a channel that nothing appears to use, and
+**an unowned access path does not become owned by being restricted.** If
+nobody claims this within a week, it goes.
+
+**Default: remove.** Reversible at every step, which is what makes removal
+the cheap option rather than the drastic one.
+
+1. `gpasswd -d svc-tools wheel` — drop the group membership.
+2. Delete `/etc/sudoers.d/wheel` (keep a copy outside the box first; it has
+   never been read by this investigation and its exact grant is still
+   unestablished).
+3. Disable the key — comment the line in
+   `/home/svc-tools/.ssh/authorized_keys` rather than deleting it, so the
+   fingerprint stays recoverable for whoever turns up asking.
+
+Each is one line to undo. If something surfaces that needs the channel, it
+reappears in minutes with a known-good configuration.
+
+**Interim, if removal has to wait:** apply `from="10.45.0.91"` — free, breaks
+nothing, and the address is already evidenced as the only one ever used. It is
+**an interim measure, not the plan.**
+
+**Restriction becomes the answer only if someone claims the channel and names
+what it is for.** Then `from=` plus `command="…"` plus a sudoers rule listing
+actual commands — and the single observed session ran `su`, `apt`, `systemctl`
+and a docker restart, which as a command list is barely narrower than `ALL`,
+so "claimed" has to mean a stated purpose rather than a shrug.
+
+### The security boundary has moved
+
+`exptools002` is now the security boundary of this platform, and nothing done
+on `siem-mon` is stronger than it. Who has root on `exptools002` is the
+question that bounds everything else — including the TLS work, the CORS fix
+and the tenancy gate, none of which constrain an account that is root on
+demand.
+
