@@ -265,12 +265,49 @@ configuration that would otherwise constrain it. Both of our filter defects
 were therefore bounded only by there being one customer.
 
 Written up for ratification in
-`docs/outbound/per-tenant-opensearch-credentials.md`, with two
-implementations (index-scoped roles, or document-level security on shared
-indices if the indexing is not to change), the onboarding and operational
-costs of each, and the inversion stated as the point: cross-customer search
-becomes opt-in with its own credential and audit, instead of the opt-out it is
-today.
+`docs/outbound/per-tenant-opensearch-credentials.md`, and **split into two
+changes by what each requires**, because writing them as alternatives hid a
+dependency:
+
+**Change 1 — a read-only credential. No prerequisites; start now.** The
+platform only reads: six HTTP calls, enumerated from the client, with no
+write, delete, index-creation, template, snapshot or security-API call in any
+of them. So `all_access` is not a trade-off anyone accepted, it is a default
+nobody chose — and the consequence is that *a flaw in our application can
+delete a customer's security logs*. That framing is the document's headline,
+because every other line is about who can read what and that one is about
+whether the evidence survives.
+
+The minimal role: `read`, `search` and `indices_monitor` action groups plus PIT
+create/delete on the alert indices, and `cluster:monitor/main` for `GET /`.
+Named as action groups rather than permission strings deliberately — the exact
+strings are the part most likely to be wrong in a document, so the role gets
+validated by exercising all six calls before the old credential is retired.
+
+**Two of those six fail silently if the permission is missing**, which belongs
+in the role design: `open_pit` catches a refusal, returns `None` and logs at
+INFO, so paging continues *without a consistent view* and can skip or
+duplicate documents; `close_pit` swallows its error at INFO and the PIT leaks,
+pinning segments. Either grant the PIT permissions or tell us, and we make the
+degradation visible instead of logged.
+
+**Change 2 — per-customer separation. Gated on the index-naming decision.**
+And `all_access` is step zero of it, not an alternative: in OpenSearch a user's
+access is the **union** of its roles, so a DLS role on `manager.name` added
+alongside `all_access` restricts nothing — the unrestricted role wins. DLS on a
+superuser is decoration, so option B could not have worked before Change 1.
+
+The per-customer artefacts are specified as **a script from one definition,
+not a checklist**: five manual steps per onboarding is the silent-registry
+shape at the infrastructure layer — customer six gets four of five and nothing
+reports which is missing, and at this layer the consequence is a customer
+whose data is not isolated. The script is idempotent and **verifies what it
+created**, including that a query with that credential returns that customer's
+data and refuses another's, which is the only part that proves isolation.
+
+The inversion is stated as the point rather than a caveat: cross-customer
+search becomes opt-in with its own credential and audit, instead of the opt-out
+it is today.
 
 **Parts 2 and 3 stay unstarted pending that ratification**, because the two
 implementations produce different enforcement boundaries and enforcement
