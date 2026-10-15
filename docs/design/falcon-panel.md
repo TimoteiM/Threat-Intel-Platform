@@ -1,172 +1,286 @@
-# The Falcon panel: scoped to what Falcon can actually answer
+# Falcon: what it answers, demonstrated by hand
 
-**Status:** specification. Nothing built. The scoping conclusion is the
-deliverable, and it moves the panel off the email page.
+**Everything here was run against tenant `c00`'s real credential on
+2026-10-15**, `https://api.eu-1.crowdstrike.com`. Nothing is quoted from a
+code comment. This replaces an earlier version of this file that was written
+from the module's own notes; three of its conclusions were wrong and are
+corrected below.
 
-## What the credential can reach
+**Falcon has real data: 182 managed devices, 2,048 alerts.** It was not
+producing nothing because it has nothing.
 
-Measured on tenant `c00`'s real credential, `https://api.eu-1.crowdstrike.com`
-(recorded in `falcon_client` beside the path constants):
+## 1. The positive control
 
-| endpoint | result | so |
+The Alerts API returns HTTP 200 with zero resources for field names that do
+not exist, so an empty result and a typo are the same response. Before any
+figure below means anything:
+
+| probe | result |
+|---|---|
+| `GET /devices/queries/devices/v1` unfiltered | 200, **182 total** |
+| `GET /alerts/queries/alerts/v2` unfiltered | 200, **2,048 total** |
+
+Then the field-level control — filter on a value *read back* from a real
+record, which is the only version that tests the field name:
+
+| probe | result | |
 |---|---|---|
-| `/alerts/queries/alerts/v2` | **200** | usable |
-| `/devices/queries/devices/v1` | **200** | usable |
-| `/alerts/queries/alerts/v1` | 200 | superseded by v2 |
-| `/detects/queries/detects/v1` | **404** | the legacy Detects API is gone |
-| `/devices/queries/devices/v2` | 404 | does not exist |
-| `/intel/queries/indicators/v1` | **403** scope not permitted | unavailable |
-| `/iocs/queries/indicators/v1` | **403** scope not permitted | unavailable |
+| `hostname:'DESKTOP-AIIJNU8'` (read back from the device record) | 200, **1 row**, same device id | control passes |
+| `hostname:'definitely-not-a-host-xyz'` | 200, 0 rows | a true empty |
+| `invented_field_xyz:'DESKTOP-AIIJNU8'` | **400 "Invalid filter expression supplied"** | Devices *validates* |
 
-The last two decide the shape of everything below. The endpoints that would
-answer *"what does CrowdStrike Intelligence know about this domain?"* are
-refused by this API client's scopes. **Falcon cannot be asked whether an
-indicator is known-bad.** It can only be asked what this tenant's own estate
-has done or seen.
+**So the hazard is Alerts-only.** On Devices an empty result is interpretable,
+because an invented field is rejected. On Alerts it is not:
 
-The integration's stored state is `verified_ok`, checked 2026-10-15 08:31, and
-that promotion rests on a real query rather than a token fetch — `verify()`
-calls the alerts endpoint and records `estate_has_alerts: True`. Worth saying
-because the token's own `scopes` field comes back `[]`, which is not "no
-scopes": `fetch_token` reads `body["scope"]`/`["scopes"]` and stores `()` when
-Falcon says nothing. Falcon does not report scopes here, so the empty list is
-an absence stored as a value — minor, but it means scope coverage must be
-inferred from endpoint behaviour, not read off the token.
+| alert filter, on values read back from a real alert | result |
+|---|---|
+| `device.hostname:'EXP-6FSKJR3'` | 200, 3 rows |
+| `hostname:'EXP-6FSKJR3'` | 200, **0 rows** |
+| `sha256:'<read back>'` | 200, 17 rows |
+| `behaviors.sha256:'<the same value>'` | 200, **0 rows** |
+| `filename:'Install_Waves_Central.exe'` | 200, 1 row |
+| `invented_field_xyz:'…'` | 200, **0 rows** |
 
-## The hazard that sets the design
+## 2. The live defect this found
 
-**The Alerts API does not validate FQL field names.** Measured on this tenant:
-`behaviors.domain`, `domain`, `indicator_id`, `filename`,
-`behaviors.ioc_value`, `ioc_value`, `sha256`, `behaviors.sha256`,
-`device.hostname`, `hostname`, `local_ip`, and the *invented*
-`behaviors.ioc_type` **all returned HTTP 200 with zero resources.**
+```python
+ALERT_FILTER_FIELDS = {          # app/integrations/falcon_client.py
+    "domain": "behaviors.domain",
+    "url":    "behaviors.domain",
+    "ip":     "behaviors.ioc_value",
+    "hash":   "behaviors.sha256",
+}
+```
 
-From the response alone, a field that does not exist is indistinguishable from
-a field that exists and matched nothing. That is precisely the
-absence-as-answer shape this platform spent two days removing, handed over by
-the vendor — and the failure direction is the bad one: a typo reads as "your
-EDR has nothing on this host", for ever, silently, on every investigation.
+**The alert record has no `behaviors` key at all.** The Alerts v2 record is
+flat — 73 fields including `sha256`, `md5`, `sha1`, `filename`, `device`,
+`tactic`, `technique`. Every field in that map is invented, and every one
+returns 200 with zero resources.
 
-The Devices API *does* validate: `local_ip:'example-host'` returns 400
-"invalid IP address". So the hazard is specific to Alerts.
+So **every hash lookup this collector has ever performed returned "the EDR has
+nothing", and the hash field works perfectly under its real name**: the same
+value returns 17 rows as `sha256` and 0 as `behaviors.sha256`. This is the
+absence-as-answer shape, except we wrote it ourselves, and the module's own
+docstring predicted it two paragraphs above the broken map.
 
-### The positive control
+Field population across a 200-alert sample, which is how the real names were
+found:
 
-`estate_has_alerts` is already recorded and is *not* sufficient. It proves the
-estate has some alerts; it says nothing about whether the field being filtered
-on exists. The control has to exercise the same field the panel uses:
+| field | populated |
+|---|---|
+| `sha256`, `filename`, `data_domains`, `indicator_id`, `source_ips`, `source_hosts` | 193/200 |
+| `md5` | 188/200 |
+| `sha1` | 186/200 |
+| `ioc_context` | 12/200 |
+| `behaviors` | **0/200** |
 
-1. `GET /alerts/queries/alerts/v2?limit=1` with **no filter** → one alert id.
-2. Fetch that alert's detail and read the value actually stored at the field
-   the panel filters on (`behaviors.domain`, say).
-3. Re-query with `filter=behaviors.domain:'<that exact value>'` → **must
-   return at least that alert.**
+## 3. What Falcon can and cannot answer
 
-If step 3 returns zero, the field name is wrong or not filterable, and every
-panel result is meaningless. The panel then renders `check_failed` naming the
-field — never "no detections". If step 1 returns nothing, the estate has no
-alerts at all and the control cannot run: that is `too_little_history`, and
-the panel says the control could not be exercised rather than claiming it
-passed.
+| question | endpoint | field | works? | an empty result means |
+|---|---|---|---|---|
+| is this host managed? | `/devices/queries/devices/v1` | `hostname` | **yes** | `never_observed` — the field validates, so empty is a real negative |
+| OS, build, sensor version, policy, first/last seen | `/devices/entities/devices/v2` | — | **yes** | n/a, 62 fields returned |
+| detections on this host | `/alerts/queries/alerts/v2` | `device.hostname` | **yes** | `never_observed`, *once the control passes* |
+| has the EDR seen this file hash? | `/alerts/queries/alerts/v2` | `sha256` / `md5` / `sha1` | **yes** | `never_observed`, control-gated |
+| detections by **domain** | — | — | **no field exists** | `no_field_map` — not an absence of contact |
+| detections by **IP** | `/alerts/queries/alerts/v2` | `source_ips` | **no, in practice** | `no_field_map` for a remote address |
+| is this indicator known-bad? | `/intel/*`, `/iocs/*` | — | **no — 403** | `check_failed` (scope), never "clean" |
+| sandbox report for an attachment | `/falconx/*` | — | **no — 403** | `check_failed` (scope) |
 
-Two requests, cached per tenant for the life of a process. Cheap enough to run
-before the panel's own query rather than on a schedule, which matters because
-a field name breaks on a provider change, not on a clock.
+### Domain search does not exist
 
-## Why this does not belong on the email page
+Every domain-shaped filter returns 200/0: `behaviors.domain`, `domain`,
+`data_domains`, `ioc_context.domain`, `ioc_value`, `behaviors.ioc_value`.
 
-An email investigation's indicators are domains from links, the sender domain,
-the sender IP, and attachment hashes. Falcon's two usable endpoints answer:
+`data_domains` is the trap — the name promises domains and the value is
+`['Endpoint']`, a data *classification*. `ioc_context` exists on 12 of 200
+alerts and its `ioc_value` holds hashes and file paths
+(`ioc_type: 'hash_sha256'`), not names.
 
-**Device search** — structurally inapplicable.
+### IP search is structurally wrong, not merely unsupported
 
-- For a domain, `lookup()` asks `hostname:'<domain>'`. That asks whether a
-  machine in the estate is *named* `aka.ms`. It is not a meaningful question,
-  and it returns a silent zero.
-- For an IP, it asks `local_ip:'<ip>'`. `local_ip` is the device's own LAN
-  address; an email's sender IP is a remote public address and will never be
-  one. The Devices API validates the *shape*, so a public IP passes validation
-  and returns 200 with zero resources — valid field, valid value, structurally
-  impossible match.
+`source_ips` is populated — with `['10.66.66.12']`. These are internal source
+addresses. An email's sender IP is a remote public address and will never
+appear there, and the Devices API's `local_ip` is the device's own LAN
+address. Both accept a valid IP and return a true empty for a reason that has
+nothing to do with the estate.
 
-Both produce "not found" for reasons that have nothing to do with the estate.
-Rendering either as an EDR answer about an email is the proxy-metric mistake:
-a number that cannot mean what the panel implies.
+### The scope wall, re-measured today
 
-**Alerts search** — meaningful, but narrow. `behaviors.domain:'<domain>'` and
-`behaviors.sha256:'<hash>'` genuinely ask "has this tenant's EDR raised an
-alert whose behaviour mentions this?". That is one real question, and it is
-worth having.
+`403 access denied, scope not permitted` on `/intel/queries/indicators/v1`,
+`/iocs/queries/indicators/v1`, `/intel/combined/indicators/v1`,
+`/intel/queries/actors/v1`, `/intel/queries/reports/v1`,
+`/falconx/queries/reports/v1`, `/scanner/queries/scans/v1`.
 
-So on the email page Falcon can answer exactly one thing, and must be scoped
-to it:
+**Falcon cannot be asked whether an indicator is known-bad.** It can only be
+asked what this estate has done and seen. That is a capability absence of the
+credential, not of the product, and it is the single fact that decides where
+the panel goes.
 
-> **Has this tenant's EDR alerted on any of these indicators?**
-> Asked of link domains and attachment hashes only. The sender IP and the
-> hostname question are not asked, because Falcon cannot answer them about
-> an email.
+(Incidentally the token's `scopes` comes back `[]`, which is our parser
+storing `()` when Falcon says nothing — not Falcon reporting no scopes. Scope
+coverage has to be inferred from endpoint behaviour.)
 
-Not "is this domain malicious" — the intel endpoints are 403. Not "is this in
-your estate" — that is the OpenSearch estate DNS panel's question, and it
-answers it from 4.47M endpoint DNS events rather than from an EDR alert
-corpus. The two panels sit side by side and must not be conflated: *resolved
-by a host* and *alerted on by the EDR* are different findings, and a domain
-can be the first without the second on every ordinary day.
+## 4. The worked example
 
-## Where Falcon is actually worth showing
+A host named in a recent tenant alert, asked of Falcon by hand:
 
-Where a **host** is in scope. The alert and case views have `agent.name` from
-the Wazuh alert — a real hostname that `/devices/queries/devices/v1` can both
-validate and match. There, all of Falcon's usable surface applies:
+```
+=== EXP-22MY264 ===
+  Wazuh alerts, 7d      : 59,716
+  Falcon managed        : yes
+  platform / os         : Windows / Windows 11 build 26200
+  sensor version        : 7.40.21309.0
+  sensor status         : normal, reduced_functionality = no
+  first / last seen     : 2025-08-20T08:13:22Z / 2026-10-15T09:42:59Z
+  type / site / domain  : Workstation / EXPERTWARE / int.expertware.net
+  prevention policy     : applied = True
+```
 
-| question | endpoint | field |
+Detections, last 30 days — and the number that must not be the headline:
+
+| measure | value |
+|---|---|
+| raw alert rows | **1,432** |
+| distinct `aggregate_id` | 546 |
+| distinct (name, filename) | **12** |
+| `status = closed` | 996 of 1,000 sampled |
+| `status = new` | **4** |
+
+| detection | file | rows |
 |---|---|---|
-| is this host managed by Falcon at all? | devices | `hostname` |
-| when did Falcon last see it? | devices detail | `last_seen` |
-| what has Falcon detected on it? | alerts | `device.hostname` |
+| TestingActivity | wsl.exe | 936 |
+| WSLProcessExecution | wsl.exe | 37 |
+| CredentialsInWindowsRegistryAccessedViaAttackerTooling | wsl.exe | 10 |
+| CredDumpTool | git.exe | 6 |
+| PShellExploitKit2 / PShellKerberroasting | powershell.exe | 2 + 2 |
 
-That third row is the one an analyst acts on: *this Wazuh alert fired on
-EXP-1234, and Falcon has three detections on EXP-1234 this week.* It is also
-the row that makes the **unmanaged-host** finding possible — a host producing
-Wazuh alerts that Falcon has never seen is a coverage gap, and the estate
-already has a denominator to measure it against: 180 agents, 175 with DNS
-telemetry. "Which of our 180 hosts is Falcon not managing?" is a question the
-devices endpoint can answer at estate scale, and nobody has asked it.
+"1,432 detections" would read as a compromised machine. It is one developer
+running WSL, 996 of them already closed, and 56 rows where prevention actually
+blocked a process. **The panel's headline must be distinct and open, not
+counted and raw** — otherwise it is a ranking number read as a verdict, which
+is a mistake this platform has already made once.
 
-A caution on that denominator: matching Wazuh `agent.name` to Falcon
-`hostname` is a join on a hostname string, and the two products normalise case
-and domain suffixes differently. That join needs its own measurement before it
-becomes a coverage number — an unmatched host would read as "Falcon is not
-managing it" when it means "the names do not line up". Partial coverage on a
-join key is worse than none; the SID re-keying design died on this exact
-point.
+## 5. Coverage: the finding nobody asked for
 
-## Order of work
+Joining Wazuh `agent.name` (179 hosts in alerts over 7 days) to Falcon
+`hostname` (175 of 182 device records carry one — **7 carry no hostname at
+all**):
 
-1. **The positive control**, in `falcon_client`, with its own absence kinds.
-   Nothing that renders a Falcon result should ship before it, because the
-   failure it catches is invisible.
-2. **The host panel** on the alert/case view — device managed/last-seen plus
-   detections by `device.hostname`.
-3. **The email panel**, scoped to the one question above, after 1 and 2. It is
-   last deliberately: it is the narrowest value and the easiest to overstate.
-4. **The coverage question** (Wazuh agents vs Falcon-managed), gated on
-   measuring the hostname join first.
+| | |
+|---|---|
+| exact match, case-insensitive | **160 / 179 (89.4%)** |
+| matched only after dropping a DNS suffix | 0 |
+| no match | **19** |
+| Falcon hosts absent from 7d Wazuh alerts | 15 |
 
-Not in scope here: ingest. Polling Falcon's detections into the alert pipeline
-needs `_create_alert_run` extracted from the API module, a field map that
-quarantines unmapped fields as `no_field_map`, and a decision about Falcon's
-own MITRE attributions as a third technique namer that must not quietly join
-`rule_only`. That is why `integration_directions` says `enrichment` alone.
+The join is good enough to build on, which I did not expect — I flagged it as
+needing measurement first, and the measurement says a plain case-insensitive
+hostname match is sufficient. No suffix normalisation is needed on this estate.
 
-## Open, and needing a fact rather than a decision
+The 19 unmanaged hosts, by Wazuh alert volume:
 
-- Whether this API client can be given the **intel** scope. If it can,
-  "what does CrowdStrike know about this indicator" becomes answerable and the
-  email panel grows a second question. If it cannot, the 403 is permanent and
-  should be recorded as a capability absence rather than retried per
-  investigation.
-- Whether Falcon's alert FQL supports any field that carries a **sender IP**
-  in a mail-flow context. If not, that indicator is permanently outside
-  Falcon's reach from an email, which is worth stating in the panel once
-  rather than discovering per alert.
+| host | alerts / 7d |
+|---|---|
+| `wm-c00.siembiot.int` | 122,878,197 |
+| `DC` | 753,898 |
+| `EXP-044036414857` | 140,583 |
+| `EXP-3BRRPB4` | 83,300 |
+| `EXPM365Analytics401` | 59,521 |
+| `WIN11-MSSQL01` | 33,485 |
+| `EXP-OPS-46807` | 33,176 |
+| `Windows-Test-Device` | 32,848 |
+| `ASIEM-VICTIM` | 28,330 |
+| `WIN10-MSSQL02` | 27,138 |
+| `CPC-alexa-GTFXM` | 24,458 |
+| `expgrafana001.int.expertware.net` | 23,905 |
+| `EXP-OPS-58255` | 17,900 |
+| `STANDALONE02` | 15,587 |
+| `SERVER01` | 11,672 |
+| `EXP-OPS-81958` | 5,097 |
+| `LABORATORVM001` | 4,459 |
+| `EXP-OPS-66927` | 4,339 |
+| `dns1.expertware.net` | 1,814 |
+
+`wm-c00.siembiot.int` is the Wazuh manager itself and should not be expected
+in an EDR. The rest are a genuine EDR coverage gap: a domain controller, two
+SQL servers, a Grafana host, a DNS server. **A domain controller generating
+753,898 alerts a week with no EDR sensor is a finding on its own**, and it
+needed no new code — only the join.
+
+This is also the one number that is *not* a per-alert question, so it belongs
+on a coverage view rather than in the panel.
+
+## 6. Proposed panel: on the alert surface
+
+A tenant alert names a host. That is the key Falcon's device endpoint takes,
+it validates, and 89.4% of them resolve. One query with a real answer.
+
+**Placement:** the alert / case detail view, beside the existing enrichment.
+Not the email investigation — an email has no host, and everything Falcon
+could be asked about an email's indicators is either a 403 or a field that
+does not exist. The one exception is attachment hashes, which is item 4 below.
+
+**Section A — EDR coverage for this host.** One `devices` query on
+`hostname`, case-insensitive.
+
+- Managed: yes → sensor version, OS and build, `status`,
+  `reduced_functionality_mode`, prevention policy applied, first/last seen.
+- Managed: **no** → this is the finding, not an empty panel. "Falcon has no
+  sensor on this host" is a real negative here, because the Devices API
+  validates the field and the control proved the filter works. Render it as a
+  coverage gap with the host's Wazuh alert volume beside it.
+- `last_seen` older than ~7 days gets its own line: a sensor that has not
+  reported is not a sensor that saw nothing. (Measured distribution: 153 of
+  182 devices within a day, 10 within a week, 10 within a month, 9 beyond 31
+  days.)
+
+**Section B — detections on this host.** One `alerts` query,
+`device.hostname:'<host>'+created_timestamp:>'<30d>'`.
+
+- Headline: **distinct open detections**, grouped by detection name, each with
+  a row count and the most recent timestamp. Never the raw row total.
+- Each group: name, tactic, technique, file, user, disposition
+  (`Prevention, process was blocked` vs `Detection, standard detection`
+  matters more than severity here), status.
+- Closed detections collapsed behind a count. 996 of 1,000 were closed; a
+  panel that shows them all shows nothing.
+- Empty → `never_observed`, **only if the control passed this process**;
+  otherwise `check_failed` naming the field.
+
+**Section C — the control's own state.** One line, not hidden: when the
+field-level control last passed. The whole panel's negatives are worthless
+without it, so it is not a debug detail.
+
+**Section D (email only, separate work) — attachment hashes.** `sha256`,
+`md5` or `sha1` against the alerts corpus. This is the *only* Falcon question
+an email can ask, and it now works because the field name is corrected. Not
+domains, not the sender IP.
+
+## 7. Order of work
+
+1. **Fix `ALERT_FILTER_FIELDS`** — `behaviors.sha256` → `sha256`, and remove
+   the `domain`/`url`/`ip` entries entirely in favour of a named
+   `no_field_map` absence, because there is no field to map them to. This is
+   a live false negative in shipped code and the smallest change here.
+2. **The field-level positive control**, in `falcon_client`, cached per
+   process: fetch one alert, read back the value at the field the query will
+   use, re-filter on it, require a hit. Failure makes every Falcon negative
+   `check_failed`. Nothing that renders a Falcon negative should ship first.
+3. **Section A + B** on the alert view — the panel above.
+4. **The coverage view** — 19 unmanaged hosts, on a plain case-insensitive
+   hostname join, which the measurement says is sufficient.
+5. **Section D** on email, last.
+
+## 8. Still needing a fact, not a decision
+
+- Whether this API client can be granted the **intel** scope. If yes,
+  "what does CrowdStrike know about this indicator" becomes answerable and
+  the email panel grows a real question. If no, the 403 should be recorded
+  once as a capability absence rather than retried per investigation.
+- The 7 Falcon device records with **no hostname**: unmanaged-but-registered,
+  or containers? They cannot be joined to anything and are currently invisible
+  on both sides.
+- Whether `DC`, `WIN11-MSSQL01`, `WIN10-MSSQL02`, `SERVER01` and
+  `dns1.expertware.net` are deliberately out of EDR scope or an oversight.
+  That is a question for whoever owns the Falcon licence count.
