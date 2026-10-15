@@ -966,3 +966,48 @@ Step 4 needs a human: nothing in this repository can establish what an
 external caller reads. Until then the trap is reduced and not gone, which is
 why the never-populate-from-`entity_user` test ships with the attribution
 change and stays afterwards — belt to the rename's braces, not instead of it.
+
+## 21. Recharts renders into a zero-size container on the email results view
+
+Seen in the browser console during the 2026-10-15 end-to-end upload
+verification:
+
+    width(-1) and height(-1) of chart should be greater than 0
+
+A chart is mounting into a container with no measured size — `-1` is
+Recharts' sentinel for "the ResponsiveContainer measured nothing", which
+happens when the parent has no resolved height at mount (a flex or grid child
+with no explicit basis, a `display: none` tab, or a render before layout
+settles).
+
+Minor, and worth fixing because it is **in the feature just verified**: the
+email investigation results view. A chart that renders at zero size is
+invisible rather than broken, so nobody reports it — the same shape as the
+fitted-graph problem already in `docs/problems/graph-fit-density.md`, where
+`cy.fit()` scaled to whichever dimension bound first and produced a
+thumbnail-scale render that was accurate and unreadable.
+
+Fix shape: give the `ResponsiveContainer`'s parent an explicit height (or a
+`min-height`), and if the chart lives in a tab, mount it only when the tab is
+active rather than hiding it with CSS. Confirm by reloading the email results
+view with the console open and seeing no warning.
+
+## 22. Who effectively has root on the platform host
+
+`svc-tools` (uid 1001) has `/bin/bash` and is in `wheel`;
+`/etc/sudoers.d/wheel` exists. What that file grants is **unestablished** —
+`/etc/sudoers` is not readable without root.
+
+If it grants broad sudo then a second interactive account can read every
+customer artifact on the host regardless of file permissions, including the
+database exports, the preserved evidence and the Postgres data directory.
+That is a question about the host's access model, not about any one file.
+
+Evidence: `svc-tools` is live — last login **2026-08-07 11:04 from
+10.45.0.91**. Found while establishing whether the 100-day world-readable
+window on the two database exports was an actual exposure (it was not: see
+`~/evidence/INVENTORY.md` — `/home/expert` is `drwxr-x---` and `svc-tools` is
+not in group `expert`).
+
+To establish, with root: what `/etc/sudoers.d/wheel` grants, whether
+`svc-tools` needs it, and whether its login on 2026-08-07 was expected.

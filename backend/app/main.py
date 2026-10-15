@@ -144,12 +144,33 @@ app.add_middleware(AuthenticationMiddleware)
 
 
 # ── CORS ──
+# No `allow_origin_regex`, in any environment.
+#
+# It was `r"^https?://[A-Za-z0-9\.\-]+(:\d+)?$" if settings.is_development
+# else None`, which matches EVERY hostname — and with `allow_credentials=True`
+# that permits credentialed cross-origin reads from any origin. Verified
+# against the running service on 2026-10-15: a preflight from
+# `https://evil.example.test` returned 200 with
+# `access-control-allow-origin: https://evil.example.test` and
+# `access-control-allow-credentials: true`.
+#
+# It was latent only because `tip_session` is `SameSite=Lax`, which withholds
+# the cookie from cross-site fetch — and adding TLS would have armed it, since
+# `Secure` makes `SameSite=None` reachable. That coupling is why this closes
+# before the TLS work rather than after it.
+#
+# Its stated purpose was direct frontend→backend calls bypassing the Next
+# proxy for large multipart uploads. That path **cannot work in this
+# deployment**: the firewall DROPs port 8000 for every address outside
+# `INGEST_CIDRS` (two /32s, both machine ingest callers), so no analyst
+# browser can reach it. 112 email uploads have succeeded through the proxy.
+#
+# Development gets explicit localhost origins below instead of a pattern, so
+# the invariant — never a non-None regex beside allow_credentials — holds in
+# every environment. A guard expected to fail somewhere is already half dead.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    # In development, allow direct frontend->backend calls from VM IP/hostname origins.
-    # This is needed when bypassing Next.js proxy for large multipart uploads.
-    allow_origin_regex=r"^https?://[A-Za-z0-9\.\-]+(:\d+)?$" if settings.is_development else None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization", "X-Request-ID"],
