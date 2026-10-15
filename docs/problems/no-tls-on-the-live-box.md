@@ -70,7 +70,44 @@ the LAN in cleartext. Pick one.
 | **Rollback** | revert compose, unbind the ports — minutes, fully reversible; the certificate is additive | revert the port binding — minutes | — |
 | **Residual risk** | none of consequence for browser traffic | **the plain ports stay open unless the rebinding is actually done** — and that step is the one that gets skipped | cleartext credentials on the LAN, indefinitely |
 
-### Recommendation: **A**, with the port rebinding as a non-optional part of it
+### DECIDED 2026-10-15: option A, port rebinding non-optional
+
+Not starting today. **Gated on two things being settled outside this
+repository:** who owns `exptools002` (backlog 22 — a root trust into this
+host makes network encryption on it largely decorative), and whether the two
+ingest callers can speak HTTPS.
+
+### The row the table was missing: how the certificate is reached
+
+A self-signed certificate reached **by IP** trains analysts to click through
+certificate warnings. On a SOC team that is a **worse security outcome than
+cleartext in one specific respect** — cleartext is a risk they do not act on,
+whereas a normalised click-through is a trained behaviour that transfers to
+every other warning they see, including real ones on hostile sites. The whole
+job of that team is to not do that.
+
+**So the plan is `siem-mon.int.expertware.net` with an internal CA, or a
+certificate distributed to analyst machines.** Not an IP, not self-signed, not
+a warning anyone is expected to accept.
+
+**If neither an internal CA nor a distribution mechanism is available, that
+changes the recommendation rather than being a detail of it.** In that case
+the options become:
+
+* **A′** — a publicly-trusted certificate for a name that resolves
+  internally (split-horizon DNS with a real certificate from a public CA,
+  obtained by DNS-01 since the host is not reachable from outside). Costs a
+  public DNS name and ACME access; buys zero warnings and no CA distribution.
+* **B′** — terminate upstream on something that already has a trusted
+  certificate, and rebind the ports here. Moves the problem to where a
+  certificate already exists.
+* **Not A-with-self-signed.** If the only available form of A is a warning
+  analysts must dismiss, A stops being the recommendation.
+
+This is a question for whoever runs internal DNS and PKI, and it is on the
+critical path with the ingest callers — not behind them.
+
+### Recommendation rationale: **A**, with the port rebinding as a non-optional part of it
 
 A is the only option whose correctness is verifiable from this host. B depends
 on a component nobody has yet shown exists — and if the rebinding is omitted,

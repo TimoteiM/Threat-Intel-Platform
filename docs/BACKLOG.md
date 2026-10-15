@@ -1122,3 +1122,31 @@ question that bounds everything else — including the TLS work, the CORS fix
 and the tenancy gate, none of which constrain an account that is root on
 demand.
 
+
+## 23. BLOCKED ON A CUSTOMER FACT: `EMAIL_OWN_MTA_IDENTITIES` is empty
+
+The estate DNS panel's sentence — "first resolved *before this email*" — needs
+an arrival time our own infrastructure wrote. The resolver is built and tested
+(`app/services/email_anchor.py`, 17 tests) and runs at parse time for both
+`.eml` and `.msg`. The setting it reads is empty, so every run resolves
+`check_failed` and **no before/after sentence renders at all**. Hits and named
+absences still render; only the comparison is withheld.
+
+**What is needed:** the mail hosts or domains that receive this customer's
+mail, comma-separated — e.g.
+`ourcorp-com.mail.protection.outlook.com,mail.ourcorp.example`. Suffix
+matching is on a dot boundary, so the registered domain is usually enough.
+
+**Why it cannot be defaulted.** The value decides which `Received` headers are
+trusted to date a message. A wrong or over-broad entry trusts a chain we do
+not own, and the failure is silent and in the dangerous direction: an attacker
+who can get a header past the filter can backdate the message, which makes
+their own domain read as "ordinary infrastructure". Empty is the honest state
+and it fails visibly.
+
+**Not a backfill.** `email_investigation_runs` has no raw-email column and
+does not retain the Received chain — one of the 38 completed runs contains the
+string "received" anywhere in its stored result. Setting this fixes runs from
+then on; the existing ones stay `check_failed` permanently.
+
+See `docs/problems/a-first-seen-that-is-really-a-collection-start.md`.

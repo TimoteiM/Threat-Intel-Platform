@@ -305,6 +305,13 @@ class Settings(BaseSettings):
     app_debug: bool = True
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    #: Comma-separated mail hosts or domains that are ours, e.g.
+    #: "mx.ourcorp.example,ourcorp-com.mail.protection.outlook.com". Read by
+    #: `email_anchor` to tell a Received header our infrastructure wrote from
+    #: one that arrived with the message. Deliberately empty by default: see
+    #: `email_own_mta_identity_set`.
+    email_own_mta_identities: str = ""
+
     # ── Authentication ──
     # "enforce" denies anything without a credential; "monitor" logs the same
     # decision and lets the request through, so a live ingest can be migrated
@@ -760,6 +767,22 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
+
+    @property
+    def email_own_mta_identity_set(self) -> frozenset[str]:
+        """Mail hosts/domains whose `Received` headers this platform trusts.
+
+        Empty by default, and the empty case is load-bearing: with no
+        identities configured, `email_anchor` reports `check_failed` rather
+        than dating a message from the sender's own headers. The default is
+        empty because this is a per-deployment fact about the customer's mail
+        path — a guessed value would trust a chain we do not own.
+        """
+        return frozenset(
+            h.strip().lower().lstrip(".")
+            for h in str(self.email_own_mta_identities or "").split(",")
+            if h.strip()
+        )
 
     @property
     def default_collectors_list(self) -> list[str]:

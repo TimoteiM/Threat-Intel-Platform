@@ -166,6 +166,37 @@ available.
 * Access control improves: journal files are `root:systemd-journal` rather
   than a world-readable path, and `expert` reads them via `adm`.
 
+### DECIDED 2026-10-15: journald, `SystemMaxUse` explicit — on two conditions
+
+**Condition 1: re-measure after a full business day.** The 8.4 MiB/day above
+is a ~40-minute sample, inflated by this session's own health checks and
+excluding alert traffic — ≈240 runs/day against the 46 in the preserved
+window. Not the number to size against, and the cap is not set until a real
+day has been measured.
+
+**Condition 2 — answered, and the premise was wrong.** "Adding a 2 GB cap to a
+filesystem already 86% full is a decision, not a default" was the right
+challenge, and `/var/log` turns out not to be the problem:
+
+| | |
+|---|---|
+| `/var/log` is **not a separate filesystem** | it is on `/` — 123.5 G total, 99.9 G used, **17.2 G free** |
+| `/var/log` itself | **384 MB**, of which 364 MB is the journal |
+| **docker build cache** | **72.14 GB — 72.09 GB reclaimable (99.9%)** |
+| docker images | 12.41 GB |
+| docker volumes | 4.53 GB |
+| `/home/expert` | 14 GB (apps 2.6 G, tenant exports 732 M, evidence 142 M, `.claude` 298 M) |
+
+**The filesystem is not full of logs. It is full of reclaimable Docker build
+cache** — largely from this session's repeated `docker compose build
+frontend` runs, each adding layers. `docker builder prune` reclaims ~72 GB
+and takes `/` from ~81% to roughly 23%.
+
+So the 2 GB journald cap is not a decision taken against a full disk; it is
+2 GB against 89 GB of headroom once the cache is pruned. **Prune first, then
+set the cap** — in that order, so the cap is sized against the real figure
+rather than against an artefact of today's work.
+
 **One caveat to verify before committing to it:** a very high-volume burst
 written to stdout goes through journald's rate limiter
 (`RateLimitIntervalSec`/`RateLimitBurst`), which **drops** lines rather than

@@ -86,6 +86,7 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
     if not received_headers:
         received_headers = _extract_headers_from_raw(raw_email, "Received")
     sender_ip = _extract_sender_ip(received_headers)
+    arrival = _resolve_arrival(received_headers, msg.get("Date"))
 
     urls = _extract_urls(msg, raw_email)
     url_domains = sorted({d for d in (_url_domain(u) for u in urls) if d})
@@ -98,6 +99,7 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
         "sender_name": sender_name,
         "sender_domain": sender_domain,
         "sender_ip": sender_ip,
+        "arrival": arrival,
         "reply_to": (reply_to_email or "").strip().lower() or None,
         "return_path": (return_path_email or "").strip().lower() or None,
         "sender_header": (sender_header_email or "").strip().lower() or None,
@@ -111,6 +113,41 @@ def extract_email_iocs(raw_email: bytes, filename: str | None = None) -> dict[st
         "url_domains": url_domains,
         "attachments": attachments,
     }
+
+
+def _resolve_arrival(
+    received_headers: list[str], date_header: Any
+) -> dict[str, Any]:
+    """When our own infrastructure first held this message, or why not known.
+
+    Extracted here rather than at display time because the Received chain is
+    not retained: `email_investigation_runs` has no raw-email column, so a
+    run whose arrival time was not resolved during parsing can never have one
+    resolved afterwards. Of the 38 completed runs on 2026-10-15, exactly one
+    contains the string "received" anywhere in its stored result, so the
+    anchor is unrecoverable for all of them and they stay `check_failed`.
+
+    `at` is serialised, because this goes into JSONB. The anchor's own name
+    and statement travel with it: a stored timestamp with no record of which
+    of the three candidate anchors produced it is how the upload time came to
+    be reported as a receipt time.
+    """
+    from app.config import get_settings
+    from app.services import email_anchor
+
+    try:
+        identities = get_settings().email_own_mta_identity_set
+    except Exception:
+        identities = frozenset()
+    resolved = email_anchor.resolve_anchor(
+        [str(h) for h in (received_headers or [])],
+        own_mta_identities=identities,
+        date_header=str(date_header) if date_header else None,
+    )
+    if isinstance(resolved, dict) and resolved.get("at") is not None:
+        resolved = dict(resolved)
+        resolved["at"] = resolved["at"].isoformat()
+    return resolved
 
 
 def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
@@ -155,6 +192,12 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
         auth_blob = " ".join(_extract_headers(headers_blob, "Authentication-Results")).strip()
         received_headers = _extract_headers(headers_blob, "Received")
         sender_ip = _extract_sender_ip(received_headers)
+        # Both parsers, not just .eml. A format that silently produced no
+        # anchor would make the discriminator depend on which way an analyst
+        # happened to export the message.
+        date_values = _extract_headers(headers_blob, "Date")
+        arrival = _resolve_arrival(
+            received_headers, date_values[0] if date_values else None)
 
         spf_result = _extract_token(SPF_RE, auth_blob) or "none"
         dkim_result = _extract_token(DKIM_RE, auth_blob) or "none"
@@ -176,6 +219,7 @@ def _extract_msg_iocs(raw_email: bytes) -> dict[str, Any]:
             "sender_name": sender_name,
             "sender_domain": sender_domain,
             "sender_ip": sender_ip,
+            "arrival": arrival,
             "reply_to": reply_to_email,
             "return_path": return_path_email,
             "sender_header": sender_header_email,
