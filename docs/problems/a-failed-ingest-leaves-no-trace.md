@@ -112,7 +112,69 @@ the one below:
 4. **A sweep that reports the backlog**, because a queue nobody reads is the
    `feeds_skipped` failure again — recorded and unconsumed for seven months.
 
-And one measurement that does not exist yet and should, independent of which
-design is chosen: **set `max-size` and `max-file` on the api's log driver.**
-Unbounded-and-destroyed-on-recreate is the worst of both; bounded-and-rotated
-at least survives a deploy.
+## Log durability, now sized against the real number
+
+This was blocked on the echo decision. Echo is off (`APP_ENV=production`,
+2026-10-15), so the log is a different object and the earlier ~200MB/day
+figure was half artefact.
+
+**Measured after the flip**, grain: bytes of container stdout/stderr per
+container, extrapolated from the elapsed time since each was recreated:
+
+| | sample | extrapolated |
+|---|---|---|
+| api | 140,599 bytes / 2,432 s | **≈4.8 MiB/day** |
+| worker | 67,358 bytes / 1,602 s | **≈3.5 MiB/day** |
+| **combined** | | **≈8.4 MiB/day** |
+| api *before* the flip | 148,499,273 bytes / 16.7 h | **≈213 MB/day** |
+
+A **44× reduction**, and the honest caveats: the sample is ~40 minutes, it is
+inflated by this session's own health checks and curls, and it excludes a full
+business day of alert traffic (≈240 runs/day against the 46 in the preserved
+window). Treat 8.4 MiB/day as the right order of magnitude, not a budget.
+
+### The mechanism: switch the logging driver to journald
+
+`max-size`/`max-file` bounds disk and **does not survive a container
+recreate** — rotated files belong to the container and go with it. That is the
+actual defect: every `--force-recreate` this week destroyed the access log,
+including the one that would have answered the ingest question.
+
+**journald is already the answer and has already proved it.** It retains from
+the host's first boot (2026-07-07), survives container replacement, and is
+what answered the `svc-tools` question across the host's entire life when
+`auth.log`'s 32-day window could not.
+
+    logging:
+      driver: journald
+      options:
+        tag: "{{.Name}}"
+
+on `api`, `worker` and `beat`. `docker compose logs` keeps working — the
+driver supports read-back — and `journalctl CONTAINER_NAME=…` becomes
+available.
+
+**Cost:**
+
+* journald currently holds 363.3 MB with **all defaults**, meaning
+  `SystemMaxUse` resolves to the 4 GB cap (10% of a 124 GB filesystem, capped).
+  At 8.4 MiB/day the container logs would need **~1.3 years** to add 4 GB.
+* **But `/var/log` is 86% used with 18 GB free**, so set `SystemMaxUse`
+  explicitly rather than relying on the cap — 2 GB gives roughly **230 days**
+  of container logs at the measured rate, inside a bound that cannot surprise
+  the disk.
+* Access control improves: journal files are `root:systemd-journal` rather
+  than a world-readable path, and `expert` reads them via `adm`.
+
+**One caveat to verify before committing to it:** a very high-volume burst
+written to stdout goes through journald's rate limiter
+(`RateLimitIntervalSec`/`RateLimitBurst`), which **drops** lines rather than
+queueing them. For an access log that is acceptable; for the structured
+ingest-failure line proposed below it is not, so that line needs either a
+rate-limit exemption or a second sink.
+
+### Which does not replace the layered design above
+
+journald makes the log *survive*, and the log is still only the floor. The
+body-persisted-before-insert and replay path remain the design, because a
+structured line records that an alert was lost and does not recover it.

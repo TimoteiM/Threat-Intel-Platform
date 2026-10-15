@@ -56,7 +56,48 @@ A 12-hour bearer cookie in cleartext is the sharpest item: it is a
 replayable credential, it needs no interaction from the victim, and nothing
 on the platform would record the replay as anything other than normal use.
 
-## Remediation options, with costs
+## THE DECISION — three options, one read
+
+Analysts reach the platform at `http://<ip>:3000`. Nothing terminates TLS.
+Login credentials, a 12-hour session cookie and tenant alert content all cross
+the LAN in cleartext. Pick one.
+
+| | **A. Caddy/nginx on this host** | **B. TLS upstream, ports rebound** | **C. Do nothing** |
+|---|---|---|---|
+| **Work** | ~1 day: one compose service, an internal certificate, rebind `:3000`/`:8000` to loopback, re-point `INGEST_CIDRS` rules at 443 | ~2h on this host, **plus unknown** elsewhere: someone must provide and operate the upstream terminator | none |
+| **Breaks while doing it** | the two ingest callers (`172.23.10.16`, `172.20.30.35`) must move to HTTPS — **coordination outside this repo**; analysts' bookmarked `:3000` URLs stop working | same ingest-caller coordination; same bookmark change | — |
+| **Analyst disruption** | one restart window, minutes; then a new URL and a certificate-trust prompt unless the internal CA is already distributed | one restart window; same URL change | none |
+| **Rollback** | revert compose, unbind the ports — minutes, fully reversible; the certificate is additive | revert the port binding — minutes | — |
+| **Residual risk** | none of consequence for browser traffic | **the plain ports stay open unless the rebinding is actually done** — and that step is the one that gets skipped | cleartext credentials on the LAN, indefinitely |
+
+### Recommendation: **A**, with the port rebinding as a non-optional part of it
+
+A is the only option whose correctness is verifiable from this host. B depends
+on a component nobody has yet shown exists — and if the rebinding is omitted,
+B is **indistinguishable from C from an attacker's position** while looking
+complete on paper.
+
+The cost that actually matters in both A and B is the same and is not
+technical: **the two ingest callers must move to HTTPS**, and they are operated
+outside this repository. That is the critical path, not the certificate.
+
+### What would change my mind
+
+* **An upstream terminator already exists and is operated.** Then B, and the
+  only work here is rebinding the ports — which still has to happen.
+* **The ingest callers cannot do HTTPS.** Then A with 443 for browsers and
+  port 8000 left plain but bound to the two `/32`s already in `INGEST_CIDRS` —
+  a documented, bounded exception rather than an open port.
+* **`exptools002` turns out to be unowned or widely held.** Then this drops
+  below backlog 22 in priority, because a root trust into the host makes
+  network encryption on it largely decorative.
+
+### Not a reason to delay
+
+The CORS wildcard is already closed, so the sequencing constraint at the top
+of this document is **satisfied** — TLS can now proceed without arming it.
+
+## Remediation options in detail
 
 ### A. Reverse proxy on this host, terminating TLS
 
