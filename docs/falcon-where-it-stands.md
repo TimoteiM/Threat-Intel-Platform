@@ -75,16 +75,9 @@ to what was asked.
 
 ## Open questions
 
-1. **Zero Falcon alerts since 2026-10-08.** Weekly totals since retention
-   begins: 2, 64, 58, 50, 82, 46, 14, 79, 32, **1427**, 9, 13, 12, **0**, 0.
-   Sensors are reporting (153 of 182 devices checked in within a day), so this
-   is not a sensor outage. Against a 9–82/week baseline, zero for a week is at
-   the low end but not outside it — and this is exactly the condition
-   backlog 18 describes: Falcon alerts on escalation, not on a clock, so a
-   quiet estate and a stopped alert flow are **indistinguishable**. Flagged,
-   not diagnosed. If it is still zero in a few days it stops being ambiguous.
-   (The 1,427 spike in the week of 2026-09-14 is one developer's `wsl.exe` on
-   `EXP-22MY264`.)
+1. **A step change in Falcon alert volume, then silence — and the dataset
+   that would explain it cannot be read.** See the section below; this is no
+   longer "ambiguous", it is a confirmed step with an unreadable cause.
 2. **Can this API client be granted the intel scope?** If yes, "what does
    CrowdStrike know about this indicator" becomes answerable and the email
    panel gains a real question. If no, the 403 should be recorded once as a
@@ -137,3 +130,111 @@ Tests: 32 panel service, 15 field control. Full unit suite at the enumerated
 
 Branch `feature/email-investigation-upload` at `f0a0ae7`, pushed. Liveness
 green on all limbs.
+
+
+---
+
+# The alert step change, 2026-09-14
+
+Added after the first version of this note called the silence "ambiguous". It
+is not. Two corrections to my own figures first, because both were wrong in
+the direction that made the series look benign.
+
+**The series was undercounted.** I built it from paired bounds,
+`created_timestamp:>'A'+created_timestamp:<'B'`, which silently drops rows:
+the buckets summed to 1,888 of 2,048 — 7.8% missing. Rebuilt from
+*differences of single-bound cumulative totals*, which reconciles **exactly**
+to 2,048:
+
+| week of | alerts | |
+|---|---|---|
+| 2026-07-13 | 15 | (partial — retention begins 07-17) |
+| 2026-07-20 | 79 | |
+| 2026-07-27 | 73 | |
+| 2026-08-03 | 117 | |
+| 2026-08-10 | 82 | |
+| 2026-08-17 | 52 | |
+| 2026-08-24 | 26 | |
+| 2026-08-31 | 80 | |
+| 2026-09-07 | 33 | |
+| **2026-09-14** | **1450** | the `wsl.exe` flood on `EXP-22MY264` |
+| 2026-09-21 | 9 | |
+| 2026-09-28 | 20 | |
+| 2026-10-05 | 12 | |
+| 2026-10-12 | **0** | |
+| after 10-19 | 0 | |
+
+**And I compared the wrong things.** I read the zeros against the whole
+period, which includes the flood and makes the baseline meaningless. Split at
+the flood:
+
+| | weeks | mean | min | max |
+|---|---|---|---|---|
+| before (excl. partial first) | 79, 73, 117, 82, 52, 26, 80, 33 | **67.8** | 26 | 117 |
+| after | 9, 20, 12, 0 | **10.2** | 0 | 20 |
+
+A **6.6× drop**, and — the part that settles it — **the two ranges do not
+overlap**: the quietest pre-flood week (26) is higher than the busiest
+post-flood week (20). That is a step change, not a low tail. My earlier
+"within the baseline" reading was an artifact of pooling across the step.
+
+The silence itself is confirmed independently of the bucketing:
+`created_timestamp:>'2026-10-08'` returns **0** on a single-bound query. Seven
+days. Sensors are live — 153 of 182 devices checked in within a day — so it is
+not a sensor outage.
+
+## What the audit log shows: it cannot be read
+
+The hypothesis worth testing is that an exclusion or policy change was added in
+response to the flood, broad enough to suppress real detections. That would
+produce a quiet estate and a stopped flow at once. **This credential cannot
+test it.**
+
+| what would answer it | result |
+|---|---|
+| `/policy/queries/ml-exclusions/v1` | **403** scope not permitted |
+| `/policy/queries/ioa-exclusions/v1` | **403** |
+| `/policy/queries/sv-exclusions/v1` | **403** |
+| `/policy/queries/prevention/v1` | **403** |
+| `/policy/queries/sensor-update/v1`, `firewall`, `device-control`, `response` | **403** |
+| `/audit-events/queries/audit-events/v1` and variants | **404** — not the right paths |
+| `/sensors/entities/datafeed/v2` (Event Streams) | **200**, but forward-only from connection; it cannot answer about September |
+
+So the outcome is neither of the two the question anticipated. It is not "a
+confirmed exclusion explains the silence", and it is not "no change found".
+It is **`check_failed` on the exclusion question** — the record of whether an
+exclusion was added is not readable with these scopes, and absence of evidence
+here is absence of access, not absence of a change.
+
+## What *is* visible, without diagnosis
+
+Device records carry per-policy application dates, which are in scope. Three
+facts, offered as coincidence and not as cause:
+
+1. **A sensor_update policy was applied to 142 of 182 devices on 2026-09-15
+   and 2026-09-16** — inside the flood week, immediately before the drop. That
+   cohort now runs 7.40.21309.0 (100), 7.39.21113.0 (29) and 8.10.21408.0
+   (13). A sensor rollout is not an exclusion, but a sensor version change can
+   change detection behaviour, and this is the only fleet-wide event visible in
+   that week.
+2. **No fleet-wide prevention-policy change.** Prevention was applied to 1–4
+   devices per day through September and October, with the bulk (152 of 182)
+   back in August — before the flood. Five distinct prevention policies, five
+   distinct `settings_hash` values. Note the limit: a policy's *contents* could
+   have been edited without that being visible here, so this rules out mass
+   reassignment, not editing.
+3. **A fleet-wide `global_config` application on 2026-10-13/14/15** (80, 61,
+   12 devices). That is *after* the silence began on 10-08, so it cannot
+   explain it, and the monthly pattern (3 in August, 12 in September, 165 in
+   October) is as consistent with routine re-application as with a change.
+
+## What would settle it
+
+- **Read access to ML/IOA/sensor-visibility exclusions** — one scope on the
+  API client, and the question becomes a single query.
+- Failing that, someone with Falcon console access can read the audit log
+  directly for the week of 2026-09-14: look for exclusions created, and for
+  prevention-policy edits.
+- Independently: if the zero persists past about 2026-10-22, "quiet estate"
+  stops being a viable reading on its own, because no pre-flood week was
+  anywhere near zero.
