@@ -849,3 +849,120 @@ So when that route lands, the log store needs **two** direction states rather
 than one — the collection path and the on-demand path are separate consumers
 with separate failure modes, which is the same argument that already keeps
 `enrichment` and `ingest` apart. Do not let one warrant stand in for both.
+
+## 19. `sandbox_analyses.requested_by` holds kinds in an actor column
+
+The only existing attribution precedent, and it should not be followed:
+`String(64)` holding a display name rather than a user reference. A rename
+orphans it and two people with one display name are indistinguishable — the
+problem `users.external_id` already solved for Entra by keying on the
+immutable claim rather than the address.
+
+**Measured, 68 rows, all populated, 5 distinct values:**
+
+| value | rows | resolves to a `users` row |
+|---|---|---|
+| `auto-detonation` | 31 | **no — not an actor at all** |
+| `timotei.moscaliuc` | 17 | yes |
+| `upload` | 14 | **no — not an actor at all** |
+| `Threat-Analyzer-Owner` | 5 | yes |
+| `admin` | 1 | no |
+
+**So the answer to "resolvable or permanently approximate" is neither, and
+the real shape is more useful than either.** 45 of 68 rows are not degraded
+names — they are **kinds stored in an actor column**: `auto-detonation` is an
+automated trigger and `upload` is a channel. The four-worlds collapse this
+platform spent 2026-10-14/15 closing is already live in this table's data.
+
+Classified against the taxonomy in
+[submitter-attribution.md](design/submitter-attribution.md):
+
+* **45 rows exactly classifiable** → `automated_ingest`. No guessing, no loss.
+* **22 rows resolvable to user ids today**, by exact match on
+  username / display_name / email — and stored as
+  **`provenance = reconstructed_from_name` with the resolution date**, never
+  as if recorded at creation. Resolving a display name now is an inference
+  about the past: a renamed-and-reused account or a once-shared display name
+  resolves confidently and wrongly, and nothing would ever flag it. Marked as
+  reconstructed it is a defensible inference that a later correction can find
+  again; stored bare it is a fabrication with a confident face. The
+  resolution still has to happen **now**, because it works only while nobody
+  has been renamed.
+* **1 row (`admin`) → `recorded_unresolvable`, not
+  `predates_attribution`.** Those are different worlds.
+  `predates_attribution` means the actor existed and was never written down;
+  this actor **was** written down and the string does not resolve — a role
+  name, a deleted account or a literal, with nothing to separate them. The
+  distinction is operational: `recorded_unresolvable` tells a later auditor to
+  go looking for other evidence (access logs, the row's timestamps, the
+  artefact) instead of concluding none exists. Folding it into
+  `predates_attribution` would close an avenue that is still open.
+
+The work: migrate to `submitted_by_kind` + `submitted_by_user_id` as
+specified for the five request types, resolve the 22 now while they still
+resolve, and classify the rest. Doing this *with* the main change is cheaper
+than after, because the resolution window is closing on its own.
+
+## 20. Rename `entity_user` → `subject_account`
+
+Split out of the attribution change deliberately: 45 readers, a dual-write
+release and a human verification step for an external API contract is too
+much to carry alongside a security-sensitive feature, and bundling them makes
+the pair hard to revert.
+
+**Why rename at all.** `entity_user` is documented as *"Who the alert is
+about … written at ingest from the alert body"* — the account named in the
+log, frequently the compromised one. Sitting beside *"who requested the
+investigation"* it is a trap that would attribute an investigation to its
+victim. A test that the submitter is never populated from it is necessary and
+insufficient: the next person reaching for the obvious column needs the name
+to stop them.
+
+**Proposed name: `subject_account`.** It says whose account the alert is
+*about*, in the vocabulary the graph layer already uses (`account` nodes,
+`Subject` in the Windows event sections), and it cannot be misread as an
+actor. It also matches migration 048's existing `target_subject_account`
+language. Not `affected_user`, which asserts impact nobody has established.
+
+### 45 readers, and one is an API contract
+
+| surface | refs | note |
+|---|---|---|
+| `models/database.py` | 1 | the column |
+| `services/alert_log_context_service.py` | 6 | `principal_of`, plus the documented `DOMAIN\user` domain-half defect |
+| `services/alert_log_selection.py` | 3 | selector construction |
+| `services/alert_correlation_service.py` | 4 | builds the **plural** `entity_users` |
+| `services/alert_case_graph_service.py` | 2 | account nodes |
+| `services/alert_case_narrative_service.py` | 2 | narrative text |
+| `services/alert_case_linkage_service.py` | 1 | case linkage key |
+| `services/alert_entity_profile_service.py` | 3 | profile and its coverage caveat |
+| `services/alert_body_investigation_service.py` | 1 | writes it from log context |
+| `tasks/alert_body_task.py` | 2 | payload and followup |
+| `tasks/alert_log_followup_task.py` | 3 | re-collection |
+| `api/alert_investigations.py` | 5 | **response payloads** |
+| `api/detections.py` | 1 | distinct-user count |
+| `frontend/src/lib/types.ts` | 3 | `entity_user`, `entity_users`, coverage comment |
+| `frontend/.../CasesList.tsx` | 5 | renders `entity_users` |
+| `frontend/.../cases/[caseKey]/page.tsx` | 3 | renders `entity_users` |
+| migrations 021, 043, 048 | — | historic, left alone |
+
+**The derived plural is the hard part.** `entity_users` is an *API field* in
+case payloads consumed by the frontend. Renaming the column is a migration;
+renaming the API field is a breaking change for an external consumer, and
+this platform has at least one.
+
+### Migration shape — the two-step form of "a rename is not a deployment"
+
+1. Add `subject_account`, backfill from `entity_user`, dual-write. Reversible
+   throughout.
+2. Move all 45 backend references; the API emits **both** `entity_user` and
+   `subject_account` for one release, so no consumer breaks on the same
+   deploy as the schema change.
+3. Move the frontend once the API emits both.
+4. Drop the old column and the old API field in a **separate** migration,
+   after a deliberate decision that no external consumer reads it.
+
+Step 4 needs a human: nothing in this repository can establish what an
+external caller reads. Until then the trap is reduced and not gone, which is
+why the never-populate-from-`entity_user` test ships with the attribution
+change and stays afterwards — belt to the rename's braces, not instead of it.

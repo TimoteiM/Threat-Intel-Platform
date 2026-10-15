@@ -596,3 +596,160 @@ def test_a_failing_direction_gets_no_warrant():
 
     out = st.status_of(spec, _Row(), "falcon")
     assert out["directions"]["enrichment"].get("warrant") is None
+
+
+# --- the 18h boundary, pinned on both sides -----------------------------
+
+
+def test_the_outage_boundary_is_pinned_symmetrically():
+    """6h was pinned both sides and 18h only above, so a `>` where `>=`
+    belongs would have passed at 19h either way."""
+    just_inside = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=18) + timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_inside["stopped"] is False
+    assert just_inside["state"] == st.CONFIGURED_UNVERIFIED
+
+    just_past = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=18) - timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_past["stopped"] is True
+    assert just_past["state"] == st.STOPPED
+
+
+# --- the band must be legible WITHOUT the prose -------------------------
+#
+# The band keeps the base state, and that base state is the same value a
+# feed which has never produced anything carries. Anything reading `state`
+# without the rendered text — the all-customers matrix is the obvious one —
+# could not tell "collected 7h ago" from "never collected". If the
+# distinction lives only in the render layer the collapse has moved, not
+# closed. Stale collector output is still collector output, so the warrant
+# is attached in the band too and carries the age structurally.
+
+
+def test_the_band_attaches_a_warrant_even_though_it_does_not_promote():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=7),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["promoted"] is False
+    assert v["warrant"], (
+        "the band carries no warrant, so a programmatic reader cannot tell "
+        "stale output from no output"
+    )
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
+    assert v["warrant"]["age_hours"] == 7.0
+    assert v["warrant"]["current"] is False, (
+        "the warrant must say structurally that it is no longer current"
+    )
+
+
+def test_a_promoted_warrant_says_it_is_current():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["warrant"]["current"] is True
+
+
+def test_never_produced_and_stale_produced_differ_without_reading_prose():
+    """The distinction a matrix cell has to survive on."""
+    never = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED, last_succeeded_at=None,
+        now=NOW, expected_interval_hours=6,
+    )
+    stale = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=7),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert never["state"] == stale["state"]          # same state, by design
+    assert never["warrant"] is None                  # and distinguishable
+    assert stale["warrant"] is not None
+    assert stale["warrant"]["age_hours"] == 7.0
+
+
+# --- a failing ping with a working collector is compound, not a contest -
+
+
+def test_a_failing_ping_and_working_collector_report_both():
+    """Precedence would make the two warrants commensurable again.
+
+    The whole argument for warrants is that an api ping and collector output
+    speak about different consumers and neither subsumes the other. A rule
+    that lets a 09:00 failure outrank output at 09:05, 09:10 and 09:15 puts
+    them back on one scale with api evidence winning — and hides a real
+    compound condition: the api cannot reach the cluster, log context still
+    flows, and the estate lookup breaks the day it is wired.
+    """
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    kinds = {w["kind"] for w in v["warrants"]}
+    assert st.WARRANT_COLLECTOR_OUTPUT in kinds, (
+        "the collector's recent output vanished because a ping failed"
+    )
+    assert v["compound"] is True
+    assert "collector" in str(v["compound_note"]).lower()
+    # The badge still shows the worse consumer condition — that is a product
+    # decision about consumers, not a claim that api evidence outranks
+    # worker evidence — and the compound is visible beside it.
+    assert v["state"] == st.VERIFIED_FAILING
+
+
+def test_no_compound_claimed_when_there_is_only_one_kind_of_evidence():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["compound"] is False
+    assert len(v["warrants"]) == 1
+
+
+def test_a_compound_badge_names_the_failing_consumer():
+    """`FAILING` alone reads as "the log store is down".
+
+    With a live collector that is the misread to prevent: the badge must say
+    which consumer is failing, so a red badge beside flowing log context is
+    legible rather than alarming. This closes it without waiting for the two
+    direction states in backlog 18.
+    """
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["compound"] is True
+    assert v["badge_qualifier"] == "api", (
+        "the badge cannot say which consumer is failing"
+    )
+
+
+def test_a_non_compound_badge_carries_no_qualifier():
+    """A qualifier on a simple state would imply a distinction that is not
+    being drawn."""
+    for state in (st.VERIFIED_OK, st.NOT_CONFIGURED, st.CONFIGURED_UNVERIFIED):
+        v = st.continuity(
+            state=state, last_succeeded_at=NOW - timedelta(minutes=5),
+            now=NOW, expected_interval_hours=6,
+        )
+        assert v["badge_qualifier"] is None
+
+    stopped = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert stopped["state"] == st.STOPPED
+    assert stopped["badge_qualifier"] is None, (
+        "a stopped integration is not compound — nothing is working"
+    )

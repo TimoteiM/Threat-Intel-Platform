@@ -126,7 +126,9 @@ _WARRANT_META = {
 }
 
 
-def warrant_for(kind: str, *, at: Any, now: Any = None) -> dict[str, Any]:
+def warrant_for(
+    kind: str, *, at: Any, now: Any = None, current: Any = None
+) -> dict[str, Any]:
     """What the `verified_ok` rests on, with its age.
 
     The age is part of the warrant rather than beside it, because every one
@@ -145,6 +147,14 @@ def warrant_for(kind: str, *, at: Any, now: Any = None) -> dict[str, Any]:
         "what": what,
         "at": None if at is None else at.isoformat(),
         "age_hours": age,
+        # Whether this warrant is still current, as a field rather than as a
+        # sentence. The 6–18h band keeps its base state, and that state is
+        # the same value a never-produced integration carries — so without
+        # this a consumer reading `state` alone (the all-customers matrix,
+        # for one) could not tell "collected 7h ago" from "never collected",
+        # and the collapse would have moved to the render layer instead of
+        # closing. Stale collector output is still collector output.
+        "current": None if current is None else bool(current),
     }
 
 
@@ -195,6 +205,10 @@ def continuity(
             "silence_verdict": None,
             "promoted": False,
             "warrant": None,
+            "warrants": [],
+            "compound": False,
+            "compound_note": None,
+            "badge_qualifier": None,
             "last_success": absent(
                 NEVER_OBSERVED,
                 "This integration has never produced a result, so there is "
@@ -247,10 +261,13 @@ def continuity(
         # honest — not currently witnessed, not yet an outage.
         within_expectation = hours <= float(expected_interval_hours)
         promoted = within_expectation and state in _PROMOTABLE
+        # Attached whether or not it promotes. A stale warrant is still a
+        # warrant, and `current` carries which it is.
+        warrant = warrant_for(
+            WARRANT_COLLECTOR_OUTPUT, at=last_succeeded_at, now=at,
+            current=within_expectation,
+        )
         if promoted:
-            warrant = warrant_for(
-                WARRANT_COLLECTOR_OUTPUT, at=last_succeeded_at, now=at,
-            )
             silence_verdict = (
                 f"Produced output {round(hours, 1)}h ago, inside its "
                 f"{expected_interval_hours}h expectation."
@@ -270,11 +287,44 @@ def continuity(
             )
 
     resolved = STOPPED if stopped else (VERIFIED_OK if promoted else state)
+
+    # Every warrant, not a winner. Precedence between an api ping and
+    # collector output would make them commensurable again — the opposite of
+    # why they are named separately — and a 09:00 ping failure outranking
+    # output at 09:05 hides a real compound condition: the api cannot reach
+    # the cluster, log context still flows, and the on-demand estate lookup
+    # breaks the day it is wired.
+    #
+    # The badge still shows the worse CONSUMER condition, which is a product
+    # decision about consumers rather than a claim that api evidence beats
+    # worker evidence. Separating them properly needs the two direction
+    # states in backlog 18; until then the compound is stated beside the
+    # badge so nothing is hidden.
+    warrants = [w for w in (warrant,) if w]
+    compound = bool(warrant) and state in (VERIFIED_FAILING,)
+    compound_note = None
+    # Which consumer the badge is about. `FAILING` alone reads as "the log
+    # store is down"; beside a live collector that is the misread to prevent,
+    # so the badge names the failing consumer — FAILING (api). The failing
+    # evidence is always the api-side verification here, since the collector
+    # warrant is what makes it compound in the first place.
+    badge_qualifier = "api" if compound else None
+    if compound:
+        compound_note = (
+            f"Compound condition: the api-side check is failing while the "
+            f"collector produced output {round(hours, 1)}h ago. Both are true "
+            f"and they describe different consumers — log context can keep "
+            f"flowing while an on-demand api lookup fails."
+        )
     return {
         "state": resolved,
         "stopped": stopped,
         "promoted": promoted,
         "warrant": warrant,
+        "warrants": warrants,
+        "compound": compound,
+        "compound_note": compound_note,
+        "badge_qualifier": badge_qualifier,
         "silent_for_hours": round(hours, 1),
         "expected_interval_hours": expected_interval_hours,
         "threshold_hours": None if threshold is None else round(threshold, 1),

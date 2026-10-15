@@ -149,8 +149,20 @@ function groupByCategory(tools: any[]): Array<[string, any[]]> {
   return [...known, ...unknown].map((c) => [c, groups[c]]);
 }
 
-function StateBadge({ state, compact }: { state: string; compact?: boolean }) {
+function StateBadge({
+  state,
+  compact,
+  qualifier,
+}: {
+  state: string;
+  compact?: boolean;
+  qualifier?: string | null;
+}) {
   const m = STATE_META[state] ?? STATE_META.not_implemented;
+  // "FAILING (api)" rather than "FAILING": a compound condition is one
+  // consumer failing while another works, and an unqualified red badge
+  // claims the whole integration is down.
+  const label = qualifier ? `${m.label} (${qualifier})` : m.label;
   return (
     <span
       title={m.meaning}
@@ -168,7 +180,7 @@ function StateBadge({ state, compact }: { state: string; compact?: boolean }) {
         whiteSpace: "nowrap",
       }}
     >
-      {m.label}
+      {label}
     </span>
   );
 }
@@ -550,7 +562,13 @@ export default function IntegrationsPage() {
                   }}
                 >
                   <strong style={{ fontSize: 13 }}>{t.label}</strong>
-                  <StateBadge state={t.overall} />
+                  {/* The qualifier names the failing CONSUMER. `FAILING`
+                      alone reads as "the log store is down", which beside a
+                      live collector is the misread to prevent. */}
+                  <StateBadge
+                    state={t.overall}
+                    qualifier={t.continuity?.badge_qualifier}
+                  />
                 </div>
 
                 {/* The payload's own reason wins where it exists. The
