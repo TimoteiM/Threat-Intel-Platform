@@ -228,6 +228,46 @@ facts, offered as coincidence and not as cause:
    explain it, and the monthly pattern (3 in August, 12 in September, 165 in
    October) is as consistent with routine re-application as with a change.
 
+## Correction: there are two events, not one
+
+The first version of this section said the drop was confined to the
+sensor-update cohort. **That claim holds for the mid-September step and is
+wrong for the October stop**, and the error was pooling: the per-cohort rates
+were computed over "21 Sep onward", which spans a *second* inflection.
+
+Per cohort, by week, nothing averaged:
+
+| week of | updated (142) | not updated (40) |
+|---|---|---|
+| 31 Aug | 83 | 8 |
+| 7 Sep | 24 | 9 |
+| **14 Sep** | **1427** | 1 |
+| 21 Sep | 9 | **23** ← its last |
+| 28 Sep | 9 | 0 |
+| 5 Oct | 19 | 0 |
+| 12 Oct | **0** | 0 |
+
+Last alert: updated cohort **2026-10-08 09:22**; non-updated cohort
+**2026-09-21 16:09**. The control cohort did not stay level — it stopped
+*first*, 24 days ago. Its 0.0240/device/day over the pooled window was 23
+alerts in that window's opening week and nothing after, and 40 devices at that
+rate implies ~7 alerts a week that do not exist. Multiplying a rate back out
+against its population is the check that catches this.
+
+So:
+
+- **the step** (mid-September) is visible in the updated cohort, about
+  four-fold, and is consistent with the sensor change. The 40-device cohort is
+  silent in 7 of 14 weeks, so it cannot confirm or deny a four-fold change.
+- **the stop** (8 October, estate-wide) is a second event the sensor policy
+  cannot explain, because it never touched those 40 devices. Its strongest
+  evidence is that the 142-device cohort had **never** produced a zero week in
+  90 days and now has.
+
+The outbound document is rewritten around the stop as the headline, since an
+estate-wide stop is a bigger finding than a cohort regression. Recorded as a
+method note in `pooling-across-a-regime-change`.
+
 ## What would settle it
 
 - **Read access to ML/IOA/sensor-visibility exclusions** — one scope on the
