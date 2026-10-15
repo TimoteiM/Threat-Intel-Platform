@@ -160,3 +160,65 @@ def test_two_outcomes_of_one_stage_are_two_kinds_not_one_template():
     for claim, counter_claim in pairs:
         assert claim != counter_claim
         assert T.TEMPLATES[claim] != T.TEMPLATES[counter_claim]
+
+
+# --- a slot must not be able to receive free text -------------------------
+
+
+def test_risk_drivers_are_computed_from_discrete_fields_not_quoted_prose():
+    """The defect: `rationale` is prose.
+
+    It read "No strong malicious signal; monitor and corroborate with external
+    context" — a capital mid-clause, and a *recommendation* in the place a
+    driver belongs. A slot that can receive free text has the same hazard as a
+    model, which is the thing templates were chosen to avoid.
+    """
+    risk = {
+        "risk_level": "low", "risk_score": 10, "confidence": "low",
+        "rationale": ["No strong malicious signal; monitor and corroborate."],
+        "components": {"lexical_score": 0.5713, "sandbox_score": 0.1,
+                       "infrastructure_score": 0.092, "opencti_score": 0.0},
+        "weights": {"lexical_score": 0.2, "sandbox_score": 0.1,
+                    "infrastructure_score": 0.15, "opencti_score": 0.15},
+    }
+    drivers = steps._risk_drivers(risk)
+    assert drivers == ["lexical 0.11", "infrastructure 0.01", "sandbox 0.01"]
+    joined = " ".join(drivers)
+    for word in ("monitor", "corroborate", "signal", ";"):
+        assert word not in joined, f"prose leaked into a driver: {word!r}"
+
+
+def test_a_component_with_no_contribution_is_not_named():
+    """`opencti_score: 0.0` contributes nothing, so naming it would assert it
+    was a driver."""
+    risk = {"components": {"a_score": 0.0, "b_score": 0.5},
+            "weights": {"a_score": 0.9, "b_score": 0.2}}
+    assert steps._risk_drivers(risk) == ["b 0.10"]
+
+
+def test_a_score_with_no_drivers_is_a_different_template():
+    """Not the same sentence with an empty list bolted in — that renders "the
+    largest contributors were none", which is a clause carrying a claim."""
+    assert T.EMAIL_RISK_NO_DRIVERS in T.TEMPLATES
+    assert T.TEMPLATES[T.EMAIL_RISK] != T.TEMPLATES[T.EMAIL_RISK_NO_DRIVERS]
+    assert "largest contributors" not in T.TEMPLATES[T.EMAIL_RISK_NO_DRIVERS]
+
+
+def test_the_interpretation_step_states_a_conclusion_not_a_method():
+    """It described how the call was made and omitted its output, on the one
+    step whose output IS the conclusion. The method claim belongs in the
+    footer, which already makes it."""
+    body = T.TEMPLATES[T.EMAIL_INTERPRET]
+    assert "{verdict_text}" in body and "{confidence}" in body
+    for method_word in ("only model call", "raw responses", "Asked the model"):
+        assert method_word not in body
+
+
+def test_model_prose_is_counted_and_never_interpolated():
+    """`primary_signals` is model output. It is counted so the step has
+    texture, and the signals themselves render where they are attributed to
+    the model rather than to a template."""
+    body = T.TEMPLATES[T.EMAIL_INTERPRET]
+    assert "{plural(signals, 'named signal')}" in body
+    assert "{listing(signals)}" not in body
+    assert "{signals}" not in body

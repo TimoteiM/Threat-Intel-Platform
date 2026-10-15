@@ -769,17 +769,6 @@ export default function EmailInvestigationsPage() {
       {result && (
         <div style={{ display: "grid", gap: 16 }}>
 
-          {/* ── The investigation, as an ordered chain of claims ──
-              Placed directly under the verdict rather than below the evidence
-              dump: the chain is how the verdict was reached, so it belongs
-              beside it. */}
-          {(result.run_id || result.history_id) && (
-            <InvestigationChain
-              surface="email"
-              originId={String(result.run_id || result.history_id)}
-            />
-          )}
-
           {/* ── Overall Verdict Banner ── */}
           {(() => {
             const verdict = String((result as any)?.resolution?.overall_verdict || "inconclusive").toLowerCase();
@@ -813,6 +802,18 @@ export default function EmailInvestigationsPage() {
               </div>
             );
           })()}
+
+          {/* ── The investigation, as an ordered chain of claims ──
+              BELOW the verdict, not above it. It read as seven steps before
+              the answer, which is the warrant-before-answer problem the
+              lookup page already had: the chain explains a verdict, so the
+              verdict comes first and the chain sits under it. */}
+          {(result.run_id || result.history_id) && (
+            <InvestigationChain
+              surface="email"
+              originId={String(result.run_id || result.history_id)}
+            />
+          )}
 
           {/* ── Result Tab Bar ── */}
           {(() => {

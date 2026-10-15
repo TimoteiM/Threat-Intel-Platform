@@ -53,11 +53,16 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
     urls = list(payload.get("urls") or [])
     attachments = list(payload.get("attachments") or [])
     sender_domain = payload.get("sender_domain")
+    # Through the pluralisation helper, not an f-string. "1 attachments" is
+    # the kind of thing a declared helper exists to prevent, and building the
+    # phrase by hand routed around it.
+    from app.services.investigation_step_templates import plural
+
     kinds: list[str] = []
     if urls:
-        kinds.append(f"{len(urls):,} links")
+        kinds.append(plural(len(urls), "link"))
     if attachments:
-        kinds.append(f"{len(attachments):,} attachments")
+        kinds.append(plural(len(attachments), "attachment"))
     if sender_domain:
         kinds.append("a sender domain")
     if payload.get("sender_ip"):
@@ -85,21 +90,26 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
     inspection = checks.get("attachment_inspection")
     if not attachments:
         recorder.step(T.EMAIL_ATTACHMENT_INSPECT_NONE,
-                      "What are the attachments, really?",
+                      "What are the attachments?",
                       source="local", target="attachment inspector",
                       verdict="none", cost=_FREE, fields={})
     elif _present(inspection):
         findings = _inspection_findings(inspection)
+        # "found nothing structurally unexpected" is a different claim from
+        # "found these things", so it is a different template rather than the
+        # same sentence with "no structural findings" interpolated as if it
+        # were an item in a list.
         recorder.step(
-            T.EMAIL_ATTACHMENT_INSPECT,
-            "What are the attachments, really?",
+            T.EMAIL_ATTACHMENT_INSPECT if findings
+            else T.EMAIL_ATTACHMENT_INSPECT_CLEAN,
+            "What are the attachments?",
             source="local", target="attachment inspector",
             response=inspection, verdict="observed", cost=_FREE,
             fields={"attachments": len(attachments), "findings": findings},
         )
     else:
         _not_asked(recorder, T.EMAIL_ATTACHMENT_INSPECT,
-                   "What are the attachments, really?",
+                   "What are the attachments?",
                    "the inspector produced no output for this message.")
 
     # 3 ── attachment content
@@ -114,8 +124,13 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
             source="local", target="file content reader",
             response=content, verdict="observed", cost=_FREE,
             fields={"files": len(files),
-                    "summaries": [str(f.get("filename") or "a file")
-                                  for f in files if isinstance(f, dict)]},
+                    # The real keys, read from a stored payload: `path` and
+                    # `kind`. `filename`/`name`/`type` — which this guessed —
+                    # do not exist, so every file rendered as "an unnamed
+                    # file" while the payload had its path all along.
+                    "summaries": [
+                        str(f.get("path") or f.get("kind") or "an unnamed file")
+                        for f in files if isinstance(f, dict)]},
         )
     else:
         limits = list((content or {}).get("limitations") or [])
@@ -207,15 +222,26 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
 
     # 7 ── risk aggregation
     risk = checks.get("final_risk") or {}
-    if _present(risk):
+    drivers = _risk_drivers(risk)
+    if _present(risk) and drivers:
         recorder.step(
             T.EMAIL_RISK,
             "Taken together, what do these answers amount to?",
             source="local", target="risk aggregation", response=risk,
             verdict=str(risk.get("risk_level") or "unknown"),
             cost=_FREE,
-            fields={"verdict_text": _risk_text(risk),
-                    "drivers": _risk_drivers(risk)},
+            fields={"verdict_text": _risk_text(risk), "drivers": drivers},
+        )
+    elif _present(risk):
+        # A score with nothing contributing to it is a different claim from a
+        # score with drivers, so it is a different template — not the same
+        # sentence with an empty list bolted into it.
+        recorder.step(
+            T.EMAIL_RISK_NO_DRIVERS,
+            "Taken together, what do these answers amount to?",
+            source="local", target="risk aggregation", response=risk,
+            verdict=str(risk.get("risk_level") or "unknown"), cost=_FREE,
+            fields={"verdict_text": _risk_text(risk)},
         )
     else:
         _not_asked(recorder, T.EMAIL_RISK,
@@ -225,13 +251,23 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
     # 8 ── the one model call
     resolution = payload.get("resolution") or {}
     if _present(resolution):
+        verdict = str(resolution.get("overall_verdict")
+                      or resolution.get("classification") or "unknown")
+        signals = [s for s in (resolution.get("primary_signals") or [])
+                   if str(s).strip()]
         recorder.step(
             T.EMAIL_INTERPRET,
             "What does this evidence mean?",
             source="model", target=str(payload.get("resolution_source") or "model"),
-            verdict=str(resolution.get("overall_verdict")
-                        or resolution.get("classification") or "unknown"),
-            cost={"model_calls": 1}, fields={},
+            verdict=verdict,
+            cost={"model_calls": 1},
+            # The verdict and confidence are structured; `primary_signals` is
+            # model prose and is COUNTED, not interpolated. The signals
+            # themselves render in the evidence sections, where they are
+            # attributed to the model rather than to a template.
+            fields={"verdict_text": verdict,
+                    "confidence": str(resolution.get("confidence") or "unstated"),
+                    "signals": len(signals)},
         )
     else:
         _not_asked(recorder, T.EMAIL_INTERPRET, "What does this evidence mean?",
@@ -263,7 +299,7 @@ def _inspection_findings(inspection: Any) -> list[str]:
         note = str(item.get("verdict") or item.get("real_type")
                    or item.get("type") or "inspected")
         out.append(f"{name} ({note})")
-    return out or ["no structural findings"]
+    return out
 
 
 def _risk_text(risk: Any) -> str:
@@ -281,9 +317,34 @@ def _risk_text(risk: Any) -> str:
 
 
 def _risk_drivers(risk: Any) -> list[str]:
+    """The largest weighted contributors, named from discrete fields.
+
+    This read `rationale` — which is **prose**: "No strong malicious signal;
+    monitor and corroborate with external context". Interpolated into a
+    sentence it produced a capital mid-clause and, worse, put a
+    *recommendation* where a driver belongs. **A slot that can receive free
+    text has the same hazard as a model**, which is the thing templates were
+    chosen to avoid.
+
+    `components` and `weights` are seven named scores, so the drivers are
+    computed rather than quoted: contribution = score x weight, largest
+    first, named by component. Nothing here can carry a sentence.
+    """
     data = risk if isinstance(risk, dict) else {}
-    for key in ("rationale", "drivers", "reasons", "signals"):
-        values = data.get(key)
-        if isinstance(values, list) and values:
-            return [str(v)[:80] for v in values[:4]]
-    return ["the combined source answers"]
+    components = data.get("components") or {}
+    weights = data.get("weights") or {}
+    if not isinstance(components, dict) or not components:
+        return []
+
+    contributions: list[tuple[float, str]] = []
+    for name, score in components.items():
+        try:
+            value = float(score) * float(weights.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0:
+            continue
+        label = str(name).replace("_score", "").replace("_", " ")
+        contributions.append((value, f"{label} {value:.2f}"))
+    contributions.sort(reverse=True)
+    return [text for _value, text in contributions[:3]]

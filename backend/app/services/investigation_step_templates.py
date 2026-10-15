@@ -65,7 +65,9 @@ def listing(values: Any, limit: int = 3) -> str:
     items = [str(v) for v in (values or []) if str(v).strip()]
     if not items:
         return "none"
-    if len(items) <= limit:
+    # One over the limit lists everything. "a, b, c and 1 others" is both
+    # ungrammatical and sillier than just naming the fourth item.
+    if len(items) <= limit + 1:
         if len(items) == 1:
             return items[0]
         return ", ".join(items[:-1]) + f" and {items[-1]}"
@@ -95,6 +97,7 @@ EMAIL_PARSE = "email.parse"
 EMAIL_PARSE_NO_INDICATORS = "email.parse.none"
 EMAIL_ATTACHMENT_INSPECT = "email.attachment.inspect"
 EMAIL_ATTACHMENT_INSPECT_NONE = "email.attachment.inspect.none"
+EMAIL_ATTACHMENT_INSPECT_CLEAN = "email.attachment.inspect.clean"
 EMAIL_ATTACHMENT_CONTENT = "email.attachment.content"
 EMAIL_ATTACHMENT_CONTENT_UNREADABLE = "email.attachment.content.unreadable"
 EMAIL_URL_TRIAGE = "email.url.triage"
@@ -103,6 +106,7 @@ EMAIL_ENRICH = "email.enrich"
 EMAIL_SANDBOX = "email.sandbox"
 EMAIL_SANDBOX_SKIPPED = "email.sandbox.skipped"
 EMAIL_RISK = "email.risk"
+EMAIL_RISK_NO_DRIVERS = "email.risk.no_drivers"
 EMAIL_INTERPRET = "email.interpret"
 STEP_NOT_ASKED = "step.not_asked"
 
@@ -116,13 +120,18 @@ TEMPLATES: dict[str, str] = {
         "no attachments and no sender address that could be looked up."
     ),
     EMAIL_ATTACHMENT_INSPECT: (
-        "Inspected {plural(attachments, 'attachment')} for what they really "
-        "are: {listing(findings)}."
+        "Inspected {plural(attachments, 'attachment')} for what the files "
+        "are, rather than what they are named: {listing(findings)}."
+    ),
+    EMAIL_ATTACHMENT_INSPECT_CLEAN: (
+        "Inspected {plural(attachments, 'attachment')} for what the files "
+        "are, rather than what they are named, and found nothing structurally "
+        "unexpected."
     ),
     EMAIL_ATTACHMENT_INSPECT_NONE: "The message carried no attachments.",
     EMAIL_ATTACHMENT_CONTENT: (
-        "Read the contents of {plural(files, 'attachment')} without opening "
-        "them by hand: {listing(summaries)}."
+        "Read the contents of {plural(files, 'attachment')} without anyone "
+        "opening the file by hand: {listing(summaries)}."
     ),
     EMAIL_ATTACHMENT_CONTENT_UNREADABLE: (
         "The attachment contents could not be read, so what the files say is "
@@ -148,13 +157,16 @@ TEMPLATES: dict[str, str] = {
         "rather than safe."
     ),
     EMAIL_RISK: (
-        "Combined every source's answer into one score: {verdict_text}, driven "
-        "by {listing(drivers)}."
+        "Combined every source's answer into one score: {verdict_text}. The "
+        "largest contributors were {listing(drivers)}."
+    ),
+    EMAIL_RISK_NO_DRIVERS: (
+        "Combined every source's answer into one score: {verdict_text}. No "
+        "single source contributed materially to it."
     ),
     EMAIL_INTERPRET: (
-        "Asked the model to interpret the evidence gathered above. This is "
-        "the only model call in the investigation, and it saw the recorded "
-        "steps rather than the raw responses."
+        "Interpreted the evidence above as {verdict_text}, with "
+        "{confidence} confidence, resting on {plural(signals, 'named signal')}."
     ),
     # Rendered for a step that could not be asked at all. Present in the chain
     # on purpose: dropping it would silently shorten the investigation.

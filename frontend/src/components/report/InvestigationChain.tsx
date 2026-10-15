@@ -54,6 +54,35 @@ function Chip({ children, tone = "neutral" }: {
   );
 }
 
+/** The attribution, in words. The four kinds are four different claims about
+ *  an audit trail and a label cannot carry the difference. */
+function actorSentence(actor: InvestigationRecordView["actor"]): string {
+  switch (actor.kind) {
+    case "human":
+      return `Submitted by ${actor.recorded ?? "a signed-in person"}.`;
+    case "service_account":
+      return `Submitted by the API principal ${actor.recorded ?? "(unnamed)"}.`;
+    case "automated_ingest":
+      return "Arrived through automated ingest, with no person submitting it.";
+    case "predates_attribution":
+      return "No submitter was recorded for this run — it predates the platform capturing one, so somebody submitted it and we cannot say who.";
+    case "recorded_unresolvable":
+      return `Submitted by ${actor.recorded ?? "an actor"}, which does not match any current account.`;
+    default:
+      return `Attribution recorded as ${actor.kind}.`;
+  }
+}
+
+/** `1 sandbox credit`, `6 external calls`. The chips read "1 model calls"
+ *  because the key was pluralised and the count was not — number agreement
+ *  is formatting, and formatting is the one thing allowed to branch. */
+function costLabel(key: string, value: unknown): string {
+  const n = Number(value) || 0;
+  const words = key.replace(/_/g, " ");
+  const singular = n === 1 ? words.replace(/s$/, "") : words;
+  return `${n.toLocaleString()} ${singular}`;
+}
+
 function Step({ step }: { step: InvestigationStepView }) {
   const noClaim = Boolean(step.absence_kind);
   const costEntries = Object.entries(step.cost || {}).filter(([, v]) => Boolean(v));
@@ -115,9 +144,11 @@ function Step({ step }: { step: InvestigationStepView }) {
             </Chip>
           )}
           {costEntries.map(([k, v]) => (
-            <Chip key={k} tone="warn">{String(v)} {k.replace(/_/g, " ")}</Chip>
+            <Chip key={k} tone="warn">{costLabel(k, v)}</Chip>
           ))}
-          {costEntries.length === 0 && !noClaim && <Chip tone="good">no external cost</Chip>}
+          {/* Nothing at zero. "no external cost" on four of seven rows is
+              noise and makes the three paid steps harder to find — the
+              opposite of what the gate exists to show. */}
           {step.duration_ms !== null && <Chip>{durationFromMs(step.duration_ms)}</Chip>}
           {step.response_truncated && (
             <Chip tone="warn">
@@ -260,9 +291,14 @@ export default function InvestigationChain({
       <footer style={{
         marginTop: 10, fontSize: 11, lineHeight: 1.55, color: "var(--text-muted)",
       }}>
+        {/* A sentence, not a kind. `predates_attribution` means nothing to a
+            reader, and the four kinds are four different claims — so each
+            gets its own words rather than a label with underscores in it. */}
+        {actorSentence(record.actor)}{" "}
         Every sentence above comes from a template over recorded fields, not
-        from a model. Attribution: {record.actor.kind.replace(/_/g, " ")}
-        {record.actor.recorded ? ` (${record.actor.recorded})` : ""}.
+        from a model — the one model call is step{" "}
+        {record.counters.steps_run}, and it saw the recorded steps rather than
+        the raw responses.
       </footer>
     </section>
   );
