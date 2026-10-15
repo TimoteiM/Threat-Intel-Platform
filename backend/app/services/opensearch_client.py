@@ -83,10 +83,12 @@ class SearchResult:
     #: skipped or duplicated documents while the screen says "related
     #: activity". On a SOC platform "no related activity" is a conclusion
     #: people act on, so a narrower answer than the one claimed has to say so.
-    #: Measured 2026-10-15: 0 of 3,524 recorded reads had a PIT refused, so
-    #: this is a latent defect rather than a live one — but a PIT can also be
-    #: refused by cluster pressure, a PIT limit or a timeout, not only by a
-    #: missing permission, and nothing would have reported it.
+    #: Measured 2026-10-15: 0 refusals across 5,948 searches that recorded the
+    #: result (3,524 top-level reads plus 2,424 nested follow-ups), with 10
+    #: follow-ups unclassified — so this is a latent defect rather than a live
+    #: one. But a PIT can also be refused by cluster pressure, a PIT limit or a
+    #: timeout, not only by a missing permission, and nothing would have
+    #: reported it.
     consistency_absence: dict[str, Any] | None = None
     #: True when a PIT was requested. Separates "not asked" from "refused".
     consistency_requested: bool = False

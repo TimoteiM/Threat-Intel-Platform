@@ -109,10 +109,17 @@ result, downgrades the window's status to partial, states that pages may have
 skipped or duplicated documents, and logs at WARNING rather than INFO. Logging
 at INFO is not reporting.
 
-**We measured it before telling you, and the news is good:** of **3,524**
-recorded log-context reads between 2026-09-24 and 2026-10-15, **zero** had a
-point-in-time refused. So this was latent, not an incident — but nothing would
-have reported it if it had not been.
+**We measured it before telling you, and the news is good:** of **5,948**
+searches that recorded the result, between 2026-09-24 and 2026-10-15, **zero**
+had a point-in-time refused. **Ten** further follow-up reads did not record it
+either way and are unclassified — about 0.2%, and we are not claiming them as
+successes. So this was latent rather than an incident, on 5,948 known-good
+observations and 10 unknown ones.
+
+We are giving you the remainder rather than the round number because you are
+making a permissions decision on it. Nothing would have reported a refusal if
+there had been one, which is the defect; the figure is what the fix makes
+visible from now on.
 
 Grant the PIT permissions if you can, since consistent paging is worth having.
 If you would rather not, say so and we will stop requesting one, which is a
