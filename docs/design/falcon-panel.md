@@ -164,8 +164,8 @@ is a mistake this platform has already made once.
 ## 5. Coverage: the finding nobody asked for
 
 Joining Wazuh `agent.name` (179 hosts in alerts over 7 days) to Falcon
-`hostname` (175 of 182 device records carry one — **7 carry no hostname at
-all**):
+`hostname` (182 device records, **175 distinct hostnames** — the difference is
+5 hostnames re-enrolled, not 7 missing names; see the correction in §8):
 
 | | |
 |---|---|
@@ -278,9 +278,19 @@ domains, not the sender IP.
   "what does CrowdStrike know about this indicator" becomes answerable and
   the email panel grows a real question. If no, the 403 should be recorded
   once as a capability absence rather than retried per investigation.
-- The 7 Falcon device records with **no hostname**: unmanaged-but-registered,
-  or containers? They cannot be joined to anything and are currently invisible
-  on both sides.
+- ~~The 7 Falcon device records with no hostname~~ — **corrected 2026-10-15.**
+  There are none. 182 records collapse to 175 *distinct lowercased* hostnames,
+  so the difference was 7 duplicate hostnames, not 7 absent ones. The cause is
+  sensor re-enrolment: 5 hostnames carry 2-3 records each, and in every case
+  the retired record's last check-in hands straight off to the next record's
+  first check-in. Those hosts are covered.
+
+  The error mattered, because it was load-bearing for code: `lookup_host`
+  took `ids[0]` from the device query, which is an arbitrary choice between
+  enrolments. Picking a retired one reports a host that checked in this
+  morning as a stale sensor — and the stale warning then discredits a
+  detection list that was complete. It now sorts by `last_seen` and reports
+  the rest as `superseded_devices`.
 - Whether `DC`, `WIN11-MSSQL01`, `WIN10-MSSQL02`, `SERVER01` and
   `dns1.expertware.net` are deliberately out of EDR scope or an oversight.
   That is a question for whoever owns the Falcon licence count.

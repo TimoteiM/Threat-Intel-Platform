@@ -2139,3 +2139,108 @@ export function removeIntegration(tenantId: string, tool: string) {
     { method: "DELETE" }
   );
 }
+
+// --- Falcon host panel ------------------------------------------------------
+
+/** An `Absent.as_json()` from `app/services/absence.py`. */
+export interface FalconAbsence {
+  absent: true;
+  kind: string;
+  reason: string;
+  raw?: string | null;
+  cannot_join?: boolean;
+}
+
+export interface FalconCoverage {
+  managed?: boolean;
+  hostname?: string;
+  basis?: string;
+  finding?: string;
+  platform_name?: string;
+  os_version?: string;
+  os_build?: string;
+  agent_version?: string;
+  status?: string;
+  product_type_desc?: string;
+  site_name?: string;
+  machine_domain?: string;
+  first_seen?: string;
+  last_seen?: string;
+  last_seen_hours_ago?: number;
+  sensor_stale?: boolean;
+  degraded?: boolean;
+  prevention_applied?: boolean | null;
+  reporting?: string | FalconAbsence;
+  re_enrolled?: boolean;
+  re_enrolled_note?: string;
+  superseded_enrolments?: Array<{
+    first_seen?: string;
+    last_seen?: string;
+    agent_version?: string;
+  }>;
+}
+
+export interface FalconDetectionGroup {
+  name: string;
+  filename: string | null;
+  tactic: string | null;
+  technique: string | null;
+  rows: number;
+  open_rows: number;
+  open: boolean;
+  prevented: boolean;
+  dispositions: string[];
+  users: string[];
+  statuses: string[];
+  latest: string | null;
+}
+
+export interface FalconDetections {
+  /** THE headline. Distinct and open — never the raw row count. */
+  open_detection_count: number;
+  distinct_detection_count: number;
+  counts_are_lower_bounds: boolean;
+  counts_basis: string;
+  groups: FalconDetectionGroup[];
+  basis?: string;
+  /** Behind the collapse. 1,432 rows is repetition, not severity. */
+  raw: {
+    rows: number;
+    aggregate_ids: number;
+    note: string;
+    truncated_at: number | null;
+  };
+}
+
+export interface FalconHostPanel {
+  run_id?: string;
+  tenant_id?: string;
+  hostname: string | null;
+  window_days: number;
+  coverage: FalconCoverage | FalconAbsence;
+  detections: FalconDetections | FalconAbsence;
+  field_control?: {
+    passed: boolean;
+    field: string | null;
+    checked_at: string | null;
+    reason: string | null;
+    why_it_matters: string;
+  };
+}
+
+/** Is `value` a named absence rather than an answer?
+ *
+ *  Exported because every consumer has to branch on it: the whole point of the
+ *  absence convention is that "the EDR has nothing" and "we could not ask" are
+ *  different renders, and a component that treats an absence as an empty
+ *  result puts the first words on the screen for the second condition. */
+export function isFalconAbsence(value: unknown): value is FalconAbsence {
+  return Boolean(value && typeof value === "object" && (value as FalconAbsence).absent === true);
+}
+
+/** What this tenant's Falcon knows about the host named in this alert. */
+export function getRunFalcon(runId: string, days = 30) {
+  return request<FalconHostPanel>(
+    `/alert-investigations/${runId}/falcon?days=${days}`,
+  );
+}

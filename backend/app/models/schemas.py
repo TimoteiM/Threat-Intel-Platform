@@ -181,7 +181,14 @@ class FalconEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="falcon"))
     #: True only when Falcon was asked and returned something.
     found: bool = False
-    detections: list[dict] = []
+    #: A list when Falcon was asked, or an `Absent.as_json()` when there was
+    #: no field to ask with. Widened on 2026-10-15: measured against 200 real
+    #: alerts, no Falcon alert field carries a domain or a remote address, so
+    #: for those kinds an empty list would assert "the EDR has no detection
+    #: mentioning this" when the truth is that it has nowhere to mention it.
+    #: The absence goes ON the field, per `app/services/absence.py` — a
+    #: renderer handed this has nothing to show but the reason.
+    detections: list[dict] | dict = []
     hosts: list[dict] = []
     queried_at: Optional[str] = None
     #: `{"asked": True, ...}` or an `Absent.as_json()`. Never absent itself.

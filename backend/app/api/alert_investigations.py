@@ -31,6 +31,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, Request, Response
 from starlette.concurrency import run_in_threadpool
 
+from app.services import absence
 from app.services import tenant_scope
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -961,6 +962,118 @@ async def _selectable_tenants(db: DBSession, request: Request | None) -> list[di
             "run_count": counts.get(None, 0),
         })
     return options
+
+
+@router.get("/{run_id}/falcon")
+async def get_run_falcon(
+    run_id: uuid.UUID,
+    db: DBSession,
+    days: int = Query(default=30, ge=1, le=90),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """What this tenant's CrowdStrike Falcon knows about the host in this alert.
+
+    Two sections that fail differently, and the difference is the point:
+
+    * **coverage** — is there a sensor on this host? The Devices API validates
+      `hostname` (an unknown field is a 400), so an empty result is a real
+      negative: no EDR on a host that is generating alerts. That is a finding.
+    * **detections** — the Alerts API does *not* validate field names; it
+      answers 200 with zero resources. So its negative is withheld unless the
+      standing field control has passed.
+
+    An alert with no `entity_host` gets `cannot_join`, never `unmanaged`. A
+    missing join key and a missing sensor are opposite findings.
+    """
+    import asyncio
+
+    from app.integrations import falcon_client as falcon
+    from app.services import falcon_host_panel_service as panel
+    from app.services import integration_credential_service as creds
+
+    run = await db.get(AlertBodyInvestigationRun, run_id)
+    if run is None:
+        raise HTTPException(404, "Alert investigation not found")
+    tenant_scope.assert_can_read(_scope(request), run.tenant_id)
+
+    tenant = str(run.tenant_id or "").strip()
+    host = str(getattr(run, "entity_host", "") or "").strip()
+
+    if not tenant:
+        # No tenant, no per-tenant credential. Never another tenant's: that is
+        # the cross-tenant read the credential design exists to prevent.
+        return {
+            "run_id": str(run_id), "hostname": host or None,
+            "coverage": panel.unjoinable(
+                "this alert carries no tenant, so no per-tenant Falcon "
+                "credential could be selected and no request was made.",
+                hostname=host or None),
+            "detections": panel.unjoinable(
+                "this alert carries no tenant.", hostname=host or None),
+            "window_days": days,
+        }
+    if not host:
+        out = panel.panel(hostname=None, device=None, detections=[],
+                          control=None)
+        out["run_id"] = str(run_id)
+        out["tenant_id"] = tenant
+        return out
+
+    try:
+        opened = await asyncio.to_thread(creds.open_for_tenant_sync, tenant, "falcon")
+    except creds.IntegrationNotConfigured:
+        return {
+            "run_id": str(run_id), "tenant_id": tenant, "hostname": host,
+            "window_days": days,
+            "coverage": absence.absent(
+                absence.CHECK_FAILED,
+                f"CrowdStrike Falcon is not configured for this customer, so "
+                f"no request was made. An unconfigured EDR is an absence — "
+                f"not a host the EDR has nothing on.",
+                raw="not_configured",
+            ).as_json(),
+            "detections": absence.absent(
+                absence.CHECK_FAILED,
+                "Falcon is not configured for this customer.",
+                raw="not_configured",
+            ).as_json(),
+        }
+
+    try:
+        raw = await asyncio.to_thread(
+            falcon.lookup_host,
+            hostname=host, client_id=opened.client_id,
+            client_secret=opened.client_secret, config=opened.config,
+            days=days, row_cap=panel.DETECTION_ROW_CAP,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Redacted at the source and again here. A credential or scope failure
+        # must never render as "the EDR has nothing on this host".
+        reason = falcon._redact(exc)
+        return {
+            "run_id": str(run_id), "tenant_id": tenant, "hostname": host,
+            "window_days": days,
+            "coverage": absence.absent(
+                absence.CHECK_FAILED,
+                f"The Falcon query did not complete ({type(exc).__name__}: "
+                f"{reason}), so whether this host has a sensor is unknown.",
+            ).as_json(),
+            "detections": absence.absent(
+                absence.CHECK_FAILED,
+                f"The Falcon query did not complete ({type(exc).__name__}).",
+            ).as_json(),
+        }
+
+    out = panel.panel(
+        hostname=raw["hostname"], device=raw["device"],
+        detections=raw["detections"], control=raw["control"],
+        truncated_at=raw.get("truncated_at"),
+        superseded=raw.get("superseded_devices"),
+    )
+    out["run_id"] = str(run_id)
+    out["tenant_id"] = tenant
+    out["window_days"] = days
+    return out
 
 
 @router.get("/{run_id}/case")

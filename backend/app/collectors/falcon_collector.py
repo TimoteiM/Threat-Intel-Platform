@@ -58,7 +58,7 @@ from typing import Any
 
 from app.collectors.base import BaseCollector
 from app.models.schemas import FalconEvidence
-from app.services.absence import CHECK_FAILED, absent
+from app.services.absence import CHECK_FAILED, NO_FIELD_MAP, absent
 
 logger = logging.getLogger(__name__)
 
@@ -162,5 +162,30 @@ class FalconCollector(BaseCollector):
         # Asked and answered — including "answered nothing", which is a real
         # negative and the one state the seven-month ThreatFox silence could
         # never express.
-        evidence.status = {"asked": True, "tenant_id": tenant_id}
+        evidence.status = {
+            "asked": True,
+            "tenant_id": tenant_id,
+            # Which field carried the detection question, so a reader can tell
+            # a negative apart from a question that was never askable. Measured
+            # 2026-10-15: no Falcon alert field carries a domain or a remote
+            # address, so for those kinds this is None and the absence below
+            # says so.
+            "detections_field": result.get("detections_field"),
+        }
+        unmappable = result.get("detections_unmappable")
+        if result.get("detections_field") is None:
+            # On the field, not in a side channel. `detections: []` would read
+            # as "the EDR has no detection mentioning this" when the truth is
+            # that Falcon has no field to mention it in.
+            evidence.detections = absent(
+                NO_FIELD_MAP,
+                f"Falcon has no alert field that answers for a "
+                f"{self.observable_type!r}"
+                + (f": {unmappable}. " if unmappable else ". ")
+                + "No detection search was run, so this is not a report that "
+                  "the EDR has nothing. The device question above was asked "
+                  "separately and answers on its own terms.",
+                raw=self.observable_type,
+            ).as_json()
+            evidence.found = bool(evidence.hosts)
         return evidence

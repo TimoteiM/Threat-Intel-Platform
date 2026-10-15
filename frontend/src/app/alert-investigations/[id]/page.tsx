@@ -8,6 +8,7 @@ import ConsoleModule from "@/components/ui/ConsoleModule";
 import AnalystVerdictControl from "@/components/report/AnalystVerdictControl";
 import EndpointEventCard from "@/components/report/EndpointEventCard";
 import { AlertLogContext } from "@/components/report/AlertLogContext";
+import FalconHostPanel from "@/components/report/FalconHostPanel";
 import { AlertLogView } from "@/components/report/AlertLogView";
 import IndicatorSummaryCard from "@/components/report/IndicatorSummaryCard";
 import PageHero from "@/components/ui/PageHero";
@@ -1635,6 +1636,12 @@ function LogContextSection({
           )}
         </div>
       )}
+      {/* The EDR's own view of the host this alert names. Placed after the log
+          context because the log is what fired and this is what another tool
+          already knew about the same machine. */}
+      <div style={{ marginTop: 16 }}>
+        <FalconHostPanel runId={runId} />
+      </div>
     </section>
   );
 }

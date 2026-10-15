@@ -77,6 +77,51 @@ Three consequences worth keeping:
    mistake, in the other direction. The pin is per field *because* the
    producer is per field.
 
+## The second instance, found the same day
+
+Hours after the above, in a different product entirely. CrowdStrike Falcon's
+alert record carries a field called **`data_domains`**, populated on 193 of
+200 sampled alerts. The Falcon panel needed to ask "has the EDR seen an alert
+mentioning this domain", and `data_domains` is the only field in 73 whose name
+contains the word.
+
+Its value is `['Endpoint']`.
+
+It is a **data classification** — which data estate the alert concerns — and
+has nothing to do with DNS names. Filtering it with a domain returns 200 and
+zero rows, like every other guess at that API.
+
+| | `data.win.eventdata.queryName` | `data_domains` |
+|---|---|---|
+| product | Wazuh / Sysmon | CrowdStrike Falcon |
+| the name suggests | the DNS name a host queried | domains in the alert |
+| it actually holds | that, **or** the name a lookup failed to resolve | a data classification, `Endpoint` |
+| why the name is honest | event 1014 really does carry a query name | a "data domain" really is a domain of data |
+| what reading it wrong produces | failed lookups reported as contact | an empty result reported as "the EDR has nothing" |
+
+The same shape and a different mechanism. In the first case one field name
+covered two *producers* with opposite meanings. In the second, one English
+word covers two *domains of discourse* — DNS and data governance — and the API
+picked the other one.
+
+Which is the generalisation getting broader, not weaker: **a field name is a
+label somebody else chose for their own question.** It is not evidence about
+yours. The check is the same either way — ask the store to break the field
+down, and look at the values before building on them. Here one sample value
+would have done it: nobody reads `['Endpoint']` and thinks "domain name".
+
+Two more from the same API, worth keeping as the pattern rather than as
+trivia:
+
+- **`source_ips`** is populated and holds `['10.66.66.12']` — *internal*
+  source addresses. A field that accepts a valid IP, validates it, and can
+  never match a remote one. Not a wrong name; a right name for a question
+  nobody here was asking.
+- **`behaviors.sha256`**, which does not exist at all, and whose non-existence
+  the API reports as HTTP 200 with zero results. The name was *plausible from
+  the vendor's older API*, which is the worst case: a name that was once
+  right.
+
 ## How to find this class of thing
 
 The query that settles it is a breakdown of the field's own documents by
