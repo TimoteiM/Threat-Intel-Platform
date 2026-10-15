@@ -674,6 +674,20 @@ class EmailInvestigationRun(Base):
     sender_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     resolution_source: Mapped[str] = mapped_column(String(50), nullable=False, default="queued")
     result_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: Who uploaded it, as the attribution pair. Captured at upload, where the
+    #: session exists — it was being discarded, which made every new run
+    #: permanently unattributable for no reason. Existing rows are
+    #: `predates_attribution`: an actor existed and was not recorded, which is
+    #: a different claim from `automated_ingest` (no human was involved).
+    actor_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="predates_attribution",
+        server_default="predates_attribution",
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    actor_recorded: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -692,6 +706,7 @@ class EmailInvestigationRun(Base):
 
     __table_args__ = (
         Index("idx_email_runs_created", "created_at"),
+        Index("idx_email_runs_actor", "actor_kind"),
     )
 
 

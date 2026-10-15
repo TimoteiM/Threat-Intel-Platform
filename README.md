@@ -1190,3 +1190,36 @@ Domain Submission
     Structured Report
     (classification, risk score, findings, IOCs, recommendations)
 ```
+
+### Rule 17 — a migration runs later than it is written
+
+**Any code that encodes a measured fact executes after the measurement that
+justified it.** So it resolves against the data rather than asserting about it.
+
+Migration 065's backfill said *"the six existing rows all carry
+`'verification'`"* — a population measured hours earlier, and written into a
+comment as justification. By the time it executed there were **26** rows,
+twelve of them from a real person whose username resolves to a `users` row.
+The classification was not merely stale; it recorded twelve real human actions
+as unattributable, in the column built to make attribution possible.
+
+The error is not the figure. It is the shape: a migration is written at one
+moment and run at another, by definition, against whatever the table holds
+*then*. The same applies to a backfill, a data fix, a one-off script, and any
+constant derived from a census.
+
+**The pattern, from migration 066:**
+
+- **resolve, don't assert** — `UPDATE … FROM users WHERE u.username =
+  t.actor_recorded`, so the answer comes from the data at execution time;
+- **promote only** — a row already resolved stays resolved;
+- **never demote** — and `downgrade()` is deliberately empty, because
+  reversing it would assert an actor cannot be matched when the migration has
+  just demonstrated it can. A false claim written by a rollback is still a
+  false claim.
+
+Re-runnable by construction, which is the test of it: if running it twice
+changes anything the second time, it was asserting rather than resolving.
+
+Related: rule 16 (name the other world), and the measurement rules — a
+population is a measurement and carries a time, like any other.

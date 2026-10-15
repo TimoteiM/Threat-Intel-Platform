@@ -66,6 +66,7 @@ async def upload_email_investigation(
     run_anyrun: bool = Form(default=False),
     run_ai: bool = Form(default=True),
     ml_phishing_score: str | None = Form(default=None),
+    request: Request = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     name = (file.filename or "").strip()
     lowered = name.lower()
@@ -79,10 +80,17 @@ async def upload_email_investigation(
     if not payload:
         raise HTTPException(status_code=400, detail="Uploaded email file is empty.")
 
+    # Captured here because here is where it exists. The endpoint has a
+    # session and was throwing the actor away, so every run became
+    # permanently unattributable — and attributing a submission is only
+    # possible at submission.
+    from app.services import actor_attribution
+
     run = EmailInvestigationRun(
         filename=Path(name).name,
         resolution_source="queued",
         result_json={"status": "queued", "error": None},
+        **await actor_attribution.resolve(request, db),
     )
     db.add(run)
     await db.commit()

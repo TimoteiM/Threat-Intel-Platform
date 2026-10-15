@@ -81,6 +81,13 @@ def run_email_investigation(
             logger.info("Email investigation already cancelled before start: %s", run_id)
             return run_id
         run_filename = run.filename
+        # Read here, inside the session that already loaded the row, so the
+        # recorder does not re-query for it later.
+        run_actor = {
+            "actor_kind": run.actor_kind,
+            "actor_user_id": run.actor_user_id,
+            "actor_recorded": run.actor_recorded,
+        }
 
     _update_run(
         parsed_id,
@@ -109,7 +116,7 @@ def run_email_investigation(
             )
         )
 
-        _record_investigation(parsed_id, response_payload)
+        _record_investigation(parsed_id, response_payload, run_actor)
 
         _update_run(
             parsed_id,
@@ -145,7 +152,8 @@ def run_email_investigation(
     return run_id
 
 
-def _record_investigation(run_uuid: uuid.UUID, payload: dict) -> None:
+def _record_investigation(run_uuid: uuid.UUID, payload: dict,
+                          actor: dict | None = None) -> None:
     """Write the investigation record. Fail-open, by contract.
 
     A recording bug must never take an investigation down — this is a
@@ -154,10 +162,9 @@ def _record_investigation(run_uuid: uuid.UUID, payload: dict) -> None:
     page says so above the chain, so a short chain is a visible gap rather
     than a plausible investigation.
 
-    The actor is `predates_attribution`, which is the honest kind rather than a
-    placeholder: the upload endpoint does not capture a submitter yet, so an
-    actor existed and was not recorded. `automated_ingest` would claim no
-    human was involved, and a human uploaded the file.
+    The actor comes from the run, which captures it at upload. A run from
+    before that existed carries `predates_attribution` — an actor existed and
+    was not recorded, which is a different claim from `automated_ingest`.
     """
     try:
         from app.models.database import ACTOR_PREDATES_ATTRIBUTION
@@ -166,10 +173,13 @@ def _record_investigation(run_uuid: uuid.UUID, payload: dict) -> None:
             InvestigationRecorder, persist_sync,
         )
 
+        pair = dict(actor or {})
         recorder = InvestigationRecorder(
             origin_surface="email",
             origin_id=str(run_uuid),
-            actor_kind=ACTOR_PREDATES_ATTRIBUTION,
+            actor_kind=pair.get("actor_kind") or ACTOR_PREDATES_ATTRIBUTION,
+            actor_user_id=pair.get("actor_user_id"),
+            actor_recorded=pair.get("actor_recorded"),
         )
         derive(payload or {}, recorder)
         resolution = (payload or {}).get("resolution") or {}

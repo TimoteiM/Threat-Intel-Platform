@@ -156,6 +156,27 @@ states it **above** the chain, and **a chain that did not record fully is
 never presented as the investigation.** A silent short chain is worse than a
 visible gap.
 
+### The summary checks ship with the first summary, not after it
+
+`unverified_entities` and `unverified_numerals` are **specified and not
+built**, because slice 1 writes no summary — the email pipeline's existing
+model call produces the resolution and no second call was added.
+
+**The condition, so slice 2 cannot skip it:** the first change that writes a
+`summary` to a record is the change that implements both checks and renders
+their output. Not the next one.
+
+Deferring them while no summary exists is correct. Deferring them *past* the
+first summary makes the check a retrofit against something already on a page —
+and a check added after the thing it constrains is already rendering is a
+check argued against live output rather than one the output had to satisfy.
+That is how `out_of_scope` acquired a test defending it.
+
+So: a record with a non-null `summary` and empty
+`summary_unverified_entities`/`summary_unverified_numerals` is only valid if
+the checks ran and found nothing. If they have not been implemented, the
+summary is not written.
+
 ## Build order
 
 1. **Now — slice 1.** The record schema, the email pipeline writing to it, and

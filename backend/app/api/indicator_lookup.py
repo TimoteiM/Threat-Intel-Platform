@@ -49,45 +49,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _actor(request: Request | None, db: Any) -> dict[str, Any]:
-    """Who is asking, as the attribution pair rather than a name.
+    """Delegates. This carried its own copy of the resolution logic, which made
+    it the second implementation of an idea specified the same day — see
+    `app/services/actor_attribution.py`."""
+    from app.services import actor_attribution
 
-    Never from a parameter: an actor a caller can set is not an actor.
-
-    This returned a single string with `"unidentified"` for absent, which
-    collapses four conditions that mean different things — see
-    `docs/design/submitter-attribution.md`. The name is now **resolved**
-    against `users`, so a recorded actor that matches an account is `human`
-    with its id, and one that does not is `recorded_unresolvable` with the
-    string kept: an actor *was* recorded and cannot be matched, which is a
-    different claim from nobody having written one down.
-    """
-    from app.models.database import (
-        ACTOR_AUTOMATED_INGEST, ACTOR_HUMAN, ACTOR_RECORDED_UNRESOLVABLE, User,
-    )
-
-    identity = getattr(getattr(request, "state", None), "identity", None) or {}
-    recorded = ""
-    for key in ("username", "label", "kind"):
-        value = str(identity.get(key) or "").strip()
-        if value:
-            recorded = value[:255]
-            break
-    if not recorded:
-        # No identity on the request at all. Not "unidentified" — there was no
-        # human actor, which is what this kind means.
-        return {"actor_kind": ACTOR_AUTOMATED_INGEST, "actor_user_id": None,
-                "actor_recorded": None}
-    try:
-        user_id = (await db.execute(
-            select(User.id).where(User.username == recorded)
-        )).scalars().first()
-    except Exception:  # noqa: BLE001
-        user_id = None
-    if user_id is not None:
-        return {"actor_kind": ACTOR_HUMAN, "actor_user_id": user_id,
-                "actor_recorded": recorded}
-    return {"actor_kind": ACTOR_RECORDED_UNRESOLVABLE, "actor_user_id": None,
-            "actor_recorded": recorded}
+    return await actor_attribution.resolve(request, db)
 
 
 @router.get("")
