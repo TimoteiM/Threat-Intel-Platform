@@ -820,11 +820,27 @@ def collect_for_alert(
         ),
         "pages": result.pages,
         "consistent_pagination": bool(getattr(result, "consistent", False)),
+        # Separated, because `consistent_pagination: false` alone conflated
+        # "a frozen view was never asked for" with "the cluster refused one".
+        # The second means these events may be incomplete.
+        "consistency_requested": bool(getattr(result, "consistency_requested", False)),
+        "consistency_absence": getattr(result, "consistency_absence", None),
         "took_ms": result.took_ms,
         "max_hits": int(max_hits if max_hits is not None else settings.alert_log_max_hits),
         "queried_from": effective_start.astimezone(timezone.utc).isoformat(),
         "queried_to": window.covered_until.astimezone(timezone.utc).isoformat(),
     }
+    # A refused point-in-time makes this window narrower than it claims, so it
+    # downgrades the status the same way an incomplete window does. Previously
+    # this was an INFO log line and a boolean in `sources`: nothing a reader
+    # of the page would ever see, while the page said "related activity".
+    # Same class as a detection search on a field that does not exist — the
+    # analyst sees a narrower answer than the one the screen claims.
+    pit_absence = getattr(result, "consistency_absence", None)
+    if pit_absence:
+        context.status = "partial"
+        context.reason = str(pit_absence.get("reason") or "")
+
     if not window.complete:
         context.status = "partial"
         context.reason = (

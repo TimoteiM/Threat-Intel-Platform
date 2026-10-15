@@ -74,6 +74,22 @@ class SearchResult:
     # Whether the pages came from one frozen view of the indices or from a live
     # one. Reported rather than assumed, because the answer differs.
     consistent: bool = False
+    #: Why not, when `consistent` is False and a PIT was asked for. `None`
+    #: means a PIT was never requested, which is a different fact.
+    #:
+    #: This field exists because `consistent: False` on its own was not
+    #: reportable: it conflated "nobody asked for a frozen view" with "the
+    #: cluster refused one", and the second means the pages below may have
+    #: skipped or duplicated documents while the screen says "related
+    #: activity". On a SOC platform "no related activity" is a conclusion
+    #: people act on, so a narrower answer than the one claimed has to say so.
+    #: Measured 2026-10-15: 0 of 3,524 recorded reads had a PIT refused, so
+    #: this is a latent defect rather than a live one — but a PIT can also be
+    #: refused by cluster pressure, a PIT limit or a timeout, not only by a
+    #: missing permission, and nothing would have reported it.
+    consistency_absence: dict[str, Any] | None = None
+    #: True when a PIT was requested. Separates "not asked" from "refused".
+    consistency_requested: bool = False
 
 
 # A node that just failed is skipped for this long rather than being retried on
@@ -184,6 +200,9 @@ class OpenSearchClient:
                     "(which sends the admin password over a connection nobody has checked)."
                 )
             verify = bundle
+        # Always present, so a reader never has to guess whether a refusal
+        # simply was not recorded.
+        self._last_pit_refusal: str | None = None
         self._client = httpx.Client(
             timeout=httpx.Timeout(
                 float(getattr(settings, "opensearch_request_timeout_seconds", 20) or 20),
@@ -313,8 +332,16 @@ class OpenSearchClient:
                 params={"keep_alive": keep_alive},
             )
         except OpenSearchError as exc:
-            logger.info("PIT unavailable, paging a live index instead: %s", self._scrub(exc)[:160])
+            # WARNING, not INFO. This is a degradation in the correctness of
+            # every page that follows, and INFO is where it went unseen.
+            reason = self._scrub(exc)[:200]
+            logger.warning(
+                "PIT refused; paging a LIVE index instead, so pages may skip "
+                "or duplicate documents: %s", reason,
+            )
+            self._last_pit_refusal = reason
             return None
+        self._last_pit_refusal = None
         return payload.get("pit_id") or payload.get("id")
 
     def close_pit(self, pit_id: str) -> None:
@@ -352,8 +379,24 @@ class OpenSearchClient:
         cursor: list[Any] | None = None
         started = time.monotonic()
 
+        self._last_pit_refusal = None
         pit_id = self.open_pit(indices, keep_alive=pit_keep_alive) if use_pit else None
         result.consistent = pit_id is not None
+        result.consistency_requested = bool(use_pit)
+        if use_pit and pit_id is None:
+            # On the result, not in a log line. A caller that renders this has
+            # nothing to show but the reason; a caller that ignores it is the
+            # one case a test can catch.
+            from app.services.absence import CHECK_FAILED, absent
+            refusal = self._last_pit_refusal or "no reason reported"
+            result.consistency_absence = absent(
+                CHECK_FAILED,
+                f"A consistent (point-in-time) view was requested and the "
+                f"cluster refused it, so these events were paged from a live "
+                f"index and may have skipped or duplicated documents. This is "
+                f"not a complete window: it is as much of one as could be read "
+                f"without a frozen view. ({refusal})",
+            ).as_json()
         try:
             self._page(
                 result=result, target=target, query=query, sort=sort,

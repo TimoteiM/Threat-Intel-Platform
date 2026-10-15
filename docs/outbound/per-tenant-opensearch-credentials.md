@@ -99,10 +99,24 @@ quietly by design.
 | **PIT create** | `open_pit` catches the refusal, returns `None`, logs at INFO, and **paging continues without a consistent view** — pages can skip or duplicate documents across a shifting index | **silent** |
 | **PIT delete** | `close_pit` swallows the error at INFO and the PIT **leaks**, pinning segments and costing the cluster disk until it expires | **silent** |
 
-Those two are deliberate in our code — a PIT is an improvement to consistency,
-not a precondition for reading logs — but it means **if you omit the PIT
-permissions, nothing will tell you.** Either grant them, or tell us you are not
-granting them and we will make the degradation visible instead of logged.
+**We have fixed the visibility on our side already, and not conditionally on
+your answer.** A PIT can be refused by cluster pressure, a point-in-time limit
+or a timeout — not only by a missing permission — so this was a live defect
+regardless of what is decided here: log context could silently return a
+narrower answer than the page claimed, while "no related activity" is a
+conclusion analysts act on. A refused PIT now carries a named absence on the
+result, downgrades the window's status to partial, states that pages may have
+skipped or duplicated documents, and logs at WARNING rather than INFO. Logging
+at INFO is not reporting.
+
+**We measured it before telling you, and the news is good:** of **3,524**
+recorded log-context reads between 2026-09-24 and 2026-10-15, **zero** had a
+point-in-time refused. So this was latent, not an incident — but nothing would
+have reported it if it had not been.
+
+Grant the PIT permissions if you can, since consistent paging is worth having.
+If you would rather not, say so and we will stop requesting one, which is a
+different and now-distinguishable state from being refused.
 
 ## The blast radius is the argument for planning it, not for deferring it
 
@@ -186,9 +200,15 @@ layer the consequence is a customer whose data is not isolated.
 So onboarding emits the artefacts from **one definition**: a single declaration
 per customer, applied by a script that is idempotent and that **verifies what
 it created** — the role exists, the mapping resolves, and a query with that
-credential returns that customer's data and refuses another's. The last part is
-the only one that actually proves isolation, and it is a test we can run on
-demand afterwards rather than a one-time assurance.
+credential returns that customer's data **and is refused another customer's**.
+
+That last step is the only one that actually proves isolation, and **its
+failure is fatal to the onboarding, not a warning.** A script that reports
+"could not confirm isolation" and exits zero has onboarded a customer whose
+data may not be separated, which is worse than not onboarding them — the same
+reason a guard has to be seen refusing before it is trusted to permit. It is
+also re-runnable afterwards, so isolation is something that can be
+demonstrated on any given day rather than asserted once at setup.
 
 We will build that against whichever model you ratify, and we would like your
 review of the declaration's contents, since the Wazuh side of it is yours.
@@ -215,8 +235,9 @@ accident to anything that forgets a filter, with no record of who used it.
 
 1. Create a read-only role and user as specified, so we can validate it
    alongside the existing credential.
-2. Confirm whether the PIT permissions are granted, so we know whether to make
-   their absence visible.
+2. Confirm whether the PIT permissions are granted. Not so we can decide
+   whether to report a refusal — that is fixed either way — but so we know
+   whether to keep requesting one.
 3. Agree a window for the switch, and for rotating the `admin` credential
    afterwards.
 
