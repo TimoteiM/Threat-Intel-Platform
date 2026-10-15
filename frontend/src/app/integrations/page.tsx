@@ -588,6 +588,47 @@ export default function IntegrationsPage() {
                   </div>
                 )}
 
+                {/* What the verified_ok rests on. Rendered rather than
+                    implied, because `api_ping` and `collector_output` are
+                    different claims: one says the api can reach the service,
+                    the other says the worker produced output. On 2026-10-14 a
+                    green api ping sat beside a worker with no configuration. */}
+                {(() => {
+                  const dirWarrant = Object.values(t.directions || {})
+                    .map((d: any) => d?.warrant)
+                    .find(Boolean);
+                  const w = t.continuity?.warrant || dirWarrant;
+                  if (!w) return null;
+                  return (
+                    <div style={{ fontSize: 11, marginTop: 6 }}>
+                      <span style={{ color: "var(--text-muted)" }}>
+                        {w.kind === "collector_output"
+                          ? "the collector produced output"
+                          : "an API ping succeeded"}
+                        {typeof w.age_hours === "number"
+                          ? ` ${w.age_hours}h ago`
+                          : ""}
+                      </span>
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          padding: "0 5px",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          fontFamily: "var(--font-mono)",
+                          color: "var(--text-dim)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 3,
+                        }}
+                        title={w.what}
+                      >
+                        {String(w.process).toUpperCase()}
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 {t.continuity && (
                   <div style={{ fontSize: 11, marginTop: 6 }}>
                     {t.continuity.stopped ? (

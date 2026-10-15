@@ -98,6 +98,62 @@ STATES = (
 )
 
 
+#: What established a `verified_ok`. Named constants rather than a boolean,
+#: the same shape as a technique carrying `RULE_CONFIRMED` against
+#: `RULE_ONLY`: the state says it works, the warrant says how that is known.
+#:
+#: These are **different claims and are never conflated.** `api_ping` proves
+#: the api process can reach the service; `collector_output` proves the
+#: collection path produced a result from the worker. On 2026-10-14 a green
+#: api ping sat beside a worker that had no configuration at all, which is
+#: exactly why the card must render which one it has.
+WARRANT_API_PING = "api_ping"
+WARRANT_COLLECTOR_OUTPUT = "collector_output"
+
+_WARRANT_META = {
+    WARRANT_API_PING: (
+        "api",
+        "An authenticated ping from the api process succeeded. This does "
+        "not establish that the worker — which runs the collection — can "
+        "reach the service, because the two read their environments "
+        "separately.",
+    ),
+    WARRANT_COLLECTOR_OUTPUT: (
+        "worker",
+        "The collector produced output: a real authenticated query that "
+        "succeeded end to end, from the worker process that does the work.",
+    ),
+}
+
+
+def warrant_for(kind: str, *, at: Any, now: Any = None) -> dict[str, Any]:
+    """What the `verified_ok` rests on, with its age.
+
+    The age is part of the warrant rather than beside it, because every one
+    of these is a claim about a moment in the past.
+    """
+    from datetime import datetime, timezone
+
+    process, what = _WARRANT_META.get(kind, ("unknown", "Unrecorded basis."))
+    reference = now or datetime.now(timezone.utc)
+    age = None
+    if at is not None:
+        age = round(max(0.0, (reference - at).total_seconds() / 3600.0), 1)
+    return {
+        "kind": kind,
+        "process": process,
+        "what": what,
+        "at": None if at is None else at.isoformat(),
+        "age_hours": age,
+    }
+
+
+#: States that collection evidence may promote to `verified_ok`. A verified
+#: FAILURE is deliberately absent: that is evidence about now, and output
+#: from the past does not clear a present failure.
+_PROMOTABLE = frozenset({NOT_CONFIGURED, CONFIGURED_UNVERIFIED})
+
+
 #: States in which a last success means the tool has STOPPED rather than
 #: merely being absent. `not_implemented` is excluded deliberately: no
 #: connector exists, so there is nothing that could have stopped.
@@ -137,6 +193,8 @@ def continuity(
             "expected_interval_hours": expected_interval_hours,
             "threshold_hours": None,
             "silence_verdict": None,
+            "promoted": False,
+            "warrant": None,
             "last_success": absent(
                 NEVER_OBSERVED,
                 "This integration has never produced a result, so there is "
@@ -161,6 +219,9 @@ def continuity(
         None if expected_interval_hours is None
         else float(expected_interval_hours) * SILENCE_MULTIPLIER
     )
+    promoted = False
+    warrant: Any = None
+
     if threshold is None:
         # No declared expectation, so no claim. Guessing an interval would
         # invent outages, and "I do not know how often this should produce"
@@ -174,14 +235,46 @@ def continuity(
         stopped = False
     else:
         stopped = state in _CAN_HAVE_STOPPED and hours > threshold
-        silence_verdict = (
-            f"Silent {round(hours, 1)}h against an expected {expected_interval_hours}h "
-            f"(flagged beyond {round(threshold, 1)}h)."
-        )
+        # Which threshold promotes: the DECLARED EXPECTATION, not the flag.
+        #
+        # Inside the expectation, silence is normal and the last success is
+        # current evidence that the path works — so it is promoted, with its
+        # warrant. Past the expectation we no longer have current evidence,
+        # and `verified_ok` must not stretch to cover the band between the
+        # expectation and the flag: a feed silent 17h rendering green is the
+        # same collapse this whole state model exists to prevent, one level
+        # in. The band keeps the base state and says it is overdue, which is
+        # honest — not currently witnessed, not yet an outage.
+        within_expectation = hours <= float(expected_interval_hours)
+        promoted = within_expectation and state in _PROMOTABLE
+        if promoted:
+            warrant = warrant_for(
+                WARRANT_COLLECTOR_OUTPUT, at=last_succeeded_at, now=at,
+            )
+            silence_verdict = (
+                f"Produced output {round(hours, 1)}h ago, inside its "
+                f"{expected_interval_hours}h expectation."
+            )
+        elif not stopped and not within_expectation:
+            silence_verdict = (
+                f"OVERDUE: silent {round(hours, 1)}h against an expected "
+                f"{expected_interval_hours}h, short of the "
+                f"{round(threshold, 1)}h outage threshold. Not currently "
+                f"witnessed working, and not yet an outage."
+            )
+        else:
+            silence_verdict = (
+                f"Silent {round(hours, 1)}h against an expected "
+                f"{expected_interval_hours}h (flagged beyond "
+                f"{round(threshold, 1)}h)."
+            )
 
+    resolved = STOPPED if stopped else (VERIFIED_OK if promoted else state)
     return {
-        "state": STOPPED if stopped else state,
+        "state": resolved,
         "stopped": stopped,
+        "promoted": promoted,
+        "warrant": warrant,
         "silent_for_hours": round(hours, 1),
         "expected_interval_hours": expected_interval_hours,
         "threshold_hours": None if threshold is None else round(threshold, 1),
@@ -408,6 +501,21 @@ def _state_for_direction(row: Any, direction: str) -> dict[str, Any]:
         "checked_at": entry.get("checked_at"),
         "reason": entry.get("reason"),
     }
+    # A verified success says what proved it, the same way the log store's
+    # promoted verified_ok does. Both cards then show one label and two
+    # different warrants, which is the point: `api_ping` and
+    # `collector_output` are different claims and neither is weakened into
+    # the other. A FAILURE gets no warrant — there is nothing to justify,
+    # and attaching one would read as partial credit.
+    if state == VERIFIED_OK:
+        from datetime import datetime
+
+        at = None
+        try:
+            at = datetime.fromisoformat(str(entry.get("checked_at")))
+        except (TypeError, ValueError):
+            at = None
+        out["warrant"] = warrant_for(WARRANT_API_PING, at=at)
     for extra in ("failure_kind", "token", "base_url"):
         if entry.get(extra) is not None:
             out[extra] = entry[extra]

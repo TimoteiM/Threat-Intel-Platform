@@ -221,7 +221,13 @@ def test_a_tool_that_produced_evidence_minutes_ago_is_not_stopped():
         "12 minutes of silence reported as an outage; this is the cry-wolf "
         "shape that makes the badge unreadable"
     )
-    assert v["state"] == st.CONFIGURED_UNVERIFIED
+    # Written before promotion existed, when the right answer was "leave the
+    # base state alone". Collection evidence inside the expectation now
+    # promotes, so the state is verified_ok — carrying the warrant that says
+    # it rests on collector output rather than on a ping. The assertion this
+    # test was built for, that 12 minutes is not an outage, is unchanged.
+    assert v["state"] == st.VERIFIED_OK
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
 
 
 def test_a_tool_silent_well_past_its_expectation_is_stopped():
@@ -411,3 +417,182 @@ def test_the_silence_clock_reads_collection_evidence_only():
             f"the silence clock reads {not_evidence!r}, which a verify can "
             f"move; it must read only what collection produced"
         )
+
+
+# --- promotion on collection evidence, with its warrant -----------------
+#
+# The log-store card read `configured_unverified` beside `silent 0.5h` —
+# a collection had succeeded 30 minutes earlier and the state was a
+# hard-coded constant that no input could change. Three worlds under one
+# label: never tested and possibly dead, never pinged but producing right
+# now, and pinged successfully seconds ago.
+#
+# Promotion is granted by CURRENT evidence only, and it carries what the
+# evidence was — the same shape as a technique carrying RULE_CONFIRMED
+# against RULE_ONLY. Falcon's verified_ok continues to mean "an api ping
+# succeeded"; the log store's means "the collector produced output". Neither
+# is weakened into the other.
+#
+# Which threshold promotes: the DECLARED EXPECTATION (6h), not the flag
+# (18h). Inside the expectation, silence is normal and the last success is
+# current evidence. Past it, we no longer have current evidence and must not
+# claim green — a feed silent 17h showing verified_ok is the same collapse
+# one level in.
+
+
+def test_inside_the_expectation_collection_evidence_promotes():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=30),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.VERIFIED_OK
+    assert v["promoted"] is True
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
+    assert v["warrant"]["process"] == "worker"
+    assert "0.5" in str(v["warrant"]["age_hours"]) or v["warrant"]["age_hours"] == 0.5
+
+
+def test_the_middle_band_is_not_promoted_and_not_an_outage():
+    """17h: past the 6h expectation, short of the 18h flag."""
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=17),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.CONFIGURED_UNVERIFIED, (
+        "verified_ok swallowed the middle band; 17h of silence rendered green"
+    )
+    assert v["promoted"] is False
+    assert v["stopped"] is False
+    assert "overdue" in str(v["silence_verdict"]).lower()
+    # Both numbers present, so the reader can see where in the band it sits.
+    assert "6" in str(v["silence_verdict"]) and "18" in str(v["silence_verdict"])
+
+
+def test_the_boundaries_are_exact():
+    inside = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=6) + timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert inside["state"] == st.VERIFIED_OK
+
+    just_past = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=6) - timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_past["state"] == st.CONFIGURED_UNVERIFIED
+    assert just_past["stopped"] is False
+
+    past_flag = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=19),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert past_flag["state"] == st.STOPPED
+    assert past_flag["stopped"] is True
+
+
+def test_promotion_needs_a_declared_expectation():
+    """Without one there is no "current", so nothing is promoted."""
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=None,
+    )
+    assert v["promoted"] is False
+    assert v["state"] == st.CONFIGURED_UNVERIFIED
+
+
+def test_promotion_never_overrides_a_real_failure():
+    """A verified failure is evidence about NOW; collection output is about
+    the past, and the past does not clear a present failure."""
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.VERIFIED_FAILING
+    assert v["promoted"] is False
+
+
+def test_an_api_ping_warrant_is_a_different_claim_from_collector_output():
+    """Falcon's verified_ok and the log store's must not be conflated."""
+    assert st.WARRANT_API_PING != st.WARRANT_COLLECTOR_OUTPUT
+    ping = st.warrant_for(st.WARRANT_API_PING, at=NOW, now=NOW)
+    output = st.warrant_for(st.WARRANT_COLLECTOR_OUTPUT, at=NOW, now=NOW)
+    assert ping["process"] == "api"
+    assert output["process"] == "worker"
+    assert "ping" in ping["what"].lower()
+    assert "produced" in output["what"].lower()
+    # And the api warrant says what it does NOT establish, because on
+    # 2026-10-14 a green api ping sat beside a worker with no config.
+    assert "worker" in ping["what"].lower()
+
+
+def test_a_credential_managed_verified_ok_carries_the_ping_warrant():
+    """Falcon's verified_ok must say what it rests on too.
+
+    Promotion gave the log store a warrant and left Falcon's `verified_ok`
+    bare, which is the same collapse in the other direction: two cards
+    showing one label, and only one of them able to say what established it.
+    """
+    from datetime import datetime, timezone
+
+    spec = st.catalogue()["falcon"]
+
+    class _Row:
+        tool = "falcon"
+        tenant_id = "c00"
+        config = {"base_url": "https://api.eu-1.crowdstrike.com"}
+        secret_ciphertext = b"x"
+        secret_set_at = datetime(2026, 10, 14, 7, 40, tzinfo=timezone.utc)
+        configured_by = "e2e-admin"
+        updated_at = secret_set_at
+        health = {
+            "enrichment": {
+                "state": st.VERIFIED_OK,
+                "checked_at": "2026-10-15T09:00:00+00:00",
+                "reason": "ok",
+            }
+        }
+
+    out = st.status_of(spec, _Row(), "falcon")
+    direction = out["directions"]["enrichment"]
+    assert direction["state"] == st.VERIFIED_OK
+    warrant = direction.get("warrant")
+    assert warrant, "a verified_ok with no warrant cannot say what proved it"
+    assert warrant["kind"] == st.WARRANT_API_PING
+    assert warrant["process"] == "api"
+    assert "worker" in warrant["what"].lower(), (
+        "the api warrant must state what it does NOT establish"
+    )
+
+
+def test_a_failing_direction_gets_no_warrant():
+    """A warrant justifies a success. There is nothing to warrant in a
+    failure, and attaching one would read as partial credit."""
+    from datetime import datetime, timezone
+
+    spec = st.catalogue()["falcon"]
+
+    class _Row:
+        tool = "falcon"
+        tenant_id = "c00"
+        config = {}
+        secret_ciphertext = b"x"
+        secret_set_at = datetime(2026, 10, 14, 7, 40, tzinfo=timezone.utc)
+        configured_by = "e2e-admin"
+        updated_at = secret_set_at
+        health = {
+            "enrichment": {
+                "state": st.VERIFIED_FAILING,
+                "checked_at": "2026-10-15T09:00:00+00:00",
+                "reason": "HTTP 401",
+            }
+        }
+
+    out = st.status_of(spec, _Row(), "falcon")
+    assert out["directions"]["enrichment"].get("warrant") is None
