@@ -264,9 +264,30 @@ So:
   evidence is that the 142-device cohort had **never** produced a zero week in
   90 days and now has.
 
-The outbound document is rewritten around the stop as the headline, since an
-estate-wide stop is a bigger finding than a cohort regression. Recorded as a
-method note in `pooling-across-a-regime-change`.
+**And the "estate-wide stop" was itself a composite.** Corrected again: the
+zero since 8 October is two cohorts stopping 17 days apart, not one event.
+
+| group | devices | last alert |
+|---|---|---|
+| no 15/16 Sep sensor policy | 40 | **2026-09-21 16:09:57** |
+| device since left the fleet | — | **2026-09-30 11:15:30** |
+| received the sensor policy | 142 | **2026-10-08 09:22:31** |
+
+So the sequence is three events: a mid-September rate drop in the updated
+cohort, silence in the control cohort from 21 September, and silence in the
+updated cohort from 8 October. The estate-level date was arithmetically true
+and wrong about what happened.
+
+The outbound document is restated as that sequence, with each last-alert
+timestamp given explicitly. It is also **frozen and marked not-to-be-sent**
+pending the one check that can invalidate it: whether Falcon's own console
+shows detections after 8 October that this API does not return. If it does,
+the finding is about our collection rather than the customer's estate, and the
+document needs rewriting rather than amending.
+
+Recorded as a method note in `pooling-across-a-regime-change`, now covering
+both dimensions — a time boundary hides a step, a group boundary hides a
+divergence, and the procedure is the same for both.
 
 ## What would settle it
 
