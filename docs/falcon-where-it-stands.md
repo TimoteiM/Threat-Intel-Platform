@@ -273,10 +273,20 @@ zero since 8 October is two cohorts stopping 17 days apart, not one event.
 | device since left the fleet | — | **2026-09-30 11:15:30** |
 | received the sensor policy | 142 | **2026-10-08 09:22:31** |
 
-So the sequence is three events: a mid-September rate drop in the updated
-cohort, silence in the control cohort from 21 September, and silence in the
-updated cohort from 8 October. The estate-level date was arithmetically true
-and wrong about what happened.
+A first pass called this "three events, 17 days apart". **That overreads the
+dates in the opposite direction from the pooled version, and is also wrong.**
+Three different last-alert dates are exactly what a *single* mid-September rate
+reduction produces: each group dribbles out and stops when its last alert
+happens to land, and the largest, most active group stops last by arithmetic —
+142 devices against 40 is 3.5× the exposure. The removed-device group stopped
+when those devices left.
+
+So the honest position is that the dates **cannot** distinguish one cause from
+several. They are observations consistent with both a single mid-September
+reduction with a sparse tail and with separate per-group events, and the only
+group that could date its own stop independently — the 40-device one — is
+silent in 7 of 14 weeks and cannot. The estate-level date was wrong about what
+happened; so was the three-event reading.
 
 The outbound document is restated as that sequence, with each last-alert
 timestamp given explicitly. It is also **frozen and marked not-to-be-sent**

@@ -1,4 +1,4 @@
-# CrowdStrike Falcon: alert volume dropped, then two groups of devices went silent 17 days apart
+# CrowdStrike Falcon: alert volume dropped in mid-September, and the estate has raised nothing for seven days
 
 > **DRAFT — NOT TO BE SENT.** One check outstanding that can invalidate this
 > entire document: whether Falcon's own console shows detections after
@@ -11,33 +11,53 @@
 **Measured:** 2026-10-15, read-only against the Falcon API. Nothing was
 changed.
 
-## The sequence
+## The observations
 
-Three events, in order. They are listed separately because aggregating them
-produces a single "the estate went quiet on 8 October" that is true at the
-total level and wrong about what happened.
+Four dates. They are given as observations because, as the next section
+explains, they do not by themselves establish how many separate things
+happened.
 
-| # | when | what | who |
-|---|---|---|---|
-| 1 | week of **14 Sep** | alert rate fell about four-fold and stayed down | the 142 devices that received a sensor-update policy on 15/16 Sep |
-| 2 | **21 Sep 16:09** | last alert, then nothing — 24 days | the 40 devices that did **not** receive that policy |
-| 3 | **8 Oct 09:22** | last alert, then nothing — 7 days | the 142-device group |
-
-Last alert per group, stated explicitly because these dates are the finding:
-
-| group | devices | last alert |
+| what | when | who |
 |---|---|---|
-| did not receive the 15/16 Sep sensor policy | 40 | **2026-09-21 16:09:57** |
-| device no longer in the fleet | — | **2026-09-30 11:15:30** |
-| received the 15/16 Sep sensor policy | 142 | **2026-10-08 09:22:31** |
+| alert rate fell about four-fold and stayed down | week of **14 Sep** | the 142 devices that received a sensor-update policy on 15/16 Sep |
+| last alert | **2026-09-21 16:09:57** | the 40 devices that did **not** receive that policy |
+| last alert | **2026-09-30 11:15:30** | devices no longer present in the fleet |
+| last alert | **2026-10-08 09:22:31** | the 142-device group |
 
-**So the estate-level zero since 8 October is the sum of three groups that
-stopped separately, 17 days apart at the extremes — not one estate-wide
-event.** Any explanation that fixes a single date cannot be the whole
-explanation.
+**No Falcon alert has been raised anywhere in this estate since 8 October
+2026** — seven days, and the first full week with no alert in the 90 days
+retained.
 
-Your 182 Falcon sensors are healthy — 153 checked in within the last 24 hours
-— so none of this is an agent outage or a connectivity problem.
+Your 182 Falcon sensors are healthy: 153 checked in within the last 24 hours.
+So none of this is an agent outage or a connectivity problem. The sensors are
+reporting; they are not raising detections.
+
+## How many events this is — we cannot tell
+
+Two readings fit these dates equally well, and the data cannot separate them.
+
+**One event.** A single reduction in mid-September cut every group's rate. Each
+group then produced its remaining alerts sparsely and fell silent whenever its
+last one happened to land. Under this reading the *order* of the three dates is
+arithmetic, not meaning: the 142-device group has 3.5 times the exposure of the
+40-device group, so it is the one most likely to produce the latest final
+alert, and the removed-device group stopped when those devices left.
+
+**Several events.** The mid-September reduction affected only the 142 updated
+devices, and the other groups stopped separately for their own reasons — which
+would mean 21 September and 8 October are two different causes 17 days apart.
+
+**What would distinguish them is a group with enough activity to date its own
+stop, and we do not have one.** The 40-device group is silent in 7 of its 14
+weeks; three consecutive zero weeks merely equals its longest earlier quiet run
+(the first three weeks of July). Its 23 final alerts all land within hours of
+each other on 21 September, which looks more like one incident on one or two
+machines than a rate tailing off — but 23 events is too few to carry that
+conclusion.
+
+So this document does not claim a number of causes. It claims the four dates
+above, the four-fold step on the updated group, and seven days of estate-wide
+silence.
 
 ## The weekly series, by group
 
@@ -69,25 +89,25 @@ timestamp is what shows it stopping.
 
 ## What each event is, and is not, supported by
 
-**Event 1 — the step.** For the 142 updated devices: 116, 83 and 24 alerts in
+**The step.** For the 142 updated devices: 116, 83 and 24 alerts in
 the weeks before the sensor policy, then 9, 9 and 19 after it. Consistent with
 the sensor change. The 40-device group cannot corroborate or contradict it:
 that group is silent in 7 of its 14 weeks, which is too irregular to detect a
 four-fold change either way.
 
-**Event 2 — the 40-device group's silence from 21 September.** Three
-consecutive zero weeks. Note honestly that this *equals* that group's longest
-earlier quiet run (the first three weeks of July), so for this group alone the
-silence is suggestive rather than conclusive. What is not ambiguous is its
-timing: it begins 17 days before the other group's.
+**The 40-device group's silence from 21 September.** Three consecutive zero
+weeks, which equals that group's longest earlier quiet run. For this group
+alone the silence is suggestive rather than conclusive, and its earlier date
+is as consistent with low exposure as with a separate cause.
 
-**Event 3 — the 142-device group's silence from 8 October.** This is the
+**The 142-device group's silence from 8 October.** This is the
 strongest single observation in the document. That group had produced alerts
 every week for the whole 90-day retention period, including 2 in its quietest
 week, and has now produced none for seven days.
 
-**What the sensor policy cannot explain:** event 2. It never touched those 40
-devices.
+**What the sensor policy cannot explain on its own:** the 40-device group
+going quiet at all, since it never touched those devices. Either something
+else did, or the step was estate-wide and only measurable on the larger group.
 
 ## Two candidate causes, and what could not be tested
 
@@ -97,12 +117,13 @@ devices.
 - **(B) Detections are not being generated** — a sensor change altered what
   the agents raise.
 
-The group split tests these for **event 1**, because a suppression rule keys on
+The group split tests these for **the step**, because a suppression rule keys on
 files, paths or hashes and would quiet matching devices regardless of sensor
 version, whereas a sensor change can only affect devices whose sensor changed.
-On that test event 1 favours **(B)**.
+On that test the step favours **(B)** — *if* the step was confined to the
+updated group, which the 40-device group is too sparse to confirm.
 
-It does not test events 2 and 3. For those, (A) and (B) are both live, and so
+It does not test the silences. For those, (A) and (B) are both live, and so
 is a third possibility the group split cannot see: a change in alert
 **delivery or retention** rather than in detection. That third possibility is
 the one the outstanding console check addresses, and it is why this document is
@@ -119,8 +140,7 @@ every policy endpoint, and the historical audit log is not reachable with it.
 - **Devices that have left the fleet.** 80 of the 556 pre-September alerts and
   4 of the 64 since 21 September come from device records no longer present and
   cannot be assigned to either group. They are excluded as unknown rather than
-  counted either way — and their own last alert, 30 September, is why the
-  stop decomposes into three dates rather than two.
+  counted either way — and their own last alert is 30 September.
 - **The 142-device group is not one sensor version.** It now spans 7.40 (100
   devices), 7.39 (29) and 8.10 (13).
 - **The 40-device group is small and bursty.** Half its weeks are zero.
@@ -132,9 +152,10 @@ every policy endpoint, and the historical audit log is not reachable with it.
    this platform does not receive.** This is the first step because it can
    invalidate everything above: if the console has them, the problem is in
    collection, not in your estate.
-2. **If the console also shows none**, check the audit log around each of the
-   three dates — 15/16 September, 21 September and 8 October — for exclusions
-   created and prevention-policy edits. Three dates, not one.
+2. **If the console also shows none**, check the audit log around each of
+   the dates — 15/16 September, 21 September, 30 September and 8 October — for
+   exclusions created and prevention-policy edits. Checking all of them costs
+   little and does not require deciding first how many events there were.
 3. **Ask CrowdStrike support about the 15/16 September sensor-update policy**:
    what it changed, and whether a four-fold fall in detections on those devices
    is expected.
