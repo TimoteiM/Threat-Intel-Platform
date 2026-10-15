@@ -248,8 +248,33 @@ Consequences, stated precisely because they change over time:
 | shares this cluster and these indices | `manager.name` field filter | the query body only |
 | gets its own manager with its own index prefix | index scope | **both** — the index set *and* the field filter as defence in depth |
 
-That is the question to put to whoever will onboard customer two, and it is
-the gate on part 2 rather than part 4.
+**Both rows assume our code enforces the boundary, and that is what failed
+twice.** The recommendation put to the Wazuh owner goes past both:
+**per-customer OpenSearch credentials, role-scoped in the cluster**, so an
+unpinned query returns one customer's data whatever our query builder does.
+`manager.name` then becomes defence in depth rather than the sole control, and
+the two sources of truth collapse — the per-customer integration becomes the
+single source and the global-settings path is removed, since it cannot express
+"this customer" at all.
+
+The fact that makes this urgent rather than tidy: **the platform authenticates
+to the cluster as `admin` with `all_access` and `own_index`** (verified
+2026-10-15 via `/_plugins/_security/api/account`). It is the cluster
+superuser — it can read every index, write, delete, and modify the security
+configuration that would otherwise constrain it. Both of our filter defects
+were therefore bounded only by there being one customer.
+
+Written up for ratification in
+`docs/outbound/per-tenant-opensearch-credentials.md`, with two
+implementations (index-scoped roles, or document-level security on shared
+indices if the indexing is not to change), the onboarding and operational
+costs of each, and the inversion stated as the point: cross-customer search
+becomes opt-in with its own credential and audit, instead of the opt-out it is
+today.
+
+**Parts 2 and 3 stay unstarted pending that ratification**, because the two
+implementations produce different enforcement boundaries and enforcement
+written against the wrong model reads as protection without being it.
 
 ### 2. One source of truth for the pin, with the other removed
 
