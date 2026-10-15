@@ -162,20 +162,15 @@ ASK = "ask"
 ROUTING: dict[str, dict[str, Any]] = {
     SHA256: {
         "falcon": ASK,
-        "estate": (absence.OUT_OF_SCOPE,
-                   "The estate's log store holds DNS queries and perimeter "
-                   "traffic. No field in it carries a file hash, so this is an "
-                   "absence of capability and not an absence of the file."),
+        "estate": ASK,
     },
     SHA1: {
         "falcon": ASK,
-        "estate": (absence.OUT_OF_SCOPE,
-                   "No estate field carries a file hash."),
+        "estate": ASK,
     },
     MD5: {
         "falcon": ASK,
-        "estate": (absence.OUT_OF_SCOPE,
-                   "No estate field carries a file hash."),
+        "estate": ASK,
     },
     HOSTNAME: {
         "falcon": ASK,

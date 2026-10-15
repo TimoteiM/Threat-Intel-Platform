@@ -197,3 +197,78 @@ behaviour. **Where a comment asserts something is "not negotiable",
 "always" or "unconditional", read the next line expecting a conditional** —
 that pairing is where the strongest claims and the weakest enforcement collect,
 because the author wrote the prose while believing the code already said it.
+
+
+---
+
+## The vocabulary of refusal needs the same accuracy as the answers
+
+A third instance, 2026-10-15, and it is not a default at all — it is a
+*reason*. Which is the point: the convention has spent its effort on making
+absences distinguishable from zeros, and comparatively none on whether the
+absence chosen is the **true** one.
+
+The indicator lookup refused hashes against the estate as `out_of_scope`:
+
+> "The estate's log store holds DNS queries and perimeter traffic. No field in
+> it carries a file hash, so this is an absence of capability and not an
+> absence of the file."
+
+Confidently worded, correctly typed, and false. `data.win.eventdata.hashes`
+carries **2,626,536 documents across 190 hosts**, spanning the full 120-day
+retention. The field was there the whole time. What was actually unknown was
+the *query cost*, because the value is a composite
+`MD5=…,SHA256=…,IMPHASH=…` string needing a leading wildcard.
+
+### Why this is worse than a wrong answer
+
+**`out_of_scope` is an absence that is wrong toward permanence.** Its meaning
+is "there is nowhere to look", and its effect on a reader is *never ask this
+again*. A wrong `check_failed` invites a retry. A wrong `never_observed`
+invites a wider window. A wrong `out_of_scope` **deletes a capability from
+everyone who reads it**, including the person who wrote it, six months later.
+
+And it propagates into tests. `test_hashes_go_to_falcon_and_not_to_the_estate`
+asserted the refusal, so the false premise acquired a guard defending it —
+which is how a wrong absence becomes permanent rather than merely wrong.
+
+### The fix, and the general rule
+
+A new kind, `cost_not_established`: *there is somewhere to look and nobody has
+measured what asking costs.* It invites the measurement rather than closing
+the question, and it carries the figures so a reader can judge. Measuring took
+four queries and found 7 days at 161 ms — so the honest outcome was not a
+better refusal but **a bounded answer**, which is the second lesson: a refusal
+built on a false premise had been standing in for a feature.
+
+**The rule: an absence is a claim, so classify it as carefully as a number.**
+Before writing one, ask which way it is wrong if it is wrong. Prefer the kind
+that invites the next question over the kind that forecloses it, unless
+foreclosure is actually established — and "I have not looked" is never
+established.
+
+A short vocabulary check, by what each one tells the next reader to do:
+
+| kind | tells the reader |
+|---|---|
+| `check_failed` | try again |
+| `never_observed` | widen the window, or accept a real negative |
+| `too_little_history` | wait |
+| `cost_not_established` | **measure it** |
+| `no_field_map` | look elsewhere |
+| `out_of_scope` | **stop asking** |
+
+The last one is the only one that costs something permanent, and it was the
+one reached for without evidence.
+
+### A footnote worth more than the finding
+
+Measuring the cost then exposed a second defect that the refusal had been
+hiding: the wildcard was **case-sensitive**. Sysmon stores digests uppercase;
+`detect()` lowercases every hash, and lowercase is what every tool and every
+analyst pastes. Same needle, same window: uppercase 9,636 hits, lowercase
+**0**. Every hash lookup would have returned a confident nothing.
+
+That defect was unreachable while the capability was refused. **Clearing a
+false refusal exposes code that has never run** — the same shape as clearing a
+long-standing test failure, one layer out.

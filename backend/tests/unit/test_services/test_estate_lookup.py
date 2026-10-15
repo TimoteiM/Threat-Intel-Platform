@@ -634,3 +634,148 @@ def test_a_partial_first_seen_result_is_an_absence_not_an_answer():
     assert part.get("relative_to_reference") is None, (
         "a comparison was claimed against a first-seen that is not known"
     )
+
+
+# --- hashes: a bounded answer, not a refusal -------------------------------
+#
+# The estate was refused for hashes as `out_of_scope` on the stated grounds
+# that no field carried one. Measured 2026-10-15:
+# `data.win.eventdata.hashes` holds 2,626,536 documents across 190 hosts and
+# spans the full retention from 2026-06-17. The field was always there; only
+# the cost was unknown, because the value is a composite
+# `MD5=…,SHA256=…,IMPHASH=…` string needing a leading wildcard.
+#
+# Timed on a quiet cluster, median of three, all complete:
+#   24h 83ms · 7d 161ms · 30d 422ms · 120d 1,682ms (4,335ms cold)
+
+
+SHA = "a" * 64
+
+
+class _HashClient:
+    def __init__(self, docs=3, hosts=("EXP-1", "EXP-2")):
+        self.calls = []
+        self._docs, self._hosts = docs, list(hosts)
+
+    def hash_seen(self, *, digest, since, until, tenant_id):
+        self.calls.append({"digest": digest, "since": since, "until": until})
+        return self._docs, list(self._hosts)
+
+
+def test_a_hash_seen_on_hosts_is_reported_with_its_window():
+    c = _HashClient()
+    out = est.hash_lookup(SHA, tenant_id="c00", days=7, client=c, now=REF)
+    answer = out["host_hashes"]
+    assert answer["observed"] is True
+    assert answer["documents"] == 3
+    assert answer["host_count"] == 2
+    assert answer["field"] == est.HOST_HASH_FIELD
+    assert out["window"]["days"] == 7
+
+
+def test_the_window_is_stated_as_a_cost_bound_not_a_data_bound():
+    """A 7-day nil is not a 120-day nil, and the reason the window is 7 days
+    is cost — the field itself spans the whole retention."""
+    out = est.hash_lookup(SHA, tenant_id="c00", days=7,
+                          client=_HashClient(), now=REF)
+    claim = out["host_hashes"]["window_claim"]
+    assert "cost bound, not a data bound" in claim
+    assert "2,626,536" in claim
+
+
+def test_the_basis_names_event_1_and_what_it_excludes():
+    """Agreement between the three producing events is not the reason to pin.
+    Event 1 is the execution claim; 7 and 29 are not."""
+    basis = est.hash_lookup(SHA, tenant_id="c00", days=7,
+                            client=_HashClient(), now=REF)["host_hashes"]["basis"]
+    assert "Process Create" in basis
+    assert "event 7" in basis and "event 29" in basis
+    assert "what RAN" in basis
+    assert est._SEMANTIC_FILTERS[est.HOST_HASH_FIELD] == [
+        {"term": {est.DNS_EVENT_FIELD: "1"}}
+    ]
+
+
+def test_a_window_past_the_measured_ceiling_is_cost_not_established():
+    """Not `out_of_scope` — there is somewhere to look. Not silently clamped
+    either, because narrowing the window someone asked for returns a different
+    answer presented as theirs."""
+    out = est.hash_lookup(SHA, tenant_id="c00", days=120,
+                          client=_HashClient(), now=REF)
+    part = out["host_hashes"]
+    assert absence.is_absent(part)
+    assert part["kind"] == absence.COST_NOT_ESTABLISHED
+    assert "only up to 30 days has been timed" in part["reason"]
+    # The timings are in the text, so the reader can judge rather than ask.
+    assert "161ms" in part["reason"] and "4.3s cold" in part["reason"]
+
+
+def test_a_non_digest_length_is_not_wildcarded():
+    """A short needle in a leading wildcard is a scan of the field."""
+    out = est.hash_lookup("abc", tenant_id="c00", days=7,
+                          client=_HashClient(), now=REF)
+    assert out["host_hashes"]["kind"] == absence.UNPARSED
+    assert "scans the field" in out["host_hashes"]["reason"]
+
+
+def test_a_hash_search_that_did_not_complete_is_unknown_not_no():
+    class _Partial:
+        def hash_seen(self, **kw):
+            raise est.PartialResult("shards failed")
+
+    out = est.hash_lookup(SHA, tenant_id="c00", days=7,
+                          client=_Partial(), now=REF)
+    assert out["host_hashes"]["kind"] == absence.CHECK_FAILED
+    assert "unknown rather than no" in out["host_hashes"]["reason"]
+
+
+def test_no_tenant_and_no_client_are_distinct_refusals():
+    a = est.hash_lookup(SHA, tenant_id="", days=7, client=_HashClient(), now=REF)
+    b = est.hash_lookup(SHA, tenant_id="c00", days=7, client=None, now=REF)
+    assert a["host_hashes"]["kind"] == absence.CHECK_FAILED
+    assert b["host_hashes"]["kind"] == absence.CHECK_FAILED
+    assert "No customer was named" in a["host_hashes"]["reason"]
+    assert "no fallback" in b["host_hashes"]["reason"]
+
+
+def test_the_hash_wildcard_is_case_insensitive():
+    """The false negative that would have made every hash lookup return zero.
+
+    Sysmon stores digests UPPERCASE. `indicator_lookup_service.detect()`
+    lowercases every hash, and lowercase is the form every tool and every
+    analyst pastes. Measured on one needle over 7 days: uppercase 9,636 hits,
+    lowercase 0. A case-sensitive wildcard here is not a performance detail,
+    it is a guaranteed wrong answer.
+
+    Asserted on the body the client builds, because the behaviour is the
+    cluster's and the only thing this side controls is the flag.
+    """
+    sent: dict = {}
+
+    class _Spy:
+        def _request(self, method, path, *, json_body=None):
+            sent.update(json_body or {})
+            return ({"hits": {"total": {"value": 0}},
+                     "_shards": {"failed": 0, "total": 1},
+                     "aggregations": {"hosts": {"buckets": []}}}, "n", [])
+
+    class _Integ:
+        opensearch_index_pattern = "x-*"
+        opensearch_tenant_field = "manager.name"
+        opensearch_tenant_value_list = ["wm"]
+        opensearch_timestamp_field = "timestamp"
+
+    client = est.OpenSearchEstateClient(_Spy(), _Integ())
+    client.hash_seen(digest="A" * 64, since="2026-10-01", until="2026-10-15",
+                     tenant_id="c00")
+
+    wildcards = [c for c in sent["query"]["bool"]["filter"] if "wildcard" in c]
+    assert len(wildcards) == 1
+    spec = wildcards[0]["wildcard"][est.HOST_HASH_FIELD]
+    assert isinstance(spec, dict), (
+        "the wildcard is the shorthand form, which cannot carry "
+        "case_insensitive — so a lowercase digest would match nothing"
+    )
+    assert spec["case_insensitive"] is True
+    # And the event pin travels with it.
+    assert {"term": {est.DNS_EVENT_FIELD: "1"}} in sent["query"]["bool"]["filter"]

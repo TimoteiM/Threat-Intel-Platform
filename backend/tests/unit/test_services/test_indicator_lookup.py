@@ -175,12 +175,23 @@ def test_a_url_with_no_host_offers_no_fallback():
     assert ind.url_fallback("https://") == {}
 
 
-def test_hashes_go_to_falcon_and_not_to_the_estate():
+def test_hashes_go_to_both_sources():
+    """This test previously asserted the estate was `out_of_scope` for a hash,
+    which is how a wrong absence defends itself.
+
+    The stated reason was "no estate field carries a file hash".
+    `data.win.eventdata.hashes` carries 2,626,536 documents across 190 hosts
+    over the full 120-day retention. The field was always there; only the
+    query cost was unknown. The refusal was wrong in the direction that
+    removes a capability from everyone who reads it — and the test encoded
+    that, so the test had to be wrong too.
+    """
     for kind in (ind.SHA256, ind.SHA1, ind.MD5):
         row = ind.plan(kind)
         assert row["falcon"] is ind.ASK
-        assert row["estate"] is not ind.ASK
-        assert ind.refusal(row["estate"])["kind"] == absence.OUT_OF_SCOPE
+        assert row["estate"] is ind.ASK, (
+            "the estate can answer for a hash; it is bounded, not refused"
+        )
 
 
 def test_a_hostname_goes_to_falcon_devices_and_not_to_estate_dns():

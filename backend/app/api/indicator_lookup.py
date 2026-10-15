@@ -150,6 +150,8 @@ async def lookup_indicator(
             "question": (
                 "endpoint DNS queries for this name"
                 if estate_plan["reading"] == ind.DOMAIN else
+                "images with this hash that were EXECUTED (Sysmon event 1)"
+                if estate_plan["reading"] in (ind.SHA256, ind.SHA1, ind.MD5) else
                 "perimeter traffic to this address"
             ),
             "answer": await asyncio.to_thread(
@@ -288,12 +290,24 @@ async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel,
 def _estate(observable: str, kind: str, tenant_id: str, days: int, est) -> dict[str, Any]:
     """The estate's answer. No reference time, so no before/after comparison.
 
+    A hash takes its own path and its own window. The DNS and perimeter
+    questions are a `term` on a keyword field; a hash is a leading wildcard
+    against a composite string, so its cost grows with the window in a way
+    theirs does not — hence a separate bound rather than a shared one.
+
     `reference_time` is deliberately not passed: an on-demand lookup has no
     email, so there is no anchor to name, and `lookup()` refuses an unnamed
     one. The raw answer — hosts, documents, first-seen, the observation floor —
     needs none of it.
     """
     client = est.estate_client_for(tenant_id)
+    if kind in (ind.SHA256, ind.SHA1, ind.MD5):
+        # Not clamped. A window past the measured ceiling comes back as
+        # `cost_not_established` with the timings, because silently narrowing
+        # the window someone asked for is a different answer presented as
+        # theirs.
+        return est.hash_lookup(
+            observable, tenant_id=tenant_id, days=int(days), client=client)
     return est.lookup(
         observable,
         kind="domain" if kind == ind.DOMAIN else "ip",

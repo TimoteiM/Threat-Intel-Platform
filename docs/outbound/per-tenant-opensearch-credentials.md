@@ -236,6 +236,77 @@ accident to anything that forgets a filter, with no record of who used it.
 
 ---
 
+---
+
+# Change 3 — split Sysmon's `Hashes` field at the decoder (same owner)
+
+Travelling with the index-naming decision because it is the same owner and the
+same kind of change: a Wazuh-side decoder edit.
+
+## What the field looks like now
+
+`data.win.eventdata.hashes` is well collected — **2,626,536 documents across
+190 hosts**, spanning the full 120-day retention from 2026-06-17, so unlike
+some of our telemetry it has no gap. Three Sysmon events produce it: 1 (Process
+Create) 2,614,044, 7 (Image Loaded) 10,364, 29 (File Executable Detected)
+2,128.
+
+The problem is the value's shape. It is a single composite string:
+
+    MD5=F63068E6…,SHA256=90D12088…,IMPHASH=D60B7706…
+
+and there is **no parsed sibling field** — `data.win.eventdata.sha256`,
+`.md5` and `data.hash.sha256` are all empty. So a search for a bare digest
+cannot use a `term` on a keyword; we measured `term` and `match_phrase` at
+**0 hits** against **18,571** for a leading wildcard on the same value.
+
+## What we are asking for
+
+Split `Hashes` at the Wazuh decoder into separate keyword fields — `sha256`,
+`md5`, `imphash` — so a digest can be matched exactly.
+
+What that buys: an exact `term` lookup instead of a leading wildcard. Our
+measured costs for the wildcard, timed on a quiet cluster, median of three,
+all complete (360/360 shards, 0 failed):
+
+| window | median | hits |
+|---|---|---|
+| 24 hours | 83 ms | 455 |
+| 7 days | 161 ms | 3,024 |
+| 30 days | 422 ms | 13,442 |
+| 120 days (full retention) | 1,682 ms (4,335 ms cold) | 27,363 |
+
+We have shipped the hash question with a **7-day default and a 30-day
+ceiling** on those figures, and the window is stated on the result rather than
+assumed — beyond 30 days the platform says the cost is unmeasured rather than
+guessing. A parsed field would remove the bound entirely.
+
+## The part that needs your decision, not just your agreement
+
+**A decoder change affects only new documents.** The existing 120 days keep the
+composite form. So there are two outcomes and they are not equivalent:
+
+- **Reindex the existing 120 days** so one query shape answers the whole
+  retention window. This costs cluster time and needs planning, and it is the
+  only option that leaves a single question with a single answer.
+- **Leave the old documents as they are**, in which case the two paths answer
+  **different questions**: an exact `term` covers everything after the change,
+  and anything before it needs the wildcard. A query written against one will
+  silently under-report on the other, and the boundary is a date nobody will
+  remember in six months.
+
+We would rather you chose than have us pick a default. If reindexing is not
+practical, say so and we will carry both query shapes explicitly with the
+changeover date in the code, which is uglier but at least cannot quietly
+answer half the window.
+
+One further note for whoever makes the decoder change: we pin to **event 1
+only**. Not because the three producing events disagree about meaning — they
+all mean "hashes of an image" — but because event 1 is the *execution* claim
+and 7 and 29 are not. A question about what **ran** must not silently include
+what was loaded into another process or what was merely seen on disk. Please
+keep the event id available on the split fields.
+
 ## What we need from you
 
 **For Change 1, which needs no decisions about the future:**
@@ -247,6 +318,13 @@ accident to anything that forgets a filter, with no record of who used it.
    whether to keep requesting one.
 3. Agree a window for the switch, and for rotating the `admin` credential
    afterwards.
+
+**For Change 3 (the decoder split):**
+
+8. Can `Hashes` be split into `sha256` / `md5` / `imphash` keyword fields at
+   the decoder?
+9. **Reindex the existing 120 days, or accept two query shapes with a
+   changeover date?** This is the decision, not the split itself.
 
 **For Change 2:**
 

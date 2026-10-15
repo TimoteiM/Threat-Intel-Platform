@@ -86,11 +86,55 @@ DNS_EVENT_QUERY = "22"
 #: request is not pinned to a tenant or to a meaning.
 _SEMANTIC_FILTERS: dict[str, list[dict[str, Any]]] = {
     HOST_DNS_FIELD: [{"term": {DNS_EVENT_FIELD: DNS_EVENT_QUERY}}],
+    # HOST_HASH_FIELD is registered below, where its constants are defined.
 }
 
 #: One network appliance. Perimeter traffic to an address, NOT endpoint
 #: telemetry, and never to be read as estate-wide.
 PERIMETER_FIELD = "data.dstip"
+
+#: Sysmon image hashes. Measured 2026-10-15: 2,626,536 documents across 190
+#: hosts, spanning the full 120-day retention from 2026-06-17 — so unlike
+#: `queryName` this field has no collection floor inside the window.
+#:
+#: The value is a COMPOSITE string, `MD5=…,SHA256=…,IMPHASH=…`, and there is
+#: no parsed sibling (`.sha256`, `.md5`, `data.hash.sha256` are all empty), so
+#: a bare digest matches only through a leading wildcard. That is why the
+#: window is bounded — see HASH_WINDOW_DAYS.
+HOST_HASH_FIELD = "data.win.eventdata.hashes"
+
+#: Which Sysmon events carry it: 1 (Process Create) 2,614,044, 7 (Image
+#: Loaded) 10,364, 29 (File Executable Detected) 2,128.
+#:
+#: **Pinned to 1 even though all three mean "hashes of an image".** Agreement
+#: is not the reason to pin; the reason is that event 1 is the *execution*
+#: claim and 7 and 29 are not. A question about what RAN must not silently
+#: include what was loaded into another process, or what was merely seen on
+#: disk — those are three different findings and the strongest of them would
+#: inherit the others' volume.
+HASH_EVENT_ID = "1"
+
+#: Default and maximum windows for a hash question, from measured cost rather
+#: than from caution. Timed on a quiet cluster, three runs each, median, all
+#: complete (360/360 shards, 0 failed, no timeout):
+#:
+#:     24h       83 ms      455 hits
+#:     7d       161 ms    3,024 hits
+#:     30d      422 ms   13,442 hits
+#:     120d   1,682 ms   27,363 hits   (first, cold run 4,335 ms)
+#:
+#: 7 days is the default because it matches the DNS lookup's window and costs
+#: about what seven concurrent DNS indicators cost (168 ms). 30 days is the
+#: measured ceiling. Beyond it the cost is *not established* rather than
+#: known-bad, and the lookup says so instead of either refusing or guessing.
+HASH_WINDOW_DAYS = 7
+HASH_MAX_MEASURED_DAYS = 30
+
+# Registered here rather than in the literal above, because the literal is
+# defined before these constants are.
+_SEMANTIC_FILTERS[HOST_HASH_FIELD] = [
+    {"term": {DNS_EVENT_FIELD: HASH_EVENT_ID}}
+]
 
 #: Oldest document 2026-06-16, measured 2026-10-14. Beyond this the store has
 #: nothing to say, which is not the same as having nothing to report.
@@ -533,6 +577,108 @@ def lookup(
     }
 
 
+def hash_lookup(
+    digest: str,
+    *,
+    tenant_id: str | None,
+    days: int = HASH_WINDOW_DAYS,
+    client: Any = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Did any host in this estate execute an image with this hash.
+
+    Bounded, and the bound is on the card. The window is part of the answer
+    because the field needs a leading wildcard, so an unbounded version of
+    this question is a different and much more expensive question — and a
+    7-day nil is not a 120-day nil.
+    """
+    at = now or datetime.now(timezone.utc)
+    clean = "".join(ch for ch in str(digest or "") if ch.isalnum())
+    window = {
+        "days": int(days),
+        "since": (at - timedelta(days=int(days))).isoformat(),
+        "until": at.isoformat(),
+        "max_measured_days": HASH_MAX_MEASURED_DAYS,
+    }
+
+    def no(reason_absence: absence.Absent) -> dict[str, Any]:
+        return {"observable": clean, "kind": "hash", "tenant_id": tenant_id,
+                "window": window, "host_hashes": reason_absence.as_json()}
+
+    if not str(tenant_id or "").strip():
+        return no(absence.absent(
+            absence.CHECK_FAILED,
+            "No customer was named, so no cluster could be chosen. An "
+            "unpinned query would answer about somebody else's estate."))
+    if client is None:
+        return no(absence.absent(
+            absence.CHECK_FAILED,
+            f"No log-store integration is configured for {tenant_id!r}, so "
+            f"the estate was not searched. There is deliberately no fallback "
+            f"cluster.", raw=str(tenant_id)))
+    if len(clean) not in (32, 40, 64):
+        return no(absence.absent(
+            absence.UNPARSED,
+            f"{len(clean)} characters is not a digest length — SHA-256 is 64, "
+            f"SHA-1 is 40, MD5 is 32. Not searched: a short needle in a "
+            f"leading wildcard scans the field.", raw=str(len(clean))))
+    if int(days) > HASH_MAX_MEASURED_DAYS:
+        # The kind that exists for exactly this: there IS somewhere to look
+        # and this window's cost has not been timed.
+        return no(absence.absent(
+            absence.COST_NOT_ESTABLISHED,
+            f"A {days}-day hash search was asked for and only up to "
+            f"{HASH_MAX_MEASURED_DAYS} days has been timed on this cluster "
+            f"(24h 83ms, 7d 161ms, 30d 422ms; the full 120 days took 1.7s "
+            f"warm and 4.3s cold). The field needs a leading wildcard, so the "
+            f"cost grows with the window. Not refused as impossible — "
+            f"unmeasured, and worth measuring if this window is wanted.",
+            raw=str(days)))
+
+    resolver = getattr(client, "hash_seen", None)
+    if resolver is None:
+        return no(absence.absent(
+            absence.CHECK_FAILED,
+            "This log-store client cannot search image hashes."))
+    try:
+        docs, hosts = resolver(digest=clean, since=window["since"],
+                               until=window["until"], tenant_id=tenant_id)
+    except Exception as exc:
+        return no(absence.absent(
+            absence.CHECK_FAILED,
+            f"The hash search did not complete, so whether this image ran is "
+            f"unknown rather than no. ({type(exc).__name__}: "
+            f"{str(exc)[:140]})"))
+
+    return {
+        "observable": clean,
+        "kind": "hash",
+        "tenant_id": tenant_id,
+        "window": window,
+        "host_hashes": {
+            "observed": bool(docs),
+            "documents": int(docs),
+            "hosts": list(hosts),
+            "host_count": len(hosts),
+            "field": HOST_HASH_FIELD,
+            "basis": (
+                f"Sysmon event {HASH_EVENT_ID} (Process Create) only — this "
+                f"is what RAN, not what was loaded into another process "
+                f"(event 7) or merely seen on disk (event 29). Matched by "
+                f"leading wildcard against the composite "
+                f"`MD5=…,SHA256=…,IMPHASH=…` value, so any of the three "
+                f"digests will match."
+            ),
+            "window_claim": (
+                f"Covers {days} days. A nil result here is not a statement "
+                f"about the full {RETENTION_DAYS}-day retention: this field "
+                f"spans it (2,626,536 documents from 2026-06-17 across 190 "
+                f"hosts), and the window is a cost bound, not a data bound."
+            ),
+        },
+    }
+
+
 # --- the real client ------------------------------------------------------
 #
 # Everything above is tested against a fake. That is not evidence the lookup
@@ -734,6 +880,90 @@ class OpenSearchEstateClient:
             return datetime.fromtimestamp(float(millis) / 1000.0, tz=_tz.utc)
 
         return _parse("first"), _parse("last")
+
+    def hash_seen(
+        self, *, digest: str, since: str, until: str, tenant_id: str
+    ) -> tuple[int, list[str]]:
+        """Did any host execute an image with this hash, and on how many hosts.
+
+        A **leading wildcard**, which is unusual enough to justify: the field
+        is a composite `MD5=…,SHA256=…,IMPHASH=…` string with no parsed
+        sibling, so a `term` on a bare digest matches nothing (measured: 0
+        hits against 18,571 for the wildcard form). The cost is bounded by the
+        caller's window rather than by hope — see HASH_WINDOW_DAYS for the
+        timings.
+
+        Pinned to Sysmon event 1. Not because the three producing events
+        disagree about meaning, but because event 1 is the *execution* claim
+        and events 7 and 29 are not — "what ran" must not silently include
+        what was loaded or what was seen on disk.
+        """
+        integ = self._integration
+        pattern = str(getattr(integ, "opensearch_index_pattern", "") or "")
+        tenant_field = str(getattr(integ, "opensearch_tenant_field", "") or "")
+        tenant_values = [
+            str(v) for v in (getattr(integ, "opensearch_tenant_value_list", None) or [])
+            if str(v).strip()
+        ]
+        timestamp_field = str(getattr(integ, "opensearch_timestamp_field", "") or "")
+        if not pattern or not timestamp_field:
+            raise RuntimeError("index pattern or timestamp field not configured")
+        if not tenant_field or not tenant_values:
+            raise RuntimeError(
+                "no tenant pin; refusing rather than querying unpinned")
+
+        clean = "".join(ch for ch in str(digest or "") if ch.isalnum())
+        if len(clean) not in (32, 40, 64):
+            # Not a digest length. Refused rather than wildcarded, because a
+            # short needle in a leading wildcard is a scan of the index.
+            raise ValueError(
+                f"{len(clean)} characters is not a digest length; a short "
+                f"needle in a leading wildcard scans the whole field"
+            )
+
+        body = {
+            "size": 0,
+            "track_total_hits": True,
+            "timeout": "120s",
+            "query": {"bool": {"filter": [
+                # `case_insensitive`, and it is load-bearing rather than
+                # tidy. Sysmon stores the digests UPPERCASE; `detect()`
+                # lowercases every hash, and lowercase is the form every tool
+                # and every analyst pastes (VirusTotal, sha256sum, every
+                # report). Measured 2026-10-15 on the same needle and window:
+                # uppercase 9,636 hits, lowercase **0**. Without this flag
+                # every hash lookup returns a confident nothing.
+                {"wildcard": {HOST_HASH_FIELD: {
+                    "value": f"*{clean}*", "case_insensitive": True,
+                }}},
+                {"range": {timestamp_field: {
+                    "gte": since, "lte": until,
+                    "format": "strict_date_optional_time",
+                }}},
+                {"terms": {tenant_field: tenant_values}},
+                *_SEMANTIC_FILTERS.get(HOST_HASH_FIELD, []),
+            ]}},
+            "aggs": {"hosts": {"terms": {
+                "field": AGENT_FIELD, "size": _HOST_BUCKETS,
+            }}},
+        }
+        payload, _node, _failures = self._client._request(
+            "POST", f"/{pattern}/_search", json_body=body,
+        )
+        payload = payload or {}
+        shards = payload.get("_shards") or {}
+        if payload.get("timed_out") or int(shards.get("failed") or 0):
+            raise PartialResult(
+                f"hash search incomplete: timed_out={payload.get('timed_out')}, "
+                f"shards failed={shards.get('failed')} of {shards.get('total')}. "
+                f"A partial count is a floor, and reporting it as 'not seen' "
+                f"would be the false negative this whole module exists to stop."
+            )
+        total = (((payload.get("hits") or {}).get("total")) or {})
+        buckets = (((payload.get("aggregations") or {})
+                    .get("hosts") or {}).get("buckets") or [])
+        hosts = [str(b.get("key")) for b in buckets if b.get("key") is not None]
+        return int(total.get("value") or 0), hosts
 
     def observation_floor(
         self, *, field: str, since: str, until: str, tenant_id: str

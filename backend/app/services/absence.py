@@ -91,6 +91,29 @@ OUT_OF_SCOPE = "out_of_scope"
 #: floor. Added for `alerts_at_close`, recorded from a member list capped at
 #: 100, where "judged on 100" asserted a count nobody took.
 LOWER_BOUND = "lower_bound"
+#: The capability exists and its cost has not been established. A refusal
+#: about *us*, not about the data.
+#:
+#: Distinct from `out_of_scope`, and the distinction is the point: `out_of_scope`
+#: says there is nowhere to look, which tells the next person never to ask.
+#: This says there is somewhere to look and nobody has measured what asking
+#: costs — so it invites the measurement instead of closing the question.
+#:
+#: **An absence that can be wrong toward permanence deletes a capability
+#: silently.** On 2026-10-15 the indicator lookup refused hashes against the
+#: estate as `out_of_scope` on the stated grounds that "no estate field
+#: carries a file hash". `data.win.eventdata.hashes` carries 2,626,536
+#: documents across 190 hosts spanning the full 120-day retention
+#: (2026-06-17 onward). The field was there the whole time; only the query
+#: cost was unknown, because the value is a composite
+#: `MD5=…,SHA256=…,IMPHASH=…` string that needs a leading wildcard. The
+#: refusal was wrong in the direction that removes the capability from
+#: everyone who reads it.
+#:
+#: `raw` carries what is known, so the reader has the measurement rather than
+#: a promise that one exists.
+COST_NOT_ESTABLISHED = "cost_not_established"
+
 #: An absence whose kind this code did not recognise. Its own bucket, because
 #: degrading an unrecognised kind into `unparsed` would file it under a kind
 #: that *means* something — the convention's own failure mode implemented
@@ -108,7 +131,7 @@ UNRECOGNISED = "unrecognised_absence"
 KINDS = frozenset({
     NO_FIELD_MAP, UNPARSED, UNCLASSIFIED, TARGET_UNKNOWN, UNRATED,
     NEVER_OBSERVED, CHECK_FAILED, TOO_LITTLE_HISTORY, OUT_OF_SCOPE,
-    LOWER_BOUND, UNRECOGNISED,
+    LOWER_BOUND, COST_NOT_ESTABLISHED, UNRECOGNISED,
 })
 
 
