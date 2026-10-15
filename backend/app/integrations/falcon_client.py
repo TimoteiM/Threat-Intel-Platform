@@ -383,8 +383,15 @@ def lookup(
 
       * **has this host been seen?** `/devices/queries/devices/v1` by hostname
         or local IP — answers "is this observable inside the estate".
-      * **are there detections mentioning it?** `/detects/queries/detects/v1`
-        with an FQL filter.
+      * **are there detections mentioning it?** `/alerts/queries/alerts/v2`
+        with an FQL filter (`ALERT_FILTER_FIELDS`).
+
+    This said `/detects/queries/detects/v1` until 2026-10-15. That endpoint is
+    recorded four lines above the path constants as **404 — the legacy Detects
+    API is gone**, and the code has always used `ALERTS_PATH`. The measurement
+    and the prose were in the same file disagreeing with each other, which is
+    why a reader has to be able to reach the constant rather than the
+    sentence.
 
     Returns a dict the collector stores. Raises only for programming errors;
     a credential or provider failure comes back as an exception the collector

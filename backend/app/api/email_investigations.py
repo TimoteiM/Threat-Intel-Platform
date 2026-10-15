@@ -8,7 +8,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Path as FastAPIPath, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Path as FastAPIPath,
+    Query,
+    Request,
+    UploadFile,
+)
 from sqlalchemy import func, or_, select
 
 from app.config import get_settings
@@ -257,6 +266,162 @@ async def get_email_investigation_run(
         return payload
 
     return base
+
+
+#: How many indicators one request will ask the estate about. Each hit costs
+#: two extra aggregations (first/last seen, and the collection floor), so the
+#: cost is per *hit* and not per indicator — 7 indicators on run 113 with 2
+#: hits took 168 ms concurrently. The cap is a bound on a pathological
+#: message (a newsletter with 400 links), and when it bites the response says
+#: so: a silently truncated indicator list reads as "the estate was asked
+#: about everything", which is the one thing this endpoint must not imply.
+_ESTATE_INDICATOR_CAP = 40
+
+
+def _estate_indicators(result: dict[str, Any]) -> list[dict[str, str]]:
+    """The observables from a parsed email that the estate can be asked about.
+
+    Domains and addresses only. URLs are deliberately not included: this
+    estate has no proxy logs, so a URL has no field to answer it, and
+    `lookup()` returns `out_of_scope` rather than a zero.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+
+    def add(value: Any, kind: str, origin: str) -> None:
+        text = str(value or "").strip().lower()
+        if not text or (text, kind) in seen:
+            return
+        seen.add((text, kind))
+        out.append({"value": text, "kind": kind, "origin": origin})
+
+    add(result.get("sender_domain"), "domain", "sender domain")
+    add(result.get("sender_ip"), "ip", "sending address from the Received chain")
+    for domain in (result.get("url_domains") or []):
+        add(domain, "domain", "domain of a link in the body")
+    return out
+
+
+@router.get("/{run_id}/estate-dns")
+async def email_investigation_estate_dns(
+    db: DBSession,
+    run_id: str = FastAPIPath(...),
+    tenant_id: str = Query(..., min_length=1),
+    days: int = Query(default=7, ge=1, le=120),
+    request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Did anything in this customer's estate resolve the names in this email?
+
+    Two questions, never merged, each with its own named absence — see
+    `estate_lookup_service`. A hit is only half an answer: the half an analyst
+    acts on is *when* it was first resolved relative to the email's arrival,
+    and that comparison is withheld unless a trustworthy arrival time exists.
+
+    `tenant_id` is required and is not inferred. `email_investigation_runs`
+    carries no tenant column, so the run cannot name its own customer; a
+    guessed tenant here would run one customer's indicators against another's
+    logs. The scope check rejects a tenant the caller may not read with a 404,
+    not a 403, so the endpoint does not confirm that the tenant exists.
+    """
+    import asyncio
+
+    from app.services import absence, email_anchor, estate_lookup_service, tenant_scope
+
+    try:
+        parsed_id = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid run id format.") from exc
+
+    row = (
+        await db.execute(
+            select(EmailInvestigationRun).where(EmailInvestigationRun.id == parsed_id)
+        )
+    ).scalars().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Email investigation run not found.")
+
+    # Scope first, before the run's contents are touched. `assert_can_read`
+    # raises 404 rather than 403 on purpose: a 403 confirms the tenant exists.
+    identity = getattr(getattr(request, "state", None), "identity", None)
+    tenant_scope.assert_can_read(tenant_scope.scope_of(identity), tenant_id)
+
+    result = dict(row.result_json or {})
+    indicators = _estate_indicators(result)
+    dropped = max(0, len(indicators) - _ESTATE_INDICATOR_CAP)
+    indicators = indicators[:_ESTATE_INDICATOR_CAP]
+
+    # The baseline, before any lookup. Resolved at parse time and stored,
+    # because the Received chain is not retained and cannot be re-read.
+    stored = result.get("arrival")
+    baseline: dict[str, Any]
+    reference_time = None
+    reference_anchor = None
+    if absence.is_absent(stored):
+        baseline = {"resolved": False, "absence": stored}
+    elif isinstance(stored, dict) and stored.get("at"):
+        try:
+            reference_time = datetime.fromisoformat(str(stored["at"]))
+        except ValueError:
+            reference_time = None
+        if reference_time is not None:
+            reference_anchor = email_anchor.anchor_statement(stored)
+        baseline = {
+            "resolved": reference_time is not None and bool(reference_anchor),
+            "anchor": stored.get("anchor"),
+            "at": stored.get("at"),
+            "statement": stored.get("statement"),
+            "written_by": stored.get("written_by"),
+            "sender_date_disagrees": stored.get("sender_date_disagrees"),
+        }
+    else:
+        # A run parsed before the anchor existed. Not an error and not a
+        # fallback to its upload time: `created_at` is when an analyst opened
+        # the investigation, which is later than arrival for every
+        # retrospectively reported message.
+        baseline = {
+            "resolved": False,
+            "absence": absence.absent(
+                absence.CHECK_FAILED,
+                "This run was parsed before an arrival time was extracted, "
+                "and the Received chain is not retained, so when the message "
+                "arrived cannot be recovered. The run's own timestamp is its "
+                "upload time, which is not when the email arrived.",
+            ).as_json(),
+        }
+
+    if not baseline["resolved"]:
+        reference_time, reference_anchor = None, None
+
+    client = estate_lookup_service.estate_client_for(tenant_id)
+
+    def _one(indicator: dict[str, str]) -> dict[str, Any]:
+        answer = estate_lookup_service.lookup(
+            indicator["value"], kind=indicator["kind"], tenant_id=tenant_id,
+            days=days, client=client,
+            reference_time=reference_time, reference_anchor=reference_anchor,
+        )
+        answer["origin"] = indicator["origin"]
+        return answer
+
+    # Concurrent because the per-indicator latency is network-bound and the
+    # cluster handles them independently; `to_thread` because the estate
+    # client is the synchronous OpenSearch adapter.
+    answers = await asyncio.gather(
+        *(asyncio.to_thread(_one, indicator) for indicator in indicators)
+    ) if indicators else []
+
+    return {
+        "run_id": str(row.id),
+        "tenant_id": tenant_id,
+        "window_days": days,
+        "baseline": baseline,
+        "indicators": list(answers),
+        "indicator_count": len(answers),
+        # Stated, not silent. See `_ESTATE_INDICATOR_CAP`.
+        "indicators_not_asked": dropped,
+        "cap": _ESTATE_INDICATOR_CAP,
+        "comparison_available": bool(reference_anchor),
+    }
 
 
 @router.post("/{run_id}/cancel")

@@ -21,6 +21,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.services import absence
+from pathlib import Path
+
+from app.services import integration_status_service as iss
 from app.services import integration_status_service as st
 
 NOW = datetime(2026, 10, 14, 14, 0, tzinfo=timezone.utc)
@@ -753,3 +756,155 @@ def test_a_non_compound_badge_carries_no_qualifier():
     assert stopped["badge_qualifier"] is None, (
         "a stopped integration is not compound — nothing is working"
     )
+
+
+# ---------------------------------------------------------------------------
+# Two direction states for the log store.
+#
+# Required by backlog 18 the moment the estate lookup got an API route
+# (2026-10-15). Before it, the api's only contact with the cluster was
+# `ping()`, so collection evidence was a strict superset of what a ping
+# proved and one direction was honest. The route broke that: the worker can
+# be answering while an analyst's on-demand lookup fails.
+#
+# Every test below is written in the dangerous direction — the failure is a
+# green badge, not an error.
+
+
+def _log_store_spec():
+    cat = iss.catalogue()
+    assert "opensearch" in cat, "the log store left the derived catalogue"
+    return cat["opensearch"]
+
+
+def test_the_log_store_declares_both_consumers():
+    spec = _log_store_spec()
+    assert iss.ENRICHMENT in spec.directions
+    assert iss.ON_DEMAND in spec.directions
+
+
+def test_the_on_demand_direction_declares_no_interval():
+    """An analyst triggers it or nobody does.
+
+    A number here would manufacture an outage on every quiet day — the same
+    reason Falcon declares none. `None` must survive the lookup, which is why
+    `expectation_for` indexes through a declared default instead of using
+    `or`: `.get(d) or 6` would turn this refusal back into 6.
+    """
+    spec = _log_store_spec()
+    assert spec.expectation_for(iss.ON_DEMAND) is None
+    assert spec.expectation_for(iss.ENRICHMENT) == 6
+
+
+def test_a_direction_that_declares_nothing_inherits_the_tool_expectation():
+    """The control on the test above: the lookup is not simply returning
+    None for everything."""
+    spec = iss.ToolSpec(
+        tool="t", label="T", directions=(iss.ENRICHMENT,),
+        expected_interval_hours=12,
+    )
+    assert spec.expectation_for(iss.ENRICHMENT) == 12
+    assert spec.warrant_for_direction(iss.ENRICHMENT) == \
+        iss.WARRANT_COLLECTOR_OUTPUT
+
+
+def test_collector_output_is_not_admissible_for_the_on_demand_path():
+    spec = _log_store_spec()
+    assert spec.warrant_for_direction(iss.ENRICHMENT) == \
+        iss.WARRANT_COLLECTOR_OUTPUT
+    assert spec.warrant_for_direction(iss.ON_DEMAND) == iss.WARRANT_API_PING
+
+
+def test_the_worker_producing_output_does_not_promote_the_api_path():
+    """The defect this split exists to prevent.
+
+    Collection output 1h ago is real evidence that the worker can reach the
+    cluster. It is no evidence at all that an analyst's estate lookup can:
+    different process, different network position. Promoting `on_demand` on
+    it would claim a consumer was witnessed working when nothing ran it.
+    """
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    recent = now - timedelta(hours=1)
+    spec = _log_store_spec()
+    entry = {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}}
+
+    per = iss._continuity_per_direction(entry, spec, recent)
+
+    assert per[iss.ENRICHMENT]["state"] == iss.VERIFIED_OK
+    assert per[iss.ENRICHMENT]["promoted"] is True
+    assert per[iss.ON_DEMAND]["state"] == iss.CONFIGURED_UNVERIFIED
+    assert per[iss.ON_DEMAND]["promoted"] is False, (
+        "the api path was promoted on the worker's evidence"
+    )
+
+
+def test_the_on_demand_direction_reports_never_observed_not_an_outage():
+    """No api-side verification has ever run, so there is nothing it stopped
+    doing. That is an absence of configuration, not a silence to judge."""
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    spec = _log_store_spec()
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
+        spec, now - timedelta(hours=1))
+
+    last = per[iss.ON_DEMAND]["last_success"]
+    assert absence.is_absent(last)
+    assert last["kind"] == absence.NEVER_OBSERVED
+    assert per[iss.ON_DEMAND]["silence_verdict"] is None
+    assert per[iss.ON_DEMAND]["stopped"] is False
+
+
+def test_each_direction_verdict_names_its_consumer_and_its_warrant():
+    """A reader of one entry must be able to tell which consumer it is about.
+    Two verdicts with the same shape and no label is the collapse again, one
+    level down."""
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
+        _log_store_spec(), now - timedelta(hours=1))
+
+    assert per[iss.ENRICHMENT]["direction"] == iss.ENRICHMENT
+    assert per[iss.ENRICHMENT]["warrant_kind"] == iss.WARRANT_COLLECTOR_OUTPUT
+    assert per[iss.ON_DEMAND]["direction"] == iss.ON_DEMAND
+    assert per[iss.ON_DEMAND]["warrant_kind"] == iss.WARRANT_API_PING
+
+
+def test_a_tool_with_one_consumer_gets_no_per_direction_verdicts():
+    """Opt-in, so nothing changes for the other integrations."""
+    spec = iss.ToolSpec(tool="t", label="T", directions=(iss.ENRICHMENT,),
+                        expected_interval_hours=6)
+    assert iss._continuity_per_direction({"overall": "x"}, spec, None) == {}
+
+
+def test_a_stopped_collection_path_still_drives_the_overall_badge():
+    """The worst direction wins, as it does for the plain `overall`.
+
+    Otherwise a tool answering one consumer while failing another reads
+    green, which is what two directions are for.
+    """
+    import datetime as _dt
+    stale = _dt.datetime.now(timezone.utc) - timedelta(hours=60)
+    # `configured_unverified` is the real base state here: the log store is
+    # deployment-managed, so no credential verification has run. `verified_ok`
+    # is deliberately NOT in `_CAN_HAVE_STOPPED` — a recorded successful call
+    # is current evidence and stale output does not retract it.
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED,
+         "directions": {iss.ENRICHMENT: {"state": iss.CONFIGURED_UNVERIFIED},
+                        iss.ON_DEMAND: {"state": iss.CONFIGURED_UNVERIFIED}}},
+        _log_store_spec(), stale)
+
+    assert per[iss.ENRICHMENT]["state"] == iss.STOPPED
+    worst = min((v["state"] for v in per.values()),
+                key=lambda s: iss.STATES.index(s))
+    assert worst == iss.STOPPED
+
+
+def test_on_demand_is_in_the_derived_direction_vocabulary():
+    """The filter in `catalogue()` was a literal `(ENRICHMENT, INGEST)`, so a
+    collector declaring this direction would have had it silently dropped —
+    the ninth hand-maintained list, inside the function whose job is to not
+    have one."""
+    assert iss.ON_DEMAND in iss.DIRECTIONS
+    source = (Path(iss.__file__).read_text())
+    assert "if d in (ENRICHMENT, INGEST)" not in source

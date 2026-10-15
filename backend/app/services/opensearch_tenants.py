@@ -62,7 +62,18 @@ INTEGRATION_SPEC: dict[str, object] = {
     "tool": "opensearch",
     "label": "OpenSearch / Wazuh log store",
     "category": "siem",
-    "directions": ("enrichment",),
+    # TWO consumers, not one. `enrichment` is the worker writing an
+    # `alert_log_context` row per analysed alert; `on_demand` is an analyst's
+    # estate lookup from the api, which got a route on 2026-10-15
+    # (`/api/email-investigations/{run_id}/estate-dns`).
+    #
+    # Until that route existed the api's only contact with the cluster was
+    # `ping()` in the health endpoint, so collection evidence was a strict
+    # superset of what a ping proved and one direction was honest. It is not
+    # any more: the worker can be answering while an analyst's lookup fails —
+    # different process, different network position — and a single green badge
+    # would show through exactly that. See backlog 18.
+    "directions": ("enrichment", "on_demand"),
     # Read-only from the API: these values come from the deployment's
     # environment, not from a per-tenant credential row. "Test connection"
     # returned HTTP 400 "not configured" until this was declared, because the
@@ -76,6 +87,20 @@ INTEGRATION_SPEC: dict[str, object] = {
     # overnight. 6h is comfortably longer than any observed quiet period and
     # far shorter than the 49h outage this is meant to catch.
     "expected_interval_hours": 6,
+    # Per direction, because the 6h figure above is a property of the
+    # *collection* consumer and nothing else. `on_demand` declares None: an
+    # analyst triggers an estate lookup or nobody does, so elapsed silence is
+    # not evidence about it, and a number here would manufacture an outage on
+    # every quiet day — the same argument that keeps Falcon from declaring
+    # one. `continuity()` then reports no verdict for that direction.
+    "direction_expectations": {"enrichment": 6, "on_demand": None},
+    # And which evidence may promote each. Collection output cannot witness
+    # the api path: that is the superset claim the estate DNS route expired,
+    # so the api-side verification is now the sole witness for `on_demand`.
+    "direction_warrants": {
+        "enrichment": "collector_output",
+        "on_demand": "api_ping",
+    },
     "config_fields": {
         "nodes": "Cluster node URLs, from deployment configuration.",
         "index_pattern": "Which indices to search, e.g. wazuh-alerts-4.x-*",

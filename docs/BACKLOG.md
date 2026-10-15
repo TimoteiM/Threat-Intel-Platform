@@ -850,6 +850,37 @@ than one — the collection path and the on-demand path are separate consumers
 with separate failure modes, which is the same argument that already keeps
 `enrichment` and `ingest` apart. Do not let one warrant stand in for both.
 
+#### DONE, 2026-10-15 — the route landed and this was closed
+
+`GET /api/email-investigations/{run_id}/estate-dns` is the api-side consumer.
+`test_estate_lookup_consumers.py` fired on it, naming the file, and the
+obligation was met rather than allowlisted:
+
+| | `enrichment` | `on_demand` |
+|---|---|---|
+| consumer | worker, one `alert_log_context` row per analysed alert | an analyst's estate lookup, from the api |
+| expected interval | 6h | **none declared** |
+| admissible warrant | `collector_output` | `api_ping` |
+| state today | promoted while output is inside 6h | `configured_unverified`, `last_success` = `never_observed` |
+
+`on_demand` declares no interval for the same reason Falcon does not: an
+analyst triggers it or nobody does, so elapsed silence is not evidence about
+it. `ToolSpec.expectation_for` indexes through a declared default rather than
+using `or`, because `.get(d) or 6` would turn that refusal back into 6 — the
+absence-as-value shape, in the one place the absence is the point.
+
+Collector output is now **inadmissible** for `on_demand`:
+`_continuity_per_direction` passes `last_succeeded_at` only to the direction
+whose warrant it actually is, so the api path cannot be promoted on the
+worker's evidence. The overall badge is the worst direction.
+
+Two things this does **not** do, both still open above: the conditional
+expectation (items 1–3 of this entry) is still unbuilt, so `on_demand` has no
+outage signal at all — only "never witnessed". And the guard that fired has
+been replaced by its inverse, which asserts the obligation still holds; a
+guard watching for an event that has already happened reads as coverage while
+watching nothing.
+
 ## 19. `sandbox_analyses.requested_by` holds kinds in an actor column
 
 The only existing attribution precedent, and it should not be followed:

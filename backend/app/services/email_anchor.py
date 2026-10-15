@@ -69,6 +69,70 @@ REJECTED_ANCHORS = {
 #: The receiving host follows `by`. Captured up to whitespace, `(` or `;`
 #: because the parenthetical and the id are not part of the hostname.
 _BY_HOST = re.compile(r"\bby\s+([A-Za-z0-9._-]+)", re.IGNORECASE)
+_FROM_HOST = re.compile(r"\bfrom\s+([A-Za-z0-9._-]+)", re.IGNORECASE)
+
+
+#: Hosts under these suffixes are the **provider's**, shared across every
+#: customer on the platform. They are not identities.
+#:
+#: This is the trap under hosted mail. On Microsoft 365 the receiving MTA is
+#: `<tenant>.mail.protection.outlook.com`; the suffix
+#: `mail.protection.outlook.com` is common to every Microsoft tenant in the
+#: world. Configure the suffix and a phisher sending from *their own* M365
+#: tenant produces a chain whose hops all match it — so the trusted run never
+#: meets a foreign hop and walks the whole way into the attacker's
+#: infrastructure, where it reads an attacker-written timestamp as ours. The
+#: identity has to be the tenant-qualified host, which is the one label the
+#: attacker cannot claim.
+#:
+#: Google Workspace is the same shape with a worse surface: inbound hops are
+#: `mx.google.com` and `*.google.com` for every Workspace customer, so there
+#: is no tenant-qualified receiving host to configure at all — the
+#: `Received-SPF`/ARC path has to be used instead, which this module does not
+#: do. A Workspace deployment therefore has no usable identity here and must
+#: stay `check_failed` rather than be given a suffix that trusts all of
+#: Google.
+SHARED_MTA_SUFFIXES = (
+    "mail.protection.outlook.com",
+    "protection.outlook.com",
+    "outlook.com",
+    "office365.com",
+    "google.com",
+    "googlemail.com",
+    "gmail.com",
+    "pphosted.com",          # Proofpoint
+    "mimecast.com",
+    "barracudanetworks.com",
+    "messagelabs.com",       # Symantec/Broadcom
+    "amazonses.com",
+    "sendgrid.net",
+)
+
+
+def over_broad_identities(identities: Any) -> list[str]:
+    """Configured identities that are a provider's rather than a customer's.
+
+    Returned rather than silently dropped, and the caller refuses on a
+    non-empty list. Dropping would leave an operator believing the anchor was
+    configured while every run reported `check_failed` for a different reason;
+    using it would trust every tenant on the provider.
+    """
+    bad: list[str] = []
+    for raw in (identities or []):
+        host = str(raw).strip().lower().lstrip(".").rstrip(".")
+        if not host:
+            continue
+        for suffix in SHARED_MTA_SUFFIXES:
+            # Equal to the shared suffix, or a bare parent of it. A
+            # tenant-qualified host — one that has its own label in front of
+            # the shared part — is fine and is what should be configured.
+            if host == suffix:
+                bad.append(host)
+                break
+            if suffix.endswith("." + host) or suffix == host:
+                bad.append(host)
+                break
+    return bad
 
 
 def _received_timestamp(header: str) -> datetime | None:
@@ -97,6 +161,39 @@ def _received_timestamp(header: str) -> datetime | None:
         # silent up-to-14-hour error in the gap the sentence reports.
         return None
     return parsed.astimezone(timezone.utc)
+
+
+#: Hops our mail provider writes *after* the message is already ours.
+#:
+#: On Microsoft 365 the top of a real chain is not the inbound gateway — it is
+#: one or more internal mailbox-server hops, `*.<region>.prod.outlook.com`,
+#: prepended during delivery inside the tenant. The tenant-qualified gateway
+#: hop sits below them. A walk that required hop 0 to be identifiably ours
+#: therefore refused every genuine M365 message, which is how this was found:
+#: the first synthetic chain in the tests put our gateway at hop 0, and no
+#: real one does.
+#:
+#: Safe to trust *in this position* for a reason that is about position, not
+#: about the hostname: a header above our inbound gateway was written by our
+#: provider after delivery, so a sender cannot place one there. The namespace
+#: is shared across Microsoft tenants, so these hops may appear in the trusted
+#: run but can never *be* the anchor and can never satisfy the requirement
+#: that the run contain a tenant-qualified hop of ours.
+#:
+#: `mail.protection.outlook.com` is deliberately NOT here. That is the inbound
+#: gateway namespace, it carries the tenant label, and admitting it would let
+#: the walk cross from our tenant into a sending tenant's hops — the exact
+#: failure the tenant label exists to prevent.
+POST_RECEIPT_INTERNAL_SUFFIXES = (
+    "prod.outlook.com",
+    "outlook.office365.com",
+)
+
+
+def _is_post_receipt_internal(host: str) -> bool:
+    host = host.strip().lower().rstrip(".")
+    return any(host == s or host.endswith("." + s)
+               for s in POST_RECEIPT_INTERNAL_SUFFIXES)
 
 
 def _is_ours(host: str, identities: frozenset[str]) -> bool:
@@ -146,6 +243,21 @@ def resolve_anchor(
             "time is unknown — not the Date header, which the sender chooses.",
         ).as_json()
 
+    # A provider's shared host is not an identity. Refused rather than
+    # dropped: see `over_broad_identities`.
+    shared = over_broad_identities(identities)
+    if shared:
+        return absence.absent(
+            absence.CHECK_FAILED,
+            f"EMAIL_OWN_MTA_IDENTITIES contains {', '.join(sorted(shared))}, "
+            f"which is the mail provider's host and is shared with every "
+            f"other customer on that platform. An attacker sending from their "
+            f"own tenant produces hops that all match it, so the trusted run "
+            f"would never end and would read their timestamp as ours. "
+            f"Configure the tenant-qualified host instead.",
+            raw=",".join(sorted(shared)),
+        ).as_json()
+
     if not received_headers:
         return absence.absent(
             absence.CHECK_FAILED,
@@ -154,13 +266,20 @@ def resolve_anchor(
             "Received chain was not delivered through a path we can see.",
         ).as_json()
 
-    # Walk down from the top while the hop is ours. The first foreign hop ends
-    # our trust: everything below it arrived with the message.
+    # Walk down from the top while the hop is either identifiably ours or a
+    # hop our provider wrote after delivery. The first hop that is neither
+    # ends our trust: everything below it arrived with the message.
     ours: list[tuple[str, datetime]] = []
+    internal_hops = 0
     foreign_at: int | None = None
     for position, header in enumerate(received_headers):
         match = _BY_HOST.search(header or "")
         host = match.group(1) if match else ""
+        if host and _is_post_receipt_internal(host):
+            # Above our gateway, so written by our provider — but shared, so
+            # it cannot anchor and does not count as a hop of ours.
+            internal_hops += 1
+            continue
         if not host or not _is_ours(host, identities):
             foreign_at = position
             break
@@ -172,18 +291,53 @@ def resolve_anchor(
         ours.append((host, stamp))
 
     if not ours:
-        first_host = ""
-        if received_headers:
-            match = _BY_HOST.search(received_headers[0] or "")
-            first_host = match.group(1) if match else "(no `by` clause)"
+        # Name the hop that ended the trusted run, not hop 0 — with internal
+        # hops above it, hop 0 is our provider's and saying so misleads.
+        blocking = foreign_at if foreign_at is not None else 0
+        match = _BY_HOST.search(received_headers[blocking] or "") \
+            if blocking < len(received_headers) else None
+        blocking_host = match.group(1) if match else "(no `by` clause)"
+        internal_note = (
+            f" The {internal_hops} hop(s) above it are shared "
+            f"provider-internal hosts, which cannot identify a tenant."
+            if internal_hops else ""
+        )
         return absence.absent(
             absence.CHECK_FAILED,
-            f"No Received header at the top of the chain was written by "
-            f"configured mail infrastructure — the most recent hop reports "
-            f"`by {first_host}`, which is not one of ours. Headers further "
-            f"down arrived with the message and may be forged, so none of "
-            f"them is read as an arrival time.",
-            raw=first_host,
+            f"No Received header above the first foreign hop was written by "
+            f"configured mail infrastructure — the run ends at `by "
+            f"{blocking_host}`, which is not one of ours.{internal_note} "
+            f"Headers further down arrived with the message and may be "
+            f"forged, so none of them is read as an arrival time.",
+            raw=blocking_host,
+        ).as_json()
+
+    # No foreign hop anywhere: the trusted run was never bounded.
+    #
+    # Two worlds produce this and nothing in the chain separates them. Either
+    # the message really is internal — M365 tenant to the same M365 tenant,
+    # every hop genuinely ours — or an identity matched the whole of somebody
+    # else's chain and the walk ran off the end of our infrastructure into
+    # theirs. The second is not hypothetical: it is precisely what a shared
+    # provider suffix produces, and the `over_broad_identities` guard above
+    # covers only the misconfigurations we can name.
+    #
+    # The cost of refusing is real and worth stating: internal-origin mail —
+    # which is what a compromised-account investigation looks like — gets no
+    # before/after sentence. That is the lesser error. An unbounded run yields
+    # the bottom-most hop in the message, and on a forged chain that is the
+    # attacker's chosen timestamp, reported as the one our infrastructure
+    # wrote.
+    if foreign_at is None:
+        return absence.absent(
+            absence.CHECK_FAILED,
+            f"Every one of the {len(received_headers)} Received hops matches "
+            f"configured mail infrastructure, so the trusted run has no end. "
+            f"An internal message and a chain that matched somebody else's "
+            f"infrastructure all the way down look identical here, and the "
+            f"second would date this email from a header the sender wrote. "
+            f"No arrival time is claimed.",
+            raw=str(len(received_headers)),
         ).as_json()
 
     # The earliest of our own run: the first moment our side held the message.
@@ -194,6 +348,7 @@ def resolve_anchor(
         "at": at,
         "written_by": host,
         "own_hops": len(ours),
+        "provider_internal_hops_above": internal_hops,
         "trusted_prefix_ended_at": foreign_at,
         "statement": (
             f"the earliest Received header written by our own mail "
@@ -216,6 +371,65 @@ def resolve_anchor(
             result["sender_date_skew_seconds"] = skew
             result["sender_date_disagrees"] = abs(skew) > 86_400
     return result
+
+
+#: Which platform a receiving host belongs to, and whether that platform
+#: offers a tenant-qualified host that can be configured as an identity.
+#: `tenant_qualified` False means there is nothing safe to configure for that
+#: platform here — not that a suffix should be used anyway.
+_PLATFORMS = (
+    ("mail.protection.outlook.com", "Microsoft 365 / Exchange Online", True,
+     "the `<tenant>.mail.protection.outlook.com` host, with the tenant label"),
+    ("outlook.com", "Microsoft 365 (internal Exchange Online hop)", False,
+     "an internal Exchange Online hop — shared, with no tenant label"),
+    ("google.com", "Google Workspace", False,
+     "Workspace inbound hops are `mx.google.com` / `*.google.com` for every "
+     "customer; there is no tenant-qualified receiving host to configure"),
+    ("googlemail.com", "Google Workspace / Gmail", False,
+     "shared across all Google customers"),
+    ("pphosted.com", "Proofpoint Essentials/Enterprise gateway", True,
+     "the customer-specific `mx*-*.pphosted.com` host"),
+    ("mimecast.com", "Mimecast gateway", False,
+     "Mimecast regional hosts are shared between customers"),
+    ("messagelabs.com", "Symantec/Broadcom Email Security.cloud", False,
+     "shared regional hosts"),
+    ("barracudanetworks.com", "Barracuda Email Gateway", False,
+     "shared regional hosts"),
+)
+
+
+def describe_platform(by_hosts: Any) -> dict[str, Any]:
+    """Name the mail platform the receiving hops belong to.
+
+    Called before anyone proposes an identity, because the answer decides
+    whether an identity is available at all. A hosted platform's receiving
+    MTA belongs to the provider, not to the customer, and on some platforms
+    there is no tenant-qualified host to configure — in which case the honest
+    outcome is that this anchor cannot be used, not a broader suffix.
+    """
+    hosts = [str(h).strip().lower().rstrip(".") for h in (by_hosts or [])
+             if str(h).strip()]
+    for suffix, name, qualified, note in _PLATFORMS:
+        for host in hosts:
+            if host == suffix or host.endswith("." + suffix):
+                return {
+                    "platform": name,
+                    "matched_host": host,
+                    "tenant_qualified_identity_available": qualified,
+                    "note": note,
+                    "shared_suffix": suffix,
+                }
+    return {
+        "platform": "not a recognised hosted platform",
+        "matched_host": hosts[0] if hosts else None,
+        "tenant_qualified_identity_available": bool(hosts),
+        "note": (
+            "the receiving hosts match no known provider, which usually means "
+            "self-hosted or on-premises mail — the host or its domain is then "
+            "genuinely ours and is safe to configure"
+        ),
+        "shared_suffix": None,
+    }
 
 
 def anchor_statement(resolved: Any) -> str | None:

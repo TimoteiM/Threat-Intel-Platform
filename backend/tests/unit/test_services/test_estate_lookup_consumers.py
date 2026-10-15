@@ -37,32 +37,72 @@ def test_the_api_dir_exists_so_this_guard_is_looking_somewhere():
     assert len(files) > 5
 
 
-def test_estate_lookup_has_no_api_side_consumer_yet():
-    """When this fails, it is because the thing it guards has happened.
+#: FIRED AND RETIRED, 2026-10-15.
+#:
+#: `app/api/email_investigations.py` gained
+#: `GET /{run_id}/estate-dns`, the guard below failed naming that file, and
+#: the obligation was met rather than allowlisted: the log store now declares
+#: `enrichment` and `on_demand` as separate directions, with separate
+#: expectations (6h and *none*) and separate admissible warrants
+#: (`collector_output` and `api_ping`).
+#:
+#: What replaces it is the inverse assertion. The original guard watched for
+#: an event; once the event has happened, watching for it again is watching
+#: for nothing, and a guard that can never fire is worse than no guard because
+#: it reads as coverage. So the test below now asserts the *obligation* holds —
+#: it fails if someone collapses the directions back to one, or lets
+#: collection output promote the api path.
+def test_an_api_side_consumer_obliges_two_direction_states():
+    """The event happened, so this asserts what it obliged.
 
-    Do not delete it and do not add the new route to an allowlist. Read
-    backlog 18: the log store needs TWO direction states once an api-side
-    consumer exists, because the collection path and the on-demand path are
-    separate consumers with separate failure modes — the same argument that
-    already keeps `enrichment` and `ingest` apart. Update the promotion
-    reasoning, then retire this guard deliberately.
+    An api-side consumer of the estate lookup exists. From that moment the
+    api ping is the sole witness for the api path, neither warrant subsumes
+    the other, and a single direction would make a narrower claim than it
+    appears to: the worker can be answering while an analyst's on-demand
+    lookup fails.
     """
-    importers = [
+    from app.services import integration_status_service as iss
+
+    consumers = [
         f.name for f in _api_files()
         if "estate_lookup_service" in f.read_text()
         or "estate_client_for" in f.read_text()
     ]
-    assert importers == [], (
-        f"{importers} now reach the estate lookup from the api side. The "
-        f"superset argument behind the log store's promoted verified_ok has "
-        f"expired — see {BACKLOG_ITEM}. The ping is now the sole witness for "
-        f"the api path and needs its own direction state; one warrant must "
-        f"not stand in for both."
+    assert consumers, (
+        "no api module reaches the estate lookup any more. If the route was "
+        f"removed, the superset argument in {BACKLOG_ITEM} is live again and "
+        "the two direction states could be collapsed — but do that "
+        "deliberately, not by deleting this test."
+    )
+
+    spec = iss.catalogue()["opensearch"]
+    assert iss.ENRICHMENT in spec.directions
+    assert iss.ON_DEMAND in spec.directions, (
+        f"{consumers} query the cluster from the api process, but the log "
+        f"store reports only {spec.directions}. One direction cannot describe "
+        f"two consumers with different failure modes — see {BACKLOG_ITEM}."
+    )
+    assert spec.warrant_for_direction(iss.ON_DEMAND) == iss.WARRANT_API_PING, (
+        "the on-demand direction accepts collector output as its warrant, "
+        "which promotes an api consumer on evidence from the worker"
+    )
+    assert spec.expectation_for(iss.ON_DEMAND) is None, (
+        "the on-demand direction declares a silence interval. An analyst "
+        "triggers it or nobody does, so a number manufactures an outage on "
+        "every quiet day."
     )
 
 
 def test_the_worker_is_still_the_only_route_to_the_log_search():
-    """The other half of the superset claim, asserted rather than recalled."""
+    """Still useful after the superset expired, for a narrower reason.
+
+    The superset argument is gone — the estate route killed it. What this
+    now guards is the *scope* of the enrichment direction's warrant: the
+    6h expectation and `collector_output` warrant are sized against one
+    producer, `alert_log_context_service` writing a row per analysed alert.
+    A second `search_all` caller with a different rhythm would make that
+    interval a measurement of something else.
+    """
     root = pathlib.Path(__file__).resolve().parents[3] / "app"
     callers = sorted(
         str(f.relative_to(root)) for f in root.rglob("*.py")

@@ -185,6 +185,16 @@ def continuity(
     last_succeeded_at: Any = None,
     now: Any = None,
     expected_interval_hours: float | None = None,
+    #: Which warrant `last_succeeded_at` is evidence of, and therefore which
+    #: consumer it speaks for. Defaults to collector output because that is
+    #: what `last_success_for` returns for every tool today. Passing the
+    #: wrong one here is the error this parameter exists to make visible:
+    #: promoting an on-demand api path on the worker's collection evidence
+    #: claims a consumer was witnessed that nothing witnessed.
+    warrant_kind: str = WARRANT_COLLECTOR_OUTPUT,
+    #: Which direction this verdict is about, carried through to the output so
+    #: a reader of one entry knows which consumer it describes.
+    direction: str | None = None,
 ) -> dict[str, Any]:
     """Split "never worked" from "worked until Monday".
 
@@ -201,6 +211,8 @@ def continuity(
             "stopped": False,
             "silent_for_hours": None,
             "expected_interval_hours": expected_interval_hours,
+            "direction": direction,
+            "warrant_kind": warrant_kind,
             "threshold_hours": None,
             "silence_verdict": None,
             "promoted": False,
@@ -264,7 +276,7 @@ def continuity(
         # Attached whether or not it promotes. A stale warrant is still a
         # warrant, and `current` carries which it is.
         warrant = warrant_for(
-            WARRANT_COLLECTOR_OUTPUT, at=last_succeeded_at, now=at,
+            warrant_kind, at=last_succeeded_at, now=at,
             current=within_expectation,
         )
         if promoted:
@@ -327,6 +339,8 @@ def continuity(
         "badge_qualifier": badge_qualifier,
         "silent_for_hours": round(hours, 1),
         "expected_interval_hours": expected_interval_hours,
+        "direction": direction,
+        "warrant_kind": warrant_kind,
         "threshold_hours": None if threshold is None else round(threshold, 1),
         "silence_verdict": silence_verdict,
         "last_success": last_succeeded_at.isoformat(),
@@ -347,6 +361,27 @@ NOT_WORKING = frozenset({VERIFIED_FAILING, CONFIGURED_UNVERIFIED,
 
 ENRICHMENT = "enrichment"
 INGEST = "ingest"
+
+#: A consumer that queries only when a person asks. Added when the estate
+#: lookup got an API route (2026-10-15), which expired the argument that let
+#: the log store report one direction.
+#:
+#: That argument was a *superset* claim: collection evidence proved more than
+#: an api ping could, because no api-side code queried the cluster at all —
+#: the only api contact was `ping()` in the health endpoint. The estate DNS
+#: route broke it. Now the worker's collection and an analyst's on-demand
+#: lookup are two consumers of one cluster with different failure modes, and
+#: the worker can be answering while the analyst's lookup fails: different
+#: process, different credentials path, different network position.
+#:
+#: Unlike `enrichment` this direction declares **no interval**. An analyst
+#: triggers it or nobody does, so elapsed silence is not evidence of
+#: anything — the same shape as Falcon's, and the reason backlog 18 argues a
+#: conditional expectation rather than a number. Its witness is therefore the
+#: api-side verification alone, and collector output must never promote it.
+ON_DEMAND = "on_demand"
+
+DIRECTIONS = (ENRICHMENT, INGEST, ON_DEMAND)
 
 
 @dataclass(frozen=True)
@@ -375,8 +410,37 @@ class ToolSpec:
     #: and `continuity()` then reports the last success without a verdict —
     #: a guessed interval invents outages.
     expected_interval_hours: float | None = None
+    #: Per-direction overrides of the two facts that make a direction's state
+    #: its own: how often it should produce, and which warrant may promote it.
+    #:
+    #: Empty means every direction shares the tool-level expectation, which is
+    #: right for a tool whose directions have one consumer. It is wrong for
+    #: the log store, where `enrichment` is produced by the worker on a
+    #: measurable rhythm and `on_demand` only when an analyst asks. Letting
+    #: the 6h expectation cover both would promote the on-demand path on
+    #: evidence from the collection path — one warrant standing in for two
+    #: consumers, which is the collapse `ON_DEMAND` exists to prevent.
+    direction_expectations: dict[str, float | None] = field(default_factory=dict)
+    #: Which `WARRANT_*` kind is admissible evidence for a direction.
+    direction_warrants: dict[str, str] = field(default_factory=dict)
     config_fields: dict[str, str] = field(default_factory=dict)
     secret_fields: dict[str, str] = field(default_factory=dict)
+
+    def expectation_for(self, direction: str) -> float | None:
+        """This direction's interval. Indexed through a declared default.
+
+        `.get(direction, self.expected_interval_hours)` rather than
+        `.get(direction) or ...`: a direction that declares `None` means "no
+        claim", and `or` would silently replace that refusal with the
+        tool-level number — an absence read as a value, in the one place where
+        the absence is the whole point.
+        """
+        if direction in self.direction_expectations:
+            return self.direction_expectations[direction]
+        return self.expected_interval_hours
+
+    def warrant_for_direction(self, direction: str) -> str:
+        return self.direction_warrants.get(direction, WARRANT_COLLECTOR_OUTPUT)
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -385,6 +449,12 @@ class ToolSpec:
             "category": self.category,
             "managed": self.managed,
             "expected_interval_hours": self.expected_interval_hours,
+            "direction_expectations": {
+                d: self.expectation_for(d) for d in self.directions
+            },
+            "direction_warrants": {
+                d: self.warrant_for_direction(d) for d in self.directions
+            },
             "directions": list(self.directions),
             "config_fields": dict(self.config_fields),
             # Names and descriptions only. A secret field is declared so the
@@ -430,6 +500,9 @@ def catalogue() -> dict[str, ToolSpec]:
             category=str(decl["category"]),
             managed=str(decl.get("managed") or "deployment"),
             expected_interval_hours=decl.get("expected_interval_hours"),
+            direction_expectations=dict(
+                decl.get("direction_expectations") or {}),
+            direction_warrants=dict(decl.get("direction_warrants") or {}),
             directions=tuple(decl["directions"]),
             config_fields=dict(decl.get("config_fields") or {}),
             secret_fields=dict(decl.get("secret_fields") or {}),
@@ -437,9 +510,13 @@ def catalogue() -> dict[str, ToolSpec]:
     for name, cls in sorted(COLLECTOR_REGISTRY.items()):
         if not getattr(cls, "integration", False):
             continue
+        # Filtered against DIRECTIONS, not a literal pair. The literal was
+        # `(ENRICHMENT, INGEST)`, so a collector declaring a direction added
+        # later would have had it silently dropped — the ninth hand-maintained
+        # list, in the one function whose job is to avoid having one.
         directions = tuple(
             d for d in getattr(cls, "integration_directions", ()) or ()
-            if d in (ENRICHMENT, INGEST)
+            if d in DIRECTIONS
         )
         out[name] = ToolSpec(
             tool=name,
@@ -710,6 +787,48 @@ async def _rows(db: AsyncSession, *, scope: tenant_scope.TenantScope,
     return list((await db.execute(stmt)).scalars().all())
 
 
+def _continuity_per_direction(
+    entry: dict[str, Any], spec: Any, last_succeeded_at: Any
+) -> dict[str, Any]:
+    """One continuity verdict per direction, for tools that need them.
+
+    Returns `{}` for a tool whose directions share one consumer, so nothing
+    changes for the other fifteen integrations. A tool opts in by declaring
+    `direction_expectations` or `direction_warrants`.
+
+    `last_succeeded_at` is passed to the direction whose admissible warrant it
+    actually is, and withheld from the others. That withholding is the whole
+    point: handing the worker's collection time to the on-demand direction
+    would promote it to `verified_ok` on evidence about a different process,
+    and the card would claim an analyst's lookup was witnessed working when
+    nothing had run it.
+    """
+    directions = tuple(getattr(spec, "directions", ()) or ())
+    if not directions:
+        return {}
+    if not (getattr(spec, "direction_expectations", None)
+            or getattr(spec, "direction_warrants", None)):
+        return {}
+
+    base = entry.get("directions") or {}
+    out: dict[str, Any] = {}
+    for direction in directions:
+        admissible = spec.warrant_for_direction(direction)
+        # Today every `last_success_for` value is collector output. A
+        # direction whose witness is something else has no evidence yet, and
+        # `None` is the honest input — `continuity` turns it into
+        # `never_observed` rather than a silence verdict.
+        evidence = (last_succeeded_at
+                    if admissible == WARRANT_COLLECTOR_OUTPUT else None)
+        state = (base.get(direction) or {}).get("state") or entry["overall"]
+        out[direction] = continuity(
+            state=state, last_succeeded_at=evidence,
+            expected_interval_hours=spec.expectation_for(direction),
+            warrant_kind=admissible, direction=direction,
+        )
+    return out
+
+
 async def for_tenant(
     db: AsyncSession, tenant_id: str, *, scope: tenant_scope.TenantScope
 ) -> dict[str, Any]:
@@ -726,12 +845,26 @@ async def for_tenant(
         # `not_configured` — the one a vanished configuration produces, and
         # the one that is invisible on a page of unconfigured tools.
         last = await last_success_for(db, tenant_id, t, rows.get(t))
+        spec = cat.get(t)
         entry["continuity"] = continuity(
             state=entry["overall"], last_succeeded_at=last,
             expected_interval_hours=getattr(
-                cat.get(t), "expected_interval_hours", None),
+                spec, "expected_interval_hours", None),
         )
-        entry["overall"] = entry["continuity"]["state"]
+        # Per direction as well, for a tool whose directions have different
+        # consumers. The tool-level `continuity` above stays — the card's
+        # footer reads it — but the overall state comes from the WORST
+        # direction, because a tool answering one consumer while failing
+        # another must not read green. Same rule as the `overall` badge.
+        per = _continuity_per_direction(entry, spec, last)
+        if per:
+            entry["direction_continuity"] = per
+            entry["overall"] = min(
+                (v["state"] for v in per.values()),
+                key=lambda s: STATES.index(s) if s in STATES else 0,
+            )
+        else:
+            entry["overall"] = entry["continuity"]["state"]
         tools.append(entry)
     # A row for a tool no connector implements any more — a connector
     # removed while its configuration remains. Surfaced rather than hidden,
