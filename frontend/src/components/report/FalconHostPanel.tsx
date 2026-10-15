@@ -29,6 +29,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 
+import { agoFromHours, shortDate, shortStamp } from "@/lib/time";
 import {
   getRunFalcon,
   isFalconAbsence,
@@ -201,13 +202,26 @@ function Coverage({ coverage }: { coverage: FalconCoverage }) {
         <Fact label="Sensor status" value={coverage.status} />
         <Fact label="Site" value={coverage.site_name} />
         <Fact label="Domain" value={coverage.machine_domain} />
-        <Fact label="First seen" value={coverage.first_seen?.slice(0, 10)} />
-        <Fact label="Last seen" value={coverage.last_seen?.replace("T", " ").slice(0, 16)} />
+        <Fact label="First seen" value={shortDate(coverage.first_seen)} />
+        <Fact label="Last seen" value={shortStamp(coverage.last_seen)} />
       </div>
 
       {/* A sensor that has not reported is not a sensor that saw nothing, so
           this sits beside the detections rather than in a tooltip. */}
-      {typeof reporting === "string" ? (
+      {coverage.last_seen_hours_ago !== undefined ? (
+        <p
+          style={{
+            margin: 0,
+            fontSize: 11.5,
+            lineHeight: 1.55,
+            color: coverage.sensor_stale ? "var(--warning)" : "var(--text-muted)",
+          }}
+        >
+          Sensor last reported {agoFromHours(coverage.last_seen_hours_ago)}.
+          {coverage.sensor_stale &&
+            " A sensor that has not reported is not a sensor that saw nothing, so the detections below may be incomplete."}
+        </p>
+      ) : typeof reporting === "string" ? (
         <p
           style={{
             margin: 0,
@@ -269,7 +283,7 @@ function DetectionRow({ group }: { group: FalconDetectionGroup }) {
           </span>
         )}
         {group.users.length > 0 && <span>user {group.users.join(", ")}</span>}
-        {group.latest && <span>last {group.latest.replace("T", " ").slice(0, 16)}</span>}
+        {group.latest && <span>last {shortStamp(group.latest)}</span>}
         {/* Repetition, named as such, beside the thing it repeats. */}
         {group.rows > 1 && (
           <span>
@@ -308,6 +322,23 @@ function Detections({ detections }: { detections: FalconDetections }) {
       <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, color: "var(--text-muted)" }}>
         {detections.counts_basis}
       </p>
+      {/* What was covered, not what was asked for. An unmeasured retention
+          floor means no window length may be claimed at all. */}
+      {detections.window && (
+        <p
+          style={{
+            margin: 0,
+            fontSize: 11.5,
+            lineHeight: 1.55,
+            color:
+              detections.window.complete === true
+                ? "var(--text-muted)"
+                : "var(--warning)",
+          }}
+        >
+          {detections.window.statement}
+        </p>
+      )}
 
       {detections.groups.length === 0 ? (
         <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.55, color: "var(--text-dim)" }}>
@@ -432,7 +463,10 @@ export default function FalconHostPanel({ runId }: { runId: string }) {
           <span
             style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-muted)" }}
           >
-            {panel.hostname} · last {panel.window_days} days
+            {panel.hostname}
+            {panel.window?.covered_days !== null && panel.window?.covered_days !== undefined
+              ? ` · last ${Math.round(panel.window.covered_days)} days`
+              : ` · window unestablished`}
           </span>
         )}
       </header>
@@ -490,7 +524,7 @@ export default function FalconHostPanel({ runId }: { runId: string }) {
               </span>
               {panel.field_control.field ? ` on ${panel.field_control.field}` : ""}
               {panel.field_control.checked_at
-                ? ` at ${panel.field_control.checked_at.replace("T", " ").slice(0, 16)}`
+                ? ` at ${shortStamp(panel.field_control.checked_at)}`
                 : ""}
               . {panel.field_control.why_it_matters}
             </footer>

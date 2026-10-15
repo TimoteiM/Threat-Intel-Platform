@@ -274,6 +274,24 @@ domains, not the sender IP.
 
 ## 8. Still needing a fact, not a decision
 
+- ~~Falcon's alert retention is unmeasured~~ — **measured 2026-10-15.** The
+  oldest alert this subscription returns is **2026-07-17T06:49:10Z, exactly 90
+  days** before the measurement, and asking `created_timestamp > '2024-01-01'`
+  returns the same 2,048 total as `> '2026-06-01'`, so the API is not clamping
+  a wider request silently. Community sources agree on 90 days for detections
+  and alerts independent of subscription tier (raw telemetry is the part that
+  varies, commonly 7 days); no official CrowdStrike page said so in the search
+  results, so the measurement is the authority and 90 is only a sanity bound.
+
+  It is re-derived per request (cached an hour) rather than hardcoded, because
+  it is a rolling window and a tier change could put it under 30 days. The
+  panel now reports the **covered** window, not the requested one, bounded by
+  the later of: what was asked, retention, and **this host's sensor
+  enrolment** — 18 of 182 devices were enrolled inside 30 days. Verified live:
+  `EXP-26ML4Y2` reports "Covers 4 days, not 30: this host's sensor was
+  enrolled 2026-10-11". For a re-enrolled hostname the *earliest* enrolment
+  binds, since detections from the retired enrolment still carry the hostname.
+
 - Whether this API client can be granted the **intel** scope. If yes,
   "what does CrowdStrike know about this indicator" becomes answerable and
   the email panel grows a real question. If no, the 403 should be recorded

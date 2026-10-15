@@ -2195,6 +2195,18 @@ export interface FalconDetectionGroup {
   latest: string | null;
 }
 
+export interface FalconWindow {
+  requested_days: number;
+  /** null when Falcon's retention could not be measured — then NO window
+   *  length may be claimed, because an assumed floor is how a 30-day claim
+   *  outlives the 30 days. */
+  covered_days: number | null;
+  covered_from: string | null;
+  bound_by: "requested" | "at_retention_floor" | "at_enrolment_floor" | null;
+  complete: boolean | null;
+  statement: string;
+}
+
 export interface FalconDetections {
   /** THE headline. Distinct and open — never the raw row count. */
   open_detection_count: number;
@@ -2203,6 +2215,7 @@ export interface FalconDetections {
   counts_basis: string;
   groups: FalconDetectionGroup[];
   basis?: string;
+  window?: FalconWindow;
   /** Behind the collapse. 1,432 rows is repetition, not severity. */
   raw: {
     rows: number;
@@ -2216,7 +2229,9 @@ export interface FalconHostPanel {
   run_id?: string;
   tenant_id?: string;
   hostname: string | null;
+  /** What was ASKED for. `window` says what was covered — they differ. */
   window_days: number;
+  window?: FalconWindow;
   coverage: FalconCoverage | FalconAbsence;
   detections: FalconDetections | FalconAbsence;
   field_control?: {

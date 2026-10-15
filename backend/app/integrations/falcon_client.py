@@ -727,6 +727,111 @@ def lookup(
     }
 
 
+#: Falcon's alert retention, measured rather than assumed — and re-measured,
+#: because it is a rolling window.
+#:
+#: Measured on tenant c00, 2026-10-15: the oldest alert the API will return is
+#: 2026-07-17T06:49:10Z, which is **exactly 90 days** earlier. Asking for
+#: `created_timestamp > '2024-01-01'` returns the same 2,048 total as
+#: `> '2026-06-01'`, so the API is not clamping a wider request silently — the
+#: data genuinely begins there.
+#:
+#: Community sources agree on 90 days for detections and alerts, independent of
+#: subscription tier (raw event telemetry is the part that varies with
+#: licensing, commonly 7 days). No official CrowdStrike documentation page was
+#: found saying so, so the measurement is the authority here and the figure
+#: below is only a sanity bound on it.
+#:
+#: This matters for the same reason the DNS collection floor did: a 30-day
+#: panel claim against an unmeasured retention is a bounded window reported as
+#: complete, and absence-because-not-retained then renders as
+#: absence-because-it-never-happened.
+EXPECTED_ALERT_RETENTION_DAYS = 90
+
+_RETENTION_FLOOR_CACHE: dict[str, dict[str, Any]] = {}
+
+#: The floor moves forward one day per day, so an hour of staleness is at most
+#: an hour of over-claim at the very edge of the window.
+RETENTION_FLOOR_TTL_SECONDS = 3600
+
+
+def alert_retention_floor(
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    timeout: int = DEFAULT_TIMEOUT,
+    now: Any = None,
+) -> dict[str, Any]:
+    """The oldest alert this subscription will return, as a measured fact.
+
+    Never raises. A floor that cannot be established comes back as
+    `floor: None` with a reason, and the caller must then refuse to claim a
+    window length rather than assuming one — an assumed floor is the whole
+    defect.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    at = now or datetime.now(timezone.utc)
+    key = base_url
+    cached = _RETENTION_FLOOR_CACHE.get(key)
+    if cached and cached.get("floor"):
+        age = at - datetime.fromisoformat(cached["measured_at"])
+        if age < timedelta(seconds=RETENTION_FLOOR_TTL_SECONDS):
+            return cached
+
+    def result(floor: Any, reason: str, **extra: Any) -> dict[str, Any]:
+        out = {"floor": floor, "reason": reason,
+               "measured_at": at.isoformat(), **extra}
+        if floor:
+            _RETENTION_FLOOR_CACHE[key] = out
+        return out
+
+    try:
+        resp = http.get(f"{base_url.rstrip('/')}{ALERTS_PATH}", headers=headers,
+                        params={"limit": 1, "sort": "created_timestamp|asc"},
+                        timeout=timeout)
+        if resp.status_code >= 400:
+            return result(None, f"the floor probe returned HTTP {resp.status_code}.")
+        body = resp.json() or {}
+        ids = list(body.get("resources") or [])
+        total = ((body.get("meta") or {}).get("pagination") or {}).get("total")
+        if not ids:
+            return result(
+                None,
+                "this tenant has no Falcon alerts at all, so how far back the "
+                "alert history reaches is unknown — not 'nothing happened'.",
+                absence="too_little_history", total=total)
+        detail = http.post(
+            f"{base_url.rstrip('/')}/alerts/entities/alerts/v2",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"composite_ids": ids}, timeout=timeout)
+        if detail.status_code >= 400:
+            return result(None, f"the oldest alert could not be read "
+                                f"(HTTP {detail.status_code}).")
+        records = list((detail.json() or {}).get("resources") or [])
+        stamp = (records[0].get("created_timestamp") if records else None)
+        parsed = None
+        if stamp:
+            try:
+                parsed = datetime.fromisoformat(
+                    str(stamp).replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            return result(None, "the oldest alert carries no readable "
+                                "created_timestamp.")
+        days = (at - parsed).total_seconds() / 86400.0
+        return result(
+            parsed.isoformat(),
+            f"The oldest alert this subscription returns is "
+            f"{parsed:%Y-%m-%d}, {round(days)} days ago.",
+            days=round(days, 1), total=total)
+    except Exception as exc:  # noqa: BLE001
+        return result(None, f"the floor could not be measured "
+                            f"({type(exc).__name__}: {_redact(exc)}).")
+
+
 def lookup_host(
     *,
     hostname: str,
@@ -807,6 +912,12 @@ def lookup_host(
             if recs:
                 device, superseded = recs[0], recs[1:]
 
+    # --- the floor on any window claim. Measured, not assumed: see
+    # `alert_retention_floor`. Fetched before the detection query so the
+    # caller can shorten the claim rather than report 30 days it does not have.
+    retention = alert_retention_floor(base_url=base, headers=headers,
+                                      http=http, timeout=timeout)
+
     # --- section B: detections, gated on the standing control, because the
     # Alerts API answers an unknown field with 200 and zero rows.
     control = alerts_field_control("device.hostname", base_url=base,
@@ -846,6 +957,14 @@ def lookup_host(
         ],
         "detections": detections,
         "control": control,
+        "retention": retention,
+        # A host cannot have detections from before its sensor existed. For a
+        # re-enrolled hostname the EARLIEST enrolment is the bound, because
+        # detections from the retired enrolment still carry this hostname.
+        "enrolment_floor": min(
+            [str(r.get("first_seen")) for r in ([device] + superseded)
+             if isinstance(r, dict) and r.get("first_seen")],
+            default=None),
         "truncated_at": truncated_at,
         "token": token.as_status(),
     }

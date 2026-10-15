@@ -29,6 +29,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { Button, Page, PageHeader } from "@/components/ui/Primitives";
+import { agoFromHours, durationFromHours } from "@/lib/time";
 import {
   getMe,
   hasAdminRights,
@@ -624,7 +625,7 @@ export default function IntegrationsPage() {
                           ? "the collector produced output"
                           : "an API ping succeeded"}
                         {typeof w.age_hours === "number"
-                          ? ` ${w.age_hours}h ago`
+                          ? ` ${agoFromHours(w.age_hours)}`
                           : ""}
                       </span>
                       <span
@@ -654,9 +655,7 @@ export default function IntegrationsPage() {
                         Last worked{" "}
                         {new Date(t.continuity.last_success).toLocaleString()}
                         {" — silent "}
-                        {t.continuity.silent_for_hours < 48
-                          ? `${t.continuity.silent_for_hours}h`
-                          : `${Math.floor(t.continuity.silent_for_hours / 24)} days`}
+                        {durationFromHours(t.continuity.silent_for_hours)}
                         .
                       </div>
                     ) : typeof t.continuity.last_success === "string" ? (

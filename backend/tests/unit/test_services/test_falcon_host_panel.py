@@ -109,7 +109,10 @@ def test_no_detections_with_a_passing_control_is_a_real_negative():
                    control=PASSED, now=NOW)
     assert not absence.is_absent(out["detections"])
     assert out["detections"]["open_detection_count"] == 0
-    assert "real negative" in out["detections"]["basis"]
+    # The "real negative" reasoning lives in the footer's field_control, once.
+    # Saying it again here made the panel read as though it were apologising.
+    assert out["field_control"]["passed"] is True
+    assert "zero results" in out["field_control"]["why_it_matters"]
 
 
 def test_no_detections_with_a_FAILED_control_is_withheld():
@@ -315,3 +318,107 @@ def test_the_live_record_is_the_one_shown_not_an_arbitrary_match():
                    control=PASSED, now=NOW, superseded=RETIRED)
     assert out["coverage"]["sensor_stale"] is False
     assert out["coverage"]["re_enrolled"] is True
+
+
+# --- the window: what was asked vs what was covered -----------------------
+#
+# The gap the DNS lookup's observation floor closed this morning, in a
+# different integration. "No alerts in 30 days" against an unmeasured
+# retention is a bounded window reported as complete, and
+# absence-because-not-retained then renders as
+# absence-because-it-never-happened.
+
+RETENTION_90 = {"floor": "2026-07-17T06:49:10+00:00",
+                "reason": "The oldest alert this subscription returns is 2026-07-17, 90 days ago.",
+                "days": 90.0}
+RETENTION_UNKNOWN = {"floor": None,
+                     "reason": "the floor probe returned HTTP 503."}
+
+
+def test_a_30_day_window_inside_90_day_retention_is_complete():
+    """Measured on this tenant: retention reaches 2026-07-17, 90 days back.
+    So the 30-day claim is sound — but only because it was measured."""
+    w = fp.effective_window(requested_days=30, retention=RETENTION_90,
+                            enrolment_floor="2024-01-01T00:00:00Z", now=NOW)
+    assert w["complete"] is True
+    assert w["bound_by"] == "requested"
+    assert w["covered_days"] == 30.0
+
+
+def test_retention_shorter_than_the_request_shortens_the_claim():
+    """A tier change, or a tenant whose history is young."""
+    w = fp.effective_window(
+        requested_days=30,
+        retention={"floor": (NOW - timedelta(days=11)).isoformat(),
+                   "reason": "oldest alert 11 days ago"},
+        enrolment_floor="2024-01-01T00:00:00Z", now=NOW)
+    assert w["complete"] is False
+    assert w["bound_by"] == fp.AT_RETENTION_FLOOR
+    assert w["covered_days"] == 11.0
+    assert "not 30" in w["statement"]
+    assert "not the same as not having" in w["statement"]
+
+
+def test_a_sensor_enrolled_inside_the_window_binds_instead():
+    """18 of 182 devices were enrolled less than 30 days ago.
+
+    Falcon could not have generated a detection on a host before its sensor
+    existed, so for those hosts the window is the enrolment, not retention.
+    """
+    w = fp.effective_window(
+        requested_days=30, retention=RETENTION_90,
+        enrolment_floor=(NOW - timedelta(days=4)).isoformat(), now=NOW)
+    assert w["bound_by"] == fp.AT_ENROLMENT_FLOOR
+    assert w["covered_days"] == 4.0
+    assert "sensor was enrolled" in w["statement"]
+
+
+def test_the_latest_of_the_three_bounds_wins():
+    """Same rule as the estate lookup's floor: the latest start binds, because
+    each is a hard limit on what could be found."""
+    w = fp.effective_window(
+        requested_days=30,
+        retention={"floor": (NOW - timedelta(days=20)).isoformat(), "reason": "x"},
+        enrolment_floor=(NOW - timedelta(days=9)).isoformat(), now=NOW)
+    assert w["bound_by"] == fp.AT_ENROLMENT_FLOOR
+    assert w["covered_days"] == 9.0
+
+
+def test_an_unmeasured_retention_withholds_the_window_claim():
+    """Not a default back to what was asked for.
+
+    An assumed floor is how a 30-day claim outlives the 30 days — the exact
+    defect, one integration over.
+    """
+    w = fp.effective_window(requested_days=30, retention=RETENTION_UNKNOWN,
+                            enrolment_floor=None, now=NOW)
+    assert w["covered_days"] is None
+    assert w["complete"] is None
+    assert "not established" in w["statement"]
+    assert "lower bound" in w["statement"]
+
+
+def test_a_tenant_with_no_alerts_does_not_get_a_window_claim():
+    w = fp.effective_window(
+        requested_days=30,
+        retention={"floor": None, "absence": "too_little_history",
+                   "reason": "this tenant has no Falcon alerts at all."},
+        enrolment_floor=None, now=NOW)
+    assert w["complete"] is None
+
+
+def test_the_panel_carries_the_window_beside_the_detections():
+    out = fp.panel(hostname="EXP-1", device=DEVICE, detections=[],
+                   control=PASSED, now=NOW, retention=RETENTION_90,
+                   enrolment_floor="2024-01-01T00:00:00Z", requested_days=30)
+    assert out["window"]["complete"] is True
+    assert out["detections"]["window"]["complete"] is True
+    assert out["window_days"] == 30
+
+
+def test_the_panel_does_not_claim_30_days_when_the_floor_is_unknown():
+    out = fp.panel(hostname="EXP-1", device=DEVICE, detections=[],
+                   control=PASSED, now=NOW, retention=RETENTION_UNKNOWN,
+                   enrolment_floor=None, requested_days=30)
+    assert out["window"]["covered_days"] is None
+    assert out["detections"]["window"]["complete"] is None

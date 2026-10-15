@@ -41,10 +41,108 @@ from typing import Any
 
 from app.services import absence
 
-#: How far back detections are fetched. 30 days because that is the window an
-#: analyst reading today's alert asks about; longer makes the open/closed
+#: How far back detections are *asked* for. 30 days because that is the window
+#: an analyst reading today's alert asks about; longer makes the open/closed
 #: ratio meaningless and costs a page of results.
+#:
+#: **What was asked for is not what was covered.** See `effective_window`: the
+#: answer is bounded below by Falcon's alert retention (measured 2026-10-15 at
+#: 90 days on this tenant) and, per host, by when its sensor was enrolled —
+#: 18 of 182 devices were enrolled inside this window. Reporting "no alerts in
+#: 30 days" against either bound is a bounded window stated as complete, which
+#: is the defect the estate DNS lookup's observation floor exists to prevent.
 DETECTION_DAYS = 30
+
+#: The window reached its own limit, so a nil result is a lower bound rather
+#: than a negative. Named for the two bounds that can produce it.
+AT_RETENTION_FLOOR = "at_retention_floor"
+AT_ENROLMENT_FLOOR = "at_enrolment_floor"
+
+
+def effective_window(
+    *,
+    requested_days: int,
+    retention: Any,
+    enrolment_floor: Any,
+    now: datetime,
+) -> dict[str, Any]:
+    """How far back this answer actually reaches, and which limit binds.
+
+    Three candidate starts, and the **latest** of them wins, exactly as in
+    `estate_lookup_service.observation_floor`:
+
+    * what was asked for (`requested_days` before now);
+    * Falcon's alert retention — nothing older exists to be found;
+    * this host's sensor enrolment — nothing older could have been generated.
+
+    A floor that could not be measured is not treated as absent. `retention`
+    with no floor returns `covered: None`, and the caller must then withhold
+    the window claim rather than default to what it asked for — an assumed
+    floor is how a 30-day claim outlives the 30 days.
+    """
+    asked_from = now - timedelta(days=int(requested_days))
+    candidates: list[tuple[datetime, str]] = [(asked_from, "requested")]
+    unmeasured: str | None = None
+
+    floor = (retention or {}).get("floor") if isinstance(retention, dict) else None
+    if floor:
+        parsed = _parse(floor)
+        if parsed:
+            candidates.append((parsed, AT_RETENTION_FLOOR))
+    else:
+        unmeasured = (
+            (retention or {}).get("reason")
+            if isinstance(retention, dict) else None
+        ) or "Falcon's alert retention was not measured."
+
+    enrolled = _parse(enrolment_floor)
+    if enrolled:
+        candidates.append((enrolled, AT_ENROLMENT_FLOOR))
+
+    start, binding = max(candidates, key=lambda pair: pair[0])
+    covered_days = max(0.0, (now - start).total_seconds() / 86400.0)
+
+    if unmeasured:
+        return {
+            "requested_days": int(requested_days),
+            "covered_days": None,
+            "covered_from": None,
+            "bound_by": None,
+            "complete": None,
+            "statement": (
+                f"Searched the last {requested_days} days as asked, but how "
+                f"far back Falcon's alert history reaches was not established: "
+                f"{unmeasured} So a nil result here is a lower bound, not a "
+                f"report that nothing happened."
+            ),
+        }
+
+    if binding == "requested":
+        statement = (
+            f"Covers the full {requested_days} days asked for: Falcon's alert "
+            f"history and this host's sensor both reach further back."
+        )
+    elif binding == AT_RETENTION_FLOOR:
+        statement = (
+            f"Covers {round(covered_days)} days, not {requested_days}: "
+            f"Falcon's alert retention begins {start:%Y-%m-%d}. Anything "
+            f"earlier is not retained, which is not the same as not having "
+            f"happened."
+        )
+    else:
+        statement = (
+            f"Covers {round(covered_days)} days, not {requested_days}: this "
+            f"host's sensor was enrolled {start:%Y-%m-%d}, so Falcon could "
+            f"not have generated a detection on it before then."
+        )
+    return {
+        "requested_days": int(requested_days),
+        "covered_days": round(covered_days, 1),
+        "covered_from": start.isoformat(),
+        "bound_by": binding,
+        "complete": binding == "requested",
+        "statement": statement,
+    }
 
 #: Rows pulled per host before grouping. The grouping is what the panel
 #: shows, so this bounds cost rather than content — but when it bites the
@@ -296,6 +394,9 @@ def panel(
     now: datetime | None = None,
     truncated_at: int | None = None,
     superseded: Any = None,
+    retention: Any = None,
+    enrolment_floor: Any = None,
+    requested_days: int = DETECTION_DAYS,
 ) -> dict[str, Any]:
     """Both sections, each carrying its own basis or its own absence.
 
@@ -305,6 +406,10 @@ def panel(
     answers an unknown field with 200 and no rows.
     """
     at = now or datetime.now(timezone.utc)
+    window = effective_window(
+        requested_days=requested_days, retention=retention,
+        enrolment_floor=enrolment_floor, now=at,
+    )
     host = str(hostname or "").strip()
     if not host:
         return {
@@ -320,12 +425,11 @@ def panel(
     if passed:
         detections_section: Any = group_detections(
             detections, truncated_at=truncated_at)
-        detections_section["basis"] = (
-            f"Searched `device.hostname` over {DETECTION_DAYS} days. The field "
-            f"was confirmed filterable at "
-            f"{(control or {}).get('checked_at')}, so an empty result here is "
-            f"a real negative."
-        )
+        # Short on purpose: the field control gets a full sentence in the
+        # footer, and saying it twice in adjacent paragraphs made the panel
+        # read as though it were apologising.
+        detections_section["basis"] = "Searched `device.hostname`."
+        detections_section["window"] = window
     else:
         # Not an empty list. The Alerts API cannot distinguish "no detections"
         # from "a field name I am ignoring", so neither can this.
@@ -340,7 +444,9 @@ def panel(
 
     return {
         "hostname": host,
-        "window_days": DETECTION_DAYS,
+        # What was ASKED. `window` says what was covered, and they differ.
+        "window_days": requested_days,
+        "window": window,
         "coverage": coverage(device, hostname=host, now=at,
                              superseded=superseded),
         "detections": detections_section,

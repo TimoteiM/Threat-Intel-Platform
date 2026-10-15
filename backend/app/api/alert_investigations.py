@@ -1069,10 +1069,12 @@ async def get_run_falcon(
         detections=raw["detections"], control=raw["control"],
         truncated_at=raw.get("truncated_at"),
         superseded=raw.get("superseded_devices"),
+        retention=raw.get("retention"),
+        enrolment_floor=raw.get("enrolment_floor"),
+        requested_days=days,
     )
     out["run_id"] = str(run_id)
     out["tenant_id"] = tenant
-    out["window_days"] = days
     return out
 
 
