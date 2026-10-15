@@ -127,3 +127,73 @@ absence from zero — each expressed "nobody asked" as an empty collection, and
 a type cannot defend a field that never constructs it. Check the *default*,
 not just the consumer: a schema default is a claim, made once, about every
 row ever written.
+
+---
+
+## Worked example, 2026-10-15: a default that erased a security boundary
+
+Same shape, higher stakes, and this one had a comment asserting the opposite.
+
+```python
+# alert_log_context_service.build_query
+    # A `filter`, not a `should`: this one is not negotiable against the entity
+    # match. A query that can return another tenant's logs if the entity clause
+    # happens to match is not pinned at all.
+    if tenant_field and tenant_values:
+        filters.append({"terms": {tenant_field: list(tenant_values)}})
+```
+
+Both parameters are declared `= None`. So when either is empty the clause is
+simply not added, the function returns a perfectly valid query, and that query
+reads **every tenant's logs**. The defect is the two lines of prose directly
+above it: they state the requirement correctly and completely, and then the
+`if` makes it conditional. **Anyone reading this believed the comment.** It is
+the most carefully explained version of the bug it describes.
+
+The caller completes the circuit with the same shape one level up:
+
+```python
+tenant_field = str(getattr(settings, "opensearch_tenant_field", "") or "")
+tenant_values = list(getattr(settings, "opensearch_tenant_value_list", []) or [])
+```
+
+`or ""` and `or []` convert "this deployment has no pin configured" into "pass
+nothing", which `build_query` then reads as "no pin wanted". Three independent
+places where an absence becomes a value, cooperating.
+
+Verified rather than reasoned: calling `build_query` with no tenant arguments
+returns a body with **one** filter clause — the time range — and no tenant
+terms. It does not raise and does not return `None`.
+
+### Why it belongs in this document rather than its own
+
+It is not a schema default, but it is the same claim made the same way: *the
+absence of a value is indistinguishable from a decision not to filter.* The
+`IntelEvidence` version lost a distinction in a report. This version loses
+tenant isolation. The lesson generalises in the direction of severity, not
+away from it.
+
+### What distinguishes it from the version that was already fixed
+
+`OpenSearchEstateClient` reaches the same cluster and refuses:
+
+```python
+if not tenant_field or not tenant_values:
+    raise RuntimeError(
+        "this tenant has no log-store tenant pin ... so the query is "
+        "refused rather than run unpinned")
+```
+
+Two paths to one cluster, written months apart, one raising and one silently
+proceeding — which is why the fix is not "add the clause in the second place".
+It is to move the refusal **below both**, into the client, so that a third path
+written next year cannot be written wrong. See
+`docs/design/opensearch-tenant-pin.md`.
+
+### The reading rule this adds
+
+A comment that states an invariant is evidence about intent, never about
+behaviour. **Where a comment asserts something is "not negotiable",
+"always" or "unconditional", read the next line expecting a conditional** —
+that pairing is where the strongest claims and the weakest enforcement collect,
+because the author wrote the prose while believing the code already said it.

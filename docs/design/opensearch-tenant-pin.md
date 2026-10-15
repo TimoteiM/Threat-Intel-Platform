@@ -141,8 +141,68 @@ matters:**
 It is not the bootstrap account, it holds the highest role, it has no e-mail to
 attribute it to anyone, it was used once at creation, and it is still enabled.
 
-**This is the question that decides whether backlog 17 is preparation or an
-incident, and the data cannot answer it.** If that account belongs to an
+### What the host establishes, and what it cannot
+
+Asked of the host rather than of anyone's recall, because the shape — created,
+used once within a minute, never again, still enabled, highest privilege — is
+the shape that resolved `svc-tools` three weeks earlier.
+
+**Established:**
+
+| | |
+|---|---|
+| interactive sessions that day | **exactly one** `Accepted`: `expert` from **10.10.126.103**, 05:35:22 → 15:23:55 |
+| was a human on the box during the window? | **yes** — that session spans both 06:32:45 and 06:33:23 |
+| sudo or any second principal in the window | none |
+| what happened next | the **api container was restarted** at 06:34:15–06:34:18 — same container id stopped and started, so a `restart` and not a recreate — **52 seconds after the login** |
+| does the platform record a creator? | **no.** `users` has no creator column: id, username, password_hash, role, active, created_at, last_login_at, must_change_password, auth_provider, external_id, email, display_name, all_tenants, tenant_ids |
+
+**And the timeline turns out to be ordinary, which corrects my own framing.**
+The API's create-user endpoint sets `must_change_password = generated is not
+None`, and the change-password endpoint sets it to `False`. So:
+
+> created 06:32:45 with a generated password → `must_change_password = True`
+> → first login 06:33:23 → password set in that session → `False`
+
+is **exactly** the row we observe. The 38-second gap between creation and the
+only login is the signature of ordinary provisioning — someone creating an
+account and the recipient logging straight in to set their password — not of
+anything anomalous. The `svc-tools` resemblance does not survive contact with
+the creation path. I raised it as alarming and the evidence says routine.
+
+**Not established, and not establishable from this host:**
+
+| question | why not |
+|---|---|
+| API call, bootstrap, or direct `INSERT`? | Postgres has `log_statement = none` and `log_min_duration_statement = -1`, so no statement was recorded and a direct insert would leave no trace. The api container from that day (`a635a3e0…`) **no longer exists** — the current one was created 2026-10-15 10:40:55 — so its json-file log is gone with it, and no access log was preserved from 2026-09-23. |
+| who the account is for | no e-mail, no creator record, no SSO identity |
+| whether the password change actually happened | nothing audits it; `must_change_password = False` is consistent with both an explicitly supplied password and a changed generated one |
+
+It was **not** the bootstrap path: `_ensure_admin` only runs when `users` is
+empty and creates `role="admin"`, and this row is `role="owner"`.
+
+So the honest position on identity: a human with host access was present, the
+row is shaped exactly as the normal API flow produces, and nothing recorded who
+did it or for whom.
+
+### Close it on its own merits, regardless of the answer
+
+This does not depend on identifying the holder. An `owner` account with no
+e-mail address, no SSO binding and `must_change_password = False` has:
+
+- **no reset path** — nowhere to send a reset, so recovery means an
+  administrator setting a password out of band;
+- **no notification path** — nothing can tell the holder their account was
+  used, changed or granted anything;
+- **nothing to attribute an action to** — the highest privilege in the system,
+  held by an identity that resolves to no person.
+
+That is worth closing or attributing now rather than pending the
+identification, and it is also the strongest argument for the submitter
+attribution work: an audit trail whose actor column can hold this account
+answers nothing.
+
+**The original question still stands for the tenancy conclusion:** If that account belongs to an
 Expertware person, the conclusion above holds. If it was created for anyone
 outside Expertware, a customer-facing principal already holds `owner` with
 `all_tenants = true` against an enforcement path that has never run, and this
@@ -156,7 +216,55 @@ Also noted: **all 28 accounts are `auth_provider = local`.** The Entra SSO
 work is built and gated off awaiting the Azure registration, so every
 principal here is a local password today.
 
-## What parts 2 and 3 will be, once part 4 is answered
+## Two things to resolve before part 2 is designed
+
+### 1. How will tenants actually be separated? — and a factual precondition
+
+Enforcement has to cover whichever control is primary, and both if the answer
+is both. But one half of the question is already settled by measurement:
+
+**Index scope cannot separate tenants today.** All **120** concrete indices
+behind `wazuh-alerts-4.x-*` are named `wazuh-alerts-4.x-YYYY.MM.DD` — **date
+only, with no tenant, manager or customer in any name.** So a second customer
+writing into this cluster under the default Wazuh template lands in **the same
+daily indices** as the first.
+
+Consequences, stated precisely because they change over time:
+
+- **Today**, `manager.name` is not merely the primary control — it is the
+  *only* control that exists. Index selection chooses a date range, so a
+  caller choosing indices or opening a PIT over them is making a
+  data-volume-and-time-window choice, **not** a cross-tenant one.
+- **The moment index separation is introduced** — a second Wazuh manager with
+  its own index prefix or alias — index choice silently becomes a cross-tenant
+  control, and the caller-supplied `indices=` argument and PIT indices become
+  an isolation hole that does not exist yet.
+- So index separation is a **deployment decision nobody has made**, and it has
+  to be made before enforcement is designed, because the two answers produce
+  different enforcement boundaries:
+
+| if customer two… | primary control | what enforcement must own |
+|---|---|---|
+| shares this cluster and these indices | `manager.name` field filter | the query body only |
+| gets its own manager with its own index prefix | index scope | **both** — the index set *and* the field filter as defence in depth |
+
+That is the question to put to whoever will onboard customer two, and it is
+the gate on part 2 rather than part 4.
+
+### 2. One source of truth for the pin, with the other removed
+
+Path 1 pins from **global settings** (`settings.opensearch_tenant_field`,
+`settings.opensearch_tenant_value_list`); paths 2–4 pin from the **per-tenant
+integration**. Two sources for one fact.
+
+They agree only while there is one customer, which means **the disagreement
+first appears on the day it matters** — and the global-settings source cannot
+express "this tenant" at all, so it is the one that cannot survive customer
+two. The resolution is one source, derived from the tenant, with the other
+**removed rather than kept in sync**: a second source kept in agreement by
+discipline is the same bug waiting on a distraction.
+
+## What parts 2 and 3 will be
 
 - **Part 2.** The refusal moves into the client: no body reaches `_request`
   without a tenant `terms` clause the caller cannot supply or suppress, and the
