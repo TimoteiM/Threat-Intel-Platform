@@ -386,10 +386,34 @@ three expensive hashes are on **113, 113 and 115 of 170 — about two-thirds of
 the active host set.**
 
 That figure was first written here as "98% of the estate", by dividing 113 by
-115 — which is *another hash's host count*, not a denominator. The corrected
-number is weaker and the argument survives it: a file on two-thirds of every
-machine that ran anything this week is an **installed component** — a signed
-binary, an agent DLL, a runtime library — not a finding.
+115 — which is *another hash's host count*, not a denominator.
+
+**And "two-thirds is high" needed a baseline, because without one it is an
+inference wearing a measurement's clothes.** So: 173 distinct hashes sampled
+from the same 7-day window **in lexicographic key order** — deliberately
+uncorrelated with prevalence, since ordering by document count would select
+ubiquitous hashes by construction and then discover they are ubiquitous.
+
+| baseline prevalence, 173 ordinary hashes | |
+|---|---|
+| p50 | **1 host** |
+| p90 | 14 hosts |
+| p95 | 35 hosts |
+| max | 134 hosts |
+| on exactly 1 host | 96 (55%) |
+| on ≤ 5 hosts | 142 (82%) |
+| on ≥ 113 hosts | **4 (2.3%)** |
+
+**The median hash in this estate runs on one host, 82% run on five or fewer,
+and only 2.3% reach 113.** So a hash on 113 of 170 sits in the top ~2% of the
+prevalence distribution, and "this is an installed component — a signed
+binary, an agent DLL, a runtime library" is a reading of a measured extreme
+rather than a guess. The claim is kept, with its baseline attached.
+
+(That query returned 0 documents across 360 clean shards on the first
+attempt, and was controlled before being believed: the cause was a guessed
+tenant pin value — `C00-Indexer`, the cluster's name, where the configured pin
+is `manager.name = wm-c00.siembiot.int`.)
 
 Which means **knowing which 113 of 170 hosts hold such a file tells an analyst
 very little.** The host list is the product of S1 and S2, and for exactly the

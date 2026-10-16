@@ -1401,6 +1401,21 @@ ad-hoc queries is right, and the shape they return is not evidence about what
 the code path returns. Before building on a shape, get it from the function
 the feature will call.
 
+**And before any of that: establish that the component exists.** The same day,
+from the other side, a diagnosis ran three paragraphs on "our collector
+stalled — check its cursor, its last run, whether the worker was recreated".
+There is no collector. One `grep` for a Falcon task settled what had been
+built on top of an inferred component: Falcon is queried live, there is no
+ingest path, no beat entry and no table. The hypothesis had *existence* fifth
+in a list of behaviours, when existence is the only question whose answer
+makes the other four meaningful.
+
+Both failures are one rule in two directions — **reasoning about an
+architecture nobody verified.** One assumed a *richer* layer than exists; the
+other assumed a layer at all. So the order is fixed: does this component
+exist, then what does it return, then how does it behave. A `grep` and a
+`\dt` are cheaper than any paragraph written about an imagined one.
+
 Three corollaries worth naming, because all three have bitten:
 
 - **Presence in a registry is not reachability.** "Every declared kind has a

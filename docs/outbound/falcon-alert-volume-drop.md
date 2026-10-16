@@ -350,3 +350,104 @@ receive, then this stops being an alert-volume document and becomes the first
 real instance of
 [a-failed-ingest-leaves-no-trace](../problems/a-failed-ingest-leaves-no-trace.md)
 — the defect that backlog item predicted, found in production.
+
+---
+
+# ADDENDUM 3 — 2026-10-16. The boundary survives every time field, and two
+# framings in this document were wrong.
+
+## 1. The 8 October boundary is an arrival boundary, not a triage artefact
+
+This record type demonstrably carries fields written at closure —
+`severity_name` is on 1,728/1,728 closed alerts and 0/319 open ones — so a
+*timestamp* written at triage rather than at arrival was a live possibility,
+and the per-day count that produced the boundary was built on
+`created_timestamp` alone. Rebuilt on every time field the record carries:
+
+| field | present | min | max | dated after 10-08 |
+|---|---|---|---|---|
+| `created_timestamp` | 2,047 | 2026-07-20 | 2026-10-15 | 1 |
+| `context_timestamp` | 1,993 | 2026-07-20 | 2026-10-15 | 1 |
+| `crawled_timestamp` | 2,047 | 2026-07-20 | 2026-10-15 | 2 |
+| `timestamp` | 2,047 | 2026-07-20 | 2026-10-15 | 2 |
+| **`updated_timestamp`** | **2,047** | 2026-07-20 | **2026-10-15** | **2** |
+| `signal_*_timestamp` | 54 | 2026-07-20 | 2026-10-08/10 | 0–1 |
+
+**`updated_timestamp` is the control and it closes the question.** It is
+written whenever a record is touched, and `updated ≥ created` always. If
+arrivals had continued while triage stopped, it would cluster before 10-08
+while `created_timestamp` ran on. If the boundary were a triage artefact, the
+reverse. Instead **both stop together, and at most 2 of 2,047 records have
+been touched at all since 8 October.**
+
+So the gap is real on every available clock. It is not an artefact of which
+field was counted.
+
+## 2. The 20 July edge is a retention floor we created, not a start
+
+`alert_retention_floor` measures the oldest alert this subscription returns as
+**2026-07-20, 88 days ago** — consistent with a ~90-day alert retention. And
+the sensors long predate it: device `first_seen` runs back to **August 2024**,
+with roughly **95 of 182 devices enrolled before 20 July 2026**, some by two
+years.
+
+So the left edge of every figure in this document is `at_retention_floor`, not
+the beginning of activity. Any statement of the form "this began on 20 July"
+is a statement about our query window. The right edge is unaffected, and so is
+the 8 October boundary, which sits well inside the window.
+
+## 3. CORRECTION — the analysts who are not triaging the lead queue are OURS
+
+Addendum 1 said the 319 untriaged alerts raise a question "only they can
+answer". **That is wrong.** `assigned_to_name` on the closed alerts resolves
+to **9 of 11 distinct names matching rows in this platform's own `users`
+table** — Loredana Hreceniuc (437 alerts), Elisabeta Ifrim (386), Alexandru
+Adochitei (372), Ioana Dutuc (252), and five more. Two names (Adi Roman,
+Iulian Cocris) do not match any account here.
+
+And the closures are **human, not a rule**: `seconds_to_resolved` has a median
+of **584 s (~10 minutes)**, p95 of 7.3 hours and a maximum of 1.5 days.
+(`seconds_to_triaged` is 0 on 2,016 of 2,047 and carries no information.)
+
+So the contrast is not "the customer works one queue and ignores another" — it
+is that **our own SOC works the `epp` queue within minutes and has never
+touched the `automated-lead*` queue in four months.** That is a question for
+us before it is a question for them, and it changes who this part of the
+document is addressed to. Worth noting separately: Ioana Dutuc has triaged 252
+alerts in the customer's Falcon console and has **never logged into this
+platform** (`last_login_at` is null).
+
+## 4. CORRECTION — "no corroborating resource" was not established
+
+Addendum 2 reported `/incidents` and `/behaviors` as 404 and concluded there
+is no second Falcon resource to corroborate from. The path shapes were
+wrong-ish and the conclusion is unsupported either way:
+
+| path | status |
+|---|---|
+| `/incidents/queries/incidents/v1` | 404 |
+| `/incidents/queries/behaviors/v1` (the correct behaviours path) | 404 |
+| `/incidents/entities/behaviors/GET/v1` | 404 |
+| `/detects/queries/detects/v1` | 404 |
+| `/alerts/queries/alerts/v1` | **200, total 2,041** |
+| `/alerts/queries/alerts/v2` | **200, total 2,047** |
+| `/not/a/real/path/v9` (control) | 404 |
+
+The 404 body for `/incidents/queries/incidents/v1` is **byte-identical in
+shape to the nonsense path's** — a generic `"Not Found: Please provide
+trace-id"` with no scope message — so the status cannot separate *unscoped*
+from *not available on this cloud*. The honest reading is `check_failed`: a
+second corroborating resource has **not been shown to be unavailable**, it has
+not been reached.
+
+Also noted: **v1 and v2 of the alerts query disagree about the population by
+6** (2,041 against 2,047). Every count in this document is v2's.
+
+## What the console check should ask
+
+Not only *"are there detections after 8 October that we do not receive?"* but
+**"what changed in this tenant's configuration on or around 8 October?"** —
+prevention policy, exclusions, host groups, sensor update policy. A
+suppression introduced on 8 October is producer-side, is the worst of the
+surviving readings for the customer, and leaves a trace in the console's own
+change history. That turns a yes/no into a cause.
