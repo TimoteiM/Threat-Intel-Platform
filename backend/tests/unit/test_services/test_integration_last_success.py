@@ -823,7 +823,14 @@ def test_the_worker_producing_output_does_not_promote_the_api_path():
     different process, different network position. Promoting `on_demand` on
     it would claim a consumer was witnessed working when nothing ran it.
     """
-    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
     recent = now - timedelta(hours=1)
     spec = _log_store_spec()
     entry = {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}}
@@ -841,7 +848,14 @@ def test_the_worker_producing_output_does_not_promote_the_api_path():
 def test_the_on_demand_direction_reports_never_observed_not_an_outage():
     """No api-side verification has ever run, so there is nothing it stopped
     doing. That is an absence of configuration, not a silence to judge."""
-    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
     spec = _log_store_spec()
     per = iss._continuity_per_direction(
         {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
@@ -858,7 +872,14 @@ def test_each_direction_verdict_names_its_consumer_and_its_warrant():
     """A reader of one entry must be able to tell which consumer it is about.
     Two verdicts with the same shape and no label is the collapse again, one
     level down."""
-    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
     per = iss._continuity_per_direction(
         {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
         _log_store_spec(), now - timedelta(hours=1))

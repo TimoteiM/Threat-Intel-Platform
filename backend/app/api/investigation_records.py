@@ -27,11 +27,22 @@ router = APIRouter(prefix="/api/investigation-records",
 def _step_json(step: Any) -> dict[str, Any]:
     fields = (step.query or {}).get("template_fields") or {}
     rendered = render(step.kind, fields)
+    # A step whose template reads a field the payload lacks has no sentence.
+    # Rendered as the absence it is, with the key named, rather than as a
+    # well-formed sentence with a hole in it.
+    text = rendered["text"]
+    absence_kind = step.absence_kind
+    absence_reason = step.absence_reason
+    if rendered["templated"] and not rendered["renderable"]:
+        text = None
+        absence_kind = absence_kind or "check_failed"
+        absence_reason = absence_reason or rendered["reason"]
     return {
         "ordinal": step.ordinal,
         "kind": step.kind,
         "question": step.question,
-        "text": rendered["text"],
+        "text": text,
+        "unrenderable_fields": rendered["missing"],
         # False means this kind has no template and the raw fields are shown.
         # Surfaced rather than hidden: an unregistered kind must look wrong.
         "templated": rendered["templated"],
@@ -41,8 +52,8 @@ def _step_json(step: Any) -> dict[str, Any]:
         "observables_found": step.observables_found,
         "observables_selected": step.observables_selected,
         "warrant": step.warrant,
-        "absence_kind": step.absence_kind,
-        "absence_reason": step.absence_reason,
+        "absence_kind": absence_kind,
+        "absence_reason": absence_reason,
         "duration_ms": step.duration_ms,
         "cost": step.cost,
         "response_truncated": step.response_truncated,

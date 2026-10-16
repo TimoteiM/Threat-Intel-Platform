@@ -1223,3 +1223,22 @@ changes anything the second time, it was asserting rather than resolving.
 
 Related: rule 16 (name the other world), and the measurement rules — a
 population is a measurement and carries a time, like any other.
+
+### Rule 18 — a field you did not read is a field that does not exist
+
+One line, beside its guard, which is the deliverable:
+`app/services/investigation_step_render.py` **refuses** to render a template
+slot whose field is absent from the payload. Absent is `check_failed` with the
+key named, like every other absence here.
+
+Distinct from rule 16's family. `queryName` and `data_domains` are real fields
+that mean something else, and the remedy there is checking the producer.
+`filename`, `selected_count` and `final_risk.verdict` **do not exist at all** —
+no misleading source, no source: code written against an imagined interface.
+What made it render plausibly every time was `.get()` returning `None` into a
+slot that formats it, so the silence was the language's, not the data's.
+
+And it is a guard rather than a rule because a rule was tried. The
+pluralisation helper existed, was declared, had a test — and the first producer
+written against it built the phrase with an f-string and shipped
+"1 attachments". A rule is advice. The renderer is where it holds.

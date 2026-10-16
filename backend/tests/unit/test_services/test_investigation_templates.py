@@ -222,3 +222,130 @@ def test_model_prose_is_counted_and_never_interpolated():
     assert "{plural(signals, 'named signal')}" in body
     assert "{listing(signals)}" not in body
     assert "{signals}" not in body
+
+
+# --- strict rendering: a field you did not read does not exist ------------
+#
+# The guard, not the rule. A rule was tried: the pluralisation helper existed,
+# was declared, and the first producer written against it — mine — built the
+# phrase with an f-string and rendered "1 attachments". A rule is advice; the
+# renderer is where it holds.
+#
+# The three real bugs this closes at once, none of which had a misleading
+# source because none of the keys exists at all: `filename` (payload has
+# `path`), `selected_count` (payload has `looked_up`), `final_risk.verdict`
+# (payload has `risk_level`).
+
+
+from app.services.investigation_step_render import (  # noqa: E402
+    field_names, missing_fields, render as strict_render,
+)
+
+
+def test_a_slot_whose_field_is_absent_refuses_to_render():
+    out = strict_render(T.EMAIL_URL_TRIAGE, {"seen": 14, "selected_count": 1})
+    assert out["renderable"] is False
+    assert out["text"] is None, "a hole was rendered instead of refused"
+    assert out["missing"] == ["selected"]
+    assert "`selected`" in out["reason"]
+    assert "do not supply" in out["reason"]
+
+
+def test_the_reason_calls_it_a_defect_in_the_step_not_an_absence_in_evidence():
+    """These are different claims. A template reading a field that does not
+    exist is our bug; the evidence is fine."""
+    out = strict_render(T.EMAIL_URL_TRIAGE, {"seen": 1})
+    assert "defect in the step's own code" in out["reason"]
+
+
+def test_a_present_but_falsy_value_still_renders():
+    """`0` links and an empty list are answers, not absences. Without this the
+    guard would refuse every true zero — the absence-as-value bug inverted."""
+    out = strict_render(T.EMAIL_URL_TRIAGE, {"seen": 0, "selected": 0})
+    assert out["renderable"] is True
+    assert "0 links" in out["text"]
+    listed = strict_render(T.EMAIL_PARSE, {"found": 0, "kinds": []})
+    assert listed["renderable"] is True
+    assert "none" in listed["text"]
+
+
+def test_a_present_but_none_value_is_treated_as_absent():
+    """`.get()` returning None into a slot is the exact mechanism."""
+    out = strict_render(T.EMAIL_URL_TRIAGE, {"seen": 14, "selected": None})
+    assert out["renderable"] is False
+    assert out["missing"] == ["selected"]
+
+
+def test_helper_arguments_are_checked_too():
+    """`{plural(signals, 'named signal')}` reads `signals`. A missing helper
+    argument was the other half of the same silence."""
+    assert "signals" in field_names(T.EMAIL_INTERPRET)
+    out = strict_render(T.EMAIL_INTERPRET,
+                        {"verdict_text": "clean", "confidence": "low"})
+    assert out["renderable"] is False
+    assert out["missing"] == ["signals"]
+
+
+def test_quoted_literals_and_integers_are_not_treated_as_fields():
+    """The control: without it every template with a literal argument would
+    refuse, and the guard would be useless rather than strict."""
+    names = field_names(T.EMAIL_PARSE)
+    assert "indicator" not in names and "3" not in names
+    assert names == ["found", "kinds"]
+
+
+def test_field_names_are_derived_from_the_template_not_declared_beside_it():
+    """A declared list is a second copy that drifts. Every template's reads
+    must be discoverable from the template itself."""
+    for kind in T.TEMPLATES:
+        derived = field_names(kind)
+        complete = {name: 1 for name in derived}
+        assert missing_fields(kind, complete) == [], (
+            f"{kind}: field_names() missed something missing_fields() wants"
+        )
+
+
+#: A sample value per helper, so the registry sweep below supplies something
+#: each slot can actually consume. `listing` wants a sequence and `plural`
+#: wants a number — filling every field with `1` made `listing(kinds)` raise
+#: and render verbatim, which is a fault in the test rather than the renderer.
+_SAMPLE_BY_HELPER = {
+    "listing": ["a", "b"],
+    "plural": 2,
+    "count": 2,
+    "duration": 1500,
+    "date_only": "2026-10-16T09:00:00Z",
+    "minute": "2026-10-16T09:00:00Z",
+}
+
+
+def _sample_payload(kind: str) -> dict:
+    """Fields for one template, typed by the helper that reads each one."""
+    import re as _re
+
+    template = T.TEMPLATES[kind]
+    consumer: dict[str, str] = {}
+    for slot_name, args in _re.findall(r"\{([a-z_]+)(?:\(([^)]*)\))?\}", template):
+        if not args:
+            continue
+        for arg in args.split(","):
+            arg = arg.strip()
+            if arg and not arg.startswith("'") and not arg.isdigit():
+                consumer[arg] = slot_name
+    return {
+        name: _SAMPLE_BY_HELPER.get(consumer.get(name, ""), "x")
+        for name in field_names(kind)
+    }
+
+
+def test_every_template_renders_from_the_fields_its_own_name_says_it_needs():
+    """End to end over the whole registry: supply exactly what each template
+    reads, typed to the helper reading it, and every one must produce a
+    sentence with no slot left behind."""
+    for kind in T.TEMPLATES:
+        out = strict_render(kind, _sample_payload(kind))
+        assert out["renderable"] is True, f"{kind}: {out['reason']}"
+        assert out["text"], f"{kind} produced no text"
+        assert "{" not in out["text"], (
+            f"{kind} left an unsubstituted slot: {out['text']}"
+        )

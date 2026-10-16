@@ -93,6 +93,26 @@ class InvestigationRecorder:
             self._ordinal += 1
             ordinal = self._ordinal
         try:
+            # **Validated against the template before anything is stored.**
+            # A template reading a field the payload does not supply is a
+            # defect in this step's own code, and it must surface while the
+            # step is being written rather than as a confident sentence with
+            # a hole in it. Absent is `check_failed` with the key named.
+            if absence_kind is None:
+                from app.services.investigation_step_render import (
+                    missing_fields, refusal_reason,
+                )
+
+                gaps = missing_fields(str(kind), fields or {})
+                if gaps:
+                    absence_kind = "check_failed"
+                    absence_reason = refusal_reason(str(kind), gaps)
+                    # Loud as well as honest: this is a recording defect, so
+                    # it belongs in `incomplete_steps` too. The step still
+                    # appears in the chain, with its reason.
+                    self.fail(ordinal, kind,
+                              f"template fields missing: {', '.join(gaps)}")
+
             excerpt, truncated, size = self._excerpt(response)
             entry = {
                 "ordinal": ordinal,

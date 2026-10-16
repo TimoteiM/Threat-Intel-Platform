@@ -73,14 +73,27 @@ function actorSentence(actor: InvestigationRecordView["actor"]): string {
   }
 }
 
-/** `1 sandbox credit`, `6 external calls`. The chips read "1 model calls"
- *  because the key was pluralised and the count was not — number agreement
- *  is formatting, and formatting is the one thing allowed to branch. */
+/** `1 sandbox credit`, `6 external calls`.
+ *
+ *  **Declared, not derived.** The first version pluralised by stripping a
+ *  trailing "s" from the *key* — a hand-rolled rule in a fourth place, and
+ *  fragile for any key whose plural is not +s. An unknown cost key now
+ *  renders as itself rather than being guessed at, which is the same shape as
+ *  the template registry: unregistered must look wrong, not plausible. */
+const COST_LABELS: Record<string, [string, string]> = {
+  external_calls: ["external call", "external calls"],
+  sandbox_credits: ["sandbox credit", "sandbox credits"],
+  model_calls: ["model call", "model calls"],
+};
+
 function costLabel(key: string, value: unknown): string {
   const n = Number(value) || 0;
-  const words = key.replace(/_/g, " ");
-  const singular = n === 1 ? words.replace(/s$/, "") : words;
-  return `${n.toLocaleString()} ${singular}`;
+  const pair = COST_LABELS[key];
+  if (!pair) {
+    // Visibly unregistered. A guessed noun reads as considered.
+    return `${n.toLocaleString()} × ${key} (unlabelled cost)`;
+  }
+  return `${n.toLocaleString()} ${n === 1 ? pair[0] : pair[1]}`;
 }
 
 function Step({ step }: { step: InvestigationStepView }) {
