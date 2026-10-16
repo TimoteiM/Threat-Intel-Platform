@@ -277,13 +277,24 @@ TEMPLATES: dict[str, str] = {
         "No ATT&CK technique could be attributed to this alert from the "
         "evidence gathered."
     ),
-
-    # Rendered for a step that could not be asked at all. Present in the chain
-    # on purpose: dropping it would silently shorten the investigation.
-    STEP_NOT_ASKED: (
-        "No claim. {question_text} was not asked, because {reason}"
-    ),
 }
+
+
+#: Kinds that deliberately have no template, with the reason they don't.
+#:
+#: `step.not_asked` is the generic "this could not be asked at all" step, and
+#: its only content is the question and the reason — both of which the step
+#: already carries in its own columns, and both of which the page already
+#: renders. A template for it was a third copy of the same two strings: it
+#: produced "No claim. {question_text} was not asked, because {reason}"
+#: directly beneath the question, above the reason. It is still a step in the
+#: chain and still rendered — dropping it would silently shorten the
+#: investigation — it just has no sentence of its own to render.
+#:
+#: This set exists so the registry guards stay exhaustive rather than gaining
+#: an exemption each time one of these appears. Anything added here needs its
+#: reason written next to it.
+NO_SENTENCE_KINDS: frozenset[str] = frozenset({STEP_NOT_ASKED})
 
 
 def template_for(kind: str) -> str | None:

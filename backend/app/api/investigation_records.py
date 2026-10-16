@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.dependencies import DBSession
 from app.services import tenant_scope
-from app.services.investigation_step_render import render
+from app.services.investigation_step_render import presentation_of, render
 
 router = APIRouter(prefix="/api/investigation-records",
                    tags=["investigation-records"])
@@ -42,6 +42,10 @@ def _step_json(step: Any) -> dict[str, Any]:
         "kind": step.kind,
         "question": step.question,
         "text": text,
+        # `claim` / `no_claim` / `raw`, decided beside the renderer. The page
+        # switches on this rather than inferring it from `absence_kind`, which
+        # is a category and not a statement that the step said nothing.
+        "presentation": presentation_of(rendered, absence_kind),
         "unrenderable_fields": rendered["missing"],
         # False means this kind has no template and the raw fields are shown.
         # Surfaced rather than hidden: an unregistered kind must look wrong.

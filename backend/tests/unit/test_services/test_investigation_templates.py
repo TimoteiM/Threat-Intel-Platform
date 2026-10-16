@@ -48,9 +48,20 @@ def _kind_constants() -> dict[str, str]:
 def test_every_declared_step_kind_has_a_template():
     constants = _kind_constants()
     assert constants, "no step-kind constants found — the test is looking in the wrong place"
-    missing = sorted(v for v in constants.values() if v not in T.TEMPLATES)
+    missing = sorted(v for v in constants.values()
+                     if v not in T.TEMPLATES and v not in T.NO_SENTENCE_KINDS)
     assert missing == [], (
         f"these step kinds have no template and would render raw JSON: {missing}"
+    )
+
+
+def test_a_kind_with_no_sentence_is_declared_as_one():
+    """The exemption is a set with a reason beside each entry, not a silent
+    hole. Both directions, so neither list can drift from the other."""
+    both = sorted(T.NO_SENTENCE_KINDS & set(T.TEMPLATES))
+    assert both == [], f"declared as having no sentence, but templated: {both}"
+    assert T.NO_SENTENCE_KINDS <= set(_kind_constants().values()), (
+        "a kind exempted from needing a template is not a declared kind"
     )
 
 
@@ -349,3 +360,132 @@ def test_every_template_renders_from_the_fields_its_own_name_says_it_needs():
         assert "{" not in out["text"], (
             f"{kind} left an unsubstituted slot: {out['text']}"
         )
+
+
+# --- a template that can never render is a dead template ------------------
+#
+# Every one of the templates above renders when given its fields — and eight
+# of them were never given the chance. The page decided what a reader saw with
+# `noClaim = Boolean(step.absence_kind)`, so any step carrying an absence kind
+# showed its `absence_reason` and its sentence was dropped. That is not a
+# cosmetic loss: `alert.logs.partial_at_cap` is recorded with `lower_bound`
+# because its count is a floor, and it rendered as *No claim* on a step that
+# had just read 500 events off the host.
+#
+# An absence kind is which honest-absence category the step fell into. It
+# qualifies a claim; it is not a statement that there was none. So the guard
+# is on the presentation, and it lives beside the renderer where a test can
+# reach it — deriving it on the page put it one layer from the only data that
+# decides it, which is why the registry test above passed while eight of the
+# kinds it checked were unreachable.
+
+from app.services.investigation_step_render import (  # noqa: E402
+    CLAIM, NO_CLAIM, RAW, presentation_of,
+)
+from app.services import alert_investigation_steps as alert_steps  # noqa: E402
+
+def _kinds_recorded_with_an_absence_kind() -> list[str]:
+    """Every `recorder.step(T.X, …, absence_kind=…)` in either deriver.
+
+    Parsed out of the source rather than listed here. A list beside the test is
+    a ninth hand-maintained registry, and the one thing it would reliably do is
+    stay at eight entries while the next deriver adds a ninth kind — which is
+    exactly how these eight went unnoticed.
+    """
+    import ast
+    import inspect
+
+    found: list[str] = []
+    for module in (steps, alert_steps):
+        tree = ast.parse(inspect.getsource(module))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "step"):
+                continue
+            if not any(kw.arg == "absence_kind" for kw in node.keywords):
+                continue
+            if not node.args:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.Attribute) and isinstance(first.value, ast.Name):
+                value = getattr(T, first.attr, None)
+                if isinstance(value, str):
+                    found.append(value)
+    return sorted(set(found))
+
+
+_ABSENCE_CARRYING = _kinds_recorded_with_an_absence_kind()
+
+
+def test_the_absence_carrying_kinds_were_actually_found():
+    """The parse is load-bearing: an empty list would make every test below
+    pass by asserting nothing, which is the shape of a check that stopped
+    looking."""
+    assert len(_ABSENCE_CARRYING) >= 8, _ABSENCE_CARRYING
+
+
+@pytest.mark.parametrize(
+    "kind", [k for k in _ABSENCE_CARRYING if k not in T.NO_SENTENCE_KINDS])
+def test_a_step_with_an_absence_kind_still_presents_its_claim(kind: str):
+    """The sentence wins. The absence kind travels beside it."""
+    out = strict_render(kind, _sample_payload(kind))
+    assert out["renderable"] is True, f"{kind} has no sentence to present"
+    for absence_kind in ("lower_bound", "never_observed", "check_failed",
+                         "out_of_scope"):
+        assert presentation_of(out, absence_kind) == CLAIM, (
+            f"{kind} with {absence_kind} was presented as having made no claim, "
+            f"discarding: {out['text']}"
+        )
+
+
+def test_the_at_cap_log_step_states_the_floor_in_its_own_sentence():
+    """The reason the claim is safe to show: it names the bound itself.
+
+    Without this the fix would trade one misreading for another — a count read
+    as a count. `lower_bound` as a chip is not enough; the sentence has to say
+    it, because the sentence is what gets read.
+    """
+    out = strict_render(T.ALERT_LOGS_PARTIAL_AT_CAP,
+                        {"host": "EXP-FL9P954", "logs": 500})
+    assert out["renderable"] is True
+    assert "floor" in out["text"]
+    assert "more events than were read" in out["text"]
+    assert "row limit" in out["text"]
+
+
+def test_a_step_with_no_sentence_and_an_absence_kind_is_no_claim():
+    """The other direction, so the fix does not swallow a real absence."""
+    unrenderable = strict_render(T.ALERT_LOGS_EMPTY, {})  # no `host`
+    assert unrenderable["renderable"] is False
+    assert presentation_of(unrenderable, "never_observed") == NO_CLAIM
+    assert presentation_of(unrenderable, None) == NO_CLAIM
+
+
+def test_an_unregistered_kind_is_raw_not_a_silent_absence():
+    out = strict_render("alert.logs.invented", {"host": "x"})
+    assert presentation_of(out, None) == RAW
+
+
+def test_every_kind_the_alert_deriver_uses_is_declared():
+    """The same registry guard as the email deriver, for the alert surface."""
+    source = __import__("inspect").getsource(alert_steps)
+    used = {getattr(T, name) for name in re.findall(r"\bT\.([A-Z][A-Z_]+)\b", source)
+            if isinstance(getattr(T, name, None), str)}
+    assert len(used) >= 15, f"the parse found only {sorted(used)}"
+    missing = sorted(k for k in used
+                     if T.template_for(k) is None and k not in T.NO_SENTENCE_KINDS)
+    assert not missing, f"alert kinds with no template: {missing}"
+
+
+def test_the_not_asked_step_presents_as_no_claim_not_as_a_sentence():
+    """The one kind the fix above must NOT turn into a claim.
+
+    Its text was the question and the reason, which the page already renders
+    from the step's own columns — so as a claim it read as the question
+    restated beneath the question, with the reason twice.
+    """
+    out = strict_render(T.STEP_NOT_ASKED, {"question_text": "q", "reason": "r"})
+    assert out["templated"] is False, "step.not_asked has a template again"
+    assert presentation_of(out, "check_failed") == NO_CLAIM

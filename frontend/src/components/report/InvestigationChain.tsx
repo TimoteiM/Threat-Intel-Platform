@@ -97,7 +97,16 @@ function costLabel(key: string, value: unknown): string {
 }
 
 function Step({ step }: { step: InvestigationStepView }) {
-  const noClaim = Boolean(step.absence_kind);
+  // Decided by the API beside the renderer, not here. This was
+  // `Boolean(step.absence_kind)`, and that expression threw away eight
+  // sentences: a log read that returned 500 events carries `lower_bound`
+  // because the count is a floor, and rendered as "No claim" — the opposite of
+  // what happened. An absence kind qualifies a claim; it does not replace one.
+  const presentation = step.presentation
+    // Older payloads have no `presentation`. Fall back to the rendered
+    // sentence, never to the absence kind.
+    ?? (step.templated && step.text ? "claim" : step.absence_kind ? "no_claim" : "raw");
+  const qualified = Boolean(step.absence_kind);
   const costEntries = Object.entries(step.cost || {}).filter(([, v]) => Boolean(v));
   return (
     <li style={{
@@ -119,7 +128,19 @@ function Step({ step }: { step: InvestigationStepView }) {
           {step.question}
         </div>
 
-        {noClaim ? (
+        {presentation === "claim" ? (
+          <div>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.65, color: "var(--text)" }}>
+              {step.text}
+            </p>
+            {/* The qualifier, beneath its claim rather than instead of it. */}
+            {qualified && step.absence_reason && (
+              <p style={{ margin: "3px 0 0", fontSize: 12, lineHeight: 1.6, color: "var(--text-dim)" }}>
+                {step.absence_reason}
+              </p>
+            )}
+          </div>
+        ) : presentation === "no_claim" ? (
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--warning)" }}>
               No claim
@@ -128,10 +149,6 @@ function Step({ step }: { step: InvestigationStepView }) {
               {step.absence_reason}
             </p>
           </div>
-        ) : step.templated ? (
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.65, color: "var(--text)" }}>
-            {step.text}
-          </p>
         ) : (
           <div>
             <div style={{ fontSize: 11, color: "var(--danger)", marginBottom: 4 }}>
@@ -149,7 +166,7 @@ function Step({ step }: { step: InvestigationStepView }) {
           marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6,
           alignItems: "center",
         }}>
-          {noClaim && <Chip tone="warn">{step.absence_kind?.replace(/_/g, " ")}</Chip>}
+          {qualified && <Chip tone="warn">{step.absence_kind?.replace(/_/g, " ")}</Chip>}
           {step.source && <Chip>{step.source}</Chip>}
           {step.verdict && (
             <Chip tone={step.verdict === "clean" || step.verdict === "none" ? "neutral" : "warn"}>

@@ -2325,6 +2325,12 @@ export interface InvestigationStepView {
   question: string;
   /** The rendered sentence, from a template over structured fields. */
   text: string;
+  /** What the reader is shown, decided by the API beside the renderer:
+   *  `claim` (the sentence), `no_claim` (there is no sentence) or `raw`
+   *  (unregistered kind). Not derived from `absence_kind` — a step can carry
+   *  an absence kind *and* a claim, and inferring it here discarded eight
+   *  sentences including a log read that returned 500 events. */
+  presentation?: "claim" | "no_claim" | "raw";
   /** False when the kind has no template and raw JSON is shown. Rendered as
    *  visibly wrong rather than quietly plausible — the silent-registry shape. */
   templated: boolean;
@@ -2334,7 +2340,8 @@ export interface InvestigationStepView {
   observables_found: unknown[];
   observables_selected: unknown[];
   warrant: Record<string, unknown>;
-  /** Set when the step could not be asked. Rendered as "No claim", never dropped. */
+  /** Which honest-absence category the step fell into. A *qualifier* on the
+   *  claim where there is one, and the whole of it where there is not. */
   absence_kind: string | null;
   absence_reason: string | null;
   duration_ms: number | null;

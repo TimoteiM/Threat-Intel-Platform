@@ -272,8 +272,15 @@ def _log_step(recorder: InvestigationRecorder, payload: dict[str, Any],
     elif truncated and at_cap:
         recorder.step(T.ALERT_LOGS_PARTIAL_AT_CAP, question, verdict="observed",
                       absence_kind="lower_bound",
-                      absence_reason=(f"{logs:,} events is the row limit, so "
-                                      f"there were more than were read."),
+                      # The sentence already names the floor, so the reason
+                      # carries what it cannot: this number is not comparable
+                      # with one from a run that was never capped. Stating the
+                      # floor twice is what the not-asked template did.
+                      absence_reason=(
+                          f"The count is capped at {logs:,}, so it must not be "
+                          f"compared with a run that did not reach the limit — "
+                          f"a quieter host and a capped one read the same here."
+                      ),
                       **common, fields=fields)
     elif truncated:
         recorder.step(T.ALERT_LOGS_PARTIAL_TRUNCATED, question,

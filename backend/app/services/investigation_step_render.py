@@ -152,3 +152,46 @@ def render(kind: str, fields: Any) -> dict[str, Any]:
         "kind": kind, "templated": True, "renderable": True,
         "missing": [], "reason": None, "text": _SLOT.sub(_sub, template),
     }
+
+
+#: What a reader is shown for this step. One of three, decided here rather than
+#: on the page.
+CLAIM = "claim"
+NO_CLAIM = "no_claim"
+RAW = "raw"
+
+
+def presentation_of(rendered: dict[str, Any], absence_kind: str | None) -> str:
+    """`claim`, `no_claim` or `raw` — and the first one is the correction.
+
+    This lived on the page as `noClaim = Boolean(step.absence_kind)`, and that
+    one expression discarded eight sentences. An absence *kind* is which
+    honest-absence category a step fell into; it is not a statement that the
+    step said nothing. Eight kinds carry both — `lower_bound` on a log read
+    that returned 500 events, `never_observed` on a window that held nothing,
+    `out_of_scope` on a message nobody asked a sandbox about — and every one of
+    them has a sentence that is the finding:
+
+        Read 500 events from EXP-FL9P954 — the row limit. The window was
+        incomplete and the limit was reached, so this is a floor: there were
+        more events than were read.
+
+    rendered as *No claim*, which says the opposite of what happened. So the
+    rule is the sentence, not the metadata: **if a template renders, that is
+    the claim**, and the absence kind travels beside it as the qualifier it is.
+
+    `no_claim` is for a step with no sentence — an absence whose kind has no
+    template, or a template that could not render. `raw` is the unregistered
+    kind, deliberately ugly.
+
+    It lives here, next to `render`, because it is a conclusion about the
+    rendered output; deriving it on the page put it one layer away from the
+    only data that decides it, and nothing could test it.
+    """
+    if rendered.get("templated") and rendered.get("renderable"):
+        return CLAIM
+    if absence_kind:
+        return NO_CLAIM
+    if not rendered.get("templated"):
+        return RAW
+    return NO_CLAIM
