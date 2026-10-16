@@ -40,9 +40,10 @@ raises, because an HTTP library's own exception text can carry a request body.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 
@@ -373,6 +374,206 @@ class Token:
         }
 
 
+class Page(NamedTuple):
+    """What a bounded read actually returned, so a caller cannot not know.
+
+    **This type is the enforcement of README rule 21**, and it exists because
+    the rule was broken three times in two days — twice by the fix for its own
+    first instance. Returning a `list` lets every caller forget that it holds
+    a page; returning this makes forgetting a type error.
+
+    * `rows` — ids, or hydrated records from `paged_alerts`.
+    * `total` — `meta.pagination.total`, or `None` when the API did not say.
+    * `complete` — `rows` covers the population. **`False` means a negative
+      over `rows` is a `lower_bound`, not a negative.**
+    * `reason` — why not, in words, for the absence that must then be recorded.
+
+    `complete` is `False` whenever `total` is unknown, even if paging ran to an
+    empty page. Covering everything the API chose to hand over is not the same
+    as covering the population, and the honest answer when nobody said how
+    many there were is that we do not know.
+    """
+
+    rows: list[Any]
+    total: int | None
+    complete: bool
+    reason: str | None = None
+
+    @property
+    def fetched(self) -> int:
+        return len(self.rows)
+
+
+#: Ids per query page, and records per hydration POST. Both are provider
+#: limits rather than preferences.
+PAGE_SIZE = 200
+HYDRATE_SIZE = 100
+#: A safety bound on `want="all"`: past this the read stops and says so,
+#: rather than paging an unbounded population on an analyst's click.
+MAX_PAGES = 25
+
+
+def paged(
+    path: str,
+    params: dict[str, Any],
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    sort: str,
+    want: Any = "all",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Page:
+    """Page a Falcon `/queries/` endpoint. **The only way this codebase pages.**
+
+    `sort` is required and has no default. A bounded read in an unspecified
+    order returns a different sample each time, and the one place that is
+    guaranteed to matter is an existence question — "is there *any* confirmed
+    detection" is answered by the population, and an unsorted page cannot
+    answer it. Naming the sort at every call site is the point.
+
+    `want="all"` pages to the population or to `MAX_PAGES`, whichever comes
+    first. `want=N` stops after N ids. Either way `complete` says which.
+    """
+    collected: list[Any] = []
+    total: int | None = None
+    # `want=N` means N RECORDS, across as many pages as that takes. An earlier
+    # version clamped the per-request limit to `PAGE_SIZE` and then stopped
+    # after one page, which quietly cut the host panel from 500 detections to
+    # 200 — a coverage reduction introduced by the fix for a coverage bug, and
+    # caught only by comparing against a measurement taken before the change.
+    ceiling = None if want == "all" else max(1, int(want))
+    pages = 0
+    while True:
+        remaining = PAGE_SIZE if ceiling is None else min(
+            PAGE_SIZE, ceiling - len(collected))
+        if remaining <= 0:
+            break
+        query = {**params, "limit": remaining,
+                 "offset": len(collected), "sort": sort}
+        resp = http.get(f"{base_url.rstrip('/')}{path}", headers=headers,
+                        params=query, timeout=timeout)
+        if resp.status_code in (401, 403):
+            raise FalconAuthError(
+                f"Falcon refused {path} (HTTP {resp.status_code}). The "
+                f"credential is valid; the API client is missing a scope."
+            )
+        if resp.status_code >= 400:
+            raise FalconUnavailable(f"Falcon {path} returned HTTP {resp.status_code}")
+        try:
+            body = resp.json() or {}
+        except Exception:  # noqa: BLE001
+            raise FalconUnavailable(
+                f"Falcon {path} returned a body this code could not parse"
+            ) from None
+        rows = list(body.get("resources") or [])
+        reported = ((body.get("meta") or {}).get("pagination") or {}).get("total")
+        # Read once, from the first page. A later page's total can differ on a
+        # moving population, and the first is the one the rows belong to.
+        if total is None and isinstance(reported, int):
+            total = reported
+        collected.extend(rows)
+        pages += 1
+        if not rows:
+            break
+        if ceiling is not None and len(collected) >= ceiling:
+            break
+        if total is not None and len(collected) >= total:
+            break
+        if pages >= MAX_PAGES:
+            return Page(
+                collected, total, False,
+                f"stopped after {pages} pages ({len(collected)} of "
+                f"{total if total is not None else 'an unreported number of'} "
+                f"records); the rest of the population was not read",
+            )
+
+    if total is None:
+        return Page(
+            collected, None, False,
+            f"Falcon did not report a total for {path}, so whether these "
+            f"{len(collected)} records are all of them is unknown",
+        )
+    if len(collected) < total:
+        return Page(
+            collected, total, False,
+            f"read {len(collected)} of {total} records, so anything not found "
+            f"here may be in the {total - len(collected)} not read",
+        )
+    return Page(collected, total, True, None)
+
+
+def hydrate_alerts(
+    ids: Sequence[Any],
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> list[dict[str, Any]]:
+    """Alert ids -> alert records.
+
+    `/alerts/queries/alerts/v2` returns composite **ids**; every field worth
+    reasoning over — `status`, `resolution`, `pattern_disposition_description`
+    — lives on the entity. `lookup` shipped without this step and returned
+    dicts with one key, which made every predicate over its output
+    unimplementable. See backlog 31.
+    """
+    out: list[dict[str, Any]] = []
+    for start in range(0, len(ids), HYDRATE_SIZE):
+        resp = http.post(
+            f"{base_url.rstrip('/')}/alerts/entities/alerts/v2",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"composite_ids": list(ids[start:start + HYDRATE_SIZE])},
+            timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            continue
+        try:
+            body = resp.json() or {}
+        except Exception:  # noqa: BLE001
+            continue
+        out.extend(r for r in (body.get("resources") or []) if isinstance(r, dict))
+    return out
+
+
+def paged_alerts(
+    *,
+    filter_expr: str,
+    base_url: str,
+    headers: dict[str, str],
+    http: Any,
+    want: Any = "all",
+    sort: str = "created_timestamp|desc",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Page:
+    """Alerts matching a filter, hydrated, with the population's size.
+
+    The two steps belong together because separating them is what produced
+    both defects: the id page without the total hid the floor, and the ids
+    without the hydration hid every field. One call, one answer, one
+    `complete`.
+    """
+    # An empty filter is OMITTED rather than sent as `filter=`. The retention
+    # floor probe asks the unfiltered population, and sending an empty filter
+    # string is a different request from sending none — not a difference worth
+    # discovering in production.
+    params = {"filter": filter_expr} if str(filter_expr or "").strip() else {}
+    ids = paged(ALERTS_PATH, params, base_url=base_url,
+                headers=headers, http=http, sort=sort, want=want,
+                timeout=timeout)
+    records = hydrate_alerts(ids.rows, base_url=base_url, headers=headers,
+                             http=http, timeout=timeout)
+    reason = ids.reason
+    if len(records) < len(ids.rows):
+        missed = len(ids.rows) - len(records)
+        detail = (f"{missed} of {len(ids.rows)} alert ids did not come back as "
+                  f"records from the entity fetch")
+        reason = f"{reason}; {detail}" if reason else detail
+        return Page(records, ids.total, False, reason)
+    return Page(records, ids.total, ids.complete, reason)
+
+
 def base_url_for(config: dict[str, Any] | None) -> str:
     """The API host for this tenant's configuration.
 
@@ -509,6 +710,11 @@ def verify(
         }
 
     http = session or requests
+    # Deliberately NOT through `paged`. This reads a status CODE, not rows —
+    # it exists to tell "unreachable" from "refused for want of a scope" from
+    # "answering", and the helper raises on exactly the statuses this function
+    # is here to report. The one-row limit is a reachability probe, not a
+    # bounded read of a population, so rule 21 has nothing to say about it.
     try:
         resp = http.get(
             f"{base.rstrip('/')}{ALERTS_PATH}",
@@ -681,6 +887,7 @@ def lookup(
     # from measurement and gated on the standing control below.
     det_field = alert_filter_field(observable_type, value)
     detections: list[Any] = []
+    detections_page: Page | None = None
     unmappable: str | None = None
     if det_field:
         control = alerts_field_control(
@@ -695,14 +902,27 @@ def lookup(
                 f"because an empty result from an unconfirmed field reads as "
                 f"'the EDR has nothing'."
             )
-        detections = _ask(ALERTS_PATH,
-                          {"filter": f"{det_field}:'{_fql(value)}'",
-                           "limit": 20},
-                          "detection")
+        # Through the paging helper, which hydrates the ids into records and
+        # reports the population's size. This asked for `limit: 20` with no
+        # sort until 2026-10-16 and returned the ids unhydrated: a hash with
+        # 29 alerts, including 2 an analyst had confirmed, evaluated as having
+        # none. Backlog 31 and 32, and the reason `Page` exists.
+        page = paged_alerts(
+            filter_expr=f"{det_field}:'{_fql(value)}'",
+            base_url=base, headers=headers, http=http, timeout=timeout,
+            want="all", sort="created_timestamp|desc",
+        )
+        detections = page.rows
+        detections_page = page
         notes.append(
             f"Detections searched on {det_field!r}, confirmed filterable by "
             f"the field control at {control['checked_at']}."
         )
+        if not page.complete:
+            notes.append(
+                f"This detection set is incomplete, so a nil answer from it "
+                f"is a floor rather than a negative: {page.reason}."
+            )
     else:
         unmappable = ALERT_UNMAPPABLE_KINDS.get(observable_type)
         notes.append(
@@ -716,7 +936,18 @@ def lookup(
         )
 
     return {
-        "detections": [{"id": str(d)} for d in detections],
+        # Records, not ids. This was `[{"id": str(d)} for d in detections]`
+        # until 2026-10-16 — a deliberate wrapping of the ids the queries
+        # endpoint returns, which made every field a predicate needs absent
+        # from this function's output while leaving it looking like a list of
+        # detections. Backlog 31.
+        "detections": list(detections),
+        # The population these came from, and whether they are all of it. A
+        # caller reading `detections` without these two is reading a page.
+        "detections_total": detections_page.total if detections_page else None,
+        "detections_complete": detections_page.complete if detections_page else None,
+        "detections_incomplete_reason": (
+            detections_page.reason if detections_page else None),
         "hosts": [{"id": str(h)} for h in hosts],
         "queried_at": datetime.now(timezone.utc).isoformat(),
         "notes": notes,
@@ -792,28 +1023,21 @@ def alert_retention_floor(
         return out
 
     try:
-        resp = http.get(f"{base_url.rstrip('/')}{ALERTS_PATH}", headers=headers,
-                        params={"limit": 1, "sort": "created_timestamp|asc"},
-                        timeout=timeout)
-        if resp.status_code >= 400:
-            return result(None, f"the floor probe returned HTTP {resp.status_code}.")
-        body = resp.json() or {}
-        ids = list(body.get("resources") or [])
-        total = ((body.get("meta") or {}).get("pagination") or {}).get("total")
-        if not ids:
+        # Through the helper, like every other row read. The sort is the whole
+        # measurement here — `asc` is what makes the first row the oldest —
+        # which is why the helper requires it to be named rather than
+        # defaulted.
+        page = paged_alerts(filter_expr="", base_url=base_url, headers=headers,
+                            http=http, want=1, sort="created_timestamp|asc",
+                            timeout=timeout)
+        total = page.total
+        if not page.rows:
             return result(
                 None,
                 "this tenant has no Falcon alerts at all, so how far back the "
                 "alert history reaches is unknown — not 'nothing happened'.",
                 absence="too_little_history", total=total)
-        detail = http.post(
-            f"{base_url.rstrip('/')}/alerts/entities/alerts/v2",
-            headers={**headers, "Content-Type": "application/json"},
-            json={"composite_ids": ids}, timeout=timeout)
-        if detail.status_code >= 400:
-            return result(None, f"the oldest alert could not be read "
-                                f"(HTTP {detail.status_code}).")
-        records = list((detail.json() or {}).get("resources") or [])
+        records = page.rows
         stamp = (records[0].get("created_timestamp") if records else None)
         parsed = None
         if stamp:
@@ -928,24 +1152,24 @@ def lookup_host(
                                    headers=headers, http=http, timeout=timeout)
     detections: list[Any] = []
     truncated_at: int | None = None
+    detections_page: Page | None = None
     if control["passed"]:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-        alert_ids = list(_get(ALERTS_PATH, {
-            "filter": f"device.hostname:'{_fql(host)}'+created_timestamp:>'{since}'",
-            "limit": min(row_cap, 1000),
-            "sort": "created_timestamp|desc",
-        }).get("resources") or [])
-        if len(alert_ids) >= min(row_cap, 1000):
-            truncated_at = len(alert_ids)
-        for start in range(0, len(alert_ids), 100):
-            resp = http.post(
-                f"{base.rstrip('/')}/alerts/entities/alerts/v2",
-                headers={**headers, "Content-Type": "application/json"},
-                json={"composite_ids": alert_ids[start:start + 100]},
-                timeout=timeout,
-            )
-            if resp.status_code < 400:
-                detections.extend((resp.json() or {}).get("resources") or [])
+        # Through the helper. The cap stays — a host with 500 detections is
+        # not worth hydrating in full on a panel render — but truncation is
+        # now read from `meta.pagination.total` rather than INFERRED from
+        # `len(ids) >= cap`. The inference cannot tell a host with exactly
+        # `cap` detections from one with a thousand, and it reported the first
+        # as truncated and the second as a count.
+        detections_page = paged_alerts(
+            filter_expr=(f"device.hostname:'{_fql(host)}'"
+                         f"+created_timestamp:>'{since}'"),
+            base_url=base, headers=headers, http=http, timeout=timeout,
+            want=min(row_cap, 1000), sort="created_timestamp|desc",
+        )
+        detections = detections_page.rows
+        if not detections_page.complete:
+            truncated_at = len(detections)
 
     return {
         "hostname": host,
@@ -960,6 +1184,14 @@ def lookup_host(
             for r in superseded
         ],
         "detections": detections,
+        # Same contract as `lookup`: the population's size and whether these
+        # are all of it, so the panel's "distinct" counts know when they are
+        # floors instead of inferring it from the row count.
+        "detections_total": detections_page.total if detections_page else None,
+        "detections_complete": (
+            detections_page.complete if detections_page else None),
+        "detections_incomplete_reason": (
+            detections_page.reason if detections_page else None),
         "control": control,
         "retention": retention,
         # A host cannot have detections from before its sensor existed. For a

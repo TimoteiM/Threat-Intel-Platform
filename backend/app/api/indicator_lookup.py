@@ -268,18 +268,33 @@ async def _ask_falcon(*, kind, observable, tenant_id, creds, falcon, panel,
             f"{falcon._redact(exc)}).").as_json()}
 
     detections = found.get("detections")
-    return {
-        "question": question,
-        "answer": {
-            "detections": detections,
-            "detection_count": len(detections) if isinstance(detections, list) else None,
-            "field": found.get("detections_field"),
-            "notes": found.get("notes") or [],
-            # No negative without its warrant. The notes carry the control's
-            # timestamp; this states plainly that the zero is interpretable.
-            "negative_is_interpretable": bool(found.get("detections_field")),
-        },
+    complete = found.get("detections_complete")
+    answer: dict[str, Any] = {
+        "detections": detections,
+        "detection_count": len(detections) if isinstance(detections, list) else None,
+        # The population these came from. `detection_count` is the number of
+        # records READ; this is how many there are, and when they differ the
+        # count is a floor.
+        "detection_total": found.get("detections_total"),
+        "detections_complete": complete,
+        "field": found.get("detections_field"),
+        "notes": found.get("notes") or [],
+        # No negative without its warrant. Two things have to hold: the field
+        # must be confirmed to filter, and the read must have covered the
+        # population. A complete read of a verified field is the only state in
+        # which a zero here means "the EDR has nothing".
+        "negative_is_interpretable": bool(found.get("detections_field")) and complete is True,
     }
+    if complete is False:
+        answer["count_is_floor"] = absence.absent(
+            absence.LOWER_BOUND,
+            f"{len(detections or [])} detections were read of "
+            f"{found.get('detections_total')} that exist, so this is a floor "
+            f"and anything not found in them may be in the rest: "
+            f"{found.get('detections_incomplete_reason')}",
+            raw=str(len(detections or [])),
+        ).as_json()
+    return {"question": question, "answer": answer}
 
 
 def _estate(observable: str, kind: str, tenant_id: str, days: int, est) -> dict[str, Any]:

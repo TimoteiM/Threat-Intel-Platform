@@ -1512,6 +1512,8 @@ same field, same control — and should resolve together.
 
 ## 31 — `falcon.lookup` returns alert *ids*, not alert records
 
+**DONE 2026-10-16**, inside item 32's helper — `hydrate_alerts` is a step of `paged_alerts`, so the two cannot come apart again. Verified live: the control hash returns 29 records of 91 keys each, `detections_total: 29`, `detections_complete: true`, and E1 evaluates **True** where it was False.
+
 `falcon.lookup(observable_type="hash")` populates `detections` from
 `/alerts/queries/alerts/v2`, which returns **composite ids**. Nothing fetches
 the entities, so each element is a dict with exactly one key, `id`:
@@ -1538,6 +1540,10 @@ Consequences:
 HTTP call** — and the code to copy is already in `lookup_host`.
 
 ## 32 — one Falcon paging helper, as the only way to page
+
+**DONE 2026-10-16.** `Page(rows, total, complete, reason)` plus `paged`, `hydrate_alerts` and `paged_alerts`. `lookup`, `lookup_host` and `alert_retention_floor` all go through it; `verify()` deliberately does not, and says why in place — it reads a status *code* rather than rows, and the helper raises on exactly the statuses it exists to report.
+
+The helper then produced a regression of its own, which is the entry worth keeping: `want=500` clamped the per-request limit to the page size and stopped after one page, cutting the host panel from 500 detections to **200**. A coverage reduction introduced by the fix for a coverage bug, caught only by comparing against a measurement taken before the change. `want=N` now means N records across as many pages as that takes, with a test asserting the request sizes are `[200, 200, 100]`.
 
 `lookup` asks `/alerts/queries/alerts/v2` for `{"limit": 20}` with **no
 `sort`**. For sha256 `7600ffe12da441fe…` the population holds **29 alerts
