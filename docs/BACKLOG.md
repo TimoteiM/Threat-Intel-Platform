@@ -2037,3 +2037,126 @@ Removing the band withdrew one of the two sides, so there is no second varying
 assessment to diverge from. **What would revive it: a second stage whose
 output actually varies.** Until one exists this cannot be settled by any
 measurement, and it should not sit in the backlog looking as though it could.
+
+## 38b — what the decomposition actually says, corrected
+
+### My "reachable" column was an observed maximum, not a ceiling
+
+Two of the seven are structural; the rest are small-sample observations, and
+calling them unreachable was a claim about the scorer derived from a sample of
+its inputs:
+
+| sub-score | weight | status | basis |
+|---|---|---|---|
+| `attachment_score` | .12 | **structurally unreachable** | 0.0 on **52 of 52**, with `attachment_analysis` present and non-empty on all 52 — so the check ran and the scorer still produced nothing |
+| `opencti_score` | .15 | **structurally unreachable** | absent from `components` on 34 of 52, 0.0 on the other 18 |
+| `behavior_score` | .16 | **not yet observed** above 0.29 | non-zero on **1 run of 52** |
+| `infrastructure_score` | .15 | **not yet observed** above 0.092 | non-zero on 18 of 52 |
+| `content_ml_score` | .12 | **not yet observed** above 0.115 | non-zero on 52 of 52 |
+| `sandbox_score` | .10 | not yet observed above 0.9 | non-zero on 19 of 52 |
+| `lexical_score` | .20 | reaches 0.9998 | non-zero on 51 of 52 |
+
+So **27 points are structurally unreachable** and the rest of the gap between
+36.4 and 100 is "nothing has happened to score higher yet", on 52 runs.
+
+### It is not a composite. It is a lexical heuristic with six passengers.
+
+`lexical` carries **20.0 of the 36.4** reachable points and is non-zero on
+**51 of 52** runs, saturating at 0.9998. Per-sub-score medians against the
+verdict, which says which input holds the signal:
+
+| sub-score | clean | suspicious | malicious | separates clean? |
+|---|---|---|---|---|
+| **`lexical_score`** | **0.4072** | **0.9998** | **0.8747** | **yes** |
+| `infrastructure_score` | 0.0 | 0.0 | 0.0320 | yes, but tiny |
+| `content_ml_score` | 0.0900 | 0.0900 | **0.0600** | **INVERTED** |
+| `behavior_score` | 0.0 | 0.0 | 0.0 | no |
+| `attachment_score` | 0.0 | 0.0 | 0.0 | no |
+| `sandbox_score` | 0.0 | 0.0 | 0.0 | no |
+| `opencti_score` | 0.0 | 0.0 | 0.0 | no |
+
+**All of the clean-vs-malicious signal is lexical.** So "recalibration" does
+not mean reweighting — reweighting six inputs that carry no signal changes
+nothing. It means either making the other six work or admitting the scorer is
+a URL-text heuristic and naming it one.
+
+**`content_ml` is inverted**, which answers the question about it: a
+well-calibrated model finding nothing on a benign corpus would not rank
+malicious *below* clean. It is compressed into the bottom tenth of its range
+**and** pointing the wrong way, so it is mis-scaled or reading something that
+anti-correlates with the verdict.
+
+And `lexical` median 0.9998 on `suspicious` against 0.8747 on `malicious`
+explains the earlier wrinkle: a scorer measuring *how suspicious the text
+looks* ranks `suspicious` highest by construction, while a malicious verdict
+reached from a sandbox hit on unremarkable text scores lower. **That is the
+scorer telling us what it measures**, not noise — and it is a second
+independent observation converging on the same reading.
+
+### CORRECTION to 38: the rationale is not all fallback
+
+I wrote that "no sub-score has ever crossed its rationale threshold". **False.**
+Of the 52 rationale lines:
+
+| line | runs |
+|---|---|
+| `URL lexical model high score` | **37** |
+| *(fallback)* `No strong malicious signal…` | 14 |
+| `AnyRun indicates suspicious/malicious behavior` | 1 |
+
+**38 of 52 are real reasons.** `confidence` is still constant, but for a
+different reason than I gave: **no run has ever carried TWO rationale items at
+once**, so the `>= 2` and `>= 3` bands are unreached. Same shape — thresholds
+never crossed — different mechanism, and the sentence I shipped was wrong. The
+fallback-when-empty is still a sentinel inside the count: "1 item" means both
+*one real reason* and *no reasons at all*, and 14 of the 52 are the latter.
+
+### The denominator was backwards and is fixed
+
+`14 out of a reachable 32` removed a weight whenever a sub-score was zero,
+which merges *ran and found nothing* with *could not run*. The arithmetic
+inverted the meaning:
+
+```
+lexical 0.70 alone, nothing else run            ->  14 of 32  = 44%
+the same 0.70, with sandbox/infra/behaviour
+all running and returning zero                  ->  14 of 100 = 14%
+```
+
+The second file has strictly **more** exculpating evidence and reads as safer,
+correctly. The first has **less information** and read as more dangerous.
+Thin coverage means uncertain, not elevated — `check_failed` rendered as risk,
+which is slice 3's `unknown`-is-not-`clean` rule inverted.
+
+Fixed: an input that ran and returned zero **stays in** — the file earned that
+zero — and coverage is out of the ratio entirely. The score is the claim with
+its observed population beside it; coverage is a `warrant` with its own
+`claim_excludes`, per rule 22.
+
+## 39 — 37 "queued" email runs are seven months old, and the queue is not stuck
+
+The answer to "is the queue draining" is **yes, and these were never in it.**
+
+| status | n | oldest | newest | has `completed_at` |
+|---|---|---|---|---|
+| completed | 55 | 2026-03-09 | **2026-10-15** | 55 |
+| **queued** | **37** | 2026-03-02 | **2026-03-05** | **0** |
+| cancelled | 18 | 2026-03-02 | 2026-04-07 | 18 |
+| failed | 4 | 2026-03-09 | 2026-08-04 | 1 |
+
+**All 37 queued runs were created in a four-day window, 2026-03-02 to 03-05,
+and completions begin 03-09 and continue to 10-15.** Nothing has been stuck:
+these predate the working pipeline and were abandoned where they sat.
+
+So it is not the 319-untriaged-alerts shape after all — it is the inverse. **A
+terminal cohort is wearing a pending status**, which means any count of
+"pending work" in this platform silently includes 37 seven-month-old rows, and
+32% of all email runs are permanently mislabelled as in-progress. That is
+worth a one-off reconciliation to a terminal state that says what happened
+(`abandoned`, with the date and the reason), rather than leaving a status that
+claims work is coming.
+
+The 18 cancelled all carry a `completed_at`, so whoever cancelled them did it
+through a path that closed them properly; the four failed include one with a
+`completed_at` and three without, which is a smaller inconsistency in the same
+column.

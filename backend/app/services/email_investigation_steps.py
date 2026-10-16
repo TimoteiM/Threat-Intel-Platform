@@ -242,6 +242,19 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
             # interpretation stage declares the verdict.
             verdict=None,
             cost=_FREE,
+            # Coverage is the score's WARRANT, not part of its ratio. Rule 22:
+            # stated beside the claim, with its own boundary.
+            warrant={"coverage": _risk_coverage(risk),
+                     "observed_range": list(RISK_SCORE_OBSERVED[:2]),
+                     "observed_over_runs": RISK_SCORE_OBSERVED[2],
+                     "components": (risk or {}).get("components"),
+                     "claim_excludes": (
+                         "The score is what the seven inputs summed to. It "
+                         "says nothing about how many of them were able to "
+                         "answer — that is the coverage line — and a low "
+                         "score on thin coverage is uncertain rather than "
+                         "safe."),
+                     },
             fields={"verdict_text": _risk_text(risk), "drivers": drivers},
         )
     elif _present(risk):
@@ -253,6 +266,9 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
             "Taken together, what do these answers amount to?",
             source="local", target="risk aggregation", response=risk,
             verdict=None, cost=_FREE,
+            warrant={"coverage": _risk_coverage(risk),
+                     "observed_range": list(RISK_SCORE_OBSERVED[:2]),
+                     "components": (risk or {}).get("components")},
             fields={"verdict_text": _risk_text(risk)},
         )
     else:
@@ -314,64 +330,83 @@ def _inspection_findings(inspection: Any) -> list[str]:
     return out
 
 
+#: What this scorer has actually produced, with its date, because a score
+#: without its population is a proportion without its denominator. Declared
+#: and `calibrated_on_self`: measured over the 52 scored runs on 2026-10-16,
+#: all of them from one small internal estate. Re-measure, do not trust.
+RISK_SCORE_OBSERVED = (9, 27, 52, "2026-10-16")
+
+
 def _risk_text(risk: Any) -> str:
-    """The score, with what it was reachable out of. Measured 2026-10-16.
+    """The score beside its population. Coverage is a separate claim.
 
-    Three things were wrong with this sentence and each was found by going one
-    level further down:
+    This sentence has now been wrong three ways, and the third was mine:
 
-    1. `low (score 14, …)` — the band. `risk_level` is a CONSTANT: 52 of 52
-       runs are `low`, because the 35/70 thresholds have never been crossed.
-    2. `…, confidence low` — **the band renamed, not removed.** `confidence`
-       derives from `len(rationale)`, rationale gets a fallback item when
-       empty, and no sub-score has ever crossed its rationale threshold. So
-       all 52 runs have exactly 1 rationale item and `confidence` is `low` on
-       all 52. A second constant in the same sentence.
-    3. `out of 100` — **a wrong scale replacing a wrong label.** Decomposing
-       the composite into its seven inputs:
+    1. `low (score 14, …)` — a band that is a CONSTANT. 52 of 52 runs are
+       `low`; the 35/70 thresholds have never been crossed.
+    2. `…, confidence low` — the band renamed. Also constant, by a different
+       route, so removing one and keeping the other removed nothing.
+    3. `14 out of a reachable 32` — **backwards.** It removed a weight from
+       the denominator whenever a sub-score was zero, which merges *the check
+       ran and found nothing* with *the check could not run* — the two states
+       this platform's whole convention exists to separate. The arithmetic
+       consequence inverts the meaning:
 
-           lexical          max 0.9998   weight .20   ->  20.0 pts reachable
-           behavior         max 0.29     weight .16   ->   4.6   (zero on 51/52)
-           content_ml       max 0.115    weight .12   ->   1.4
-           attachment       max 0.0      weight .12   ->   0.0   (zero on 52/52)
-           sandbox          max 0.9      weight .10   ->   9.0   (zero on 33/52)
-           infrastructure   max 0.092    weight .15   ->   1.4   (zero on 34/52)
-           opencti          max 0.0      weight .15   ->   0.0   (absent on 34/52)
+           lexical 0.70 alone, nothing else run    ->  14 of 32  = 44%
+           the same 0.70, with sandbox, infra and
+           behaviour all running and finding zero  ->  14 of 100 = 14%
 
-       `attachment_score` and `opencti_score` are **0 on every run**, so
-       **27 of the nominal 100 points are structurally unreachable** and the
-       ceiling the observed maxima imply is 36.4 — against an observed
-       composite maximum of 27. "14 out of 100" reads as very low; 14 against
-       a reachable 36 is mid-range.
+       The second file has strictly MORE exculpating evidence and reads as
+       safer, correctly. The first has less information and read as more
+       dangerous. Thin coverage means uncertain, not elevated — it is
+       `check_failed` being rendered as risk, which is slice 3's
+       `unknown`-is-not-`clean` rule inverted.
 
-    So the sentence states the score and, from this run's OWN components, how
-    many inputs contributed nothing — a score without its distribution is a
-    proportion without its denominator, and the denominator is computed here
-    rather than hardcoded so it stays true per run. See backlog 38.
+    So: **an input that ran and returned zero stays in the denominator — the
+    file earned that zero** — and coverage comes out of the ratio entirely.
+    The score is the claim; what could not contribute is its warrant, stated
+    beside it under rule 22 rather than multiplied into it.
     """
     data = risk if isinstance(risk, dict) else {}
     score = data.get("risk_score")
     if score is None:
         return "no score was produced"
+    low, high, n, when = RISK_SCORE_OBSERVED
+    return (
+        f"a composite score of {score} on a nominal 0-100 scale; across the "
+        f"{n} runs this scorer has produced, values have ranged {low} to "
+        f"{high} (measured {when}, on this estate only)"
+    )
+
+
+def _risk_coverage(risk: Any) -> str | None:
+    """Which inputs could not contribute, as the score's warrant.
+
+    Absent from `components` is the only *defensible* reading of "could not
+    contribute" available in the record: `opencti_score` is missing entirely
+    from 34 of 52 payloads, while `attachment_score` is present-and-zero on
+    all 52 with its evidence section non-empty — which is a scorer question
+    (backlog 38), not a coverage one, and must not be reported as missing
+    coverage on a particular run.
+    """
+    data = risk if isinstance(risk, dict) else {}
     components = data.get("components") if isinstance(data.get("components"), dict) else {}
     weights = data.get("weights") if isinstance(data.get("weights"), dict) else {}
-    silent = [k for k, v in components.items() if isinstance(v, (int, float)) and v == 0]
-    text = f"a composite score of {score}"
-    if components and weights:
-        lost = sum(float(weights.get(k) or 0.0) for k in silent)
-        reachable = int(round((1.0 - lost) * 100))
-        text += f" out of a reachable {reachable}"
-        if silent:
-            text += (
-                f" — {len(silent)} of this scorer's {len(components)} inputs "
-                f"contributed nothing on this run "
-                f"({', '.join(sorted(k.replace('_score', '') for k in silent))}), "
-                f"so {int(round(lost * 100))} of the nominal 100 points were "
-                f"not in play"
-            )
-    else:
-        text += " out of 100"
-    return text
+    if not components or not weights:
+        return None
+    missing = sorted(k for k in weights if k not in components)
+    if not missing:
+        return None
+    lost = sum(float(weights.get(k) or 0.0) for k in missing)
+    names = ", ".join(k.replace("_score", "") for k in missing)
+    return (
+        f"{len(missing)} of this scorer's {len(weights)} inputs could not "
+        f"contribute at all on this run ({names}), carrying "
+        f"{int(round(lost * 100))} of the nominal 100 points — so the score "
+        f"is bounded below what the scale implies. Inputs that ran and "
+        f"returned zero are NOT counted here; that is evidence, not absent "
+        f"coverage."
+    )
 
 
 def _risk_drivers(risk: Any) -> list[str]:
