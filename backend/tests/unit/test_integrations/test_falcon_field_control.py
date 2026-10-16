@@ -82,9 +82,18 @@ def test_the_broken_behaviors_prefix_is_gone_from_every_mapping():
     is the shape that returned "the EDR has nothing" for every hash.
     """
     source = fc.ALERT_HASH_FIELDS
-    assert set(source.values()) == {"sha256", "sha1", "md5"}
+    # The durable claim is the one in this test's name: no mapping carries the
+    # `behaviors.` prefix. The exact SET of mapped fields is a decision that
+    # has since changed on a measurement — `sha1` was removed 2026-10-16
+    # because its only value in this tenant is forty zeros — so pinning the
+    # set here would have made this test an authority on a field's contents.
     assert not any("behaviors" in v for v in source.values())
     assert not any("behaviors" in str(v) for v in fc.ALERT_UNMAPPABLE_KINDS.values())
+    assert not any("behaviors" in str(v)
+                   for v in fc.ALERT_SENTINEL_HASH_FIELDS.values())
+    # And every mapped field is a bare alert field, not a dotted path into a
+    # structure the record does not have.
+    assert all("." not in v for v in source.values())
 
 
 def test_hash_dispatch_is_by_digest_length():
@@ -92,11 +101,18 @@ def test_hash_dispatch_is_by_digest_length():
 
     Filtering a 32-character MD5 against `sha256` is the same silent zero one
     level down — a valid field, a valid value, and no possible match.
+
+    SHA-1 now routes to NOTHING, and that is a measurement rather than an
+    omission: `sha1` is present on 1,953 of this tenant's 2,047 alerts and
+    carries exactly one distinct value, forty zeros. See
+    `test_a_sha1_does_not_route_to_a_falcon_field` in test_falcon_paging.py.
     """
     assert fc.alert_filter_field("hash", "a" * 64) == "sha256"
-    assert fc.alert_filter_field("hash", "a" * 40) == "sha1"
     assert fc.alert_filter_field("hash", "a" * 32) == "md5"
     assert fc.alert_filter_field("hash", "a" * 16) is None
+    assert fc.alert_filter_field("hash", "a" * 40) is None
+    # ...and the refusal carries its reason, so the absence is not a silence.
+    assert fc.alert_hash_sentinel_reason("a" * 40)
 
 
 @pytest.mark.parametrize("kind", ["domain", "url", "ip"])

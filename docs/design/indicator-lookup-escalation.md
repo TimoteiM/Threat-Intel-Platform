@@ -17,6 +17,32 @@ the gate opens at all.
 
 ---
 
+## 0. Every constant here is `calibrated_on_self`
+
+**Every figure in this document was measured on a single small internal
+estate** — Expertware's own 182 devices — **where 70.4% of the alert corpus is
+one laptop running test activity.** The prevalence baseline, the 2.9% fire
+rate, the host-count bimodality, the 619 s triage median: all of them.
+
+That is the right way to start. You tune on what exists. It is **not** fine
+unlabelled, because in six months someone reads "2.9%" as a property of
+estates in general.
+
+So every declared constant carries `calibrated_on_self` beside it, the way
+`RECENT_DAYS` already ships disabled pending a real distribution:
+
+| constant | value | status |
+|---|---|---|
+| E1 fire rate (design input) | 2.9% per known hash | `calibrated_on_self` |
+| prevalence baseline (p50 1 host, 2.3% ≥113) | — | `calibrated_on_self` |
+| host-count bimodality (no mass 21–100) | — | `calibrated_on_self` |
+| triage benchmark | 619 s | `calibrated_on_self` |
+| `RECENT_DAYS` | unset | **disabled**, pending 250 lookups |
+| S1 per-host cost | 5 calls / 1.44 s | measured, provider-side, portable |
+
+A declared value with its calibration provenance is a starting point. A tuned
+value without it is a claim about the world.
+
 ## 1. The corpus every rate below is measured over
 
 One population, named once, because every figure in this document has it as
@@ -207,6 +233,64 @@ fire is not a safeguard, it is decoration.
 fields this predicate reads.
 
 **Verdict contributed: `malicious`.**
+
+### E1's records are heterogeneous, and a missing field must not evaluate False
+
+**The highest-priority correctness item in this slice.** Keys per record run
+**33 to 99** against a union of 113, so the records E1 reads are not one
+shape. A predicate reading a field a given record type does not carry
+evaluates `False` — silently, for exactly the reason `behaviors.sha256` did,
+one level in. The field exists on the API; it does not exist on *this record*.
+
+Two things ship before E1 does:
+
+1. **The proportion of records carrying each field E1 reads**, measured and
+   recorded beside the predicate, so a clause resting on a field present on
+   66% of the population says so. Measured within the open stage, which is
+   where E1 runs:
+
+   | field | open | closed |
+   |---|---|---|
+   | `status` | 100% | 100% |
+   | `resolution` | **0%** | 100% |
+   | `sha256` | 83% | 100% |
+   | `pattern_disposition_description` | 66% | 100% |
+
+2. **A record lacking the field produces an absence kind, not a `False`.**
+   `no_field_map` where the record type never carries it,
+   `unrecognised_absence` where it should and does not — never a bare falsy
+   value folded into an `any()`. An `any()` over records of mixed shape
+   returns `False` both when every record said no and when half of them were
+   never asked, and those are the two readings this platform exists to keep
+   apart.
+
+### E1 will escalate on test activity as currently written
+
+**1,323 of 2,047 alerts are named `TestingActivity`**, 0 of 2,047 have a
+classified host, and the production/test classification built on 2026-10-12
+(`asset_criticality.environment`) does not reach Falcon devices — it holds
+**two** classified rows, both `windows-test-device`, and `EXP-22MY264` does
+not match its name regex. So this is not a corner case; it is the majority of
+the corpus.
+
+The signals are already present and do not need inventing:
+
+* `machine_domain = dev.expertware.net` — 10 devices;
+* the detection `name` itself — `TestingActivity` on 1,323;
+* the existing `_TEST_TOKEN` regex, for hosts that are named honestly.
+
+**Extend the classification to Falcon devices before E1 freezes, and make host
+class something E1 reads** — because an alert on an unclassified host is not
+evidence of the same kind as one on a production host. Three constraints on
+how it is read, following §4's guardrail exactly:
+
+* host class may change **what is said** and **what enrichment is paid for**;
+* it must **not** suppress escalation — a test host is where a real
+  compromise is least likely to be looked for, and suppression is where
+  false-negative paths get built;
+* `unknown` is **not** `production`. An unclassified host is its own state and
+  says so, rather than inheriting the benefit of the doubt in either
+  direction.
 
 ### E2 — the estate executed it
 
@@ -628,7 +712,7 @@ predicate produced a false negative.**
 
 ---
 
-## 6b. No better discriminator than `resolution` exists in the record
+## 6b. Whether a better discriminator exists is UNANSWERABLE at this sample size
 
 The field inventory said "73 fields in all". A record now returns 91 keys, so
 the inventory was reconciled before E1 was allowed to freeze — rule 19 before
@@ -655,10 +739,23 @@ both the field and the verdict exist. Base rate 21.9% of closed alerts:
 | `severity_name = Low` | 78 | 2.6% | 0.1× |
 | `prevention_policy_name = …Pilot Gr…` | 167 | 2.4% | 0.1× |
 
-**Nothing discriminates.** The best positive lift is 2.0× on 67 records, from
-a 21.9% base — and those 67 are on the test laptop. The only strong signals
-are *negative*: populations that are almost never true positives. Three
-further reasons not to build on them:
+**This is `too_little_history`, not a negative result, and the distinction
+matters because one of them gets revisited and the other gets cited.**
+
+Held out from the test laptop, this corpus contains **seven true positives.**
+"No field predicts `true_positive`" and "we have seven events" produce
+*identical observations* — which is the collapse rule 19's discriminator
+clause forbids, and the held-out table above is what proves it: the best lift,
+2.0× on 67 records, lives entirely on the test laptop.
+
+So the recorded answer is: **at 7 held-out positive events, no field can be
+shown to predict the verdict, and none can be shown not to.** Revisit when a
+corpus exists with enough positives to separate those two states — the number
+that makes it unanswerable is 7, and it is written here so this section is not
+read later as "the question was settled".
+
+The *decision* not to build a model stands on its own, independently of the
+sample size, for three reasons:
 
 * they would be used to **suppress**, which is exactly where a false-negative
   path gets built, and the prevalence guardrail in §4 applies unchanged;
@@ -668,9 +765,10 @@ further reasons not to build on them:
 * `severity_name` is **0% populated on the open stage**, so its 1.3× is
   unusable where E1 runs, and the rest sit at 83% coverage there.
 
-So `resolution == 'true_positive'` stays the whole of E1, and this is a
-closed question rather than an open one: the 18 unexamined fields were
-examined, and the answer is no.
+So `resolution == 'true_positive'` stays the whole of E1 — not because the
+alternatives were ruled out, but because at this sample size nothing can be
+ruled in, and the only signals that even gesture are ones it would be wrong
+to act on.
 
 Three keys do separate the stages — `lead_id` (100% open / 1.9% closed),
 `network_accesses` (30% / 3%) and `dns_requests` (30% / 3%) — but separating

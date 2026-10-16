@@ -1664,3 +1664,67 @@ claim as a value we lack.
 Related: `show_in_ui` is also why `/alerts/queries/alerts/v1` returns 2,041
 where v2 returns 2,047, and why a console count must be compared against the
 v1 population (see `docs/falcon-alert-volume-drop-internal.md`).
+
+## 35 — there is no boundary where vendor absence becomes a kind
+
+**Checked, and it is the worse answer: each caller meets the raw payload.**
+`cape_normalizer` is the only vendor normaliser in the codebase and it shapes
+data rather than distinguishing absence from a sentinel. For Falcon, callers
+read `record.get("status")`, `record.get("pattern_disposition_description")`
+and `r.get("seconds_to_resolved")` directly.
+
+The honest-absence convention protects code that goes *through* it. **Every
+vendor payload arrives with absence already encoded as a value**, and nothing
+converts it. Enumerated over this tenant's 2,047 alerts:
+
+| field | the sentinel | scale |
+|---|---|---|
+| **`sha1`** | **forty zeros** | **1,953 of 1,953 — one distinct value** |
+| `seconds_to_triaged` | `0` | 2,016 of 2,047 (98.5%) |
+| `seconds_to_resolved` | `0` for never-resolved | 319 of 2,047 |
+| `ioc_context` | `{}` | 1,786 of 1,993 |
+| `associated_files` | `[]` | 134 of 203 |
+| `aggregate_id` | `""` | 41 of 2,047 |
+
+**The `sha1` one was live and shipped.** `ALERT_HASH_FIELDS` mapped a
+40-character digest to `sha1`, so every SHA-1 indicator lookup filtered on a
+real digest against a field whose only value is a sentinel, and returned a
+clean zero. **And the field control passed**: it samples a value the API
+returned — the zeros — filters on it, gets 1,953 rows, and concludes the field
+filters. It does. It can never match. Fixed by removing 40 from the map and
+giving it a measured reason that names SHA-256 and MD5 as the routes that
+work.
+
+`seconds_to_resolved = 0` is the same class and cost a published figure: a
+median over the whole population carried 319 never-resolved zeros and came out
+at 584 s where the closed-record median is 977 s.
+
+Two items:
+
+1. **A vendor boundary per integration** — one function per vendor that takes
+   a raw record and returns one whose absences are kinds, with the sentinels
+   above enumerated in it. Callers then cannot meet the raw payload, which is
+   the same move as `Page` and `Concentrated`: the type removes the option.
+2. **The field control needs a variance check** (folded into item 33): a
+   sampled value from a field with **one distinct value** satisfies a
+   known-present control trivially. The control must require the field to hold
+   more than one distinct value across its sample, or the pass is vacuous.
+
+## 36 — extend the production/test classification to Falcon devices
+
+`asset_criticality.environment` holds **two** classified rows, both
+`windows-test-device`, and **0 of 2,047 Falcon alerts have a classified
+host**. `EXP-22MY264` — 70.4% of the corpus, 1,323 alerts named
+`TestingActivity` — does not match `seed_host_environment`'s `_TEST_TOKEN`
+regex, because it is named like an ordinary laptop.
+
+Signals available without inventing any:
+
+* `machine_domain = dev.expertware.net` — 10 devices;
+* the detection `name` (`TestingActivity` on 1,323 alerts), as a
+  behaviour-based proposal in the shape `propose_from_behaviour` already uses;
+* the existing name regex, for hosts named honestly.
+
+Proposals, not confirmations — the existing propose/confirm split stays.
+**This blocks E1**: see "E1 will escalate on test activity as currently
+written" in [indicator-lookup-escalation](design/indicator-lookup-escalation.md).

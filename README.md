@@ -1569,3 +1569,36 @@ numbers.
 So: `{rows: 500, groups: 9, hosts: 2}` before, the same after, and look at
 them side by side. The before-figure is also what makes the after-figure
 interpretable at all.
+
+### Rule 24 — resolve a corpus's subjects before analysing it
+
+**Whose hosts, whose users, whose tenant.** Two queries, before the first
+aggregate.
+
+This rule is the cost of three reframings of one document in two days, each
+produced by resolving an identifier that had been carried as a label:
+
+| framing | what it rested on | what resolved it |
+|---|---|---|
+| "a customer's estate has gone quiet" | the file's location in `docs/outbound/` | — |
+| "the untriaged queue is our service gap" | — | `assigned_to_name` → our own `users` table |
+| "the estate and the analysts are both ours" | — | device `machine_domain` → `*.expertware.net`, 182 of 182 |
+
+Nobody resolved an identifier until two days in. Every intervening conclusion
+was sound reasoning over an unestablished subject, which is rule 20's
+existence clause applied to the subject of a report rather than to a
+component — and the audience is the part that goes wrong silently, because a
+document inherits it from where the file was filed.
+
+**The audience of a finding is something to measure, not something to
+inherit.** So:
+
+* names in a payload are resolved against `users` before they are described;
+* hostnames are resolved against a domain or an asset inventory before an
+  estate is characterised;
+* a tenant id is resolved to an organisation before a document is addressed
+  to one.
+
+The same two queries also catch the thing rule 16's concentration check is
+for: resolving 182 hostnames is what revealed that one of them was 70% of the
+corpus.

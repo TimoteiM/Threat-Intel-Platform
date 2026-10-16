@@ -113,7 +113,35 @@ DEVICES_PATH = "/devices/queries/devices/v1"
 #: Hash dispatch is by digest length, not one field name: an observable of
 #: kind `hash` may be any of the three, and filtering a 32-character MD5
 #: against `sha256` is the same silent zero one level down.
-ALERT_HASH_FIELDS = {64: "sha256", 40: "sha1", 32: "md5"}
+#: SHA-1 IS DELIBERATELY ABSENT. Measured 2026-10-16 over this tenant's full
+#: 2,047-alert population: `sha1` is present on 1,953 records and carries
+#: **exactly one distinct value — forty zeros.** Falcon populates it with a
+#: sentinel, universally. So a filter on any real SHA-1 matches nothing, for
+#: every SHA-1 that will ever be looked up, and the empty result reads as "the
+#: EDR has nothing on this file".
+#:
+#: **The field control cannot catch this, and that is the important part.** The
+#: control samples a value the API itself returned — the zeros — filters on it,
+#: gets 1,953 rows and passes. The field demonstrably filters. It just cannot
+#: ever match a real digest. A constant-valued field satisfies a
+#: known-present control trivially; see backlog 33.
+#:
+#: A 40-character hash therefore routes to no Falcon field, and the absence is
+#: `no_field_map` with this reason rather than a zero.
+ALERT_HASH_FIELDS = {64: "sha256", 32: "md5"}
+
+#: Digest lengths that exist as fields and cannot answer, with why. Separate
+#: from `ALERT_HASH_FIELDS` so a reader cannot mistake "absent from the map"
+#: for "nobody looked".
+ALERT_SENTINEL_HASH_FIELDS = {
+    40: (
+        "Falcon's `sha1` is a sentinel in this tenant: present on 1,953 of "
+        "2,047 alerts with exactly one distinct value, forty zeros. A filter "
+        "on a real SHA-1 can never match, so nothing was searched — an empty "
+        "result would mean the sentinel, not the file. Look the same file up "
+        "by SHA-256 or MD5, which carry 223 and 166 distinct values."
+    ),
+}
 
 #: Kinds with NO filterable alert field, and why — so the absence is recorded
 #: rather than rediscovered. All of these were probed and returned 200/0:
@@ -155,6 +183,15 @@ def alert_filter_field(observable_type: str, value: str) -> str | None:
     if observable_type != "hash":
         return None
     return ALERT_HASH_FIELDS.get(len(str(value or "").strip()))
+
+
+def alert_hash_sentinel_reason(value: str) -> str | None:
+    """Why a digest of this length has no Falcon field, when that is the case.
+
+    Returned so the caller records `no_field_map` with the measured reason
+    instead of a bare zero — the distinction this whole module exists for.
+    """
+    return ALERT_SENTINEL_HASH_FIELDS.get(len(str(value or "").strip()))
 
 
 def _redact(text: Any) -> str:
@@ -924,16 +961,28 @@ def lookup(
                 f"is a floor rather than a negative: {page.reason}."
             )
     else:
-        unmappable = ALERT_UNMAPPABLE_KINDS.get(observable_type)
-        notes.append(
-            f"No Falcon alert field answers for observable type "
-            f"{observable_type!r}"
-            + (f": {unmappable}. " if unmappable else ". ")
-            + "Measured, not assumed — the alert record has no `behaviors` "
-              "key and no field carries this kind. Nothing was searched, "
-              "because a filter on a guessed field returns a clean-looking "
-              "zero."
-        )
+        # A digest length whose field exists and is a sentinel is a DIFFERENT
+        # absence from a kind with no field at all, and it gets its own
+        # measured reason — "there is a field and it cannot match" rather than
+        # "there is no field".
+        unmappable = (alert_hash_sentinel_reason(value)
+                      if observable_type == "hash" else None)
+        if unmappable:
+            notes.append(
+                f"No Falcon alert field can answer for this digest length: "
+                f"{unmappable}"
+            )
+        else:
+            unmappable = ALERT_UNMAPPABLE_KINDS.get(observable_type)
+            notes.append(
+                f"No Falcon alert field answers for observable type "
+                f"{observable_type!r}"
+                + (f": {unmappable}. " if unmappable else ". ")
+                + "Measured, not assumed — the alert record has no `behaviors` "
+                  "key and no field carries this kind. Nothing was searched, "
+                  "because a filter on a guessed field returns a clean-looking "
+                  "zero."
+            )
 
     return {
         # Records, not ids. This was `[{"id": str(d)} for d in detections]`

@@ -247,3 +247,36 @@ def test_want_n_larger_than_the_population_is_complete():
     assert page.fetched == 7
     assert page.complete is True
     assert page.reason is None
+
+
+# --- a constant-valued field satisfies a control trivially ----------------
+
+
+def test_a_sha1_does_not_route_to_a_falcon_field():
+    """Measured: `sha1` carries exactly one distinct value in this tenant —
+    forty zeros, on 1,953 of 2,047 alerts. So a filter on a real SHA-1 matches
+    nothing, for every SHA-1 anyone will ever look up.
+
+    The dangerous part is that the FIELD CONTROL PASSES: it samples the value
+    the API returned (the zeros), filters on it, gets 1,953 rows, and
+    concludes the field filters. It does. It just cannot match a real digest.
+    """
+    assert fc.alert_filter_field("hash", "a" * 40) is None, (
+        "a SHA-1 routed to a Falcon field whose only value is a sentinel, so "
+        "every SHA-1 lookup would return a false negative"
+    )
+    reason = fc.alert_hash_sentinel_reason("a" * 40)
+    assert reason and "sentinel" in reason
+    assert "SHA-256 or MD5" in reason, (
+        "the refusal must name the route that does work, or it reads as "
+        "'this file cannot be looked up'"
+    )
+
+
+def test_the_hashes_that_do_route_still_route():
+    """The control on the test above: removing SHA-1 must not remove the two
+    digest lengths that carry 223 and 166 distinct values."""
+    assert fc.alert_filter_field("hash", "b" * 64) == "sha256"
+    assert fc.alert_filter_field("hash", "c" * 32) == "md5"
+    assert fc.alert_hash_sentinel_reason("b" * 64) is None
+    assert fc.alert_hash_sentinel_reason("c" * 32) is None

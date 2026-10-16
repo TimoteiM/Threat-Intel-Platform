@@ -697,3 +697,42 @@ Every figure in this document and in the escalation spec is a **v2** number:
 hashes; the 4.5% and 60.1% fire rates. They are stated as v2 numbers rather
 than silently re-based, because the two populations answer different
 questions — v2 is what the API holds, v1 is what an analyst can see.
+
+---
+
+# ADDENDUM 7 — THE HYPOTHESIS TO TEST BEFORE ANYTHING ELSE IS BUILT ON THIS CORPUS
+
+**This may be a proof-of-concept tenant whose evaluation ended.** Labelled a
+hypothesis, not a finding — a collector was asserted this morning that did not
+exist, and this is the same shape.
+
+What fits it, with nothing left over:
+
+| observation | under the trial reading |
+|---|---|
+| 182 devices, all our own | an evaluation runs on your own estate |
+| one laptop is 70.4% of alerts, 1,323 named `TestingActivity` | somebody exercised a machine to generate detections |
+| a lead queue never assigned in four months | nobody owned the evaluation's second queue |
+| `epp` triage worked diligently, then stopping on a date | the evaluation period ending |
+| alerts span 2026-07-20 → 10-15, floor at 88 days | a trial beginning in July, inside a 90-day retention |
+| the credential wired into this platform **2026-10-14** | six days *after* the stop, to look at what was left |
+| fleet alive, 163 of 182 reporting, detection output absent | **entitlement expiry, not an outage** |
+
+The last row is the one that makes it compelling: an expiry stops detections
+while leaving sensors checking in, which is precisely the shape measured and
+the shape a dead subscription does not have.
+
+**If it is right, the gap is not an incident.** The cohort analysis, the volume
+drop and the fleet-alive-but-silent picture all become consequences of one
+administrative date, and there is nothing to investigate.
+
+**The discriminator is a question, not a query.** One conversation with
+whoever owns the Falcon relationship, plus the licence and subscription state
+already in the console check (§ADDENDUM 4, part 3). Both are a corridor away —
+there is no customer in this tenant, so everything that looked blocked on a
+customer conversation is answerable internally today.
+
+**Ask before building anything further on this corpus.** Every rate in
+`docs/design/indicator-lookup-escalation.md` is calibrated on it, and if this
+is an ended trial then it is calibration against an artefact of the trial
+rather than against an estate.
