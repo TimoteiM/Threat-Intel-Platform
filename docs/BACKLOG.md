@@ -1280,3 +1280,70 @@ test is what makes the chosen authority real instead of nominal.
 
 Related: `docs/deploy/schema-changes.md`, and the idempotency note in
 `alembic/versions/064_indicator_lookups.py`.
+
+---
+
+## `Threat-Analyzer-Owner` — deactivated 2026-10-16
+
+A platform placeholder holding the **highest role in the product**, with one
+login ever, at creation. Closed by deactivation rather than by giving it an
+email address: an account nobody uses should not hold `owner`, and
+deactivation is reversible in one statement where handing it an identity is
+not.
+
+**What was found, before anything was changed.** `last_login_at` is the
+login path's own declaration, so it was not the evidence — every column that
+records a user *acting* was checked instead, each against its own type
+(README rule 20):
+
+| column | type | rows for this account |
+|---|---|---|
+| `alert_case_spine.closed_by` | varchar | 0 |
+| `api_keys.created_by` | varchar | 0 |
+| `case_read_set.requested_by` | varchar | 0 |
+| `email_investigation_runs.actor_user_id` | uuid | 0 |
+| `indicator_lookups.actor_user_id` | uuid | 0 |
+| `investigation_records.actor_user_id` | uuid | 0 |
+| `sandbox_analyses.requested_by` | varchar | **5** |
+
+The five are all on **2026-09-23, 07:42 → 14:33** — the day the account was
+created, within eight hours of its single login at 06:33. Nothing in the 23
+days since, anywhere.
+
+The type column is load-bearing and nearly cost the finding: four of those
+seven columns hold a **name**, not an id. The first pass compared all seven to
+the account's uuid and returned 0 across the board, including for
+`sandbox_analyses.requested_by` where the answer is 5 — a predicate written
+without checking the column's type, which is README rule 19 one layer out of
+the payload.
+
+Also checked, and empty: no `api_keys` row created by it (all four are
+`bootstrap`/`admin`, role `ingest`), no `integration_audit` entry (only
+`timotei.moscaliuc` and `e2e-admin` appear), and no reference to the name
+anywhere in the source — `security/bootstrap.py` creates `admin` or
+`BOOTSTRAP_ADMIN_USERNAME`, so nothing recreates this account on start.
+
+**Why deactivation bites immediately.** `middleware/auth._identify_user`
+re-reads `active` on **every request**, so this is not a change that waits for
+the next login — any live session for the account stops working at once. The
+session TTL is 12 hours in any case, so the token issued on 2026-09-23 expired
+23 days ago.
+
+**Why it was a hand-written statement.** `auth.update_user` refuses to
+deactivate or demote an owner, for everyone including another owner, and the
+refusal names the escape hatch itself: *"Change the role in the database if
+this is genuinely required."* So the API could not do it, by design. The
+last-administrator guard's premise was verified manually before the change:
+`timotei.moscaliuc` (owner) and `viorel.horga` (admin) both remain active, so
+the platform is not left unmanageable.
+
+```sql
+-- what was run
+UPDATE users SET active = false WHERE username = 'Threat-Analyzer-Owner';
+-- to reverse it
+UPDATE users SET active = true  WHERE username = 'Threat-Analyzer-Owner';
+```
+
+The row keeps `role = 'owner'` and its five `sandbox_analyses` rows still
+resolve to it, so the attribution work above is unaffected: deactivating an
+account does not rewrite what it did.

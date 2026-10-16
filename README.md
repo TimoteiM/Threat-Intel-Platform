@@ -1269,14 +1269,28 @@ reading the fourteen keys that are actually there.
 One listing would have prevented all four, at a cost lower than any single one
 of the checks that didn't. It is three seconds of query.
 
-Two related traps the same listing habit catches:
+#### Enumerate until you reach scalars
 
-- **`-> 'key' IS NOT NULL` is satisfied by a JSON `null`.** It reported
-  400/400 present when the values were null. `jsonb_typeof(...) = 'object'`
-  answers the question asked.
-- **Key present ≠ value present ≠ value non-empty.** "100% with log context"
-  counted the *container*; 695 of 2,833 objects carried no logs at all, and a
-  `status` field had recorded which all along.
+"List the keys" is not the whole rule, because a listing can stop one level too
+early and the stop is itself a guess. **Every stopping point above a scalar is
+an assumption about the level below it** — which is exactly what this rule
+exists to forbid. So descend: keys, then each value's *type*, then, for a
+container, the shape of its elements, until what you are looking at is a
+number, a string, a boolean or a null.
+
+Three instances in one day, each one level deeper than the last:
+
+| level | the stop | what it asserted | what was there |
+|---|---|---|---|
+| container vs value | `log_context` is present | "100% have log context" | the object was present on 2,833 of 2,833; 695 held no logs |
+| value vs non-empty | the key exists and is not SQL `NULL` | "400/400 present" | `-> 'key' IS NOT NULL` is **true for a JSON `null`**; `jsonb_typeof(...)` is the question |
+| dict keys vs element shape | `attack_assessment`'s keys listed, `techniques` among them | `listing(techniques)` would name techniques | `techniques` is a list of **objects**; it rendered raw dicts on the page |
+
+The third is the one that shows the rule needs the clause. The section's keys
+*were* enumerated, deliberately and under this rule — and the enumeration
+stopped at the name `techniques` without asking what one element of it looks
+like. `[type(x) for x in value[:3]]` is the same three seconds as the listing
+above it.
 
 And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
 a different row each run.** Two consecutive reads of "the latest" gave
@@ -1286,3 +1300,45 @@ such ordering.
 
 See rule 18 for the guard that stops a guessed field *rendering*; this rule is
 upstream of it and cheaper.
+
+### Rule 20 — check the layer that acts, not the layer that answers
+
+**A check is only evidence about the layer it interrogates.** Ask the component
+that *answers conveniently* and you learn about that component; the work is
+being done somewhere else, and that somewhere else is what the claim was about.
+
+Three instances in two days, in three unrelated domains:
+
+| # | the check asked | the work was done by | what the check missed |
+|---|---|---|---|
+| 1 | the **api** container, over HTTP | the **worker**, which runs the task | the worker was 4 commits behind; the api answered for itself and was read as answering for the deployment |
+| 2 | the **fingerprint on disk**, by hashing files | the **socket**, serving an already-imported module | committed code was 404ing for three hours while disk and git agreed it was there |
+| 3 | the **template registry**, which the author writes to | the **page**, which renders | eight templates the registry certified could not render at all; `Boolean(absence_kind)` discarded their sentences |
+
+The shape, stated so the fourth one is recognisable: **the registry, the
+manifest, the config, the repository and the disk are all declarations of
+intent. The socket, the worker, the renderer and the query planner are what
+act.** A declaration agreeing with itself is not a measurement. When the two
+layers can disagree — and they can whenever one is loaded, cached, deployed,
+projected or rendered from the other — the only check worth the name goes
+through the acting layer.
+
+It is cheap to get right and the fix is always the same: route the check
+through the thing that does the work. `liveness.sh` fingerprints the worker
+over its own socket *and* diffs serving-against-disk because of #1 and #2;
+`presentation_of()` lives beside the renderer, with the page switching on its
+output, because of #3.
+
+Two corollaries worth naming, because both have bitten:
+
+- **Presence in a registry is not reachability.** "Every declared kind has a
+  template" passed throughout, while certifying eight that nothing could
+  reach. A registry answers *is it declared*, never *does it run*.
+- **A parse or aggregation that found nothing makes every assertion over it
+  pass.** The `ast` walk that replaced a hand-kept list of eight kinds is the
+  right correction — but an empty walk would have made every test over it
+  succeed by asserting nothing, so it asserts its own non-emptiness first.
+  Same family as a zero-shard aggregation read as agreement: the acting layer
+  returned nothing and silence was scored as a pass. See
+  `docs/problems/container-defaults-erase-absence.md` for the collection of
+  these — an instrument whose absence reads as a value.
