@@ -669,6 +669,27 @@ def hash_lookup(
                 f"`MD5=…,SHA256=…,IMPHASH=…` value, so any of the three "
                 f"digests will match."
             ),
+            # EVERY WARRANT STATES WHAT IT DOES NOT COVER.
+            #
+            # This sentence is true and was, for one measurement, actively
+            # harmful: a wrong-but-present tenant pin returned 0 documents,
+            # and this warrant then told the reader the field spans the full
+            # retention with 2.6M documents across 190 hosts. Both facts are
+            # true and neither is about whether the FILTER selected anything,
+            # so the warrant made a false negative more credible rather than
+            # less. A coverage warrant interrogates the field, which answers
+            # about itself; the filter is what acts.
+            #
+            # Warrants are load-bearing for this platform's credibility, so a
+            # warrant that can co-sign a wrong answer raises confidence in
+            # precisely the cases that deserve less. The scope clause is the
+            # fix, and it is rendered wherever the warrant is.
+            "claim_excludes": (
+                "This says the FIELD holds data across the window. It says "
+                "nothing about whether this query's filters — the tenant pin "
+                "included — selected the right documents. A zero here is only "
+                "a negative if the pin resolved; see `pin_verified`."
+            ),
             "window_claim": (
                 f"Covers {days} days. A nil result here is not a statement "
                 f"about the full {RETENTION_DAYS}-day retention: this field "

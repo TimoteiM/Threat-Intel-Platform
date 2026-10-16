@@ -172,6 +172,26 @@ an empty result must not be accepted as an answer. The unforgettable-pin work
 that backlog 17 asks for therefore has to assert the pin's value resolves,
 not merely that a pin was supplied.
 
+### This changes the sequencing, not just the backlog
+
+**Pin-value verification is a precondition for per-customer separation, not a
+task alongside it.**
+
+Today a zero from a wrong pin looks wrong *because a human knows this estate
+has data*. That is the entire mechanism currently protecting us from a broken
+pin: somebody finding an empty answer surprising.
+
+**That mechanism expires the moment a second tenant lands.** Once each
+customer has its own credential and its own pin, "this tenant has no data" is
+a legitimate and expected answer — a newly onboarded customer returns exactly
+that for days. The one state a wrong pin imitates becomes the one state nobody
+questions, and the implausibility that protects us now disappears precisely
+when the number of pins multiplies.
+
+So the order is: verify pins by value, **then** separate. Doing it the other
+way round means the first customer onboarded under separation is also the
+first customer whose silence we cannot interpret.
+
 **What we would like from you:** confirmation of the exact `manager.name`
 value (or equivalent) for each customer at the point each credential is
 created, as part of the artefact script in the section below, so the value is

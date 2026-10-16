@@ -1620,3 +1620,47 @@ check while every negative from it is meaningless.
 One extra call, cached with the pass as the control already caches, failing
 closed through the existing `FalconFieldUnverified`. README rule 19 carries
 the practice; this item is the code.
+
+## 34 — six alerts no operator can see, and we render them identically
+
+`show_in_ui` is `False` on **6 of 2,047** alerts. They are not duplicates of
+anything visible: **every aggregate group containing a hidden record is
+entirely hidden** (0 visible members in each), so these are whole detections
+absent from the operator's view rather than suppressed copies.
+
+| # | product | status | resolution | severity | name | created |
+|---|---|---|---|---|---|---|
+| 1 | automated-lead-context | new | — | — | `PollingKeylogg…` | 2026-09-29 |
+| 2 | automated-lead | new | — | — | `EXP-BBTN473 at…` | 2026-09-29 |
+| 3 | automated-lead-context | new | — | — | `UmppcBypassSus…` | 2026-09-30 |
+| 4 | automated-lead-context | new | — | — | `MaliciousModul…` | 2026-09-29 |
+| 5 | epp | closed | false_positive | **High** | `ObfScript` | 2026-07-25 |
+| 6 | epp | closed | false_positive | **High** | `ObfScript` | 2026-07-25 |
+
+Records 5 and 6 are `scenario: evade_detection`, tactic Execution, technique
+Command and Scripting Interpreter, and were closed by an account that is **not
+in this platform's `users` table**. Records 1–4 are untriaged leads, so
+"hidden because dismissed" cannot explain them.
+
+**What is not established:** whether the console surfaces these somewhere else
+— CrowdStrike groups detections into incidents, and `/incidents/*` is
+unreachable to this credential (README rule 19's discriminator clause: the 404
+separates none of the candidate states). So "no operator can see these" is the
+honest reading of `show_in_ui` and not a proven claim about every console
+view.
+
+**The product question, which is the actionable half.** We render all 2,047
+identically. For a platform whose purpose is to surface what the console does
+not, six operator-invisible records are the thesis in miniature — and
+rendering them with no provenance means the first analyst who compares our
+page against their queue finds a mismatch and stops trusting both.
+
+So those six need **provenance on the page**: not "hidden", which we cannot
+substantiate, but *"not shown in the vendor console"* stated as a fact about
+where the record came from. That is the absence convention's instinct applied
+to a **presence** — a record we have and they do not is as much a provenance
+claim as a value we lack.
+
+Related: `show_in_ui` is also why `/alerts/queries/alerts/v1` returns 2,041
+where v2 returns 2,047, and why a console count must be compared against the
+v1 population (see `docs/falcon-alert-volume-drop-internal.md`).

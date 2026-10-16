@@ -260,7 +260,44 @@ def test_counts_from_a_truncated_fetch_are_marked_as_lower_bounds():
         truncated_at=500)
     assert out["counts_are_lower_bounds"] is True
     assert out["counts_basis"].startswith("At least")
-    assert "older rows in the window were not read" in out["counts_basis"]
+    # The DECISION is that the counts are floors; the sentence explaining it is
+    # a reason and is not pinned here. An earlier version asserted the literal
+    # phrase "older rows in the window were not read" and failed when the
+    # sentence became more precise.
+    assert "not counted here" in out["counts_basis"]
+
+
+def test_a_truncated_fetch_quantifies_the_floor_when_the_population_is_known():
+    """The producer's declaration, consumed.
+
+    `falcon_client.Page` reports `total`, so the panel can say how many rows
+    exist rather than gesturing at "older rows". For one change nothing read
+    that declaration: the helper correctly reported `complete: False` while a
+    regression cut this panel from 500 rows to 200, and no sentence anywhere
+    changed. An honest producer with an inattentive consumer is the
+    registry-and-renderer error again.
+    """
+    out = fp.group_detections(
+        _rows(500, name="Noisy", filename="wsl.exe", status="closed"),
+        truncated_at=500, population=1432,
+        incomplete_reason="read 500 of 1432 records")
+    assert out["rows_population"] == 1432
+    assert out["rows_not_read"] == 932
+    assert "500 of 1432 alert rows" in out["counts_basis"]
+    assert "932 were not" in out["counts_basis"]
+    assert out["incomplete_reason"] == "read 500 of 1432 records"
+
+
+def test_an_unknown_population_does_not_invent_a_floor_figure():
+    """`total` absent is not `total` zero. The sentence falls back rather than
+    subtracting from None."""
+    out = fp.group_detections(
+        _rows(500, name="Noisy", filename="wsl.exe", status="closed"),
+        truncated_at=500, population=None)
+    assert out["counts_are_lower_bounds"] is True
+    assert out["rows_population"] is None
+    assert out["rows_not_read"] is None
+    assert "the rest of the window was not read" in out["counts_basis"]
 
 
 def test_an_untruncated_fetch_states_its_counts_as_exact():

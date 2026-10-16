@@ -28,6 +28,25 @@ is 2,047 and 2,047 were fetched, so this is the **population, not a sample** —
 checked, because a page read as a population is how a rate gets an unstated
 denominator.
 
+**⚠️ One host is 70.4% of this population**, and every rate below is stated
+pooled unless it says otherwise. `EXP-22MY264` — a Windows 11 laptop on
+`int.expertware.net`, 1,323 of whose alerts are named `TestingActivity` —
+contributes 1,442 of the 2,047 alerts and **371 of the 378 true positives
+(98%)**. Held out:
+
+| | all hosts | excluding EXP-22MY264 |
+|---|---|---|
+| alerts | 2,047 | 605 |
+| `true_positive` of closed | 378 (21.9%) | **7 (2.3%)** |
+| distinct `sha256` | 223 | 204 |
+| **E1 per distinct hash** | **10 of 223 (4.5%)** | **6 of 204 (2.9%)** |
+| median seconds to resolve | 977 | 619 |
+
+So E1's fire rate is 4.5% pooled and **2.9% with the test laptop held out**,
+and the apparent 21.9% true-positive base rate is 2.3% off that one machine.
+This tenant is Expertware's own estate — see
+`docs/falcon-alert-volume-drop-internal.md`.
+
 Within it, 223 distinct `sha256` values. **Where a rate is per-hash the
 denominator is 223, and where it is per-record the denominator is 2,047.** They
 differ by more than a factor of two for the same predicate, and the per-hash
@@ -354,14 +373,19 @@ customer's tenant to prove it would cause the exact harm being described:
 ### The benchmark the projections were missing
 
 Latency means nothing against taste; it means something against what a triage
-actually costs. Measured on the same tenant's closed alerts,
-`seconds_to_resolved` for the analysts doing the work: **median 584 s**, p95
-7.3 hours.
+actually costs.
 
-| case | lookup wall clock | share of a median triage |
+**The grain had to be fixed first.** `seconds_to_resolved` is **0 on all 319
+open records** — never resolved, recorded as zero — so a median over the whole
+population carries 319 zeros in its denominator. That gave 584 s. Over the
+1,728 **closed** records, where the field means what it says: **median 977 s**,
+p95 26,439 s (7.3 h), max 129,491 s (1.5 days). And 619 s with the test laptop
+held out, which is the figure to use for ordinary work.
+
+| case | lookup wall clock | share of a 619 s triage |
 |---|---|---|
 | p50 — 4 hosts | ~6 s | **1%** |
-| p95 — 113 hosts | ~162 s | **28%** |
+| p95 — 113 hosts | ~162 s | **26%** |
 
 So the cheap path costs an analyst one percent of the time they already spend
 on one alert, and the expensive path costs more than a quarter of it — for a
@@ -603,6 +627,54 @@ in this document is that **the first positive control run against the
 predicate produced a false negative.**
 
 ---
+
+## 6b. No better discriminator than `resolution` exists in the record
+
+The field inventory said "73 fields in all". A record now returns 91 keys, so
+the inventory was reconciled before E1 was allowed to freeze — rule 19 before
+predicating, with 18 unexamined fields as the place a better discriminator
+would hide.
+
+**Neither number was the schema.** Keys per record range from **33 to 99**
+(median 90), and the union across the population is **113 distinct keys**. So
+"73" and "91" were both true of different records, and the inventory was a
+sample of one.
+
+With all 113 enumerated, every scalar field on the open stage was tested for
+whether it predicts `resolution == 'true_positive'` on the closed stage, where
+both the field and the verdict exist. Base rate 21.9% of closed alerts:
+
+| field = value | n | TP% | lift |
+|---|---|---|---|
+| `technique = Indirect Command Execution` | 67 | 44.8% | 2.0× |
+| `name = WSLProcessExecution` | 67 | 44.8% | 2.0× |
+| `tactic = Defense Evasion` | 73 | 41.1% | 1.9× |
+| `objective = Keep Access` | 74 | 40.5% | 1.9× |
+| `local_prevalence = low` | 47 | **0.0%** | 0.0× |
+| `name = VolumeShadowSnapshotHidden` | 64 | **0.0%** | 0.0× |
+| `severity_name = Low` | 78 | 2.6% | 0.1× |
+| `prevention_policy_name = …Pilot Gr…` | 167 | 2.4% | 0.1× |
+
+**Nothing discriminates.** The best positive lift is 2.0× on 67 records, from
+a 21.9% base — and those 67 are on the test laptop. The only strong signals
+are *negative*: populations that are almost never true positives. Three
+further reasons not to build on them:
+
+* they would be used to **suppress**, which is exactly where a false-negative
+  path gets built, and the prevalence guardrail in §4 applies unchanged;
+* `local_prevalence = low` and `unique` have *lower* true-positive rates than
+  `common`, the opposite of the usual intuition, so any model built on them
+  would be fitting this estate's test activity;
+* `severity_name` is **0% populated on the open stage**, so its 1.3× is
+  unusable where E1 runs, and the rest sit at 83% coverage there.
+
+So `resolution == 'true_positive'` stays the whole of E1, and this is a
+closed question rather than an open one: the 18 unexamined fields were
+examined, and the answer is no.
+
+Three keys do separate the stages — `lead_id` (100% open / 1.9% closed),
+`network_accesses` (30% / 3%) and `dns_requests` (30% / 3%) — but separating
+the stages is not predicting the verdict.
 
 ## 7. What this still does not decide
 

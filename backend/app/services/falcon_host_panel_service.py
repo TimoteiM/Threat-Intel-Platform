@@ -286,7 +286,9 @@ def coverage(device: Any, *, hostname: str, now: datetime,
     return out
 
 
-def group_detections(records: Any, *, truncated_at: int | None = None) -> dict[str, Any]:
+def group_detections(records: Any, *, truncated_at: int | None = None,
+                     population: int | None = None,
+                     incomplete_reason: str | None = None) -> dict[str, Any]:
     """Section B. Distinct open detections, grouped — never a raw row count.
 
     Grouped on (name, filename) because that is what a reader recognises as
@@ -366,6 +368,16 @@ def group_detections(records: Any, *, truncated_at: int | None = None) -> dict[s
     # the collapse from 500 rows to 9 groups looks like the whole picture
     # precisely because the number got small.
     bounded = truncated_at is not None
+    # The producer's declaration, CONSUMED. `falcon_client.Page` has reported
+    # `total` and `complete` since 2026-10-16, and for one change nothing read
+    # them: the helper correctly said `complete: False` while a regression cut
+    # this panel from 500 rows to 200, and no sentence anywhere changed. An
+    # honest producer with an inattentive consumer is the registry-and-renderer
+    # error in a fourth location, so the floor is now quantified from `total`
+    # rather than described as "older rows".
+    missing = (population - truncated_at
+               if bounded and isinstance(population, int)
+               and population > (truncated_at or 0) else None)
     return {
         # THE headline. Distinct and open.
         "open_detection_count": len(open_groups),
@@ -374,13 +386,23 @@ def group_detections(records: Any, *, truncated_at: int | None = None) -> dict[s
         # sentence, so a renderer cannot show the number without the caveat.
         "counts_are_lower_bounds": bounded,
         "counts_basis": (
-            f"At least {len(open_groups)} open of at least {len(out)} distinct: "
-            f"the newest {truncated_at} alert rows were fetched and older rows "
-            f"in the window were not read, so a detection kind that only "
-            f"occurs further back is not counted here."
+            (f"At least {len(open_groups)} open of at least {len(out)} "
+             f"distinct: {truncated_at} of {population} alert rows in this "
+             f"window were read and {missing} were not, so a detection kind "
+             f"that only occurs in those {missing} is not counted here."
+             if missing is not None else
+             f"At least {len(open_groups)} open of at least {len(out)} "
+             f"distinct: the newest {truncated_at} alert rows were fetched "
+             f"and the rest of the window was not read, so a detection kind "
+             f"that only occurs further back is not counted here.")
             if bounded else
             f"Exact: every alert row in the window was read and grouped."
         ),
+        # How many rows exist, beside how many were read. A count without its
+        # population is the floor-as-fact shape.
+        "rows_population": population,
+        "rows_not_read": missing,
+        "incomplete_reason": incomplete_reason,
         "groups": out,
         # Behind the collapse, explicitly labelled, so it cannot be read as
         # severity. See the module docstring.
@@ -423,6 +445,8 @@ def panel(
     control: Any,
     now: datetime | None = None,
     truncated_at: int | None = None,
+    population: int | None = None,
+    incomplete_reason: str | None = None,
     superseded: Any = None,
     speculative_host: bool = False,
     retention: Any = None,
@@ -455,7 +479,8 @@ def panel(
     passed = bool((control or {}).get("passed"))
     if passed:
         detections_section: Any = group_detections(
-            detections, truncated_at=truncated_at)
+            detections, truncated_at=truncated_at, population=population,
+            incomplete_reason=incomplete_reason)
         # Short on purpose: the field control gets a full sentence in the
         # footer, and saying it twice in adjacent paragraphs made the panel
         # read as though it were apologising.

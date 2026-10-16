@@ -1,8 +1,74 @@
-# Falcon alert volume: an unexplained seven-day gap, and a triage gap that is ours
+# Falcon alert volume: an unexplained seven-day gap in OUR OWN estate
 
-> ## ⛔ REFRAMED 2026-10-16. DO NOT SEND. DO NOT SEND ANY PART OF THIS.
+> ## ⛔ THIS HAS NO CUSTOMER AUDIENCE. 2026-10-16.
 >
-> **This was being written as a finding about the customer. It is not one.**
+> **Every device in this Falcon tenant is Expertware's own.** Measured across
+> all 182:
+>
+> | `machine_domain` | devices |
+> |---|---|
+> | `int.expertware.net` | 144 |
+> | `ext.expertware.net` | 24 |
+> | `dev.expertware.net` | 10 |
+> | *(empty)* | 4 |
+>
+> `site_name` is `EXPERTWARE` on 144 and `Default-First-Site-Name` on 34;
+> every populated `ou` ends in `ExpertWare`. There is **no customer estate in
+> this tenant**, so a document addressed to "the security manager and whoever
+> owns the CrowdStrike configuration" has nobody to go to. It is an internal
+> report about our own endpoints and always was.
+>
+> This is the third and largest reframing of this file. The sequence is worth
+> keeping, because each step was a measurement that contradicted the framing
+> built on the one before:
+>
+> 1. *A customer's estate has gone quiet* — written before anyone asked whose
+>    devices these were.
+> 2. *The untriaged queue is our service gap* — `assigned_to_name` resolved to
+>    our own `users` table.
+> 3. **Both estate and analysts are ours** — the devices resolve to
+>    Expertware domains.
+>
+> Nobody checked whose machines they were for two days of analysis. That is
+> README rule 20's clause about establishing what a thing *is* before
+> reasoning about how it behaves, applied to the subject of a report rather
+> than to a component.
+>
+> **The findings all survive; only the audience changes.** A seven-day gap in
+> our own EDR output is still a seven-day gap, and arguably a more urgent one:
+> it is our own detection coverage, and nobody noticed for eight days.
+
+> ## ⚠️ And a dominant term that invalidates every rate below
+>
+> **One host, `EXP-22MY264`, is 1,442 of the 2,047 alerts — 70.4%.** It is a
+> Windows 11 **laptop** on `int.expertware.net`, enrolled 2025-08-20, and
+> **1,323 of its alerts are named `TestingActivity`**. It holds **371 of the
+> 378 true positives in the whole corpus (98%)**.
+>
+> Disaggregated, because pooled these are one machine's numbers:
+>
+> | | all hosts | excluding EXP-22MY264 | only EXP-22MY264 |
+> |---|---|---|---|
+> | alerts | 2,047 | 605 | 1,442 |
+> | closed / open | 1,728 / 319 | 307 / 298 | 1,421 / **21** |
+> | `true_positive` (of closed) | 378 (21.9%) | **7 (2.3%)** | 371 (26.1%) |
+> | distinct `sha256` | 223 | 204 | 26 |
+> | median seconds to resolve | 977 | **619** | 1,047 |
+>
+> So the estate's real true-positive rate is **2.3% of closed alerts, not
+> 21.9%** — an order of magnitude — and the 319-alert untriaged queue is
+> almost entirely *not* that host (298 of 319). One laptop running test
+> activity is worked diligently; everything else's leads are untouched.
+>
+> This is the sixth instance of a statistic whose dominant term is an
+> artefact, after `Manager: Siembiot`, `Windows-Test-Device` and the rest —
+> and the platform already built a production/test host classification on
+> 2026-10-12 for exactly this reason. **Falcon's devices are not in it: 0 of
+> 2,047 alerts have a classified host.** Extending that classification to
+> Falcon device names is the fix, and it is also what would have caught this
+> on day one.
+
+> ## Earlier framing, kept for the record
 >
 > `assigned_to_name` on the closed alerts resolves to **9 of 11 distinct names
 > matching rows in this platform's own `users` table**. The people triaging
@@ -16,6 +82,25 @@
 > * Sending a customer "you have 319 untouched alerts" when we are the ones
 >   contracted to touch them would have been the worst outcome available this
 >   week.
+>
+> ### This is not a performance finding, and it must not be read as one
+>
+> Named individuals and closure counts appear below, and a list of people
+> beside a queue they did not work reads as a performance table whether or not
+> it was meant as one. **It is not one, and the measurements say the
+> opposite:** 1,447 alerts worked at a median of **ten minutes** is evidence
+> that those analysts are doing the job well.
+>
+> **The finding is that a queue has no owner.** Nobody works a view they were
+> never assigned, so the gap is above the people in it — an assignment,
+> tooling and coverage decision that was never made. Any use of the figures
+> below to appraise an individual is a misreading of what was measured.
+>
+> **And the names do not appear in anything that goes to the customer, in any
+> version.** They are here because resolving `assigned_to_name` is what
+> established whose service gap this is; that question is now answered and the
+> names have done their work. The customer-facing question is about alert
+> volume and nothing else.
 >
 > A frozen document with the wrong framing is still a document someone can
 > open, so this banner is the point of the file until it is rewritten as two
@@ -43,9 +128,11 @@
 > substitutes for it.** It is the first thing to hand to whoever is running
 > this work; it cannot be done from inside the platform.
 
-**Audience of the volume sections, once they are clean:** the security manager
-and whoever owns the CrowdStrike configuration.
-**Audience of the triage finding:** our own SOC lead. Not the customer.
+**Audience: internal only.** Our own SOC lead and whoever owns Expertware's
+CrowdStrike configuration. There is no customer in this tenant — see the top
+banner. Nothing in this file is addressed outward, and the earlier
+"For: the security manager" line was written before anyone established whose
+devices these are.
 **Measured:** 2026-10-15 and 2026-10-16, read-only against the Falcon API.
 Nothing was changed.
 

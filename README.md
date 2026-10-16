@@ -1517,3 +1517,55 @@ it read a page — the same thing `search_all` → `_page` already does for
 OpenSearch, which is why no OpenSearch read in this codebase has made this
 mistake. A rule a caller has to remember is a rule that holds until the next
 fix is written in a hurry.
+
+### Rule 22 — a warrant states what it does not cover
+
+A **warrant** is the sentence this platform attaches to an answer to say why
+the answer can be trusted: *this field spans the full retention window, 2.6
+million documents across 190 hosts.* Warrants are load-bearing for the whole
+credibility story — the point of them is that a number without one is not
+evidence.
+
+**Which is why a warrant that can co-sign a wrong answer is worse than no
+warrant at all.** On 2026-10-16 a tenant pin was set to a plausible wrong
+value. The query returned zero documents, and the answer carried that coverage
+warrant beside it. Every word of it was **true**, and none of it was about
+whether the *filter* had selected anything. So the reader got a confident
+negative with a coverage guarantee attached, and adding warrants
+systematically raises confidence in exactly the cases that deserve less.
+
+It is rule 20 at a seam nobody had looked at: **the warrant interrogated the
+field, which answers about itself, and not the filter, which acts.**
+
+So every warrant carries a scope clause, and if the warrant is rendered next
+to a verdict, its boundary is rendered with it:
+
+> This says the FIELD holds data across the window. It says nothing about
+> whether this query's filters — the tenant pin included — selected the right
+> documents. A zero here is only a negative if the pin resolved.
+
+### Rule 23 — record what a read path returns before you change it
+
+**Before touching a read path, record what it currently returns as counts.
+After the change, diff.** Three lines, no new tooling, and it fits the
+measurements-print-aggregates rule unchanged — counts and distributions, never
+payloads.
+
+This is the only control that has caught a **coverage regression**. The
+Falcon paging helper was written to stop bounded reads being read as answers;
+in writing it, `want=500` was clamped to one page, and the host panel silently
+dropped from 500 detections to **200**. Nothing failed. No test broke. The
+numbers were internally consistent, `complete: False` was correctly reported,
+and the helper was being honest about a page that was now 300 rows shorter
+than the day before. It was caught by comparing against a figure recorded
+before the change and nothing else.
+
+Every other control here catches a *bug*: a wrong value, an exception, a
+failing assertion. A coverage reduction has none of those symptoms — the code
+is correct, the output is well-formed, and only its *size* changed. That is
+invisible to tests, to types and to review, and visible in a diff of two
+numbers.
+
+So: `{rows: 500, groups: 9, hosts: 2}` before, the same after, and look at
+them side by side. The before-figure is also what makes the after-figure
+interpretable at all.

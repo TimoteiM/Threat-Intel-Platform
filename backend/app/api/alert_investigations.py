@@ -1068,6 +1068,8 @@ async def get_run_falcon(
         hostname=raw["hostname"], device=raw["device"],
         detections=raw["detections"], control=raw["control"],
         truncated_at=raw.get("truncated_at"),
+        population=raw.get("detections_total"),
+        incomplete_reason=raw.get("detections_incomplete_reason"),
         superseded=raw.get("superseded_devices"),
         retention=raw.get("retention"),
         enrolment_floor=raw.get("enrolment_floor"),
