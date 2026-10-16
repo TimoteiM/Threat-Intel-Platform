@@ -128,8 +128,15 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
                     # `kind`. `filename`/`name`/`type` — which this guessed —
                     # do not exist, so every file rendered as "an unnamed
                     # file" while the payload had its path all along.
+                    # `path` can carry an internal artefact suffix —
+                    # "…CCRM.pdf!stream-22" rendered in production. The part
+                    # after "!" is the extractor's own stream id, which is a
+                    # fact about our parser rather than about the attachment,
+                    # so the reader gets the file and the detail stays in the
+                    # payload.
                     "summaries": [
-                        str(f.get("path") or f.get("kind") or "an unnamed file")
+                        str(f.get("path") or f.get("kind")
+                            or "an unnamed file").split("!")[0]
                         for f in files if isinstance(f, dict)]},
         )
     else:

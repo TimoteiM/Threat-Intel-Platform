@@ -39,6 +39,17 @@ from app.services.investigation_recorder import InvestigationRecorder
 #: will, which is a different claim from one that failed to collect.
 LOG_CONTEXT_FROM = "2026-09-21"
 
+#: Internal surface identifiers, in words. Unmapped values render verbatim —
+#: the silent-registry shape means a new surface must look wrong rather than
+#: plausible, and "alert arrived from alert_body" is what plausible looked
+#: like.
+_SOURCE_WORDS = {
+    "alert_body": "the alert-body ingestion pipeline",
+    "alert": "the alert pipeline",
+    "manual": "a manual submission",
+    "api": "the ingestion API",
+}
+
 _FREE: dict[str, Any] = {}
 
 
@@ -78,7 +89,15 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
         "Why does this investigation exist?",
         source="local", target="intake",
         verdict="opened", cost=_FREE,
-        fields={"source_text": str(payload.get("source") or "an unnamed sender"),
+        # `payload["source"]` is an internal surface identifier —
+        # "alert_body" rendered as "an alert arrived from alert_body". A
+        # reader has no idea what that names, and the sentence reads as though
+        # a system called alert_body sent it. Mapped to words; an unmapped
+        # value is shown verbatim rather than guessed at, so a new surface
+        # looks wrong instead of plausible.
+        fields={"source_text": _SOURCE_WORDS.get(
+                    str(payload.get("source") or "").strip().lower(),
+                    str(payload.get("source") or "an unnamed source")),
                 "subject_text": subject},
         warrant={"exclusions_applied": _int(exclusions.get("applied")),
                  "exclusion_list_size": _int(exclusions.get("list_size")),

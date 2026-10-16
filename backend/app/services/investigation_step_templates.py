@@ -174,8 +174,14 @@ TEMPLATES: dict[str, str] = {
         "and dropping duplicates."
     ),
     EMAIL_URL_TRIAGE_NONE: "The message carried no links.",
+    # `source_names` holds CHECK categories — sender_domain, sender_ip, urls,
+    # attachments, email_security, content_ml — not external services. The
+    # sentence said "6 external sources: sender_domain, …", which is false
+    # about both halves: those are not sources and they are not named sources.
+    # Corrected to say what the values are. Which external services answered
+    # is a different question this step does not currently record.
     EMAIL_ENRICH: (
-        "Asked {plural(sources, 'external source')} about "
+        "Ran {plural(sources, 'enrichment check')} over "
         "{plural(observables, 'indicator')}: {listing(source_names)}."
     ),
     EMAIL_SANDBOX: (

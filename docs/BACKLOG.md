@@ -1829,3 +1829,52 @@ Signals available without inventing any:
 Proposals, not confirmations — the existing propose/confirm split stays.
 **This blocks E1**: see "E1 will escalate on test activity as currently
 written" in [indicator-lookup-escalation](design/indicator-lookup-escalation.md).
+
+## 37 — the chain shows two verdicts and does not say they disagree
+
+Read off a live email record, steps 7 and 8, verbatim:
+
+> **7.** Combined every source's answer into one score: **low** (score 14,
+> confidence low). The largest contributors were lexical 0.11, infrastructure
+> 0.01 and sandbox 0.01.
+>
+> **8.** Interpreted the evidence above as **malicious**, with low confidence,
+> resting on 1 named signal.
+
+**This is not a prose defect.** The two steps hold different verdicts in their
+own columns — `verdict='low'` on step 7, `verdict='malicious'` on step 8 — so
+the chain is faithfully rendering a real disagreement between two pipeline
+stages. The numeric risk model says low; the interpretation says malicious.
+
+It is the
+[proxy-metric-read-as-verdict](problems/../design/..) shape again — a score
+band and a judgement being presented as the same kind of thing — and the chain
+makes it visible for the first time, which is what it is for.
+
+Two things to decide, and they are different decisions:
+
+1. **Which is the verdict?** A record that carries two cannot be acted on. If
+   the interpretation is the verdict, the score is an input and step 7 should
+   not read as a conclusion; if the score is, step 8 is a narrative and must
+   not state a different one.
+2. **The chain must name a disagreement rather than render both calmly.** When
+   `final_risk.risk_level` and the interpretation verdict differ, *that is the
+   finding* — a separate step kind, above both, in the shape `incomplete`
+   already uses. Rendering two contradictory sentences in sequence is the
+   worst available option because each one reads as settled.
+
+### Two smaller inconsistencies in the same record
+
+* **Step 1 counts 26 indicators and lists 27.** `found = 26`, and `kinds`
+  renders "24 links, 1 attachment, a sender domain and a sending address" —
+  24 + 1 + 1 + 1. Either the count or the breakdown is wrong, and the
+  breakdown strings are pre-formatted by the deriver so the arithmetic is not
+  checked anywhere.
+* **Step 1 says 24 links, step 4 says 49 seen.** Different populations —
+  extracted-unique against seen-occurrences — rendered as two counts of the
+  same thing with no reconciliation. Whichever is right, one of them needs its
+  population in the sentence, which is rule 14 inside the prose rather than
+  inside a measurement.
+* **Step 8 rests on "1 named signal" while step 7 names three contributors.**
+  Signals and score contributors are different things and read as a
+  contradiction.
