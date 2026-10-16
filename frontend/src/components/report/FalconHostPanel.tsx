@@ -527,6 +527,15 @@ export default function FalconHostPanel({ runId }: { runId: string }) {
                 ? ` at ${shortStamp(panel.field_control.checked_at)}`
                 : ""}
               . {panel.field_control.why_it_matters}
+              {/* Rule 22: a warrant rendered next to a verdict has its
+                  boundary rendered with it, or it reads as underwriting the
+                  whole answer. `sha1` filtered perfectly for months while
+                  holding forty zeros on every record. */}
+              {panel.field_control.claim_excludes && (
+                <span style={{ display: "block", marginTop: 4, color: "var(--text-muted)" }}>
+                  {panel.field_control.claim_excludes}
+                </span>
+              )}
             </footer>
           )}
         </div>

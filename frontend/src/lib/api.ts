@@ -2244,6 +2244,10 @@ export interface FalconHostPanel {
     checked_at: string | null;
     reason: string | null;
     why_it_matters: string;
+    /** What this control does NOT cover — rendered beside it, per rule 22. A
+     *  warrant that can co-sign a wrong answer raises confidence in exactly
+     *  the cases that deserve less. */
+    claim_excludes?: string;
   };
 }
 

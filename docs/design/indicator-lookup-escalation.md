@@ -791,3 +791,37 @@ the stages is not predicting the verdict.
   highest-value evidence Falcon holds here, and it is 2% of the population.
 * Which of §4's three bounding designs to build. The measurement says the
   distribution has no middle; it does not say which design the team wants.
+
+---
+
+## 8. The lookup-type baseline, recorded now because it is cheap
+
+**`too_little_history` — n=27, and mostly our own test lookups.** This proves
+nothing today. It is written down because the question it answers only becomes
+answerable if the baseline exists *before* real usage accrues.
+
+Every `indicator_lookups` row, 2026-10-16:
+
+| detected kind | lookups |
+|---|---|
+| domain | 8 |
+| ip | 5 |
+| hostname | 4 |
+| **sha256** | **6** |
+| **md5** | **1** |
+| url | 2 |
+| unparsed | 1 |
+| **total** | **27** |
+
+The three facts that make this worth keeping:
+
+* **The gate being designed is hash-only.** E1 and E2 both read a digest.
+* **Hashes are 7 of 27 — about a quarter** of what has been looked up.
+* **Domains are the largest single group at 8, and Falcon refuses them**
+  (`cost_not_established`, backlog 30) while the estate answers them.
+
+So "did we build the gate for the indicator type people actually use?" is a
+real question with a real risk attached, and today it can only be argued
+about. When usage accrues it becomes a measurement against this table.
+**Revisit alongside `RECENT_DAYS` at 250 rows** — the same threshold, since
+both wait on the same distribution.

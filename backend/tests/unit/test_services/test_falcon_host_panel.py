@@ -503,3 +503,45 @@ def test_the_panel_passes_the_flag_through():
     assert out["coverage"]["speculative_reading"] is True
     assert "finding" not in out["coverage"]
     assert out["coverage"]["conditional_finding"]
+
+
+def test_a_host_with_no_sensor_has_no_detections_section_at_all():
+    """Found in production 2026-10-16.
+
+    The detections section was gated on the field control alone, so a host
+    with no CrowdStrike sensor and a passing control rendered a real block
+    reading "0 open detections" — which says the EDR looked and found
+    nothing. There is nowhere for a detection to have come from.
+
+    Same shape as reporting the hostless Falcon devices as `unmanaged`
+    instead of `cannot_join`: an absence of a place to look, rendered as a
+    finding about the thing looked for.
+    """
+    out = fp.panel(hostname="EXP-NOSENSOR", device=None, detections=[],
+                   control={"passed": True, "reason": "fine",
+                            "checked_at": "2026-10-16T00:00:00+00:00"})
+    det = out["detections"]
+    assert det.get("absent") or det.get("kind"), (
+        "a host with no sensor got a detections block, so zero rendered as a "
+        "measured negative"
+    )
+    assert det["kind"] == "out_of_scope"
+    assert "no CrowdStrike sensor" in det["reason"]
+    assert "open_detection_count" not in det
+
+
+def test_a_host_WITH_a_sensor_still_gets_its_counts():
+    """The control: the gate must distinguish two states, not suppress the
+    section whenever detections are empty. Zero detections on a host that DOES
+    have a sensor is a real measured negative and must still render as one."""
+    out = fp.panel(hostname="EXP-HASSENSOR",
+                   device={"hostname": "EXP-HASSENSOR", "device_id": "d1",
+                           "last_seen": "2026-10-16T09:00:00Z",
+                           "reduced_functionality_mode": "no"},
+                   detections=[],
+                   control={"passed": True, "reason": "fine",
+                            "checked_at": "2026-10-16T00:00:00+00:00"})
+    det = out["detections"]
+    assert det.get("open_detection_count") == 0
+    assert det.get("counts_are_lower_bounds") is False
+    assert "Exact" in det["counts_basis"]

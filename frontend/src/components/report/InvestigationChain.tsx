@@ -325,10 +325,18 @@ export default function InvestigationChain({
             reader, and the four kinds are four different claims — so each
             gets its own words rather than a label with underscores in it. */}
         {actorSentence(record.actor)}{" "}
-        Every sentence above comes from a template over recorded fields, not
-        from a model — the one model call is step{" "}
-        {record.counters.steps_run}, and it saw the recorded steps rather than
-        the raw responses.
+        {/* The header counts model calls and this sentence used to assert one
+            unconditionally — so an alert chain with `model_calls: 0` read
+            "0 model calls" above and "the one model call is step 9" below.
+            It also named an ordinal the record does not hold: nothing records
+            WHICH step called a model, so claiming the last one was an
+            inference dressed as a fact. Both fixed by saying only what the
+            counter says. */}
+        {record.counters.model_calls === 0
+          ? "Every sentence above comes from a template over recorded fields. No model was called at any point in this investigation."
+          : record.counters.model_calls === 1
+            ? "Every sentence above comes from a template over recorded fields, not from a model. One model call was made, and it saw the recorded steps rather than the raw responses."
+            : `Every sentence above comes from a template over recorded fields, not from a model. ${record.counters.model_calls} model calls were made, and they saw the recorded steps rather than the raw responses.`}
       </footer>
     </section>
   );

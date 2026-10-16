@@ -274,6 +274,38 @@ _NONSENSE_VALUE = "zzqx-not-a-real-value-91746-00000"
 #: population before it can refuse.
 _VARIANCE_MIN_RECORDS = 10
 
+#: Fields whose value space is LARGE BY CONSTRUCTION, so a single distinct
+#: value across a real sample means a sentinel rather than a homogeneous
+#: estate. **Variance refuses only these.**
+#:
+#: The distinction is the whole of it: `sha1` is constant because Falcon
+#: populates it with forty zeros; `platform` is constant because this estate
+#: is Windows-only. Both are one distinct value and they are opposite
+#: findings, and a variance check that cannot tell them apart refuses valid
+#: fields — which trains people to override the control, which is worse than
+#: not having one. Measured 2026-10-16 the naive check refused
+#: `alleged_filetype`, `logon_domain` and `platform`, all three legitimate.
+#:
+#: Each entry carries its premise: the distinct count measured over the full
+#: 2,047-alert population, so an exemption is a recorded measurement rather
+#: than an opinion (README's rule on verifying an exemption's premise).
+#:
+#:   sha256           223 distinct   identity field, used as a needle
+#:   md5              166 distinct   identity field, used as a needle
+#:   device.hostname   51 distinct   identity field, used as a needle
+#:   filename          —             free text, large by construction
+#:   cmdline           —             free text, large by construction
+#:   sha1               1 distinct   <-- THE SENTINEL this set exists to catch
+#:
+#: For every other field, variance is REPORTED and never decisive: a
+#: categorical field with one value in the sample is a homogeneous estate, and
+#: the axis that separates a wrong namespace from a narrow one is an external
+#: `reference`, not cardinality.
+_IDENTITY_FIELDS = frozenset({
+    "sha256", "sha1", "md5", "filename", "cmdline", "device.hostname",
+    "composite_id", "aggregate_id", "user_name", "ioc_value",
+})
+
 
 def alerts_field_control(
     field: str,
@@ -390,15 +422,18 @@ def alerts_field_control(
             _dotted(r, field) for r in records
             if isinstance(_dotted(r, field), str) and _dotted(r, field).strip()
         }
-        if len(seen) == 1 and len(records) >= _VARIANCE_MIN_RECORDS:
+        constant = len(seen) == 1 and len(records) >= _VARIANCE_MIN_RECORDS
+        if constant and field in _IDENTITY_FIELDS:
             return result(
                 False,
                 f"{field!r} carries exactly ONE distinct value across the "
-                f"{len(records)} most recent alerts, so filtering on it proves "
-                f"only that the API echoes its own sentinel. A field that is "
-                f"constant cannot match a real value of its kind — this is how "
-                f"`sha1` (forty zeros on 1,953 of 1,953 records) passed a "
-                f"one-axis control. Not searched.",
+                f"{len(records)} most recent alerts, and it is an identity "
+                f"field whose value space is large by construction — so a "
+                f"single value means a sentinel, not a homogeneous estate. "
+                f"Filtering on it proves only that the API echoes its own "
+                f"placeholder; it cannot match a real value of its kind. This "
+                f"is how `sha1` (forty zeros on 1,953 of 1,953 records) passed "
+                f"a one-axis control. Not searched.",
                 absence="unrecognised_absence", distinct_sampled=len(seen),
             )
 
@@ -460,11 +495,19 @@ def alerts_field_control(
             + ("" if reference_checked else
                " No external reference value was supplied, so axis 4b — that "
                "this field's namespace is the same as the caller's — rests on "
-               "variance alone."),
+               "variance alone.")
+            + ("" if not constant else
+               f" It carries one distinct value across {len(records)} sampled "
+               f"alerts, which is NOT treated as a sentinel here: {field!r} is "
+               f"not an identity field, so one value means a homogeneous "
+               f"estate rather than a placeholder."),
             probe_total=total, sampled=len(records),
             distinct_sampled=len(seen),
             axes={"name_means_something": True, "filter_applied": True,
                   "has_variance": len(seen) > 1,
+                  # Whether variance COULD decide for this field, so a reader
+                  # can tell "varied" from "cardinality says nothing here".
+                  "variance_is_decisive": field in _IDENTITY_FIELDS,
                   "external_reference_checked": reference_checked},
         )
     except Exception as exc:  # noqa: BLE001

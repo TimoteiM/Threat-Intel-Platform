@@ -1388,6 +1388,33 @@ them. The 319 open alerts were left indeterminate by exactly this test — every
 triage" and "a property of the product" produce identical observations here
 and the cells that would separate them are empty.
 
+#### Searching a container is not searching its values
+
+The depth clause above is about *enumeration*; this is the same rule applied to
+*search*. **A serialisation is a container.** `WHERE col::text LIKE '%0000…%'`
+searches the JSON text, not the JSON values, and it matches a run of zeros
+inside any longer string.
+
+A sweep for the `sha1` sentinel reported **1,708 rows of damage** that way.
+Extracting the values at their JSON paths found **none**: they were
+62-character JARM TLS fingerprints whose leading zeros are JARM's own
+convention for *no handshake*. The sweep committed the trap it was hunting.
+
+**And the direction of that error is the dangerous part.** Every other failure
+in this codebase has run one way — a false pass, a confident zero, a
+reassurance that was not earned. An over-reporting sweep runs the other way,
+and it is worse than it looks:
+
+| a sweep that | produces | and then |
+|---|---|---|
+| under-reports | silence | somebody may eventually notice |
+| **over-reports** | **a remediation plan against healthy data** | **it gets approved quickly, because it looks like an incident** |
+
+Urgency is what stops people verifying. So: **a sweep that finds hits verifies
+a sample of them at value level before anyone acts on the count.** Extracting
+at the path rather than grepping the serialisation is that verification, and it
+is three lines.
+
 And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
 a different row each run.** Two consecutive reads of "the latest" gave
 different payloads, and reading a shape from one row while templating against
@@ -1656,3 +1683,46 @@ Practically, when something is retracted: `grep` the claim's distinctive
 phrase across the repo and the memory directory, not just the file you were
 editing. Two of today's three retractions had a copy somewhere else, and the
 phrase was the thing that found it.
+
+### Rule 26 — run every new control against a case it must refuse
+
+**Before trusting a control, give it something it has to reject.** A control
+that has only ever been shown passing has been shown to run, not to
+discriminate.
+
+The reason this needs stating is the day's error distribution. Counted by
+direction:
+
+| failure | direction |
+|---|---|
+| the field control passing on a sentinel | **false pass** |
+| the template registry certifying unreachable templates | **false pass** |
+| `all("None" in line)` passing on every input | **false pass** |
+| the permissive test double accepting what the provider rejects | **false pass** |
+| the paging control refusing a working field | false failure |
+
+Four to one — and the single false failure cost twenty minutes and was
+obvious, because a false failure is noisy and gets fixed within the hour. **A
+false pass is silent and ships.**
+
+This platform has a convention that prevents false reassurance in its
+*output* — every absence carries a kind and a reason. It had no equivalent
+discipline in its *verification*, and that asymmetry is the whole of the table
+above.
+
+So the practice, which item 33 performed before it was named: `sha1` refused
+while `sha256`, `md5` and `device.hostname` passed, in one live run. Not "the
+control works" but "the control works and here is what it rejects".
+
+#### Test doubles err strict
+
+The same asymmetry one layer down. A double that is **stricter** than the
+provider produces false failures: noisy, visible, fixed in an hour. A double
+that is **more permissive** produces false passes: silent, and shipped.
+
+So doubles err strict, and **a double that accepts something the provider
+rejects is a defect in the double even when every test passes.** The Falcon
+fake honoured a filter's field name and ignored its value, so it modelled an
+API that applies no filters — and the nonsense-value axis failed against it
+while the real API behaves correctly. The fake was certifying behaviour the
+provider does not have.

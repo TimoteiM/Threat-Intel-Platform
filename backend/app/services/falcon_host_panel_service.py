@@ -477,8 +477,27 @@ def panel(
         }
 
     passed = bool((control or {}).get("passed"))
-    if passed:
-        detections_section: Any = group_detections(
+    # A host with NO SENSOR cannot have produced Falcon detections, so zero is
+    # not a measured negative there — it is out of scope, and rendering "0
+    # open detections" says the EDR looked and found nothing.
+    #
+    # Found in production 2026-10-16: the detections section was gated on the
+    # field control alone, so an unmanaged host with a passing control got a
+    # real detections block reading 0. Same shape as reporting the 7 hostless
+    # Falcon devices as `unmanaged` instead of `cannot_join` — an absence of a
+    # place to look, rendered as a finding about the thing looked for.
+    if device is None:
+        detections_section: Any = absence.absent(
+            absence.OUT_OF_SCOPE,
+            f"{hostname or 'This host'} has no CrowdStrike sensor, so Falcon "
+            f"holds no detections for it to find. This is not 'no detections' "
+            f"— there is nowhere for a detection to have come from. The "
+            f"coverage finding above is the answer to the question this panel "
+            f"was asked.",
+            raw=str(hostname or ""),
+        ).as_json()
+    elif passed:
+        detections_section = group_detections(
             detections, truncated_at=truncated_at, population=population,
             incomplete_reason=incomplete_reason)
         # Short on purpose: the field control gets a full sentence in the
@@ -518,6 +537,24 @@ def panel(
                 "The Falcon Alerts API returns HTTP 200 with zero results for "
                 "a field name that does not exist, so a negative is only "
                 "meaningful while this control passes."
+            ),
+            # README rule 22: a warrant states what it does NOT cover. This
+            # one was an overclaim in the same way the estate's coverage
+            # warrant was — it interrogates the FIELD NAME and reads as
+            # underwriting the whole answer, and a warrant that can co-sign a
+            # wrong one raises confidence in exactly the cases deserving less.
+            #
+            # `sha1` is the proof: it passed a field-name control for months
+            # while being forty zeros on every record, so "the field filters"
+            # was true and "a negative from it is meaningful" was false.
+            "claim_excludes": (
+                "This control confirms the field NAME filters. It does not "
+                "confirm that the field can match the kind of value you are "
+                "searching for — Falcon's `sha1` filters perfectly and holds "
+                "forty zeros on every record — nor that the detections read "
+                "are the whole population, nor that this host has a sensor at "
+                "all. Those are stated separately as the variance axis, "
+                "`counts_are_lower_bounds`, and the coverage finding."
             ),
         },
     }

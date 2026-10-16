@@ -362,3 +362,52 @@ def test_an_external_reference_is_sent_when_supplied():
     assert out["passed"] is True
     assert any("d" * 64 in f for f in http.filters)
     assert out["axes"]["external_reference_checked"] is True
+
+
+def test_variance_refuses_only_identity_fields():
+    """A control that refuses valid fields trains people to override it.
+
+    Measured 2026-10-16: the naive variance check refused `alleged_filetype`
+    (7 distinct in the population, 1 in the sample), `logon_domain` (3) and
+    `platform` (1, legitimately — this estate is Windows-only). All three are
+    real fields. `sha1` is one distinct value for the opposite reason: Falcon
+    populates it with a placeholder.
+
+    So variance is decisive ONLY where the value space is large by
+    construction, and `platform = Windows` across a whole sample is a
+    homogeneous estate rather than a sentinel.
+    """
+    for field in ("platform", "logon_domain", "alleged_filetype"):
+        recs = _population(25, field, "constant")
+        http = _Http(record=recs[0], filterable={field}, records=recs)
+        out = fc.alerts_field_control(field, base_url=BASE, headers=HEADERS,
+                                      http=http, now=NOW)
+        assert out["passed"] is True, f"{field} was refused for being uniform"
+        assert out["axes"]["has_variance"] is False
+        assert out["axes"]["variance_is_decisive"] is False
+        assert "homogeneous estate rather than a placeholder" in out["reason"]
+
+
+def test_variance_still_refuses_a_constant_identity_field():
+    """The control on the test above, and the sha1 case itself: the exemption
+    must not swallow the thing the axis exists for."""
+    recs = _population(25, "sha256", "0" * 64)
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW)
+    assert out["passed"] is False
+    assert "identity field whose value space is large" in out["reason"]
+    # A refusal carries no `axes` block: the later axes were never reached, so
+    # reporting them would claim checks that did not run.
+    assert "axes" not in out
+
+
+def test_every_identity_field_is_one_this_platform_filters_on():
+    """The exemption set's premise: these are the fields used as NEEDLES, so a
+    placeholder in one of them produces a false negative on a lookup. A field
+    nobody filters on cannot cause that, and does not belong here."""
+    needles = set(fc.ALERT_HASH_FIELDS.values()) | {"device.hostname"}
+    assert needles <= fc._IDENTITY_FIELDS, (
+        f"a field this platform filters on is not covered by the variance "
+        f"axis: {sorted(needles - fc._IDENTITY_FIELDS)}"
+    )

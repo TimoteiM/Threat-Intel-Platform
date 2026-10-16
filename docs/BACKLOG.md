@@ -1721,6 +1721,38 @@ failure mode is that it looks like a success and therefore gets no scrutiny.
 median over the whole population carried the 319 never-resolved zeros and came
 out at 584 s.
 
+### ⛔ The boundary must NOT convert sentinels by shape
+
+**JARM's leading zeros mean no TLS handshake was completed. That is a
+measurement. `sha1`'s forty zeros are an absence. The two are
+indistinguishable by pattern and opposite in meaning.**
+
+A rule like *"all-zeros becomes absence"* is the obvious implementation of
+today's lesson, it is what anyone applying it mechanically would write, and it
+would **silently destroy a real Hybrid Analysis finding** — turning "we
+completed no TLS handshake with this host" into "we do not know whether we
+did".
+
+So the conversion is **per field, against the vendor's documented meaning for
+that field**, and a field the boundary has no rule for arrives **`unmapped`**
+rather than being guessed at in either direction. Guessing toward absence
+destroys measurements; guessing toward value is the defect we started with.
+Unmapped is the only safe default, and it is also the one that makes the gap
+visible.
+
+### Three classes wearing one label, and the boundary treats them differently
+
+| class | fields | what it means | conversion |
+|---|---|---|---|
+| **Dead** | `sha1` 1,953/1,953, `seconds_to_triaged` 2,016/2,047 | no information at any time | **absence, unconditionally** |
+| **State-recoverable** | `seconds_to_resolved` 319/2,047, matching the open stage *exactly* | a badly-typed **state** field — zero means *open* | **recover it, losslessly.** Not a landmine: `0` → `state: open`, and the field keeps its meaning for the other 1,728 |
+| **Sparse** | `ioc_context` 1,786/1,993, `associated_files` 134/203 | real fields, mostly empty | leave as a value, and **whatever consumes it must expect nothing as the normal case** — `associated_files` has content in **69 records of 2,047** |
+
+The middle row is the one that was mislabelled first: `seconds_to_resolved`
+was called a landmine alongside `seconds_to_triaged`, and it is not. Its zeros
+land exactly on the 319 open records, so the conversion is a type fix rather
+than a discard.
+
 ### A second vendor, already in our stored evidence
 
 Found while sweeping for sha1 damage: **JARM TLS fingerprints** from Hybrid
