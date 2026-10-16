@@ -1595,6 +1595,22 @@ and the alerts variant hydrates them. Do this one first.
 
 ## 33 — add the nonsense-value check to `alerts_field_control`
 
+**DONE 2026-10-16, with all four axes rather than only the nonsense check.**
+Verified live: `sha1` is now refused *by the control itself* — "carries exactly
+ONE distinct value across the 25 most recent alerts, so filtering on it proves
+only that the API echoes its own sentinel" — while `sha256` (18 distinct),
+`md5` (14) and `device.hostname` (5) still pass, each with a nonsense value
+returning nothing. `behaviors.sha256` still fails at axis 1.
+
+`reference` is optional and a pass without one says so in its own reason, so
+axis 4b is never implied when it was not checked. Eight new tests in the
+dangerous direction, including the sha1 case end to end and an
+accepted-and-ignored field. The test fake also had to be corrected: it
+honoured the field *name* and ignored the *value*, so it modelled an API that
+ignores its own filters — a fake more permissive than the provider certifies
+behaviour the provider does not have, which is the same error as the control
+it was testing.
+
 **`alerts_field_control` is already correct and must not be changed except to
 add one call.** It passes on `total > 0` and never requires the sampled row to
 be inside the page — which is exactly right, and is why it survived while two
@@ -1677,14 +1693,43 @@ The honest-absence convention protects code that goes *through* it. **Every
 vendor payload arrives with absence already encoded as a value**, and nothing
 converts it. Enumerated over this tenant's 2,047 alerts:
 
-| field | the sentinel | scale |
-|---|---|---|
-| **`sha1`** | **forty zeros** | **1,953 of 1,953 — one distinct value** |
-| `seconds_to_triaged` | `0` | 2,016 of 2,047 (98.5%) |
-| `seconds_to_resolved` | `0` for never-resolved | 319 of 2,047 |
-| `ioc_context` | `{}` | 1,786 of 1,993 |
-| `associated_files` | `[]` | 134 of 203 |
-| `aggregate_id` | `""` | 41 of 2,047 |
+Every row carries its denominator, because a sentinel on 134 of 140 records
+carrying the field is a **dead field** and on 134 of 1,900 it is ordinary
+sparsity:
+
+| field | the sentinel | sentinel / carrying the key | reading |
+|---|---|---|---|
+| **`sha1`** | **forty zeros** | **1,953 / 1,953 — 100%, one distinct value** | **dead field** |
+| `seconds_to_triaged` | `0` | 2,016 / 2,047 — 98.5% | **effectively dead: 31 real points** |
+| `ioc_context` | `{}` | 1,786 / 1,993 — 89.6% | mostly absent |
+| `associated_files` | `[]` | 134 / 203 — 66.0% | mostly absent, and sparse to begin with |
+| `seconds_to_resolved` | `0` where never resolved | 319 / 2,047 — 15.6% | **exactly the open stage** |
+| `aggregate_id` | `""` | 41 / 2,047 — 2.0% | ordinary sparsity |
+
+### ⚠️ `seconds_to_triaged` is a KPI landmine, labelled now rather than later
+
+**Zero on 2,016 of 2,047 — thirty-one real data points in the whole
+population.** Anyone who computes *mean time to triage* from this field gets a
+number indistinguishable from instant triage: **the most flattering possible
+result, manufactured entirely out of absence**, on a metric that will end up
+on a slide.
+
+It is written here rather than left to whoever computes it, because the
+failure mode is that it looks like a success and therefore gets no scrutiny.
+`seconds_to_resolved` is the usable field — median 977 s over closed records,
+619 s with the test laptop held out — and even that needed its grain fixed: a
+median over the whole population carried the 319 never-resolved zeros and came
+out at 584 s.
+
+### A second vendor, already in our stored evidence
+
+Found while sweeping for sha1 damage: **JARM TLS fingerprints** from Hybrid
+Analysis, 62-character strings whose leading zeros are JARM's convention for
+*no handshake data*. Present at
+`hybrid_analysis.items[].raw_summary.behavior_details.connections[].tlsFingerprint.jarm`
+on 357 sampled rows of `evidence.evidence_json` and 302 of
+`collector_results.evidence_json`. So this is not a Falcon problem; it is
+every vendor, and the boundary is the only place to deal with it once.
 
 **The `sha1` one was live and shipped.** `ALERT_HASH_FIELDS` mapped a
 40-character digest to `sha1`, so every SHA-1 indicator lookup filtered on a
@@ -1701,14 +1746,38 @@ at 584 s where the closed-record median is 977 s.
 
 Two items:
 
-1. **A vendor boundary per integration** — one function per vendor that takes
-   a raw record and returns one whose absences are kinds, with the sentinels
-   above enumerated in it. Callers then cannot meet the raw payload, which is
-   the same move as `Page` and `Concentrated`: the type removes the option.
-2. **The field control needs a variance check** (folded into item 33): a
-   sampled value from a field with **one distinct value** satisfies a
-   known-present control trivially. The control must require the field to hold
-   more than one distinct value across its sample, or the pass is vacuous.
+1. **A vendor boundary per integration, and it only works if it is the ONLY
+   way a payload enters.** One function per vendor taking a raw record and
+   returning one whose absences are kinds — but the **output type has to make
+   raw access impossible**: accessors returning *a value or an absence*, never
+   the underlying dict. If callers can still reach `record["sha1"]`, they
+   will, and we are back to a registry that declares correctly while the
+   consumer goes around it — which is exactly what happened to `Page.complete`
+   for a day.
+
+   This is the **third application of the same move**, and two of the three
+   have already held where a documented rule did not:
+
+   | type | removes the option of | held? |
+   |---|---|---|
+   | `Page(rows, total, complete, reason)` | reading a page as a population | yes — and the regression it then caught was found by rule 23, not by the type |
+   | `Concentrated(value, …, held_out, …)` | reporting a pooled rate without its dominant term | new |
+   | the vendor record | meeting a raw payload | **this item** |
+
+   Treat it as the house approach rather than three coincidences: a rule a
+   caller must remember is held until the next hurried fix; a return type is
+   held by the compiler.
+2. **The field control needs axes 2 and 4** (item 33): a sampled value from a
+   field with **one distinct value** satisfies a known-present control
+   trivially, and more fundamentally a reference value drawn from the system
+   under test verifies a round trip rather than a capability. See README rule
+   19's four axes.
+
+3. **`cape_normalizer` is in scope, not done.** It shapes data; it does not
+   name absence. That is the layer-that-answers error one more time — a
+   normaliser that answers about the *shape* of a payload while the question
+   is whether a field's value means anything — and the sandbox path is already
+   load-bearing for email investigations, so it is not a future concern.
 
 ## 36 — extend the production/test classification to Falcon devices
 

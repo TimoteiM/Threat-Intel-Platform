@@ -1338,9 +1338,33 @@ negative from it is meaningless. No Falcon field behaves that way today
 (`behaviors.sha256` with a real digest returns 0 of 0), which is a measured
 property of the provider and not a thing to rely on for free.
 
-**A field control is three parts:** known-present → `total ≥ 1`; nonsense →
-`total = 0`; and the total is read. The middle one is the only part that
-catches a filter being ignored. Rule 21 owns the second question in the table.
+#### The four axes, as a set
+
+Assembled one axis at a time over a single day, each from a different live
+defect, so they are written as a set rather than discovered again:
+
+| # | question | answered by | the defect it caught |
+|---|---|---|---|
+| 1 | Does the field name mean anything? | `total ≥ 1` on a **known-present** value | `behaviors.sha256` — 200 with zero rows for every hash |
+| 2 | Is the filter actually applied? | a **nonsense** value returns `total = 0` | the hazard a field accepted-and-ignored would pose |
+| 3 | Did I see everything? | returned count against `total`, **with a sort** | `limit: 20` of 29, both confirmed records outside the page |
+| 4 | Can it match the kind of value I will pass? | a reference value of **external provenance**, plus variance in the field's own distribution | `sha1` — forty zeros on 1,953 of 1,953 |
+
+**Axis 4 is the one that is not a patch.** The control sampled its test value
+*from the API's own response*, so it filtered the sentinel against itself and
+got 1,953 rows. **It verified a round trip, not a capability.** A control whose
+reference value is drawn from the system under test inherits that system's
+defects.
+
+Variance catches the degenerate case — one distinct value is trivially
+satisfied — but the general fix is **provenance**: the reference value comes
+from outside. Hash a file you hold, or take a digest from a public corpus, and
+confirm the field matches a *real* value of that kind rather than its own
+echo. That also catches what variance cannot: a field whose values are
+plentiful and varied but drawn from a **different namespace** than the thing
+you will pass it.
+
+Rule 21 owns axis 3.
 
 #### A discriminator must differ between the states it claims to separate
 
@@ -1602,3 +1626,33 @@ inherit.** So:
 The same two queries also catch the thing rule 16's concentration check is
 for: resolving 182 hostnames is what revealed that one of them was 70% of the
 corpus.
+
+### Rule 25 — a retraction has to be total
+
+**A claim has copies, so correcting it means correcting all of them.** When a
+rule or a reason changes, enumerate everywhere it lives — README, memory,
+spec prose, test fixtures, code comments, commit history you can still
+amend — and fix every copy, **because the uncorrected copy is the one that
+gets cited.**
+
+Two instances in one day, and they are the same shape:
+
+| the retracted claim | the stale copy | how it would have resurfaced |
+|---|---|---|
+| "no Falcon alert field holds a domain" — measured false | a **test** asserting the literal sentence | the test certified the false reason for weeks, and would have blocked the correction |
+| "a control must return the row you took the value from" — reproduces the bug it fixes | a **memory file** still carrying the merged formulation | it would have been recalled in a later session as current guidance |
+
+The test case is the more dangerous of the two, because a stale assertion does
+not merely sit there: it actively defends the retracted claim against the
+correction. The memory case is the more insidious, because nothing in the
+repository contradicts it and it comes back wearing the authority of a
+considered note.
+
+Hence the companion rule already in place: **a test may pin a decision, never
+the decision's reason** (rule 20's third corollary). A reason with no copies
+cannot go stale.
+
+Practically, when something is retracted: `grep` the claim's distinctive
+phrase across the repo and the memory directory, not just the file you were
+editing. Two of today's three retractions had a copy somewhere else, and the
+phrase was the thing that found it.

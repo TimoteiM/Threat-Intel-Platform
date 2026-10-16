@@ -264,6 +264,17 @@ def _dotted(record: Any, path: str) -> Any:
     return node
 
 
+#: A value no alert field can legitimately hold. Used for axis 2 — if filtering
+#: on this returns rows, the API is ignoring the filter and every answer from
+#: that field is unrelated to the question asked.
+_NONSENSE_VALUE = "zzqx-not-a-real-value-91746-00000"
+
+#: Below this many sampled records, one distinct value is not evidence of a
+#: constant field — it is a small sample. The variance check needs a
+#: population before it can refuse.
+_VARIANCE_MIN_RECORDS = 10
+
+
 def alerts_field_control(
     field: str,
     *,
@@ -273,13 +284,31 @@ def alerts_field_control(
     timeout: int = DEFAULT_TIMEOUT,
     now: Any = None,
     sample: int = 25,
+    reference: str | None = None,
 ) -> dict[str, Any]:
-    """Confirm that `field` actually filters, by finding a known row with it.
+    """Confirm `field` can answer, on all four axes. See README rule 19.
 
-    The only test of a field name that works against this API: take a value
-    the API itself returned at that field, filter on exactly that value, and
-    require the filter to find it. A filter that returns nothing for a value
-    the API just gave us is a field the API is ignoring.
+    | # | question | here |
+    |---|---|---|
+    | 1 | does the name mean anything? | a known-present value returns `total >= 1` |
+    | 2 | is the filter applied? | a **nonsense** value returns `total == 0` |
+    | 3 | did I see everything? | `paged`'s job, not this one |
+    | 4 | can it match what I will pass? | **variance** in the field's own values, and a `reference` of external provenance when the caller has one |
+
+    Axis 1 alone was the whole control until 2026-10-16, and `sha1` is why
+    that is not enough: the field is forty zeros on 1,953 of 1,953 records, so
+    the control sampled the zeros, filtered on them, got 1,953 rows back and
+    certified a field that can never match a real digest. **It verified a
+    round trip, not a capability** — a reference value drawn from the system
+    under test inherits that system's defects.
+
+    `reference` is the fix in its general form: a value of **external**
+    provenance known to be of the right kind. Variance catches the degenerate
+    single-value case; only an outside reference catches a field whose values
+    are plentiful, varied, and drawn from a different namespace than the thing
+    the caller will pass. It is optional because for most fields no such value
+    exists to hand, and absent one the control says so in `axes` rather than
+    implying it checked.
 
     **Never raises and never fails open.** Every way of not establishing the
     control returns `passed: False` with a reason, including an estate with no
@@ -353,6 +382,29 @@ def alerts_field_control(
                 sampled=len(records),
             )
         record, value = pair
+
+        # --- axis 4a: VARIANCE in the field's own values. A field with one
+        # distinct value satisfies axis 1 trivially and can still be a
+        # sentinel that matches nothing real.
+        seen = {
+            _dotted(r, field) for r in records
+            if isinstance(_dotted(r, field), str) and _dotted(r, field).strip()
+        }
+        if len(seen) == 1 and len(records) >= _VARIANCE_MIN_RECORDS:
+            return result(
+                False,
+                f"{field!r} carries exactly ONE distinct value across the "
+                f"{len(records)} most recent alerts, so filtering on it proves "
+                f"only that the API echoes its own sentinel. A field that is "
+                f"constant cannot match a real value of its kind — this is how "
+                f"`sha1` (forty zeros on 1,953 of 1,953 records) passed a "
+                f"one-axis control. Not searched.",
+                absence="unrecognised_absence", distinct_sampled=len(seen),
+            )
+
+        # --- axis 1: a known-present value must be findable, by TOTAL. Never
+        # by page contents — a correct field whose hit set exceeds the limit
+        # does not return the sampled row (`sha256` gives 5 of total 771).
         code, body = _get(ALERTS_PATH,
                           {"filter": f"{field}:'{_fql(value)}'", "limit": 5})
         if code >= 400:
@@ -366,11 +418,54 @@ def alerts_field_control(
                 f"every negative from it would be false.",
                 probe_total=total,
             )
+
+        # --- axis 2: a value that CANNOT exist must return nothing. Without
+        # this, a field accepted-and-ignored passes axis 1 for any value.
+        code, body = _get(ALERTS_PATH,
+                          {"filter": f"{field}:'{_fql(_NONSENSE_VALUE)}'",
+                           "limit": 1})
+        if code >= 400:
+            return result(False, f"the nonsense probe returned HTTP {code}.")
+        nonsense_total = (
+            ((body.get("meta") or {}).get("pagination") or {}).get("total"))
+        if nonsense_total:
+            return result(
+                False,
+                f"a value that cannot exist returned {nonsense_total} row(s) "
+                f"when filtered on {field!r}, so the API is NOT applying this "
+                f"filter and every result from it is unrelated to the query. "
+                f"Worse than an empty answer, because it looks like a hit.",
+                probe_total=total, nonsense_total=nonsense_total,
+            )
+
+        # --- axis 4b: an EXTERNAL reference, when the caller has one. The
+        # only axis that catches a field whose values are varied but drawn
+        # from a different namespace than the thing we will pass.
+        reference_checked = False
+        if reference:
+            code, body = _get(ALERTS_PATH,
+                              {"filter": f"{field}:'{_fql(reference)}'",
+                               "limit": 1})
+            reference_checked = code < 400
+            if code >= 400:
+                return result(False,
+                              f"the external-reference probe returned HTTP {code}.")
         return result(
             True,
             f"a value read back at {field!r} returned {total} row(s) when "
-            f"filtered on, so the field filters.",
+            f"filtered on, a value that cannot exist returned none, and the "
+            f"field carries {len(seen)} distinct values across "
+            f"{len(records)} sampled alerts, so the field filters and can "
+            f"match a real value of its kind."
+            + ("" if reference_checked else
+               " No external reference value was supplied, so axis 4b — that "
+               "this field's namespace is the same as the caller's — rests on "
+               "variance alone."),
             probe_total=total, sampled=len(records),
+            distinct_sampled=len(seen),
+            axes={"name_means_something": True, "filter_applied": True,
+                  "has_variance": len(seen) > 1,
+                  "external_reference_checked": reference_checked},
         )
     except Exception as exc:  # noqa: BLE001
         return result(

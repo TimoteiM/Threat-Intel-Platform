@@ -41,28 +41,50 @@ def _page(ids):
 
 
 class _Http:
-    """A Falcon that behaves the way the real one was measured to behave."""
+    """A Falcon that behaves the way the real one was measured to behave.
 
-    def __init__(self, *, record, filterable, unfiltered=("id-1",)):
+    **This fake honoured the field NAME and ignored the VALUE until
+    2026-10-16**, which meant it returned rows for a value that cannot exist —
+    so it modelled an API that ignores its own filters, and the control's
+    nonsense probe failed against it. The real API returns `total: 0` for a
+    value no record holds. A fake that is more permissive than the provider
+    certifies behaviour the provider does not have, which is the same error as
+    the control it was testing.
+
+    `records` is the population; a filter matches a record when the record's
+    value at that field equals the filtered value.
+    """
+
+    def __init__(self, *, record, filterable, unfiltered=("id-1",),
+                 records=None, ignores_filters=False):
         self.record = record
+        self.records = list(records) if records is not None else [record]
         self.filterable = set(filterable)
         self.unfiltered = list(unfiltered)
         self.filters = []
+        # For the dangerous-direction test: an API that accepts a filter and
+        # applies nothing, which axis 2 exists to catch.
+        self.ignores_filters = ignores_filters
 
     def get(self, url, headers=None, params=None, timeout=None):
         f = (params or {}).get("filter")
         if not f:
             return _Resp(200, _page(self.unfiltered))
         self.filters.append(f)
-        field = f.split(":", 1)[0]
+        field, _, raw = f.partition(":")
+        wanted = raw.strip().strip("'")
         # The measured behaviour: an unknown field is a 200 with no rows, NOT
         # an error. This is the whole hazard.
         if field not in self.filterable:
             return _Resp(200, _page([]))
-        return _Resp(200, _page(["id-1"]))
+        if self.ignores_filters:
+            return _Resp(200, _page([f"id-{i}" for i in range(len(self.records))]))
+        hits = [f"id-{i}" for i, r in enumerate(self.records)
+                if str(fc._dotted(r, field)) == wanted]
+        return _Resp(200, _page(hits))
 
     def post(self, url, headers=None, json=None, timeout=None):
-        return _Resp(200, {"resources": [self.record]})
+        return _Resp(200, {"resources": list(self.records)})
 
 
 @pytest.fixture(autouse=True)
@@ -144,7 +166,7 @@ def test_the_control_passes_when_a_read_back_value_filters():
     out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
                                   http=http, now=NOW)
     assert out["passed"] is True
-    assert "abc123" in http.filters[-1]
+    assert any("abc123" in f for f in http.filters)
 
 
 def test_the_control_fails_on_a_field_the_api_silently_ignores():
@@ -177,7 +199,7 @@ def test_a_dotted_path_is_read_out_of_the_nested_record():
     out = fc.alerts_field_control("device.hostname", base_url=BASE,
                                   headers=HEADERS, http=http, now=NOW)
     assert out["passed"] is True
-    assert "EXP-22MY264" in http.filters[-1]
+    assert any("EXP-22MY264" in f for f in http.filters)
 
 
 def test_an_estate_with_no_alerts_is_not_a_pass():
@@ -238,3 +260,105 @@ def test_the_cache_is_per_field():
     fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS, http=http, now=NOW)
     fc.alerts_field_control("md5", base_url=BASE, headers=HEADERS, http=http, now=NOW)
     assert sorted(fc._FIELD_CONTROL_CACHE) == ["md5", "sha256"]
+
+
+# --- axes 2 and 4: the two the control did not have until 2026-10-16 -------
+
+
+def _population(n, field, value, *, vary=False):
+    """n records carrying `field`, constant unless `vary`."""
+    return [{"composite_id": f"c{i}",
+             field: (f"{value}{i}" if vary else value)} for i in range(n)]
+
+
+def test_a_constant_valued_field_is_refused_however_well_it_filters():
+    """THE sha1 case. Forty zeros on 1,953 of 1,953 records: the control
+    samples the zeros, filters on them, gets every row back, and certifies a
+    field that can never match a real digest. It verified a round trip, not a
+    capability.
+    """
+    recs = _population(25, "sha1", "0" * 40)
+    http = _Http(record=recs[0], filterable={"sha1"}, records=recs)
+    out = fc.alerts_field_control("sha1", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW)
+    assert out["passed"] is False, (
+        "a field whose only value is a sentinel passed the control, which is "
+        "how every SHA-1 lookup returned a false negative"
+    )
+    assert out["distinct_sampled"] == 1
+    assert "ONE distinct value" in out["reason"]
+    assert out["absence"] == "unrecognised_absence"
+
+
+def test_a_varied_field_still_passes():
+    """The control on the test above: variance must distinguish two states,
+    not refuse every field."""
+    recs = _population(25, "sha256", "abc", vary=True)
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW)
+    assert out["passed"] is True
+    assert out["distinct_sampled"] == 25
+    assert out["axes"]["has_variance"] is True
+
+
+def test_one_distinct_value_in_a_SMALL_sample_is_not_a_constant_field():
+    """A small sample agreeing is a small sample, not a sentinel. Refusing
+    here would fail a correct field on a quiet estate."""
+    recs = _population(3, "sha256", "abc")
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW)
+    assert out["passed"] is True
+    assert out["axes"]["has_variance"] is False, (
+        "it passed, and it must still report that variance was not established"
+    )
+
+
+def test_a_field_that_is_accepted_and_ignored_is_refused_by_the_nonsense_probe():
+    """Axis 2, and the failure it catches is the dangerous one: rows come back
+    for anything, so every answer looks like a hit and none of them is about
+    the question asked."""
+    # A flat field name: `_dotted` WALKS a dotted path, so a literal
+    # "device.hostname" key is not what it reads — a fixture detail that made
+    # this test fail for the wrong reason on first run.
+    recs = _population(25, "filename", "run", vary=True)
+    http = _Http(record=recs[0], filterable={"filename"}, records=recs,
+                 ignores_filters=True)
+    out = fc.alerts_field_control("filename", base_url=BASE,
+                                  headers=HEADERS, http=http, now=NOW)
+    assert out["passed"] is False
+    assert out["nonsense_total"] == 25
+    assert "cannot exist returned" in out["reason"]
+    assert "looks like a hit" in out["reason"]
+
+
+def test_the_nonsense_probe_is_actually_sent():
+    recs = _population(25, "sha256", "abc", vary=True)
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                            http=http, now=NOW)
+    assert any(fc._NONSENSE_VALUE in f for f in http.filters), (
+        "axis 2 was not exercised, so a field accepted-and-ignored would pass"
+    )
+
+
+def test_a_pass_without_an_external_reference_says_so():
+    """Axis 4b rests on provenance, and the control must not imply it checked
+    a namespace it had no outside value for."""
+    recs = _population(25, "sha256", "abc", vary=True)
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW)
+    assert out["axes"]["external_reference_checked"] is False
+    assert "No external reference value was supplied" in out["reason"]
+
+
+def test_an_external_reference_is_sent_when_supplied():
+    recs = _population(25, "sha256", "abc", vary=True)
+    http = _Http(record=recs[0], filterable={"sha256"}, records=recs)
+    out = fc.alerts_field_control("sha256", base_url=BASE, headers=HEADERS,
+                                  http=http, now=NOW, reference="d" * 64)
+    assert out["passed"] is True
+    assert any("d" * 64 in f for f in http.filters)
+    assert out["axes"]["external_reference_checked"] is True

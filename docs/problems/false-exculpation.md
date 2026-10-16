@@ -185,3 +185,55 @@ Three things that follow, all cheap:
    script. Writing "0 (cannot join: column is varchar, compared to a uuid)" in
    the output costs one line and is the difference between a finding and a
    false negative that happened to agree with the truth.
+
+---
+
+## The sha1 sentinel, and its damage count — 2026-10-16
+
+`ALERT_HASH_FIELDS` mapped a 40-character digest to Falcon's `sha1`. That
+field is present on **1,953 of this tenant's 2,047 alerts and carries exactly
+one distinct value: forty zeros.** So every SHA-1 indicator lookup filtered a
+real digest against a constant and returned a clean zero.
+
+**The field control passed**, which is why this needed its own axis rather
+than a patch: the control samples a value the API itself returned — the
+zeros — filters on it, gets 1,953 rows, and certifies that the field filters.
+It does. It cannot match a real digest. See README rule 19's fourth axis.
+
+### Which path established it
+
+"The field is a sentinel" and "we read it from a path that does not populate
+it" are two conclusions with one observation, and neither 73 nor 91 keys was
+the schema earlier the same day. Three independent paths, and a control:
+
+| path | result |
+|---|---|
+| `entities/alerts/v2` via `paged_alerts` | 1,953 carry `sha1`, **1 distinct**, all zeros |
+| `queries/alerts/v2` filtering `sha1:'00…0'` | **total = 1,953** — Falcon's own index holds the zeros |
+| `entities/alerts/v2` hit directly, no helper | 37 of 50 carry it, 1 distinct, all zeros |
+| **control: `sha256` on the same 50 records** | 44 present, **30 distinct** — the path does not flatten hashes |
+
+Settled: the field is a sentinel, not a read-path artefact.
+
+### The damage count — nil, and established rather than assumed
+
+The field-map sweep of 2026-10-12 is the precedent, so the same sweep ran:
+
+| question | answer |
+|---|---|
+| SHA-1 lookups ever performed on the affected path | **0** of 27 `indicator_lookups` — 8 domain, 4 hostname, 5 ip, 2 url, 1 unparsed, 6 sha256, 1 md5 |
+| stored records carrying a Falcon `detections_field` | **0**, across 13 json columns and ~40,000 rows |
+| stored verdicts derived from a sentinel comparison | **none** — nothing to re-run or mark |
+
+So no analyst was ever told "the EDR has nothing" on the back of this. The
+defect was live and shipped, and it had not yet been exercised.
+
+**One finding from the sweep, and it is a second vendor's sentinel.** Searching
+stored evidence for forty zeros returned 370 + 757 + 581 rows, which looked
+like damage. Extracting the actual values at their JSON paths showed **none of
+them is a forty-zero value**: they are 62-character **JARM TLS fingerprints**
+from Hybrid Analysis, whose leading zeros are JARM's own convention for *no
+handshake data* — absence encoded as a value, in a second vendor, already
+stored in our evidence. `LIKE '%0…0%'` matched a substring of a longer string,
+which is the sweep's own version of the trap it was looking for, and the fix
+was to extract values rather than grep the serialisation. See backlog 35.
