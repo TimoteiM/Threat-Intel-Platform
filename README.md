@@ -1684,6 +1684,15 @@ phrase across the repo and the memory directory, not just the file you were
 editing. Two of today's three retractions had a copy somewhere else, and the
 phrase was the thing that found it.
 
+**And it applies to values, not only to sentences.** `risk_level` was removed
+from a step's prose as an uncalibrated constant — and the same sentence still
+carried `confidence`, which is **also** a constant, by a different route:
+it derives from `len(rationale)`, rationale gets a fallback item when empty,
+and no sub-score has ever crossed its rationale threshold, so all 52 runs read
+`low`. The band was renamed, not removed. A retraction has to chase every
+*expression* of the thing, and "is this other value in the same sentence also
+constant?" is the question that catches the second copy.
+
 ### Rule 26 — run every new control against a case it must refuse
 
 **Before trusting a control, give it something it has to reject.** A control

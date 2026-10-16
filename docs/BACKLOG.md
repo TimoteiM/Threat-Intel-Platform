@@ -1956,3 +1956,84 @@ Two things to decide, and they are different decisions:
 * **Step 8 rests on "1 named signal" while step 7 names three contributors.**
   Signals and score contributors are different things and read as a
   contradiction.
+
+## 38 — 27 of the risk scorer's 100 points are structurally unreachable
+
+The bands were the symptom; **the ceiling is the finding.** Seven weights
+summing to 1.00 × 100 can reach 100, and the observed maximum across the whole
+history is 27. Decomposing the composite into its seven inputs over the 52
+scored runs:
+
+| component | weight | min | max | distinct | exactly 0 | points reachable |
+|---|---|---|---|---|---|---|
+| `lexical_score` | .20 | 0.0 | **0.9998** | 11 | 1/52 | 20.0 |
+| `behavior_score` | .16 | 0.0 | 0.29 | 2 | **51/52** | 4.6 |
+| `content_ml_score` | .12 | 0.03 | 0.115 | 6 | 0/52 | 1.4 |
+| **`attachment_score`** | **.12** | 0.0 | **0.0** | **1** | **52/52** | **0.0** |
+| `sandbox_score` | .10 | 0.0 | 0.9 | 3 | 33/52 | 9.0 |
+| `infrastructure_score` | .15 | 0.0 | 0.092 | 11 | 34/52 | 1.4 |
+| **`opencti_score`** | **.15** | 0.0 | **0.0** | **1** | 18/18, **absent on 34/52** | **0.0** |
+
+**`attachment_score` and `opencti_score` are zero on every run they appear in.
+That is 27 of the nominal 100 points that cannot be reached at all** — and it
+is the same defect one layer down, exactly as predicted: a sub-score wired to
+something that never produces a value. The ceiling the observed maxima imply is
+**36.4**, against an observed composite maximum of 27.
+
+So `14 out of 100` was a wrong scale replacing a wrong label. Three of the four
+remaining inputs are near-dead too: `behavior` is zero on 51 of 52,
+`infrastructure` tops out at 0.092 of its 0.15, `content_ml` at 0.115 of its
+0.12. **In practice this is a 0–36 scale with one load-bearing input
+(`lexical`, 20 of the 36).**
+
+Two things to establish, and they are different:
+
+1. **Why are `attachment_score` and `opencti_score` always zero?** Unconfigured
+   integration, an unwritten field, a scorer reading the wrong key, or a
+   corpus with no attachments worth scoring. `attachment_score` being zero on
+   all 52 while attachments *were* inspected (step 2 renders for them) points
+   at the third.
+2. **Whether the weights are defensible at all.** `DEFAULT_WEIGHTS` carries no
+   provenance either — seven round numbers summing to 1.00 — so this is the
+   `RECENT_DAYS` shape at the level of the model rather than the threshold.
+
+### The scorer does separate clean from not-clean, so recalibration is worth it
+
+The cheap test, on data already held — 45 runs with both a score and a verdict:
+
+| verdict | n | min | median | max |
+|---|---|---|---|---|
+| clean | 12 | 9 | **10** | 20 |
+| inconclusive | 5 | 20 | 20 | 26 |
+| malicious | 4 | 14 | **23** | 26 |
+| suspicious | 24 | 10 | **26** | 27 |
+
+**Malicious median 23 against clean median 10** — the direction is right and
+the gap is large, so the scorer has signal and only the bands were wrong.
+Stated honestly: the ranges **overlap** (malicious 14–26, clean 9–20) and
+n=4 for malicious, so separation is *consistent with* signal and not
+established by it.
+
+One wrinkle worth keeping: **`suspicious` scores higher than `malicious`**
+(26 against 23). The scorer separates clean from not-clean; it does not rank
+within not-clean.
+
+### The 62 runs with no score are not a missing stage
+
+| run `status` | runs |
+|---|---|
+| queued | 37 |
+| cancelled | 18 |
+| failed | 4 |
+| **completed** | **3** |
+
+**59 of 62 never finished**, so the absence is the run, not the scorer. The
+residue is **3 completed runs with no score**, which is the only part that
+needs explaining and is small enough to read individually.
+
+### Divergence as a trigger is now UNMEASURABLE, not not-yet-measurable
+
+Removing the band withdrew one of the two sides, so there is no second varying
+assessment to diverge from. **What would revive it: a second stage whose
+output actually varies.** Until one exists this cannot be settled by any
+measurement, and it should not sit in the backlog looking as though it could.

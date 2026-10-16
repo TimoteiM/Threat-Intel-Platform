@@ -315,40 +315,62 @@ def _inspection_findings(inspection: Any) -> list[str]:
 
 
 def _risk_text(risk: Any) -> str:
-    """The score, WITHOUT its band label. Measured, 2026-10-16.
+    """The score, with what it was reachable out of. Measured 2026-10-16.
 
-    This rendered `low (score 14, confidence low)`, and `low` had no standing
-    to be in a sentence beside a verdict. Over all 114 email runs, 52 carry a
-    `risk_score`:
+    Three things were wrong with this sentence and each was found by going one
+    level further down:
 
-        range 9 to 27, median 21, MAX 27
-        the low band is 0-34, so all 52 are "low" — 100%, one distinct value
+    1. `low (score 14, …)` — the band. `risk_level` is a CONSTANT: 52 of 52
+       runs are `low`, because the 35/70 thresholds have never been crossed.
+    2. `…, confidence low` — **the band renamed, not removed.** `confidence`
+       derives from `len(rationale)`, rationale gets a fallback item when
+       empty, and no sub-score has ever crossed its rationale threshold. So
+       all 52 runs have exactly 1 rationale item and `confidence` is `low` on
+       all 52. A second constant in the same sentence.
+    3. `out of 100` — **a wrong scale replacing a wrong label.** Decomposing
+       the composite into its seven inputs:
 
-    `risk_level` is therefore a **constant** in this platform's entire
-    history: the 35 and 70 thresholds in `risk_aggregator` have never once
-    been crossed, carry no comment and no measured provenance, and sit far
-    outside the range the scorer actually produces. A field with one distinct
-    value read as a judgement is the `sha1` shape in our own code.
+           lexical          max 0.9998   weight .20   ->  20.0 pts reachable
+           behavior         max 0.29     weight .16   ->   4.6   (zero on 51/52)
+           content_ml       max 0.115    weight .12   ->   1.4
+           attachment       max 0.0      weight .12   ->   0.0   (zero on 52/52)
+           sandbox          max 0.9      weight .10   ->   9.0   (zero on 33/52)
+           infrastructure   max 0.092    weight .15   ->   1.4   (zero on 34/52)
+           opencti          max 0.0      weight .15   ->   0.0   (absent on 34/52)
 
-    So the label is dropped rather than arbitrated against the interpretation
-    verdict — there was never a disagreement between two assessments, only a
-    constant printed beside a variable. Of 45 runs carrying both, the
-    verdict side takes four values (suspicious 24, clean 12, inconclusive 5,
-    malicious 4) and the band side takes one.
+       `attachment_score` and `opencti_score` are **0 on every run**, so
+       **27 of the nominal 100 points are structurally unreachable** and the
+       ceiling the observed maxima imply is 36.4 — against an observed
+       composite maximum of 27. "14 out of 100" reads as very low; 14 against
+       a reachable 36 is mid-range.
 
-    The raw score stays, because it is a real measurement on a stated scale —
-    a weighted sum of seven 0-1 sub-scores, x100 — and it is rendered with
-    that scale so nobody reads 14 as a count. Restore a band when there is a
-    distribution behind it; see backlog 37.
+    So the sentence states the score and, from this run's OWN components, how
+    many inputs contributed nothing — a score without its distribution is a
+    proportion without its denominator, and the denominator is computed here
+    rather than hardcoded so it stays true per run. See backlog 38.
     """
     data = risk if isinstance(risk, dict) else {}
     score = data.get("risk_score")
-    confidence = data.get("confidence")
     if score is None:
         return "no score was produced"
-    text = f"a composite risk score of {score} out of 100"
-    if confidence:
-        text += f", at {confidence} confidence"
+    components = data.get("components") if isinstance(data.get("components"), dict) else {}
+    weights = data.get("weights") if isinstance(data.get("weights"), dict) else {}
+    silent = [k for k, v in components.items() if isinstance(v, (int, float)) and v == 0]
+    text = f"a composite score of {score}"
+    if components and weights:
+        lost = sum(float(weights.get(k) or 0.0) for k in silent)
+        reachable = int(round((1.0 - lost) * 100))
+        text += f" out of a reachable {reachable}"
+        if silent:
+            text += (
+                f" — {len(silent)} of this scorer's {len(components)} inputs "
+                f"contributed nothing on this run "
+                f"({', '.join(sorted(k.replace('_score', '') for k in silent))}), "
+                f"so {int(round(lost * 100))} of the nominal 100 points were "
+                f"not in play"
+            )
+    else:
+        text += " out of 100"
     return text
 
 
