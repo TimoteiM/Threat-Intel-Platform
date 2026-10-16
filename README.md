@@ -1242,3 +1242,47 @@ And it is a guard rather than a rule because a rule was tried. The
 pluralisation helper existed, was declared, had a test — and the first producer
 written against it built the phrase with an f-string and shipped
 "1 attachments". A rule is advice. The renderer is where it holds.
+
+### Rule 19 — list the keys before writing a predicate against a payload
+
+**Don't check carefully. List.** Before writing any predicate, filter, template
+slot or presence test against a payload, enumerate that payload's keys —
+`jsonb_object_keys`, `jsonb_each_text`, `sorted(d.keys())`, whatever the store
+offers.
+
+The reason is not diligence, it is that **care does not help.** A check written
+against a guessed field *inherits the guess*, so no amount of rigour in the
+predicate escapes it. That is not a hypothesis:
+
+| # | the guess | what it did |
+|---|---|---|
+| 1 | `selected_count` (payload: `looked_up`) | rendered "0 worth checking" beside a step that asked six sources |
+| 2 | `final_risk.verdict` (payload: `risk_level`) | rendered "no verdict" on a run with a verdict |
+| 3 | `filename` (payload: `path`) | rendered "an unnamed file" for every file |
+| 4 | `log_context.events` / `.logs` (payload has **neither**) | an emptiness check that reported "not empty" for all 2,833 rows — **inside the query written to catch #3** |
+
+The fourth is the lesson. It was a *careful* check, written knowing about the
+first three, and it inherited a new guess and failed silently. What broke the
+loop was not a better predicate — it was running `jsonb_object_keys` and
+reading the fourteen keys that are actually there.
+
+One listing would have prevented all four, at a cost lower than any single one
+of the checks that didn't. It is three seconds of query.
+
+Two related traps the same listing habit catches:
+
+- **`-> 'key' IS NOT NULL` is satisfied by a JSON `null`.** It reported
+  400/400 present when the values were null. `jsonb_typeof(...) = 'object'`
+  answers the question asked.
+- **Key present ≠ value present ≠ value non-empty.** "100% with log context"
+  counted the *container*; 695 of 2,833 objects carried no logs at all, and a
+  `status` field had recorded which all along.
+
+And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
+a different row each run.** Two consecutive reads of "the latest" gave
+different payloads, and reading a shape from one row while templating against
+another would have left no trace in the output. Add the primary key to every
+such ordering.
+
+See rule 18 for the guard that stops a guessed field *rendering*; this rule is
+upstream of it and cheaper.

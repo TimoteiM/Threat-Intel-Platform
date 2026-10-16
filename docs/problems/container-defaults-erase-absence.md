@@ -272,3 +272,51 @@ analyst pastes. Same needle, same window: uppercase 9,636 hits, lowercase
 That defect was unreachable while the capability was refused. **Clearing a
 false refusal exposes code that has never run** — the same shape as clearing a
 long-standing test failure, one layer out.
+
+---
+
+## Four guesses, and the fourth was inside the check for the third
+
+2026-10-15/16. Four fields written against an interface that was imagined,
+each rendering plausibly rather than failing:
+
+| # | written | payload actually has | what rendered |
+|---|---|---|---|
+| 1 | `url_triage.selected_count` | `looked_up` | "Triaged 14 links down to **0** worth checking" — beside a step that asked six sources |
+| 2 | `final_risk.verdict` | `risk_level`, `risk_score`, `confidence` | "one score: **no verdict**" on a run with a verdict |
+| 3 | `file_content.files[].filename` | `path`, `kind` | "**an unnamed file**", for every file, while the path was right there |
+| 4 | `log_context.events` / `.logs` | neither exists | `greatest(-1,-1) = -1 ≠ 0`, so an emptiness check reported **"not empty" for all 2,833 rows** |
+
+**The fourth was written to catch the third.** It is a careful check, by an
+author who had just fixed three instances of this exact class, and it inherited
+a fresh guess and failed silently in the direction of success. A check written
+against a guessed field inherits the guess — rigour in the predicate cannot
+escape it, because the predicate is not where the error is.
+
+What broke the loop was `jsonb_object_keys`. Fourteen keys, three seconds, and
+the answer was immediate: `log_count`, `status`, `window`, `sources`,
+`selectors`, `analysis_basis`… no `events`, no `logs`. See README rule 19 —
+**list, don't check.**
+
+### Two neighbours the same listing catches
+
+**`-> 'key' IS NOT NULL` is true for a JSON `null`.** A presence check over
+16,214 alert runs reported `log_context` present in 400/400 sampled rows; the
+values were JSON nulls. `jsonb_typeof(x) = 'object'` is the question that was
+meant. This one is the harder to notice because it sits in the *measurement*
+rather than in the product — nothing renders, so nothing looks wrong.
+
+**Key present ≠ value present ≠ value non-empty.** "100% with log context"
+counted containers. Of 2,833 objects, **695 carry no logs**, and the object's
+own `status` field said so — `unavailable` 613, `empty` 75, `skipped` 7. The
+platform had recorded the distinction and the check read past it, which is
+`recording-a-failure-is-not-reading-it` in a presence test.
+
+### And an unattributable one, which is why it is here
+
+**`ORDER BY created_at DESC LIMIT 1` with no unique tiebreaker returned a
+different row on two consecutive queries.** Timestamps tie. The shape was read
+from one row and the templates would have been written against another, and
+**nothing in the output would have shown it** — the sentences would simply have
+had holes in fields that exist in some runs and not others. Every "latest row"
+ordering needs the primary key appended.

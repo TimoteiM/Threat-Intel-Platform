@@ -159,6 +159,8 @@ def run_alert_body_investigation_task(
             result_json=payload,
             completed_at=datetime.now(timezone.utc),
         )
+
+        _record_alert_investigation(parsed_id, payload, run)
     except Exception as exc:
         logger.exception("Alert-body investigation failed: %s", run_id)
         _update_run(
@@ -272,3 +274,38 @@ def _finalise_log_context(run_uuid: uuid.UUID, row_id: Any, payload: dict[str, A
     except Exception as exc:  # noqa: BLE001
         logger.warning("Log context for run %s could not be finalised: %s", run_uuid, exc)
         return {"status": "unavailable", "log_count": 0}
+
+
+def _record_alert_investigation(run_uuid: uuid.UUID, payload: dict, run: Any) -> None:
+    """Write the investigation record for an alert. Fail-open, by contract.
+
+    Same contract as the email one: a recording bug must never take an
+    investigation down, and the loud half lives on the record —
+    `incomplete_steps` names every step that failed to record, and the page
+    says so above the chain.
+
+    The actor is `automated_ingest` rather than `predates_attribution`, and
+    the distinction is the point: an alert **arrives**, with no human
+    submitting it. Claiming an actor existed and was not recorded would be
+    false here, where it is true of an email upload.
+    """
+    try:
+        from app.models.database import ACTOR_AUTOMATED_INGEST
+        from app.services.alert_investigation_steps import derive
+        from app.services.investigation_recorder import (
+            InvestigationRecorder, persist_sync,
+        )
+
+        recorder = InvestigationRecorder(
+            origin_surface="alert",
+            origin_id=str(run_uuid),
+            tenant_id=getattr(run, "tenant_id", None),
+            actor_kind=ACTOR_AUTOMATED_INGEST,
+        )
+        derive(payload or {}, recorder)
+        summary = (payload or {}).get("summary") or {}
+        verdict = str(summary.get("overall_verdict") or "") or None
+        with Session(sync_engine) as db:
+            persist_sync(recorder, db, verdict=verdict)
+    except Exception:  # noqa: BLE001
+        logger.exception("investigation record not written for alert %s", run_uuid)

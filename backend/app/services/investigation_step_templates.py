@@ -110,6 +110,37 @@ EMAIL_RISK_NO_DRIVERS = "email.risk.no_drivers"
 EMAIL_INTERPRET = "email.interpret"
 STEP_NOT_ASKED = "step.not_asked"
 
+# --- the alert surface ----------------------------------------------------
+#
+# Written against measured statuses, not a presence boolean. `log_context` is
+# present as an OBJECT on 2,833 of 2,833 post-cutover runs and carries logs on
+# only 2,138 of them: `unavailable` 613, `empty` 75, `skipped` 7 — and its own
+# `status` field recorded which all along.
+#
+# `partial` is 1,654 of those 2,138 — 77% — and is a *collapse* that had to be
+# split before anything could claim "ten minutes either side":
+# `window.complete` is False on **all** 1,654, with truncation layered on top
+# (639 window-only, 433 truncated below the 500 cap, 582 truncated at it).
+# So the window claim and the truncation claim are separate kinds rather than
+# one sentence with a clause bolted on.
+ALERT_WHY = "alert.why"
+ALERT_EXTRACT = "alert.extract"
+ALERT_EXTRACT_NONE = "alert.extract.none"
+ALERT_PRIOR = "alert.prior"
+ALERT_PRIOR_NONE = "alert.prior.none"
+ALERT_LOGS_COLLECTED = "alert.logs.collected"
+ALERT_LOGS_PARTIAL_WINDOW = "alert.logs.partial_window"
+ALERT_LOGS_PARTIAL_TRUNCATED = "alert.logs.partial_truncated"
+ALERT_LOGS_PARTIAL_AT_CAP = "alert.logs.partial_at_cap"
+ALERT_LOGS_UNAVAILABLE = "alert.logs.unavailable"
+ALERT_LOGS_EMPTY = "alert.logs.empty"
+ALERT_LOGS_NO_HOST = "alert.logs.no_host"
+ALERT_LOGS_PREDATES = "alert.logs.predates"
+ALERT_ATTACK = "alert.attack"
+ALERT_ATTACK_NONE = "alert.attack.none"
+ALERT_INDICATORS = "alert.indicators"
+ALERT_INDICATORS_NONE = "alert.indicators.none"
+
 TEMPLATES: dict[str, str] = {
     EMAIL_PARSE: (
         "Read the message and extracted {plural(found, 'indicator')}: "
@@ -168,6 +199,85 @@ TEMPLATES: dict[str, str] = {
         "Interpreted the evidence above as {verdict_text}, with "
         "{confidence} confidence, resting on {plural(signals, 'named signal')}."
     ),
+    # --- the alert surface ------------------------------------------------
+    ALERT_WHY: (
+        "This investigation exists because an alert arrived from "
+        "{source_text} naming {subject_text}, and no exclusion suppressed it."
+    ),
+    ALERT_EXTRACT: (
+        "Extracted {plural(investigable, 'indicator')} worth investigating "
+        "from {count(characters)} characters of alert text, setting aside "
+        "{count(excluded)} already excluded."
+    ),
+    ALERT_EXTRACT_NONE: (
+        "Found no investigable indicator in the alert text — nothing in it "
+        "could be looked up anywhere."
+    ),
+    ALERT_PRIOR: (
+        "Checked what this platform already knew and found "
+        "{plural(prior, 'earlier investigation')} of the same indicators, so "
+        "they were reused rather than paid for again."
+    ),
+    ALERT_PRIOR_NONE: (
+        "Checked what this platform already knew about these indicators and "
+        "found nothing."
+    ),
+    # One claim each. `window.complete` is false on every `partial` run, and
+    # truncation is an additional, separate fact — so three kinds, not one
+    # sentence with two optional clauses.
+    ALERT_LOGS_COLLECTED: (
+        "Read the host's own logs around the alert: "
+        "{plural(logs, 'event')} from {host}, over the full window asked for."
+    ),
+    ALERT_LOGS_PARTIAL_WINDOW: (
+        "Read {plural(logs, 'event')} from {host}, but the window asked for "
+        "was not fully available — so this is some of what happened around "
+        "the alert, not all of it."
+    ),
+    ALERT_LOGS_PARTIAL_TRUNCATED: (
+        "Read {plural(logs, 'event')} from {host}. The window was incomplete "
+        "AND the result was truncated before the row limit, so events were "
+        "dropped for a reason this step cannot name."
+    ),
+    ALERT_LOGS_PARTIAL_AT_CAP: (
+        "Read {plural(logs, 'event')} from {host} — the row limit. The window "
+        "was incomplete and the limit was reached, so this is a floor: there "
+        "were more events than were read."
+    ),
+    ALERT_LOGS_UNAVAILABLE: (
+        "The host's logs could not be read for {host}, so what happened "
+        "around the alert is unknown rather than uneventful."
+    ),
+    ALERT_LOGS_EMPTY: (
+        "Read the host's logs around the alert for {host} and the window held "
+        "nothing. The store was asked and answered; this is a real negative."
+    ),
+    ALERT_LOGS_NO_HOST: (
+        "No host logs were read, because the alert names no host — there is "
+        "nothing to fetch a window around."
+    ),
+    ALERT_LOGS_PREDATES: (
+        "No host logs were read. This investigation predates log-context "
+        "collection, which began on {started_text}, so none was ever "
+        "gathered for it."
+    ),
+    ALERT_ATTACK: (
+        "Mapped the alert to MITRE ATT&CK: {listing(techniques)}."
+    ),
+    ALERT_INDICATORS: (
+        "Investigated {plural(investigated, 'indicator')} against external "
+        "sources and reused {count(reused)} already known, finding "
+        "{count(malicious)} malicious and {count(suspicious)} suspicious."
+    ),
+    ALERT_INDICATORS_NONE: (
+        "No indicator was investigated against an external source — every one "
+        "extracted was either excluded or already known."
+    ),
+    ALERT_ATTACK_NONE: (
+        "No ATT&CK technique could be attributed to this alert from the "
+        "evidence gathered."
+    ),
+
     # Rendered for a step that could not be asked at all. Present in the chain
     # on purpose: dropping it would silently shorten the investigation.
     STEP_NOT_ASKED: (
