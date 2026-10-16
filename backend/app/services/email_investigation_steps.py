@@ -235,7 +235,12 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
             T.EMAIL_RISK,
             "Taken together, what do these answers amount to?",
             source="local", target="risk aggregation", response=risk,
-            verdict=str(risk.get("risk_level") or "unknown"),
+            # NOT a verdict. Two stages writing verdicts into their own
+            # columns with nothing arbitrating is backlog 25's shape in a
+            # third domain, and here the contest is not even close: this
+            # column held a constant. The scorer produces evidence; the
+            # interpretation stage declares the verdict.
+            verdict=None,
             cost=_FREE,
             fields={"verdict_text": _risk_text(risk), "drivers": drivers},
         )
@@ -247,7 +252,7 @@ def derive(payload: dict[str, Any], recorder: InvestigationRecorder) -> None:
             T.EMAIL_RISK_NO_DRIVERS,
             "Taken together, what do these answers amount to?",
             source="local", target="risk aggregation", response=risk,
-            verdict=str(risk.get("risk_level") or "unknown"), cost=_FREE,
+            verdict=None, cost=_FREE,
             fields={"verdict_text": _risk_text(risk)},
         )
     else:
@@ -310,17 +315,41 @@ def _inspection_findings(inspection: Any) -> list[str]:
 
 
 def _risk_text(risk: Any) -> str:
-    """`low (score 10, confidence low)`. Read from the real keys."""
+    """The score, WITHOUT its band label. Measured, 2026-10-16.
+
+    This rendered `low (score 14, confidence low)`, and `low` had no standing
+    to be in a sentence beside a verdict. Over all 114 email runs, 52 carry a
+    `risk_score`:
+
+        range 9 to 27, median 21, MAX 27
+        the low band is 0-34, so all 52 are "low" — 100%, one distinct value
+
+    `risk_level` is therefore a **constant** in this platform's entire
+    history: the 35 and 70 thresholds in `risk_aggregator` have never once
+    been crossed, carry no comment and no measured provenance, and sit far
+    outside the range the scorer actually produces. A field with one distinct
+    value read as a judgement is the `sha1` shape in our own code.
+
+    So the label is dropped rather than arbitrated against the interpretation
+    verdict — there was never a disagreement between two assessments, only a
+    constant printed beside a variable. Of 45 runs carrying both, the
+    verdict side takes four values (suspicious 24, clean 12, inconclusive 5,
+    malicious 4) and the band side takes one.
+
+    The raw score stays, because it is a real measurement on a stated scale —
+    a weighted sum of seven 0-1 sub-scores, x100 — and it is rendered with
+    that scale so nobody reads 14 as a count. Restore a band when there is a
+    distribution behind it; see backlog 37.
+    """
     data = risk if isinstance(risk, dict) else {}
-    level = str(data.get("risk_level") or "no level recorded")
     score = data.get("risk_score")
     confidence = data.get("confidence")
-    parts = [level]
-    if score is not None:
-        parts.append(f"score {score}")
+    if score is None:
+        return "no score was produced"
+    text = f"a composite risk score of {score} out of 100"
     if confidence:
-        parts.append(f"confidence {confidence}")
-    return f"{parts[0]} ({', '.join(parts[1:])})" if len(parts) > 1 else parts[0]
+        text += f", at {confidence} confidence"
+    return text
 
 
 def _risk_drivers(risk: Any) -> list[str]:

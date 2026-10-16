@@ -286,9 +286,13 @@ _VARIANCE_MIN_RECORDS = 10
 #: not having one. Measured 2026-10-16 the naive check refused
 #: `alleged_filetype`, `logon_domain` and `platform`, all three legitimate.
 #:
-#: Each entry carries its premise: the distinct count measured over the full
-#: 2,047-alert population, so an exemption is a recorded measurement rather
-#: than an opinion (README's rule on verifying an exemption's premise).
+#: The premise is RECOMPUTED ON EVERY CONTROL RUN, not recorded here. A
+#: recorded measurement ages into a guess, and the whole point of this set is
+#: to catch a field collapsing to a sentinel — so if `sha256` ever goes the way
+#: `sha1` did, the control must catch it the same way rather than defending a
+#: number measured in October. The counts below are the October reading and
+#: are documentation only; the live distinct count in the sampled window is
+#: what decides.
 #:
 #:   sha256           223 distinct   identity field, used as a needle
 #:   md5              166 distinct   identity field, used as a needle

@@ -332,11 +332,27 @@ export default function InvestigationChain({
             WHICH step called a model, so claiming the last one was an
             inference dressed as a fact. Both fixed by saying only what the
             counter says. */}
-        {record.counters.model_calls === 0
-          ? "Every sentence above comes from a template over recorded fields. No model was called at any point in this investigation."
-          : record.counters.model_calls === 1
-            ? "Every sentence above comes from a template over recorded fields, not from a model. One model call was made, and it saw the recorded steps rather than the raw responses."
-            : `Every sentence above comes from a template over recorded fields, not from a model. ${record.counters.model_calls} model calls were made, and they saw the recorded steps rather than the raw responses.`}
+{(() => {
+          // The ordinal is DERIVED from the steps' own recorded cost rather
+          // than assumed to be the last one. The previous version named
+          // `steps_run` as the model step, which was an inference dressed as
+          // a fact; the provenance was already in `cost.model_calls` all
+          // along, so the sentence can be a measurement again.
+          const modelSteps = record.steps
+            .filter((s) => Number((s.cost as Record<string, unknown>)?.model_calls ?? 0) > 0)
+            .map((s) => s.ordinal);
+          const n = record.counters.model_calls;
+          if (n === 0) {
+            return "Every sentence above comes from a template over recorded fields. No model was called at any point in this investigation.";
+          }
+          const where =
+            modelSteps.length === 0
+              ? "which step called it is not recorded"
+              : modelSteps.length === 1
+                ? `the call was step ${modelSteps[0]}`
+                : `the calls were steps ${modelSteps.join(", ")}`;
+          return `Every sentence above comes from a template over recorded fields, not from a model. ${n} model call${n === 1 ? "" : "s"}: ${where}, and it saw the recorded steps rather than the raw responses.`;
+        })()}
       </footer>
     </section>
   );

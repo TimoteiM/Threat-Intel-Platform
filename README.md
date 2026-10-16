@@ -1726,3 +1726,77 @@ fake honoured a filter's field name and ignored its value, so it modelled an
 API that applies no filters — and the nonsense-value axis failed against it
 while the real API behaves correctly. The fake was certifying behaviour the
 provider does not have.
+
+### Rule 27 — score, severity, confidence and priority are evidence, not verdicts
+
+**A verdict exists only where a stage declares one.** Words that sound like
+judgements are almost always one stage's internal bookkeeping, and reading
+them as conclusions is the single most repeated error in this codebase. Three
+instances, all in one week:
+
+| the field | what it sounded like | what it was |
+|---|---|---|
+| `severity_name` | a ranking for triage | written at **closure** — 100% on closed alerts, **0% on open ones**, so it ranks only what is already decided |
+| `is_closed` | the closed indicator | absent on 100% of closed records and present on 17% of open ones — the opposite of its name |
+| `risk_level` | a verdict | a band over a score that has **never left one band**: 52 runs, range 9–27, max 27, against a threshold of 35 |
+
+So: **treat them as evidence by default.** A number is a measurement on a
+scale, and it belongs in a sentence with its scale attached — *"a composite
+risk score of 14 out of 100"*, not *"low"*. A label over that number is a
+claim about where the boundaries are, and it needs the same provenance as any
+other constant.
+
+#### A threshold with no distribution behind it has no standing
+
+`risk_aggregator` bands a 0–100 score as `high >= 70`, `medium >= 35`, else
+`low`. Neither number carries a comment, a measurement or a reference. And
+over the platform's whole history the score has a **maximum of 27** — so the
+thresholds have never been crossed, `risk_level` is a constant, and the label
+was competing with a real verdict while carrying no information at all.
+
+This is the `sha1` sentinel in our own code: **a field with one distinct
+value, read as a judgement.**
+
+A threshold chosen rather than measured ships the way `RECENT_DAYS` does —
+**disabled, or rendered as the raw value with no label** — until a
+distribution justifies the boundaries. `RECENT_DAYS` is the precedent for how
+easily a chosen number becomes a reported finding.
+
+#### Two authorities with no declared precedence is now a pattern
+
+Backlog 25's shape, in a third domain. Each time, the outcome is decided by
+execution order rather than by a decision anyone made:
+
+| domain | the two authorities | what decided |
+|---|---|---|
+| the schema | `Base.metadata.create_all` and Alembic | whichever ran first |
+| the alert population | `/alerts/queries/alerts/v1` (2,041) and `v2` (2,047) | which endpoint a caller happened to use |
+| **a verdict** | the risk scorer's `verdict` column and the interpretation stage's | step order in the chain |
+
+The fix is the same every time: **name the authority explicitly, and make the
+non-authoritative one say what it is.** The scorer now writes no verdict at
+all, which is the honest version of losing an arbitration it was never
+qualified to enter.
+
+### Rule 28 — a step sentence may only name things the reader can verify outside this platform
+
+The editorial rule, and it catches all three of the prose defects found on one
+page plus the next one:
+
+| rendered | the problem |
+|---|---|
+| "Asked 6 **external sources**: sender_domain, sender_ip, urls…" | those are our own check categories |
+| "Read the contents of …CCRM.pdf**!stream-22**" | our extractor's stream id |
+| "an alert arrived from **alert_body**" | our internal surface identifier |
+
+Each took a fact about **the implementation** and rendered it as a fact about
+**the world.** A reader cannot check any of them against anything, and each
+one reads as though it were about the evidence.
+
+*"VirusTotal: no detections"* passes — the reader could go and look.
+*"Ran 6 enrichment checks"* passes, because it claims only what it is. A
+field name, an internal id, a module name and a surface identifier all fail.
+
+The test is one question: **could the reader confirm this somewhere that is
+not us?** If not, either translate it or state it as a fact about our own
+processing, explicitly.

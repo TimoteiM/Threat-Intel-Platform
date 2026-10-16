@@ -1830,7 +1830,85 @@ Proposals, not confirmations — the existing propose/confirm split stays.
 **This blocks E1**: see "E1 will escalate on test activity as currently
 written" in [indicator-lookup-escalation](design/indicator-lookup-escalation.md).
 
-## 37 — the chain shows two verdicts and does not say they disagree
+## 37 — RESOLVED 2026-10-16: there was no disagreement, because one side is a constant
+
+**Do not arbitrate precedence — the premise failed.** The two questions had to
+be answered before deciding which verdict wins, and the answers dissolve the
+contest.
+
+### What the 14 counts: a 0–100 score, not a count of engines
+
+`risk_aggregator.aggregate_risk` computes a weighted sum of **seven 0–1
+sub-scores** — lexical 0.20, behaviour 0.16, content_ml 0.12, attachment 0.12,
+sandbox 0.10, infrastructure 0.15, opencti 0.15 — then `×100`, clamped to
+0–100. So 14 is fourteen out of a hundred, `low` is a *fair* reading of the
+scale, and the "14 of 70 engines" reading is ruled out.
+
+Which would have left two genuine assessments to arbitrate. Except:
+
+### Where the bands came from: nowhere, and they have never been crossed
+
+```python
+level = "high" if risk_score >= 70 else ("medium" if risk_score >= 35 else "low")
+```
+
+No comment, no measurement, no reference, in a module whose docstring is three
+words. And measured over **all 114 email runs**, the 52 that carry a score:
+
+| | |
+|---|---|
+| range | **9 to 27** |
+| median | 21 |
+| **maximum** | **27** |
+| in the `low` band (0–34) | **52 of 52 — 100%** |
+| in `medium` or `high` | **0** |
+
+**`risk_level` is a constant across this platform's entire history.** The 35
+and 70 thresholds sit outside the range the scorer produces and have never
+once been crossed. It is the `sha1` sentinel in our own code: a field with one
+distinct value, read as a judgement.
+
+### So the "disagreement" was a constant printed beside a variable
+
+Of the 45 runs carrying both:
+
+| `risk_level` | `overall_verdict` | runs |
+|---|---|---|
+| low | suspicious | 24 |
+| low | clean | 12 |
+| low | inconclusive | 5 |
+| low | malicious | 4 |
+
+One side takes four values; the other takes one. There is nothing to
+arbitrate, and nothing to render as a disagreement — the band had no standing
+to compete with a verdict.
+
+### What shipped
+
+* **The band is gone from the sentence.** Step 7 now reads *"a composite risk
+  score of 14 out of 100, at low confidence"* — the raw value with its scale,
+  which is what a threshold with no distribution behind it earns (the
+  `RECENT_DAYS` treatment).
+* **The scorer writes no `verdict` at all.** Two stages writing verdicts with
+  nothing arbitrating is backlog 25's shape in a third domain; the authority
+  is now named, and the non-authoritative stage says what it is.
+* **README rules 27 and 28** carry the general forms.
+
+### Still open, and deliberately not shipped
+
+**Divergence as an escalation trigger** — the idea is right and the
+measurement says not yet. With `risk_level` constant, every non-clean verdict
+"diverges" by construction: **33 of 45 runs, 73%.** A trigger on that fires
+constantly, and the gate's whole purpose is to be rare. Revisit after the
+scorer is recalibrated and the band means something, then measure the rate the
+way E1's was measured.
+
+**Recalibrating the scorer** is the real work and it is its own item: a
+0–100 scale whose observed maximum is 27 is not a scale, and either the
+weights are wrong, the sub-scores are, or the corpus has never contained
+anything bad. All three are plausible and none is established.
+
+## 37b — the original rendering question, for when a real disagreement exists
 
 Read off a live email record, steps 7 and 8, verbatim:
 
