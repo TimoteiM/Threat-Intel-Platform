@@ -1537,7 +1537,7 @@ Consequences:
 **Fix, measured:** one `POST /alerts/entities/alerts/v2` with the ids — **1
 HTTP call** — and the code to copy is already in `lookup_host`.
 
-## 32 — the detection fetch is capped at 20 and unsorted, so a negative is a floor
+## 32 — one Falcon paging helper, as the only way to page
 
 `lookup` asks `/alerts/queries/alerts/v2` for `{"limit": 20}` with **no
 `sort`**. For sha256 `7600ffe12da441fe…` the population holds **29 alerts
@@ -1549,45 +1549,68 @@ over the 20 the lookup fetches:  any(resolution == 'true_positive') -> False
 over all 29:                     any(resolution == 'true_positive') -> True
 ```
 
-So the EDR's strongest evidence about a hash can be dropped by an unsorted
-page boundary, and the lookup would tell an analyst Falcon has nothing
-confirmed on a file an analyst has twice confirmed. **False exculpation in the
-predicate itself**, found by the first positive control ever run against it.
+False — on the hash chosen *because* it has two confirmed detections. The gate
+would tell an analyst Falcon has nothing confirmed on a file an analyst
+confirmed twice.
 
-The truncation is **free to detect**: the same response carries
-`meta.pagination.total` (29, against a limit of 20). So:
+**This is not to be fixed locally, and that is the point of the item.** The
+same defect was then committed a second time *inside the control written to
+catch it* (item 30: 5 rows of `total: 6`, concluding a working field was
+ignored). A rule that is broken by the fix for its own first instance is not
+going to be held by documentation.
 
-* page until the population is covered, or
-* record the floor — a negative over a truncated detection set is
-  `lower_bound`, never a negative — and sort deterministically either way, so
-  the same lookup twice returns the same answer.
+So: **one paging helper, and it is the only way this codebase pages Falcon.**
 
-Related: README rule 19's positive-control clause, and
-[false-exculpation](problems/false-exculpation.md).
+```python
+def paged(path, params, *, headers, base_url, want="all") -> Page
+# Page = (rows, total, complete)
+```
 
-## 33 — the field control needs the nonsense-value check
+* It always sends a deterministic `sort`.
+* It always reads `meta.pagination.total`.
+* It returns `complete: bool`, so **a caller cannot not know** whether it
+  holds the population or a page. A list return type lets the caller forget;
+  a 3-tuple does not.
+* `want="all"` pages to the end; `want=N` stops and reports `complete=False`.
 
-`alerts_field_control` does the right thing with the total — it passes on
-`total > 0` and never requires the sampled row to be inside the page, so it is
-immune to the trap that broke the ad-hoc control in item 30. It has the other
-gap: **it never checks that a value which cannot exist returns nothing.**
+This is exactly what `search_all` → `_page` already does for OpenSearch, and
+it is why **no OpenSearch read in this codebase has made this mistake** while
+the Falcon paths have made it three times. The lesson is that the signature
+carried it, not the discipline.
 
-The framework's premise is that a field name the API does not recognise
-answers 200 with zero resources, which is measured and still true —
-`behaviors.sha256` with a real digest returns 0 of 0. But the premise is an
-assumption about provider behaviour, and the failure it cannot survive is a
-field that is *accepted and ignored*, returning an arbitrary page: such a
-field passes the known-present check (rows come back) while every negative
-from it is meaningless.
+Then every existing Falcon call site moves onto it — `lookup`,
+`lookup_host`, `alerts_field_control`, `alert_retention_floor` — and a
+negative over `complete=False` becomes a `lower_bound` rather than a
+negative, mechanically.
 
-No Falcon field has been observed behaving that way. The check is one extra
-call and removes the assumption:
+**This closes rule 21 for Falcon and unblocks E1 in the same change**, because
+item 31's entity fetch belongs inside the same helper: `paged` returns ids,
+and the alerts variant hydrates them. Do this one first.
 
-> **A field control is three parts:** a known-present value must return the
-> row it was taken from *or* a `total` that accounts for it; a **nonsense
-> value must return zero**; and the total must be read. The middle one is the
-> only part that catches a filter being ignored.
+## 33 — add the nonsense-value check to `alerts_field_control`
 
-Add it to `alerts_field_control`, cache it with the pass as the control
-already does, and fail closed with the existing `FalconFieldUnverified`.
-README rule 19 carries the practice; this item is the code.
+**`alerts_field_control` is already correct and must not be changed except to
+add one call.** It passes on `total > 0` and never requires the sampled row to
+be inside the page — which is exactly right, and is why it survived while two
+hand-written controls did not. A proposed "fix" requiring the source row in
+the page would have **broken every correct field whose hit set exceeds the
+limit**: `sha256` returns 5 rows of `total: 771`.
+
+The two concerns it keeps apart, and which must stay apart:
+
+| question | answered from |
+|---|---|
+| does this field name mean anything to the API? | `total` — known-present ≥ 1, nonsense 0 |
+| did I see what I am about to reason over? | returned count against `total`, plus a sort — item 32 |
+
+The one gap: it never checks that **a value which cannot exist returns
+nothing.** The framework's premise is that an unrecognised field name answers
+200 with zero resources — measured, and still true (`behaviors.sha256` with a
+real digest returns 0 of 0) — but that is a property of this provider rather
+than a guarantee. The failure it cannot survive is a field *accepted and
+ignored*, returning rows for anything: such a field passes the known-present
+check while every negative from it is meaningless.
+
+One extra call, cached with the pass as the control already caches, failing
+closed through the existing `FalconFieldUnverified`. README rule 19 carries
+the practice; this item is the code.

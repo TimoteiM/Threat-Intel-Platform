@@ -257,3 +257,96 @@ Two controls against over-reading it:
 **The decisive check is unchanged and is not in the API:** whether Falcon's own
 console shows detections after 8 October that we do not receive. Everything
 above constrains the question; none of it answers it.
+
+---
+
+# ADDENDUM 2 — 2026-10-16. Our own side, checked and eliminated.
+
+The right instinct was to suspect ourselves first: all three alert families
+going quiet together on a shared integration points at the consumer, not the
+producer, and
+[a-failed-ingest-leaves-no-trace](../problems/a-failed-ingest-leaves-no-trace.md)
+is an open known defect whose signature is a gap with no record of it.
+
+**It is not us, and the reason is decisive rather than a judgement.**
+
+| check | result |
+|---|---|
+| Is there a Falcon ingest path? | **No.** No task in `app/tasks`, no beat schedule entry, no table whose name contains `falcon`, `crowdstrike` or `edr`. Falcon is queried **live** on every panel render and lookup. |
+| When did this platform first hold a Falcon credential? | **2026-10-14 07:40**, `tenant_integrations` row created; secret set 07:46. `integration_audit` has no earlier Falcon row. |
+| Deploys / container recreation in the 6th–10th window? | Commits on 10-09 and 10-12, none on 10-10 or 10-11. Containers in question were recreated 10-15/10-16, after the fact. |
+
+**We were not connected during the gap.** The boundary is 8 October and our
+credential did not exist until 14 October — six days later. There is no
+collector between Falcon and this measurement, so there is no cursor to stall,
+no queue to drop, and no deploy that could have interrupted a feed that did
+not exist. The 2,047 alerts are Falcon's own ~90-day retention, read live, and
+the 8 October boundary sits inside **their** store. By the same token nothing
+in the original cohort analysis is an observation of a live transition: all of
+it is retrospective, pulled after 14 October.
+
+The one self-shaped mechanism not eliminated by that is **the scope of our API
+credential** — a client scoped to a subset of hosts cannot see alerts from the
+rest. It is unlikely to produce a *date* boundary, since scope restricts by
+host rather than by time, and Falcon's device inventory returns **182
+devices** against roughly 190 hosts the log store sees, so there is no sign of
+a gross restriction. It cannot be fully excluded from our side.
+
+## The fleet is alive, which is what makes the console check interpretable
+
+Measured on `/devices/entities/devices` for all 182:
+
+| |  |
+|---|---|
+| devices with `last_seen` on/after 2026-10-09 | **163 of 182** |
+| devices that reported today (2026-10-16) | **140** |
+| `reduced_functionality_mode` not `no` | **1 of 182** |
+
+So the sensors are connected, reporting and not degraded — and produced **one
+alert in eight days.** This is not a connectivity story.
+
+`/incidents/queries/incidents/v1` and `/behaviors/queries/behaviors/v1` are
+both **404** to this credential, as `/detects/v1` already was, so there is no
+second Falcon resource available to corroborate from.
+
+## The intermittency control failed to explain the gap, which is a stronger result than cautioning against the reading
+
+Addendum 1 offered each family's activity rate as a reason not to over-read a
+seven-day gap. Doing the arithmetic on what that control returned:
+
+* 2,046 alerts in 81 days is **25.3 per day**. One alert in the seven days to
+  10-15 is **0.14 per day — a 99.4% drop.**
+* Under each family's own observed activity rate, a seven-consecutive-day
+  silence is `(1 − p)^7`: **1.5%** for `epp` (p = 0.45), **2.2%** for
+  `automated-lead` (p = 0.42), **0.4%** for `automated-lead-context`
+  (p = 0.54).
+* Those three cannot simply be multiplied, because they share one integration
+  and independence is precisely what is in question. But each one alone is a
+  1-in-50 event or rarer, and **all three at once is not something
+  intermittency explains.**
+
+So the control did not say "this gap is normal". It said "this gap is not
+accounted for", which is the stronger finding.
+
+## Status: STILL FROZEN. Not to be sent.
+
+The surviving hypotheses are both on the producer's side of the wire:
+
+1. **Detections are not being generated** — a policy, exclusion or sensor
+   configuration change on or around 8 October. The fleet is online, so this
+   would be a deliberate or accidental change in what triggers.
+2. **Detections exist and the Alerts API is not returning them to this
+   credential** — a visibility or scope question, which is the one shape that
+   is still partly ours.
+
+**This document must not be sent as a customer finding until the console
+distinguishes those two**, because the two have opposite meanings for the
+customer: the first is a configuration conversation, the second is us failing
+to see their alerts. Everything measured here constrains the question; none of
+it answers it.
+
+And if the console *does* show detections after 8 October that we do not
+receive, then this stops being an alert-volume document and becomes the first
+real instance of
+[a-failed-ingest-leaves-no-trace](../problems/a-failed-ingest-leaves-no-trace.md)
+— the defect that backlog item predicted, found in production.

@@ -374,14 +374,76 @@ customer's tenant to prove it would cause the exact harm being described:
    asked). "Examined 20 hosts" where 115 ran it is the floor-as-fact shape
    this platform keeps finding.
 
-The recommendation, stated so it can be argued with: **lazy per-host
-enrichment.** It makes the p50 case free rather than merely cheap, it never
-reaches the tail without an explicit human action per host, it bounds the
-blast radius to one host's calls, and the `n of m` sentence is honest by
-construction — the record says 2 of 115 examined because 2 is what someone
-asked for. The cap and the async variants both still have to answer "how many
-is enough", and the measured answer is that there is no such number: the
-distribution has no middle.
+### The expensive case and the uninformative case are the same case
+
+The bimodality is not a cost curiosity, it is a statement about *what those
+three hashes are.*
+
+**The denominator, measured rather than inferred:** `observation_floor` on the
+hash field enumerates **170 hosts** that executed any hashed process in the
+7-day window (181 over 30 days; Falcon's device inventory holds 182). So the
+three expensive hashes are on **113, 113 and 115 of 170 — about two-thirds of
+the active host set.**
+
+That figure was first written here as "98% of the estate", by dividing 113 by
+115 — which is *another hash's host count*, not a denominator. The corrected
+number is weaker and the argument survives it: a file on two-thirds of every
+machine that ran anything this week is an **installed component** — a signed
+binary, an agent DLL, a runtime library — not a finding.
+
+Which means **knowing which 113 of 170 hosts hold such a file tells an analyst
+very little.** The host list is the product of S1 and S2, and for exactly the
+cases that cost ~565 calls it carries almost no information. The 1-host and
+2-to-5-host cases are **7 of the 12** and are the ones where a host list
+changes what somebody does — and they cost 5 to 25 calls.
+
+So the distribution hands over the design: **cheap where it matters, expensive
+where it does not.**
+
+### The design
+
+**Get prevalence cheaply, state it, and enrich per host on demand.**
+
+1. The hash question already returns `host_count` and `hosts` for one
+   OpenSearch query (43 ms median, measured over all 223). That is prevalence,
+   already paid for.
+2. The estate step states it as a fact rather than a host list: *"ran on 113
+   of the 170 hosts that executed anything in this window"* — which is the
+   finding for a ubiquitous file, and more useful than 113 enrichments would
+   be. The denominator travels with the number, because "113 hosts" alone
+   invites exactly the division that produced a wrong "98%" in the first
+   draft of this section.
+3. S1 and S2 then run **per host, on the analyst's click**, so the record says
+   `2 of 113 hosts examined` because 2 is what somebody asked for. The `n of
+   m` sentence is honest by construction rather than by remembering to add a
+   caveat, and the blast radius is one host's five calls.
+
+The cap and async variants both still owe an answer to "how many hosts is
+enough", and the measured answer is that there is no such number — the
+distribution has no middle to put a threshold in.
+
+### The guardrail: prevalence modulates the enrichment, never the gate
+
+This is the week's recurring failure mode and it would land squarely in the
+one feature whose purpose is not to have a false-negative path.
+
+**Prevalence is an input to how much enrichment to pay for. It is never an
+input to E1, E2 or the verdict.** A file on 113 of 170 hosts *with a
+`true_positive` disposition* is the mass-compromise case — a trojanised
+installed component, a poisoned update, a living-off-the-land binary being
+abused estate-wide — and it is the single most serious thing this lookup could
+ever surface. If high prevalence ever suppresses escalation, the gate has a
+hole in it shaped exactly like the worst case.
+
+So, explicitly:
+
+* `host_count` does not appear in any escalation predicate.
+* Prevalence may change **what is fetched** (lazily rather than eagerly) and
+  **what is said** ("113 of 170 hosts"), and nothing else.
+* It may never change **whether a record opens**, and the test for that is a
+  fixture with `host_count: 113` of 170 and a `true_positive` resolution,
+  asserting the record opens — written **before** the enrichment code, since a
+  dangerous-direction test written afterwards is a test of what was built.
 
 ---
 

@@ -1315,13 +1315,32 @@ common is almost always a property of the comparison. Suspect the predicate
 before believing the result. (Rule 20's instances are the same idea one layer
 up: a declaration agreeing with itself.)
 
-The control also has to be *findable*: a filter that returns rows is not a
-pass either. `dns_requests.domain_name:'<a value the API itself returned>'`
-came back HTTP 200 with **five rows that did not include the sampled alert** —
-the field was ignored and the filter degenerated to an unfiltered page. A
-zero-row miss at least looks like an answer about the data; a non-empty page
-of the wrong rows looks like a hit. So the control is not "did it return
-something", it is **"did it return the row I took the value from"**.
+**Two concerns, and merging them produces the bug it was meant to fix.**
+
+| the question | answered from | never from |
+|---|---|---|
+| does this field name mean anything to the API? | **`total`** — known-present ≥ 1, nonsense 0 | page contents |
+| did I see what I am about to reason over? | returned count against `total`, plus a deterministic sort | the first page alone |
+
+The first draft of this clause said a known-present value must return *"the
+row you took it from"*. That merges the two, and **it fails on every correct
+field whose hit set exceeds the limit** — which is the normal case:
+`sha256:'<a real digest>'` returns 5 rows of `total: 771`, and the sampled row
+is not among them. A control written that way condemns a field that
+demonstrably works. `alerts_field_control` already had this right by passing
+on `total > 0`, and the proposed "fix" would have broken it.
+
+So the pass condition is `total > 0`, and the part still missing is the
+**nonsense value**: a value that cannot exist must return `total: 0`. That is
+the only check that catches a field name which is *accepted and ignored* —
+one that returns rows for anything, passing a known-present check while every
+negative from it is meaningless. No Falcon field behaves that way today
+(`behaviors.sha256` with a real digest returns 0 of 0), which is a measured
+property of the provider and not a thing to rely on for free.
+
+**A field control is three parts:** known-present → `total ≥ 1`; nonsense →
+`total = 0`; and the total is read. The middle one is the only part that
+catches a filter being ignored. Rule 21 owns the second question in the table.
 
 And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
 a different row each run.** Two consecutive reads of "the latest" gave
@@ -1441,5 +1460,23 @@ is the population. That is exactly how a hash an analyst had twice confirmed
 came back as having no confirmed detections.
 
 See rule 19's positive-control clause for the other half — the one that checks
-a predicate can match at all. This one checks that what it matched is
-everything.
+a predicate can match at all, from `total`. This one checks that what you
+*read* is everything, from the count against that same total. The two
+questions share a response and must not share an assertion.
+
+#### Put it in a signature, not a habit
+
+Rules 19, 20 and 21 are habits, and **habits are being written faster than
+they change.** Two instances in one session, both of them a *fix* inheriting
+the habit rather than the lesson:
+
+* the call counter fell to rule 20 **the day rule 20 was written**, and
+* the paging control fell to rule 21 **while being written to catch rule 21.**
+
+Documentation is not the mechanism for closing that gap. **Whatever can be
+moved into a signature should be.** A paging helper that returns
+`(rows, total, complete)` instead of a list means a caller *cannot not know*
+it read a page — the same thing `search_all` → `_page` already does for
+OpenSearch, which is why no OpenSearch read in this codebase has made this
+mistake. A rule a caller has to remember is a rule that holds until the next
+fix is written in a hurry.
