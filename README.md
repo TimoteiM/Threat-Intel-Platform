@@ -1342,6 +1342,28 @@ property of the provider and not a thing to rely on for free.
 `total = 0`; and the total is read. The middle one is the only part that
 catches a filter being ignored. Rule 21 owns the second question in the table.
 
+#### A discriminator must differ between the states it claims to separate
+
+The general form, and it is cheap to check before trusting any check: **ask
+what each candidate state would produce, and if two of them produce the same
+observation, the check is not a discriminator for those two.**
+
+An HTTP 404 was read as "this endpoint is gone, so there is no corroborating
+resource". But `/incidents/queries/incidents/v1` returns a body *identical in
+shape* to a deliberately nonsense path — a generic `"Not Found: Please provide
+trace-id"` with no scope message. Unscoped, not-available-on-this-cloud, and
+never-existed all produce the same bytes. So the 404 separates **none** of
+them, and the honest kind is `check_failed`: not shown unavailable, merely not
+reached.
+
+This is the absence convention applied to a status code rather than a value,
+and it is the same test that killed the nonsense-value question in one call:
+name the candidate states, then find the observation that differs between
+them. The 319 open alerts were left indeterminate by exactly this test — every
+`epp` alert is closed and every `automated-lead` alert is open, so "written at
+triage" and "a property of the product" produce identical observations here
+and the cells that would separate them are empty.
+
 And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
 a different row each run.** Two consecutive reads of "the latest" gave
 different payloads, and reading a shape from one row while templating against

@@ -351,6 +351,31 @@ customer's tenant to prove it would cause the exact harm being described:
 | p95 | 113 | ~565 | **~162 s** |
 | max | 115 | ~575 | **~165 s (2.8 min)** |
 
+### The benchmark the projections were missing
+
+Latency means nothing against taste; it means something against what a triage
+actually costs. Measured on the same tenant's closed alerts,
+`seconds_to_resolved` for the analysts doing the work: **median 584 s**, p95
+7.3 hours.
+
+| case | lookup wall clock | share of a median triage |
+|---|---|---|
+| p50 — 4 hosts | ~6 s | **1%** |
+| p95 — 113 hosts | ~162 s | **28%** |
+
+So the cheap path costs an analyst one percent of the time they already spend
+on one alert, and the expensive path costs more than a quarter of it — for a
+host list that, at that prevalence, tells them almost nothing (see the
+baseline below). **The bimodal design is validated against what humans spend,
+not against a preference**, and the 584 s is the number to re-measure against
+if the estate's triage pattern changes.
+
+A second fact from the same source, which belongs in whatever this feature
+eventually becomes: the four analysts who produced 1,447 of those closures
+work in the customer's Falcon console, and **one of them has never logged into
+this platform.** Every judgement in this document about what should escalate
+and what an analyst wants first is a guess they could settle in half an hour.
+
 ### Three problems, not one
 
 1. **The synchronous design is already broken, for the tail rather than the

@@ -1,23 +1,59 @@
-# CrowdStrike Falcon: alert volume dropped in mid-September, and the estate has raised nothing for seven days
+# Falcon alert volume: an unexplained seven-day gap, and a triage gap that is ours
 
-> **One check to run in the same pass as the console result, before this is
-> edited further:** how many *distinct devices* produced the 40-device group's
-> final 23 alerts on 21 September? If it is one or two machines, that group
-> never had a rate at all, and the "step confined to the updated group" reading
-> loses its comparator rather than merely being under-powered — the comparison
-> would then rest on a group that was never comparable. The figure is one
-> aggregation over alerts already retrieved.
+> ## ⛔ REFRAMED 2026-10-16. DO NOT SEND. DO NOT SEND ANY PART OF THIS.
+>
+> **This was being written as a finding about the customer. It is not one.**
+>
+> `assigned_to_name` on the closed alerts resolves to **9 of 11 distinct names
+> matching rows in this platform's own `users` table**. The people triaging
+> this customer's Falcon console are **Expertware analysts** — our own SOC,
+> doing the work we are contracted to do. Which means:
+>
+> * The **319 untriaged alerts** are a finding about **the service we sell
+>   them**, not about their estate. The `epp` queue is worked in a median of
+>   **584 seconds**; the `automated-lead*` queue has **never been touched in
+>   four months**, by us.
+> * Sending a customer "you have 319 untouched alerts" when we are the ones
+>   contracted to touch them would have been the worst outcome available this
+>   week.
+>
+> A frozen document with the wrong framing is still a document someone can
+> open, so this banner is the point of the file until it is rewritten as two
+> separate pieces of work:
+>
+> 1. **An internal service finding** — the lead queue is unworked. Ours to fix
+>    or ours to decide is out of scope, and either way it is a conversation
+>    with the SOC, not a customer communication.
+> 2. **A genuine joint question** — the seven-day alert gap from 8 October,
+>    which is still unexplained and whose remaining candidates are all on the
+>    producer's side of the wire.
+>
+> Nothing in this file is customer-ready, and the volume sections cannot be
+> made so until the console check lands.
 
-> **DRAFT — NOT TO BE SENT.** One check outstanding that can invalidate this
-> entire document: whether Falcon's own console shows detections after
-> 8 October 2026 that this platform's API does not return. If it does, the
-> finding is about our collection and not about your estate, and everything
-> below needs rewriting rather than amending. That check is in progress.
-> Nothing further is being added to this document until it comes back.
+> ## The first thing to do is not a query
+>
+> **Ask the four analysts.** Loredana Hreceniuc (437 closures), Elisabeta
+> Ifrim (386), Alexandru Adochitei (372) and Ioana Dutuc (252) were in that
+> console daily until the boundary. One of them knows whether the queue went
+> quiet, whether they were told to stop working it, whether their access
+> changed, or whether something was reconfigured on or around 8 October.
+>
+> That is five minutes with a colleague and **no amount of API work
+> substitutes for it.** It is the first thing to hand to whoever is running
+> this work; it cannot be done from inside the platform.
 
-**For:** the security manager and whoever owns the CrowdStrike configuration.
-**Measured:** 2026-10-15, read-only against the Falcon API. Nothing was
-changed.
+**Audience of the volume sections, once they are clean:** the security manager
+and whoever owns the CrowdStrike configuration.
+**Audience of the triage finding:** our own SOC lead. Not the customer.
+**Measured:** 2026-10-15 and 2026-10-16, read-only against the Falcon API.
+Nothing was changed.
+
+> **One check still outstanding on the volume question:** how many *distinct
+> devices* produced the 40-device group's final 23 alerts on 21 September? If
+> it is one or two machines, that group never had a rate at all and the "step
+> confined to the updated group" reading loses its comparator. One aggregation
+> over alerts already retrieved.
 
 ## The observations
 
@@ -451,3 +487,126 @@ prevention policy, exclusions, host groups, sensor update policy. A
 suppression introduced on 8 October is producer-side, is the worst of the
 surviving readings for the customer, and leaves a trace in the console's own
 change history. That turns a yes/no into a cause.
+
+---
+
+# ADDENDUM 4 — 2026-10-16. A shared cause becomes available, because one side of it is ours.
+
+## Two processes stopped on the same date, and one of them is us
+
+* **CrowdStrike stopped producing alerts** — 1 in the seven days to 10-15
+  against 25.3/day before.
+* **Expertware analysts stopped working them** — at most 2 of 2,047 records
+  touched since 8 October, on `updated_timestamp`.
+
+The `updated_timestamp` control correctly rules out the *artefact* reading:
+both stopped, not one, so the boundary is not an accident of which clock was
+counted. But two independent processes halting on the same day wants a
+**shared cause**, and until `assigned_to_name` was resolved there was no
+candidate that could reach both — the producer and the consumer looked like
+different organisations. They are not.
+
+**The fleet constrains what the shared cause can be.** 163 of 182 devices
+reported on/after 10-09, 140 today, 1 of 182 degraded. So device management is
+intact and detection output is absent: whatever happened left sensors checking
+in and stopped what they raise. A **licensing or module change** fits that
+shape — a dead subscription does not, because a dead subscription takes the
+device check-ins with it.
+
+**That is a candidate, not an assertion.** Falcon console internals have been
+guessed wrong in this work before, and the one thing that distinguishes these
+readings is not in the API.
+
+## So the console check has three parts, not one
+
+1. Are there detections after 8 October that this platform's API does not
+   return?
+2. **What changed in this tenant's configuration on or around 8 October** —
+   prevention policy, exclusions, host groups, sensor update policy. A
+   suppression introduced that day is producer-side and leaves a trace in the
+   console's own change history.
+3. **What is this tenant licensed for, and did its subscription or module
+   state change around that date?** Entitlements, module enablement, seat or
+   SKU changes. This is the part that can stop detections while leaving device
+   management working, which is exactly the shape the fleet measurement
+   leaves open.
+
+Each of the three turns a yes/no into a cause. None of them is answerable from
+the API with this credential.
+
+---
+
+# ADDENDUM 5 — a product finding, separate from everything above
+
+**Four analysts, 1,447 closures, in someone else's console — and the people
+who do the work are not users of the thing being built for them.**
+
+| analyst | closures in Falcon | logins to this platform |
+|---|---|---|
+| Loredana Hreceniuc | 437 | last 2026-10-06 |
+| Elisabeta Ifrim | 386 | last 2026-10-15 |
+| Alexandru Adochitei | 372 | last 2026-10-15 |
+| **Ioana Dutuc** | **252** | **never** |
+
+Ioana Dutuc has triaged 252 alerts in the customer's Falcon console and has
+never once logged into this platform.
+
+Two consequences, and the second is the useful one.
+
+**It is a risk.** A platform built for a workflow whose practitioners do not
+use it accumulates design decisions nobody has validated, and the gap is
+invisible from inside: every page renders, every test passes, and the measure
+of whether any of it helps is absent.
+
+**It is also the cheapest design input available.** Every judgement made this
+week about the escalation feature is currently a guess that these four could
+settle in half an hour:
+
+* what should open an investigation record, against what they actually chase;
+* whether a host list is worth 565 API calls, or whether prevalence alone
+  answers the question they have;
+* what an analyst wants to see first on a verdict strip;
+* whether the `automated-lead*` family is noise they correctly ignore or a
+  queue nobody assigned.
+
+**And their median closure time is the benchmark the cost analysis was
+missing** — see §4 of
+[indicator-lookup-escalation](../design/indicator-lookup-escalation.md). A
+real triage on this estate takes **584 seconds**. That is what a lookup's
+latency has to be measured against, and it is a measurement rather than taste.
+
+---
+
+# ADDENDUM 6 — the v1/v2 disagreement is resolved, and it changes the console check
+
+Six records are visible to `/alerts/queries/alerts/v2` and not to
+`/alerts/queries/alerts/v1` (2,047 against 2,041). Six is noise against 2,047
+and it is **larger than the entire `ignored` population (5)** and comparable
+to the **10 hashes the gate fires on**, so it was identified rather than
+left as a line.
+
+The id sets are directly comparable — 2,041 shared, 6 in v2 only, 0 in v1
+only — and the six have one signature:
+
+| | |
+|---|---|
+| `show_in_ui: False` across the population | **6 of 2,047** |
+| the v1/v2 difference | **6** |
+
+Exactly the hidden records. **v1 returns the UI-visible population; v2
+includes alerts the console does not display.** Their products are mixed
+(3 `automated-lead-context`, 1 `automated-lead`, 2 `epp`) and their statuses
+are 4 `new` / 2 `closed`, so nothing else distinguishes them.
+
+**This has a direct consequence for the console check**, and it is the reason
+it was worth one query: a human in the console sees the **2,041**, not our
+2,047. Comparing "what the console shows" against "what the API returns"
+without that correction manufactures a six-record discrepancy that looks
+exactly like the thing the check is testing for. The comparison baseline is
+`show_in_ui: True`.
+
+Every figure in this document and in the escalation spec is a **v2** number:
+2,047; the 1,728/319 split; `resolution` at 1,345/378/319/5; 223 distinct
+hashes; the 4.5% and 60.1% fire rates. They are stated as v2 numbers rather
+than silently re-based, because the two populations answer different
+questions — v2 is what the API holds, v1 is what an analyst can see.

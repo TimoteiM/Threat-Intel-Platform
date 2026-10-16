@@ -125,6 +125,58 @@ Grant the PIT permissions if you can, since consistent paging is worth having.
 If you would rather not, say so and we will stop requesting one, which is a
 different and now-distinguishable state from being refused.
 
+## A third silent failure, found 2026-10-16, and it is the one that matters for Change 2
+
+The two above are about *permissions*. This one is about **the tenant pin
+itself**, and it is the failure mode that per-customer separation makes more
+likely rather than less.
+
+Every query this platform sends to the cluster carries a tenant filter, and
+the code refuses outright if the pin's field or value list is **absent**. It
+does not check that the value is **right**. Measured, in the dangerous
+direction, against a hash known to have documents under the correct pin:
+
+| pin value | result |
+|---|---|
+| `manager.name = wm-c00.siembiot.int` (configured) | `observed: true`, 5 documents, 2 hosts |
+| `manager.name = C00-Indexer` (plausible, wrong) | `observed: false`, **0 documents, 0 hosts, no absence kind** |
+
+**A pin that is present and wrong returns zero rows, and zero rows is reported
+as a measured negative** — "this host never executed that file" — rather than
+"the query was scoped to a tenant that does not exist". It looks like
+compliance and produces silence.
+
+It is worse than a wrong field name in ordinary code, for two reasons:
+
+1. **The silence is reassuring.** The same answer carries a sentence stating
+   that the field spans the full retention window with 2.6 million documents
+   across 190 hosts. A reader gets a confident negative with a coverage
+   warrant attached.
+2. **It is indistinguishable from the thing separation is meant to produce.**
+   Once each customer has its own credential and its own pin, "this tenant has
+   no data" becomes a legitimate, expected answer — a newly onboarded customer
+   returns exactly that. So the one state a wrong pin imitates is the one
+   state that stops looking like a bug.
+
+`C00-Indexer` is not a hypothetical: it is the cluster's own name, it appears
+throughout our notes, and it was the value used by mistake in an internal
+measurement on 2026-10-16 that returned 0 documents across 360 healthy shards.
+That query was controlled before it was believed. A production query would not
+have been.
+
+**What we are changing on our side, regardless of your decision:** the pin is
+verified by value, not by presence. A tenancy filter that matches no documents
+at all in a window where the index pattern *does* hold documents is treated as
+`check_failed` and never as a negative — the one place in this platform where
+an empty result must not be accepted as an answer. The unforgettable-pin work
+that backlog 17 asks for therefore has to assert the pin's value resolves,
+not merely that a pin was supplied.
+
+**What we would like from you:** confirmation of the exact `manager.name`
+value (or equivalent) for each customer at the point each credential is
+created, as part of the artefact script in the section below, so the value is
+recorded from the cluster rather than transcribed from a document.
+
 ## The blast radius is the argument for planning it, not for deferring it
 
 The `admin` credential is used by **every** path the platform has to the
