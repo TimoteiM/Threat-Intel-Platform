@@ -138,3 +138,50 @@ the provider. So the control is permanent too.
 - README rule 16: name the other world that produces the same observation.
   Here: "the EDR has no detection" and "the API is ignoring my field name"
   produce byte-identical responses.
+
+---
+
+## The convention only protects code that goes through it
+
+**2026-10-16.** Checking whether anything still authenticates as
+`Threat-Analyzer-Owner` meant counting its rows in every column that records a
+user acting. Seven columns, **0 in every one**, and the conclusion — nothing
+uses this account — was right. It was right by luck. Four of those seven
+columns hold a **name**, not a uuid, and comparing them to the account's id
+cannot match anything. The real answer in one of them was 5.
+
+The relief is the dangerous part. The conclusion survived, so there was
+nothing to notice, and a measurement that cannot find a positive had been read
+as a measured negative. That is this document's subject exactly: *we asked,
+the tool had something, we said it had nothing.* Only this time the tool was
+our own database.
+
+**The platform already has the right kind, and it was not used.** Four columns
+that cannot be compared to a uuid are not `0` — they are `cannot_join`, which
+is the kind the Falcon coverage work introduced for devices with no hostname,
+precisely so that an unjoinable row never renders as an absent one. Nothing
+forced it here, because:
+
+> **the honest-absence convention only applies to code that goes through it,
+> and investigative queries are where we routinely step outside it.**
+
+`absence.absent(...)` is reached by services, tasks and routes. An ad-hoc
+`SELECT count(*)` in a throwaway script has no `absence` import, no kind, no
+reason field and no reviewer — it returns an integer, and an integer cannot
+say "this comparison was ill-typed". Every protection this platform has built
+against absence-read-as-value lives on the far side of a boundary that
+investigation work steps over by design, and the investigative queries are
+*also* the ones whose answers get written into documents as findings.
+
+Three things that follow, all cheap:
+
+1. **Type the column before comparing it.** `information_schema.columns` is
+   one query. Four of seven being varchar was visible before any count was
+   taken.
+2. **Positive control on every predicate** — README rule 19. A count of a
+   value known to be present must come back non-zero, or the zero means
+   nothing.
+3. **An ill-typed comparison is `cannot_join`, not zero**, even in a scratch
+   script. Writing "0 (cannot join: column is varchar, compared to a uuid)" in
+   the output costs one line and is the difference between a finding and a
+   false negative that happened to agree with the truth.

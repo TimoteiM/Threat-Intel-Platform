@@ -261,8 +261,17 @@ def test_the_primary_readings_refusal_survives_being_asked_as_a_secondary():
 
     Someone typing `aka.ms` means the domain. Falcon asked as a *hostname*
     returns a true "no such device", and reading that as "the EDR has nothing
-    on this domain" is false exculpation one reading over. The sentence that
-    prevents it — no Falcon field holds a domain — has to still be there.
+    on this domain" is false exculpation one reading over. The refusal that
+    prevents it has to still be there.
+
+    This asserted the literal sentence "no alert field that holds a domain"
+    until 2026-10-16, when that sentence turned out to be **false**:
+    `dns_requests[].domain_name` is present on 138 of the 2,047-alert
+    population, and the original probe missed it because its 200 alerts were
+    all `product: epp`. The refusal survived the correction — the field cannot
+    be FILTERED on, and the positive control returns a page of unrelated rows
+    rather than nothing — so what this test pins is the refusal's identity and
+    its durable claim, not a wording that can be wrong.
     """
     plan = ind.plan_readings(ind.detect("aka.ms")["readings"])
     other = plan["falcon"].get("also_refused_for")
@@ -270,7 +279,15 @@ def test_the_primary_readings_refusal_survives_being_asked_as_a_secondary():
     assert other["reading"] == ind.DOMAIN
     rendered = ind.refusal(other["decision"])
     assert rendered["kind"] == absence.NO_FIELD_MAP
-    assert "no alert field that holds a domain" in rendered["reason"]
+    reason = rendered["reason"].lower()
+    assert "filter" in reason, "the reason no longer says why Falcon cannot be asked"
+    assert "nothing was searched" in reason, (
+        "the reason must still say nothing was searched, which is what stops "
+        "an empty Falcon section reading as an answer about the domain"
+    )
+    # The false claim must not come back. It was measured false, and a
+    # regression to it would restore a confident wrong sentence.
+    assert "no alert field that holds a domain" not in reason
 
 
 def test_no_spurious_other_reading_when_the_primary_was_the_one_asked():

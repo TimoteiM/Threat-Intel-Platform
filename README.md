@@ -1292,6 +1292,37 @@ stopped at the name `techniques` without asking what one element of it looks
 like. `[type(x) for x in value[:3]]` is the same three seconds as the listing
 above it.
 
+#### Every predicate needs a positive control
+
+Enumerating the keys tells you the field exists. It does not tell you that
+your comparison can match anything. So **the same predicate, with a value
+known to be present, must return non-zero** — and until it has, a zero is a
+statement about the comparison rather than about the data.
+
+This was already established for one API and then not applied to SQL. The
+Falcon alert field control exists because the Alerts API answers an unknown
+field name with HTTP 200 and zero rows, so a negative is meaningful only while
+a positive control passes. That is not a Falcon practice. It is a predicate
+practice, and the next instance was a hand-written SQL query with no control
+at all: seven columns compared to a user's uuid, **0 in every one**, when the
+answer in one of them was 5. Four of the seven hold a *name*; comparing them
+to a uuid cannot match, and the uniform zero was the shape of the comparison.
+
+**A uniform zero across heterogeneous code paths is itself the signal.** Seven
+columns, written by seven different features, at different times, by different
+people, agreeing perfectly — perfect agreement between things with nothing in
+common is almost always a property of the comparison. Suspect the predicate
+before believing the result. (Rule 20's instances are the same idea one layer
+up: a declaration agreeing with itself.)
+
+The control also has to be *findable*: a filter that returns rows is not a
+pass either. `dns_requests.domain_name:'<a value the API itself returned>'`
+came back HTTP 200 with **five rows that did not include the sampled alert** —
+the field was ignored and the filter degenerated to an unfiltered page. A
+zero-row miss at least looks like an answer about the data; a non-empty page
+of the wrong rows looks like a hit. So the control is not "did it return
+something", it is **"did it return the row I took the value from"**.
+
 And: **`ORDER BY created_at DESC LIMIT 1` without a unique tiebreaker returns
 a different row each run.** Two consecutive reads of "the latest" gave
 different payloads, and reading a shape from one row while templating against

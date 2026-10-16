@@ -1347,3 +1347,170 @@ UPDATE users SET active = true  WHERE username = 'Threat-Analyzer-Owner';
 The row keeps `role = 'owner'` and its five `sandbox_analyses` rows still
 resolve to it, so the attribution work above is unaffected: deactivating an
 account does not rewrite what it did.
+
+---
+
+## 26 — there is no application path to disable an owner
+
+`auth.update_user` refuses to deactivate **or** demote an owner, for everyone
+including another owner and the owner themselves, and the refusal is
+unconditional. For a security platform, the missing case is the ordinary one:
+**an owner who leaves the company, or an owner credential that is
+compromised.** The documented remedy today is a hand-written `UPDATE` against
+`users`, which means the offboarding path for the highest-privileged account
+in the product is "edit the database".
+
+Deactivating `Threat-Analyzer-Owner` on 2026-10-16 required exactly that.
+
+## 27 — the owner refusal names the database as the way around it
+
+The 409 detail reads:
+
+> An owner account cannot be {action}. This is deliberate and applies to
+> everyone, including other owners. **Change the role in the database if this
+> is genuinely required.**
+
+An error message should not tell the caller where the control isn't. The
+sentence is useful to an operator reading the source and harmful in an HTTP
+response, which is the one place it currently appears. Move the guidance into
+the docstring (it is already there) and leave the response saying only that
+the operation is refused and who can authorise an alternative.
+
+## 28 — the owner guard refuses unconditionally, so it is not enforcing its own purpose
+
+`_refuse_if_owner` exists to stop an administrator taking the platform's
+administration away from its owner — that is, to stop a tenant being orphaned
+and left unmanageable. But it does not check whether that would happen. It
+refuses always, which means:
+
+* the case it protects against and the case it blocks needlessly are treated
+  identically, and
+* the actual check — *are there other active administrators?* — was performed
+  **by hand, in the transaction, as a count** when the account was
+  deactivated:
+
+```sql
+SELECT count(*) FROM users
+ WHERE role IN ('owner','admin') AND active IS TRUE
+   AND username <> 'Threat-Analyzer-Owner';   -- returned 2
+```
+
+That count belongs inside `update_user`. `_refuse_if_last_admin` already
+performs the same shape of query for administrators; extending it to own the
+owner case turns an unconditional refusal into a **condition**, which makes
+items 26 and 28 the same fix: an owner may be deactivated exactly when another
+active administrator remains, and the API can then do it. Item 27 falls out
+too — the refusal no longer needs to point at the database, because there is
+no longer a case where the database is the only route.
+
+## 29 — no user-administration action is audited anywhere
+
+Creating a user, changing a role, deactivating an account and resetting a
+password all go through `auth.py`, and **none of them writes an audit row.**
+The only audit table is `integration_audit`, which is scoped to integration
+configuration (`tool`, `action`, `actor`, `actor_role`, `detail`) and is
+written only by `integrations.py` and `integration_credential_service.py`.
+
+So a privileged account state change leaves no trace in the system that holds
+the account. That is
+[a-failed-ingest-leaves-no-trace](problems/a-failed-ingest-leaves-no-trace.md)
+applied to authorisation rather than ingest: the event happened, the state
+changed, and nothing in the platform records that it did or who did it.
+
+**The deactivation of `Threat-Analyzer-Owner` wrote no audit row**, and no
+audit row was written for it deliberately either: the one audit table is for
+integrations, and putting a user event in it would make that table mean two
+things. **So the only record of that action is the backlog entry above and the
+commit that carries it**, which is stated here rather than left to be
+discovered — and it is the clearest possible argument for the item.
+
+The fix is a `user_audit` table, or a generalisation of `integration_audit`
+with an explicit subject, written by the four paths above and by nothing else.
+
+## 30 — Falcon has a domain field in the record and cannot filter on it
+
+`indicator_lookup_service.ROUTING[DOMAIN]["falcon"]` refuses with
+`no_field_map` and the reason *"CrowdStrike Falcon has no alert field that
+holds a domain."* **That reason is wrong, and the refusal is still right.**
+
+Measured 2026-10-16 over the full 2,047-alert population: `dns_requests` is
+present and non-empty on **138 records, 607 elements**, and every element is
+an object whose keys are `('domain_name', 'interface_index', 'load_time',
+'request_type')` — the field holds exactly the thing the refusal says does not
+exist. It was missed because the original probe ran against 200 alerts that
+were all `product: epp`, and `dns_requests` is carried almost entirely by the
+`automated-lead*` family (29% of open alerts vs 3% of closed).
+
+But the field cannot be filtered on. The positive control —
+`dns_requests.domain_name:'<a value the API itself returned>'` — came back
+**HTTP 200 with five rows that did not contain the sampled alert**: the filter
+was ignored and the query degenerated to an unfiltered page. `domain_name` and
+`dns_requests` as filter names both return 200 with zero rows.
+
+Two actions:
+
+1. **Correct the reason string** (done in the same change as this entry): the
+   field exists in the record, it is not filterable, and an unfilterable field
+   on this API returns a full page of unrelated rows rather than nothing —
+   which is a more dangerous failure than the empty one and belongs in the
+   record of why we do not ask.
+2. **Consider answering the domain question client-side.** The population is
+   2,047 alerts, reachable in 11 paged calls, and `dns_requests[].domain_name`
+   can be matched locally. That is a real capability with a measured cost, not
+   an impossibility — so it is `cost_not_established` only until someone
+   decides whether 11 calls per domain question is acceptable.
+
+## 31 — `falcon.lookup` returns alert *ids*, not alert records
+
+`falcon.lookup(observable_type="hash")` populates `detections` from
+`/alerts/queries/alerts/v2`, which returns **composite ids**. Nothing fetches
+the entities, so each element is a dict with exactly one key, `id`:
+
+```python
+found = falcon.lookup(observable=<sha256>, observable_type="hash", …)
+found["detections"]          # 20 items
+sorted(found["detections"][0].keys())   # ['id']
+```
+
+Consequences:
+
+* `detection_count` in the indicator-lookup response is a **count of alert
+  ids**. It is a usable count and nothing more — no status, no resolution, no
+  disposition, no timestamp.
+* **Any predicate over those records is unimplementable**, which is what
+  blocks E1 in
+  [indicator-lookup-escalation](design/indicator-lookup-escalation.md).
+* `lookup_host` **does** fetch the entities — 91 keys per record, `status` and
+  `resolution` present — so **the shipped Falcon host panel is unaffected**.
+  This is the two-implementations divergence with `lookup` as the stale half.
+
+**Fix, measured:** one `POST /alerts/entities/alerts/v2` with the ids — **1
+HTTP call** — and the code to copy is already in `lookup_host`.
+
+## 32 — the detection fetch is capped at 20 and unsorted, so a negative is a floor
+
+`lookup` asks `/alerts/queries/alerts/v2` for `{"limit": 20}` with **no
+`sort`**. For sha256 `7600ffe12da441fe…` the population holds **29 alerts
+including 2 `resolution: true_positive`**, and the 20 returned contained
+**neither**:
+
+```
+over the 20 the lookup fetches:  any(resolution == 'true_positive') -> False
+over all 29:                     any(resolution == 'true_positive') -> True
+```
+
+So the EDR's strongest evidence about a hash can be dropped by an unsorted
+page boundary, and the lookup would tell an analyst Falcon has nothing
+confirmed on a file an analyst has twice confirmed. **False exculpation in the
+predicate itself**, found by the first positive control ever run against it.
+
+The truncation is **free to detect**: the same response carries
+`meta.pagination.total` (29, against a limit of 20). So:
+
+* page until the population is covered, or
+* record the floor — a negative over a truncated detection set is
+  `lower_bound`, never a negative — and sort deterministically either way, so
+  the same lookup twice returns the same answer.
+
+Related: README rule 19's positive-control clause, and
+[false-exculpation](problems/false-exculpation.md).

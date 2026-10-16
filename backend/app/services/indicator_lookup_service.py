@@ -187,16 +187,30 @@ ROUTING: dict[str, dict[str, Any]] = {
         # and `ioc_value` all return HTTP 200 with zero rows, and
         # `data_domains` holds a data classification (`['Endpoint']`), not a
         # name. The intel endpoints that would answer are 403.
+        # Corrected 2026-10-16. The previous reason said Falcon has no alert
+        # field holding a domain. It HAS one — `dns_requests[].domain_name`,
+        # on 138 of the 2,047-alert population — and the original probe missed
+        # it because those 200 alerts were all `product: epp`, while
+        # `dns_requests` is carried by the `automated-lead*` family. The
+        # refusal survives the correction; its reason does not.
         "falcon": (absence.NO_FIELD_MAP,
-                   "CrowdStrike Falcon has no alert field that holds a domain. "
-                   "Every candidate was probed and each returns an empty "
-                   "success, and `data_domains` — the only field whose name "
-                   "contains the word — holds a data classification such as "
-                   "'Endpoint'. The intelligence endpoints that would answer "
-                   "'is this domain known bad' are refused to this credential "
-                   "(403, scope not permitted). So nothing was searched: an "
-                   "empty Falcon result here would mean the field, not the "
-                   "domain."),
+                   "CrowdStrike Falcon's alert records do hold domains, at "
+                   "`dns_requests[].domain_name`, but the Alerts API cannot "
+                   "FILTER on it. The positive control — filtering on a value "
+                   "the API itself returned — came back HTTP 200 with five "
+                   "rows that did not include the sampled alert, so the field "
+                   "is ignored and the query degenerates to an unfiltered "
+                   "page. `domain_name` and `dns_requests` as filter names "
+                   "return 200 with zero rows. `data_domains`, the only field "
+                   "whose name contains the word, holds a data classification "
+                   "such as 'Endpoint'. The intelligence endpoints that would "
+                   "answer 'is this domain known bad' are refused to this "
+                   "credential (403, scope not permitted). So nothing was "
+                   "searched — and here a non-empty Falcon result would be "
+                   "more misleading than an empty one, because it would be a "
+                   "page of alerts unrelated to this domain. Matching "
+                   "`dns_requests` locally over all 2,047 alerts is possible "
+                   "in 11 paged calls; see backlog 30."),
         "estate": ASK,
     },
     IP: {
