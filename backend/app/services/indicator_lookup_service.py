@@ -187,30 +187,42 @@ ROUTING: dict[str, dict[str, Any]] = {
         # and `ioc_value` all return HTTP 200 with zero rows, and
         # `data_domains` holds a data classification (`['Endpoint']`), not a
         # name. The intel endpoints that would answer are 403.
-        # Corrected 2026-10-16. The previous reason said Falcon has no alert
-        # field holding a domain. It HAS one — `dns_requests[].domain_name`,
-        # on 138 of the 2,047-alert population — and the original probe missed
-        # it because those 200 alerts were all `product: epp`, while
-        # `dns_requests` is carried by the `automated-lead*` family. The
-        # refusal survives the correction; its reason does not.
-        "falcon": (absence.NO_FIELD_MAP,
-                   "CrowdStrike Falcon's alert records do hold domains, at "
-                   "`dns_requests[].domain_name`, but the Alerts API cannot "
-                   "FILTER on it. The positive control — filtering on a value "
-                   "the API itself returned — came back HTTP 200 with five "
-                   "rows that did not include the sampled alert, so the field "
-                   "is ignored and the query degenerates to an unfiltered "
-                   "page. `domain_name` and `dns_requests` as filter names "
-                   "return 200 with zero rows. `data_domains`, the only field "
-                   "whose name contains the word, holds a data classification "
-                   "such as 'Endpoint'. The intelligence endpoints that would "
-                   "answer 'is this domain known bad' are refused to this "
-                   "credential (403, scope not permitted). So nothing was "
-                   "searched — and here a non-empty Falcon result would be "
-                   "more misleading than an empty one, because it would be a "
-                   "page of alerts unrelated to this domain. Matching "
-                   "`dns_requests` locally over all 2,047 alerts is possible "
-                   "in 11 paged calls; see backlog 30."),
+        # The reason here has now been wrong twice, in opposite directions,
+        # and the second correction removes the refusal's basis rather than
+        # restating it. Kept as a refusal only until backlog 30 implements the
+        # narrow capability, because a refusal with a falsified reason is held
+        # by inertia and this one says so out loud.
+        #
+        #   2026-10-15: "Falcon has no alert field that holds a domain."
+        #               FALSE. `dns_requests[].domain_name` exists. The probe
+        #               that missed it ran over 200 alerts that were all
+        #               `product: epp`, and `dns_requests` is carried by the
+        #               `automated-lead*` family — 29% of open alerts against
+        #               3% of closed.
+        #   2026-10-16: "the field exists but cannot be filtered on."
+        #               ALSO FALSE, and it was my own measurement at fault:
+        #               the control read 5 rows of `total: 6` with no sort,
+        #               missed the source row, and called the field ignored.
+        #               Re-run with the total read and a nonsense-value check,
+        #               the field FILTERS CORRECTLY — nonsense returns 0 of 0,
+        #               the real value returns 6 including the source row.
+        "falcon": (absence.COST_NOT_ESTABLISHED,
+                   "Falcon CAN be asked about a domain and currently is not. "
+                   "`dns_requests[].domain_name` exists on 138 of this "
+                   "tenant's 2,047 alerts (6.7%), holds 280 distinct domains, "
+                   "and filters correctly — verified against a known-present "
+                   "value (6 rows, including the alert the value came from) "
+                   "and three nonsense values (0 rows, total 0). What has not "
+                   "been settled is what a NEGATIVE from it means, and that "
+                   "is a decision rather than a measurement: a nil answer "
+                   "would mean 'not one of 280 domains that appeared in the "
+                   "DNS context of an alert', not 'Falcon has no opinion on "
+                   "this domain'. The intelligence endpoints that would "
+                   "answer the broad question are refused to this credential "
+                   "(403, scope not permitted), and `data_domains` holds a "
+                   "data classification such as 'Endpoint'. So this is a "
+                   "narrow capability awaiting a decision on how to state its "
+                   "bound — backlog 30 — and not an absence of one."),
         "estate": ASK,
     },
     IP: {

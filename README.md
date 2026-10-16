@@ -1360,7 +1360,29 @@ over its own socket *and* diffs serving-against-disk because of #1 and #2;
 `presentation_of()` lives beside the renderer, with the page switching on its
 output, because of #3.
 
-Two corollaries worth naming, because both have bitten:
+**It is a reflex, not a fact you can learn once.** The fourth instance was
+written *the same day as this rule*: a call counter patched onto
+`httpx.Client.send`, reporting **0 Falcon calls** for work that plainly
+happened, because `falcon_client` imports `requests`. The instrument was the
+declaring layer and the provider was the acting one. Knowing the rule did not
+help; asking "which layer am I actually touching?" before trusting the number
+is the only thing that does.
+
+**And the acting layer is sometimes *poorer*, not just different.** The fifth
+instance inverts the first four. E1 in the escalation spec was drafted against
+a corpus paged by hand from `/alerts/entities/alerts/v2` — 112 keys per
+record, `status`, `resolution`, dispositions, everything. The acting layer,
+`falcon.lookup`, reads the *queries* endpoint and returns dicts with **one
+key, `id`**. Nothing was inconsistent; the product simply cannot do what my
+hand-run query could.
+
+So: **a predicate drafted against data you obtained by hand is a predicate
+drafted against a capability the product does not have.** Investigating with
+ad-hoc queries is right, and the shape they return is not evidence about what
+the code path returns. Before building on a shape, get it from the function
+the feature will call.
+
+Three corollaries worth naming, because all three have bitten:
 
 - **Presence in a registry is not reachability.** "Every declared kind has a
   template" passed throughout, while certifying eight that nothing could
@@ -1373,3 +1395,51 @@ Two corollaries worth naming, because both have bitten:
   returned nothing and silence was scored as a pass. See
   `docs/problems/container-defaults-erase-absence.md` for the collection of
   these — an instrument whose absence reads as a value.
+- **A test may pin a decision; it must not pin the decision's *reason*.** A
+  refusal has an identity — *we do not ask Falcon about domains* — and a
+  justification, which is a claim about the world. The test never measured the
+  world, so pinning the justification makes it an authority on something it
+  cannot see. One did: it asserted the literal sentence *"no alert field that
+  holds a domain"*, which was measured **false** on 2026-10-16, and the test
+  had been certifying it for weeks. It now pins the refusal's kind, its
+  reading, and that the reason still says nothing was searched — plus a guard
+  that the falsified sentence cannot return. This is the third kind of
+  certified-wrong-thing after the registry that certified unreachable
+  templates and the `all("None" in line)` check that passed on every input.
+
+### Rule 21 — a bounded read without a deterministic order is a sample, not an answer
+
+**Any `limit` without a `sort`, and without reading the available total, is a
+claim about what you did not see.** Four instances, and the fourth was my own
+control written to catch the second:
+
+| # | the read | what it concluded | what was there |
+|---|---|---|---|
+| 1 | `ORDER BY created_at DESC LIMIT 1`, no tiebreaker | "the latest row" | a *different* row on consecutive runs; ties, no unique key |
+| 2 | `limit: 20` on a hash's Falcon alerts | `true_positive` → **False** | 29 alerts, **2 confirmed**, both outside the page |
+| 3 | `limit: 5` filtering on a sampled `dns_requests.domain_name` | "the field is ignored, the filter returns an arbitrary page" | `total: 6` — the source row was the sixth. **The field filters correctly.** |
+| 4 | `limit: 5` on `sha256`, in the same run as #3 | would have condemned `sha256` too | `total: 771`; a field known to work, failing the same way |
+
+#3 is the one worth keeping. It produced a confident, specific, wrong
+diagnosis — *a non-filterable field returning an arbitrary page* — which would
+have put a hole in the whole field-control framework, and it was wrong because
+five rows of six were read without a sort and without the total. #4 is its
+control: the same method condemns a field that demonstrably works.
+
+**The total is free.** `meta.pagination.total` comes back in the *same
+response* as the rows. The floor was always detectable and was simply not
+read. So:
+
+* `sort` deterministically, always, so the same read twice is the same answer;
+* read the total, and when `total > len(rows)` the result is a `lower_bound`,
+  never a negative;
+* page until the population is covered when the question is "is there *any*".
+
+An existence question is the dangerous one: "is there any confirmed detection"
+is answered by the *population*, and a page cannot answer it unless the page
+is the population. That is exactly how a hash an analyst had twice confirmed
+came back as having no confirmed detections.
+
+See rule 19's positive-control clause for the other half — the one that checks
+a predicate can match at all. This one checks that what it matched is
+everything.

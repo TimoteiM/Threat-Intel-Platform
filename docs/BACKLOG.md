@@ -1424,41 +1424,91 @@ things. **So the only record of that action is the backlog entry above and the
 commit that carries it**, which is stated here rather than left to be
 discovered — and it is the clearest possible argument for the item.
 
+### The cost has already landed, which is the argument
+
+Closing `Threat-Analyzer-Owner` took the better part of an hour. Almost none
+of that was the decision — the decision was one `UPDATE`. It went on
+*reconstructing* what an audit row would have recorded in one line: who
+created this account, when, under what authority, and for what purpose.
+Nothing recorded any of it, so the question had to be answered by inference
+across seven tables, and the inference was **wrong on the first pass** (see
+[false-exculpation](problems/false-exculpation.md) — a uniform zero from an
+ill-typed comparison).
+
+**That hour is what this table costs every time.** Not hypothetically: it is
+the measured price of the one privileged-account question anyone has asked of
+this platform so far, and the answer was still only "nothing has used it in 23
+days", never "here is who granted it owner and why".
+
+### The customer-facing version
+
+An MSSP platform holding 154M documents across a tenant boundary will be
+audited, and the questions are predictable:
+
+* **Who holds `owner` on this platform, and when was it granted?** Today:
+  unanswerable retrospectively. `users` has `created_at` for the row, and
+  nothing for the *role*. An account promoted to owner last week is
+  indistinguishable from one created as owner in September.
+* **Who deactivated this account, and when?** Unanswerable. There is no record
+  that any deactivation occurred, including the one performed today.
+* **Who reset this analyst's password?** Unanswerable.
+
+These compound with items 26–28: a role change may be **both unrecorded and
+only possible at the database**, so the one class of change most likely to be
+asked about is the one with the least trace. An operator editing `users`
+directly leaves nothing but shell history on a box, and that is the documented
+path.
+
 The fix is a `user_audit` table, or a generalisation of `integration_audit`
 with an explicit subject, written by the four paths above and by nothing else.
 
-## 30 — Falcon has a domain field in the record and cannot filter on it
+## 30 — Falcon can answer the domain question, narrowly, and is not asked
 
-`indicator_lookup_service.ROUTING[DOMAIN]["falcon"]` refuses with
-`no_field_map` and the reason *"CrowdStrike Falcon has no alert field that
-holds a domain."* **That reason is wrong, and the refusal is still right.**
+`ROUTING[DOMAIN]["falcon"]` refuses. **Its stated reason has now been wrong
+twice, in opposite directions**, and the second correction removes the
+refusal's basis rather than replacing it:
 
-Measured 2026-10-16 over the full 2,047-alert population: `dns_requests` is
-present and non-empty on **138 records, 607 elements**, and every element is
-an object whose keys are `('domain_name', 'interface_index', 'load_time',
-'request_type')` — the field holds exactly the thing the refusal says does not
-exist. It was missed because the original probe ran against 200 alerts that
-were all `product: epp`, and `dns_requests` is carried almost entirely by the
-`automated-lead*` family (29% of open alerts vs 3% of closed).
+| date | reason given | verdict |
+|---|---|---|
+| 2026-10-15 | "Falcon has no alert field that holds a domain" | **false** — `dns_requests[].domain_name` exists |
+| 2026-10-16 | "the field exists but cannot be filtered on" | **false** — and it was our own measurement at fault |
 
-But the field cannot be filtered on. The positive control —
-`dns_requests.domain_name:'<a value the API itself returned>'` — came back
-**HTTP 200 with five rows that did not contain the sampled alert**: the filter
-was ignored and the query degenerated to an unfiltered page. `domain_name` and
-`dns_requests` as filter names both return 200 with zero rows.
+The first was a sampling error: the probe ran over 200 alerts that were all
+`product: epp`, and `dns_requests` is carried by the `automated-lead*` family
+(29% of open alerts against 3% of closed).
 
-Two actions:
+The second was a bounded read without a sort — README rule 21. The control
+filtered on a sampled `domain_name`, read 5 rows, did not find the alert the
+value came from, and concluded the field was ignored. `total` was **6**: the
+source row was the sixth. Re-run with the total read and nonsense values
+added, the field **filters correctly**:
 
-1. **Correct the reason string** (done in the same change as this entry): the
-   field exists in the record, it is not filterable, and an unfilterable field
-   on this API returns a full page of unrelated rows rather than nothing —
-   which is a more dangerous failure than the empty one and belongs in the
-   record of why we do not ask.
-2. **Consider answering the domain question client-side.** The population is
-   2,047 alerts, reachable in 11 paged calls, and `dns_requests[].domain_name`
-   can be matched locally. That is a real capability with a measured cost, not
-   an impossibility — so it is `cost_not_established` only until someone
-   decides whether 11 calls per domain question is acceptable.
+| probe | rows | total | source row present |
+|---|---|---|---|
+| `dns_requests.domain_name:'<sampled value>'` | 5 (limit) | **6** | **yes** |
+| three nonsense domains | 0 | 0 | — |
+| `sha256:'<sampled value>'` (control) | 5 (limit) | 771 | no — *same page-boundary trap* |
+| `behaviors.sha256` (dead field, control) | 0 | 0 | — |
+
+**Measured capability**: `dns_requests` is non-empty on **138 of 2,047 alerts
+(6.7%)** and holds **280 distinct domains**.
+
+So there is no measured reason left to refuse, and what remains is a decision
+nobody has taken: **what a negative from this field means.** A nil answer is
+*"not one of 280 domains that appeared in the DNS context of an alert"* — not
+*"Falcon has no opinion on this domain"*. The intelligence endpoints that
+would answer the broad question are 403 to this credential.
+
+The routing entry is therefore `cost_not_established` rather than
+`no_field_map` — there is somewhere to look and the cost of a wrong reading
+has not been established — and it says so in its own reason, because **a
+refusal whose stated reason has been falsified is held by inertia until a new
+one is written down.**
+
+To close this: decide the negative's wording, add the field to the standing
+control, and switch the entry to `ASK` with the 6.7% / 280-domain bound stated
+in the section the analyst reads. This and item 33 are one investigation —
+same field, same control — and should resolve together.
 
 ## 31 — `falcon.lookup` returns alert *ids*, not alert records
 
@@ -1514,3 +1564,30 @@ The truncation is **free to detect**: the same response carries
 
 Related: README rule 19's positive-control clause, and
 [false-exculpation](problems/false-exculpation.md).
+
+## 33 — the field control needs the nonsense-value check
+
+`alerts_field_control` does the right thing with the total — it passes on
+`total > 0` and never requires the sampled row to be inside the page, so it is
+immune to the trap that broke the ad-hoc control in item 30. It has the other
+gap: **it never checks that a value which cannot exist returns nothing.**
+
+The framework's premise is that a field name the API does not recognise
+answers 200 with zero resources, which is measured and still true —
+`behaviors.sha256` with a real digest returns 0 of 0. But the premise is an
+assumption about provider behaviour, and the failure it cannot survive is a
+field that is *accepted and ignored*, returning an arbitrary page: such a
+field passes the known-present check (rows come back) while every negative
+from it is meaningless.
+
+No Falcon field has been observed behaving that way. The check is one extra
+call and removes the assumption:
+
+> **A field control is three parts:** a known-present value must return the
+> row it was taken from *or* a `total` that accounts for it; a **nonsense
+> value must return zero**; and the total must be read. The middle one is the
+> only part that catches a filter being ignored.
+
+Add it to `alerts_field_control`, cache it with the pass as the control
+already does, and fail closed with the existing `FalconFieldUnverified`.
+README rule 19 carries the practice; this item is the code.

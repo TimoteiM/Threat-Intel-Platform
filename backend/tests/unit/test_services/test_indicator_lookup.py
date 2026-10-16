@@ -135,14 +135,28 @@ def test_an_unknown_kind_raises_rather_than_asking_everything():
 
 
 def test_a_domain_is_never_asked_of_falcon_and_says_why():
-    """Measured: no Falcon alert field holds a domain. An empty Falcon section
-    for a domain would mean the field, not the domain."""
+    """Falcon is not asked about a domain, and the *kind* says why not.
+
+    This pinned `no_field_map` while the stated reason was "no Falcon alert
+    field holds a domain". That reason was measured **false** on 2026-10-16:
+    `dns_requests[].domain_name` exists on 138 of 2,047 alerts and filters
+    correctly. The decision therefore moved to `cost_not_established` — there
+    IS somewhere to look and what a negative from it would mean has not been
+    settled — and a test may pin a decision, so this moves with it.
+
+    What it must never again pin is the justification, which is a claim about
+    the world this test cannot see. So the two assertions below are: the
+    section is a refusal rather than an empty answer, and the falsified
+    sentence has not come back.
+    """
     decision = ind.plan(ind.DOMAIN)["falcon"]
     assert decision is not ind.ASK
     rendered = ind.refusal(decision, raw=ind.DOMAIN)
-    assert rendered["kind"] == absence.NO_FIELD_MAP
-    assert "data_domains" in rendered["reason"]
-    assert "403" in rendered["reason"]
+    assert rendered["kind"] == absence.COST_NOT_ESTABLISHED
+    assert "403" in rendered["reason"], (
+        "the credential limit is the durable half of the reason"
+    )
+    assert "no alert field that holds a domain" not in rendered["reason"]
 
 
 def test_an_ip_is_out_of_scope_for_falcon_with_the_structural_reason():
@@ -265,29 +279,29 @@ def test_the_primary_readings_refusal_survives_being_asked_as_a_secondary():
     prevents it has to still be there.
 
     This asserted the literal sentence "no alert field that holds a domain"
-    until 2026-10-16, when that sentence turned out to be **false**:
-    `dns_requests[].domain_name` is present on 138 of the 2,047-alert
-    population, and the original probe missed it because its 200 alerts were
-    all `product: epp`. The refusal survived the correction — the field cannot
-    be FILTERED on, and the positive control returns a page of unrelated rows
-    rather than nothing — so what this test pins is the refusal's identity and
-    its durable claim, not a wording that can be wrong.
+    until 2026-10-16, when that sentence was measured **false**. It then
+    briefly asserted a second reason — that the field cannot be filtered on —
+    which was *also* false, and that one was my own measurement's fault: a
+    control read 5 rows of `total: 6` with no sort, missed the row the value
+    came from, and condemned a field that filters correctly.
+
+    Two wrong reasons in two days is the argument for the rule: a test may pin
+    a decision, it must not pin the decision's justification. So this pins the
+    decision — Falcon is not asked for the domain reading, and the fact is
+    still carried when the domain is the *secondary* reading — and nothing
+    about why.
     """
     plan = ind.plan_readings(ind.detect("aka.ms")["readings"])
     other = plan["falcon"].get("also_refused_for")
     assert other is not None, "the domain refusal was dropped"
     assert other["reading"] == ind.DOMAIN
     rendered = ind.refusal(other["decision"])
-    assert rendered["kind"] == absence.NO_FIELD_MAP
+    assert rendered["kind"] == absence.COST_NOT_ESTABLISHED
+    assert rendered["reason"].strip(), "a refusal with no reason at all"
+    # Neither falsified sentence may come back.
     reason = rendered["reason"].lower()
-    assert "filter" in reason, "the reason no longer says why Falcon cannot be asked"
-    assert "nothing was searched" in reason, (
-        "the reason must still say nothing was searched, which is what stops "
-        "an empty Falcon section reading as an answer about the domain"
-    )
-    # The false claim must not come back. It was measured false, and a
-    # regression to it would restore a confident wrong sentence.
     assert "no alert field that holds a domain" not in reason
+    assert "cannot filter" not in reason
 
 
 def test_no_spurious_other_reading_when_the_primary_was_the_one_asked():

@@ -108,6 +108,17 @@ estate — they are `resolution` values. `CLOSED_STATUSES` in
 `falcon_host_panel_service` lists them as statuses; that is harmless but it is
 not measured here, and the predicate below does not depend on it.
 
+**`resolution: ignored` — 5 rows — is handled explicitly, as dismissed.** An
+enum member handled by omission is a bug with a date on it, so: `ignored`
+means a human saw the alert and chose to take no action on it, which is a
+judgement in the same family as `false_positive` and not an absence of one. It
+therefore does **not** satisfy E1. The distinction from `<absent>` (319 rows)
+is the whole reason to say so: absent means *nobody has looked yet*, and that
+is the clause E1 drops to a reported fact below. All 5 `ignored` rows are
+`closed` and all 5 carry a prevention disposition — the EDR blocked it and
+someone decided it needed nothing further, which is the clearest possible case
+for "dismissed".
+
 ### E1 — Falcon has evidence a human either confirmed or has not yet seen
 
 ```python
@@ -128,6 +139,35 @@ and that is not a gate.** `resolution == 'true_positive'` alone is 10 of 223 —
 4.5% — and that is the clause that carries evidence: a human looked and
 confirmed it.
 
+#### 4.5% of what — because the two readings differ by an order of magnitude
+
+**4.5% is per hash Falcon has already seen.** It is *not* the rate at which a
+lookup escalates, and 4.5% is the number people will remember, so:
+
+> escalation rate per lookup = 4.5% × P(the hash an analyst types is one of
+> the 223 Falcon has seen)
+
+The lookup's real population is hashes an analyst types — from an email
+attachment, a report, a customer question — and the overwhelming majority have
+never appeared in this tenant's 2,047 alerts. That second factor is **not
+measured**: `indicator_lookups` holds 27 rows, which is the same 27 that make
+`RECENT_DAYS` unmeasurable. Until it is, the honest statement is *"4.5% of the
+hashes Falcon already knows, which is a small fraction of the hashes anyone
+looks up"* — and the per-lookup rate is `cost_not_established`, not a number
+divided out and presented as one.
+
+E2's denominator is the same shape: **12 of the 223 Falcon-known hashes** had
+executed in the estate at a 7-day window (5.4%), which is again *given that
+Falcon knows the hash*, and the estate may well have executed hashes Falcon
+has never alerted on.
+
+The reason this section exists is the sampling error that produced the first
+draft: a base rate quoted from **the 600 most recent alerts**, where recency in
+this estate is dominated by the untriaged `automated-lead` family. That sample
+gave 1 true positive; the population gives 378. **The selection was correlated
+with the thing being measured**, which is why §1 names the population and
+checks `meta.pagination.total` against the fetch.
+
 `status == 'new'` is dropped from the opening condition and kept as a
 *reported fact* on the Falcon step. It means "sitting in an untriaged queue",
 and in this estate all 319 such records belong to the `automated-lead*`
@@ -144,7 +184,7 @@ detection.` (209) or absent (110). Prevention dispositions exist on 311
 records in the population and all of them are closed. A clause that cannot
 fire is not a safeguard, it is decoration.
 
-**Cost: 1 additional call** — see §5, the lookup does not currently fetch the
+**Cost: 1 additional call** — see §6, the lookup does not currently fetch the
 fields this predicate reads.
 
 **Verdict contributed: `malicious`.**
@@ -268,7 +308,84 @@ domain lookup permanently inconclusive.
 
 ---
 
-## 4. The follow-up steps, and that they only run after the record opens
+## 4. The cost is a design constraint, not a tuning knob
+
+**This is the largest finding in the document and it was first written as a
+footnote.** S1 is per host, so the host-count distribution decides the design
+— and the distribution is bimodal with nothing in the middle.
+
+Measured 2026-10-16: every one of the 223 Falcon-known hashes asked of the
+estate at a 7-day window, 223 queries in 10.5 s, 43 ms median, **zero
+absences**. 12 of 223 had executed here.
+
+| statistic | over the 12 executed hashes |
+|---|---|
+| min | 1 host |
+| **p50** | **4 hosts** |
+| p90 | 113 hosts |
+| **p95** | **113 hosts** |
+| max | 115 hosts |
+| mean | 31.5 (the mean is meaningless here — see the buckets) |
+
+| hosts | hashes |
+|---|---|
+| 1 | 2 |
+| 2–5 | 5 |
+| 6–20 | 2 |
+| 21–100 | **0** |
+| 100+ | **3** |
+
+Nine of twelve are ≤20 hosts; three are >100; **nothing is in between.** The
+three are almost certainly estate-wide signed binaries. So the design is not
+"pick a cap and tune it" — it is "the common case is cheap and the tail is
+catastrophic, and they are separated by a gap".
+
+Per-host cost, measured on 3 real hosts: **median 5 Falcon calls and 1.44 s**
+(14 calls / 4.96 s for the host that hits its 500-row detection cap). The
+worst case is **projected, not run** — running 575 calls against the
+customer's tenant to prove it would cause the exact harm being described:
+
+| case | hosts | Falcon calls | wall clock |
+|---|---|---|---|
+| p50 | 4 | ~20 | ~6 s |
+| p95 | 113 | ~565 | **~162 s** |
+| max | 115 | ~575 | **~165 s (2.8 min)** |
+
+### Three problems, not one
+
+1. **The synchronous design is already broken, for the tail rather than the
+   extreme.** ~165 s sequential does not complete inside any request timeout
+   this platform runs, and it is reached by 3 of the 12 executed hashes — 25%
+   of the cases where E2 fires, not a freak. One analyst pressing one button.
+2. **Blast radius: the lookup shares a credential and a rate budget with the
+   shipped alert panel.** There is one `tenant_integrations` row for
+   `c00`/`falcon`, so an unbounded analyst-triggered fan-out of ~575 calls
+   degrades or stalls the alert panel for everyone, and the panel is the thing
+   on the alert page that analysts depend on. An on-demand feature cannot be
+   allowed to exhaust the budget of a background one that is already shipped.
+3. **A bound is a design decision because the absence convention forbids a
+   silent truncation.** Whichever of these is chosen —
+   * cap the hosts (cheap, and the bimodal gap makes ~20 a natural line),
+   * make host enrichment lazy, one host at a time on the analyst's click,
+   * or run the fan-out asynchronously with the record filling in,
+
+   the record must say **`n of m hosts examined` under a named kind**
+   (`lower_bound` for a cap, `cost_not_established` for hosts deliberately not
+   asked). "Examined 20 hosts" where 115 ran it is the floor-as-fact shape
+   this platform keeps finding.
+
+The recommendation, stated so it can be argued with: **lazy per-host
+enrichment.** It makes the p50 case free rather than merely cheap, it never
+reaches the tail without an explicit human action per host, it bounds the
+blast radius to one host's calls, and the `n of m` sentence is honest by
+construction — the record says 2 of 115 examined because 2 is what someone
+asked for. The cap and the async variants both still have to answer "how many
+is enough", and the measured answer is that there is no such number: the
+distribution has no middle.
+
+---
+
+## 5. The follow-up steps, and that they only run after the record opens
 
 The record opens with the lookup's own results as its first steps — the
 fan-out is the evidence that triggered the escalation, so the chain would
@@ -277,17 +394,13 @@ asked, at zero additional cost. Then, and only then:
 
 | # | step | measured cost | gated on |
 |---|---|---|---|
-| S1 | Falcon host panel per host in `host_hashes.hosts` | **6.5 Falcon calls per host** (13 for 2 hosts, counted) | E2 fired |
+| S1 | Falcon host panel per host in `host_hashes.hosts` | **5 Falcon calls / 1.44 s per host** (median of 3) | E2 fired, and §4's bound |
 | S2 | the estate's log window around the earliest execution per host | 1 OpenSearch query per host | E2 fired |
 | S3 | external reputation on the indicator | 1 call per source, **paid credits** | any condition fired |
 | S4 | the summary | **1 model call** | the record exists |
 
-**S1's per-host cost makes the cap mandatory, with a number rather than a
-worry.** The third true-positive hash the estate had executed ran on **106
-hosts** — at 6.5 calls per host that is ~690 Falcon calls for one lookup. The
-cap is a `lower_bound` on the step, stated in its sentence; it is not a silent
-truncation. A sensible first cap is the hosts holding the earliest executions,
-and the step says how many were not asked.
+S1's bound is §4, which is a design section rather than a note because the
+distribution has no middle: p50 is 4 hosts and p95 is 113.
 
 Carried from slices 1 and 2 rather than restated as new: every step records
 its cost so the chain shows what escalation bought; a step that could not be
@@ -297,7 +410,7 @@ the recorded steps, never the raw responses, with `unverified_entities` and
 
 ---
 
-## 5. The positive control — and the two defects it found
+## 6. The positive control — and the two defects it found
 
 `aka.ms` firing nothing is a negative control, and a negative control alone
 cannot distinguish a working gate from an unreachable one. So the gate was run
@@ -380,7 +493,7 @@ predicate produced a false negative.**
 
 ---
 
-## 6. What this still does not decide
+## 7. What this still does not decide
 
 * `RECENT_DAYS` — gated on `indicator_lookups` reaching 250 rows (§2, E3).
 * The DNS and perimeter timing for `first_last_seen` — unmeasured, so
@@ -393,7 +506,7 @@ predicate produced a false negative.**
   probably right, a blocked execution being a working control rather than an
   incident, but it is a consequence of the clause rather than a decision
   anyone took. Note also that the 41 are a *superset* relationship worth
-  checking before the cap in §4 is designed: prevented-and-confirmed is the
+  checking before the bound in §4 is designed: prevented-and-confirmed is the
   highest-value evidence Falcon holds here, and it is 2% of the population.
-* Whether E2's host cap should be the earliest executions or the most recent.
-  The 106-host case is the one to decide it against.
+* Which of §4's three bounding designs to build. The measurement says the
+  distribution has no middle; it does not say which design the team wants.

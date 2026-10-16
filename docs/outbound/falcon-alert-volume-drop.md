@@ -183,3 +183,77 @@ Read-only, through the existing API credential:
   boundary rather than averaged across.
 
 No configuration, policy, exclusion, detection or host state was modified.
+
+---
+
+# ADDENDUM — 2026-10-16. Still DRAFT, still NOT TO BE SENT.
+
+Two measurements over the **full alert population** rather than a recent
+window: all 2,047 alerts CrowdStrike holds for this tenant,
+2026-07-20 → 2026-10-15, with `meta.pagination.total` checked equal to the
+number fetched so this is the population and not a page.
+
+## 1. There are 319 alerts nobody has triaged, and the newest is 8 October
+
+The population splits into two families that are triaged in completely
+different ways:
+
+| `product` | alerts | `status` | `resolution` present | first | last |
+|---|---|---|---|---|---|
+| `epp` | 1,728 | **100% closed** | 100% | 2026-07-23 | 2026-10-15 |
+| `automated-lead-context` | 265 | **100% new** | 0% | 2026-07-20 | 2026-10-08 |
+| `automated-lead` | 54 | **100% new** | 0% | 2026-07-20 | 2026-10-08 |
+
+**Every `epp` alert has been closed and not one `automated-lead*` alert has
+ever been touched** — over the same four months, with both families arriving
+throughout. There are no exceptions in either direction: the two
+cross-cells are empty.
+
+So **319 alerts are sitting unread**, the oldest from 20 July, the newest from
+8 October. Whether that family is noise the customer deliberately ignores, or
+a queue that was never assigned to anyone, is a question only they can answer
+— and it is probably the most operationally significant thing in this
+document. The two readings have opposite remedies: one is a tuning exercise,
+the other is a gap in coverage that has been open for 88 days.
+
+For this platform it also means something narrower: no field's coverage
+measured across all 2,047 transfers to either family. `resolution`,
+`severity_name`, `confidence`, `priority_value` and `tags` are populated on
+100% of the closed family and **0%** of the open one.
+
+## 2. The 8 October date is shared, and a single query dissolves the
+   per-family reading rather than confirming it
+
+The `automated-lead*` families' last alert is 2026-10-08, which is the date
+this document's open question is about. That looked like a second,
+family-specific silence. Per-day counts per family say otherwise:
+
+| day | `automated-lead` | `automated-lead-context` | `epp` |
+|---|---|---|---|
+| 2026-10-05 | 0 | 0 | 7 |
+| 2026-10-06 | 1 | 6 | 0 |
+| **2026-10-08** | 1 | 2 | 2 |
+| 2026-10-09 → 10-14 | 0 | 0 | 0 |
+| 2026-10-15 | 0 | 0 | **1** |
+
+**All three families go quiet after 8 October, not one of them.** The estate
+produced **one alert in the seven days to 10-15**, against 2,046 in the
+preceding 81 days — and that single alert is the evidence the integration
+still delivers at all.
+
+Two controls against over-reading it:
+
+* **Every family is intermittent.** Active on 42% (`automated-lead`), 54%
+  (`automated-lead-context`) and 45% (`epp`) of the calendar days in its own
+  span. A multi-day gap is normal here, so gap *length* is weak evidence and a
+  seven-day one is not self-evidently abnormal.
+* **Two silences sharing a date is a hypothesis, not a finding.** This
+  document has already been corrected once for promoting a date pattern into a
+  cause. What the query establishes is narrower and more useful: the silence is
+  **estate-wide, not per-family**, so an explanation scoped to one alert
+  product is ruled out, and the remaining candidates are a single cause
+  upstream of all three — or genuinely low activity.
+
+**The decisive check is unchanged and is not in the API:** whether Falcon's own
+console shows detections after 8 October that we do not receive. Everything
+above constrains the question; none of it answers it.
