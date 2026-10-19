@@ -2161,7 +2161,26 @@ through a path that closed them properly; the four failed include one with a
 `completed_at` and three without, which is a smaller inconsistency in the same
 column.
 
-## 40 — The platform connects to its database as a superuser, and it is the only role
+## 40 — The platform connects to its database as a superuser, and it is the only role — **DONE 2026-10-19**
+
+**Done the same day it was filed**, because it was a precondition rather than
+a backlog item. `scripts/db_roles.sql` creates `tip_app` and `tip_sanitizer`;
+the API, worker and beat run as `tip_app`; Alembic keeps `threatintel`;
+`scripts/check_db_privileges.sql` is run by `scripts/liveness.sh`. The README
+section "Database connections" says which connection does what. What it cost
+and what it found is in the commit and in
+`docs/design/token-boundary-gaps.md`.
+
+One finding worth keeping at the top of this item: **the test suite could not
+have verified any of it.** The full unit suite, run against a database it
+could not connect to at all, produced one extra failure out of 3,281 tests,
+and the integration suite skips when the server is unreachable. Had the grant
+set been derived from "run the suite and see what fails", the answer would
+have been "nothing fails, the grants are complete" — with every grant missing.
+That is why the check is introspection in `liveness.sh`.
+
+The original text follows.
+
 
 Measured on 2026-10-19 while trying to do something smaller: restrict read
 access to `investigation_token_maps`, the table holding the reverse index from

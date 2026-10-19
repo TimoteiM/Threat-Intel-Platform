@@ -31,7 +31,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.db.session import sync_engine
+from app.db.session import sanitizer_engine
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,11 @@ def purge_token_maps() -> dict[str, int | str]:
     """
     from app.services import token_boundary as tb
 
-    with Session(sync_engine) as db:
+    # The sanitizer's own connection. `tip_app` — what the rest of this
+    # worker uses — has no privilege on `investigation_token_maps`, so this
+    # sweep would get `permission denied` on the application engine. That is
+    # the separation working, not a bug to route around.
+    with Session(sanitizer_engine()) as db:
         result = tb.purge_expired(db)
         db.commit()
 

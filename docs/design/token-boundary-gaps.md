@@ -71,8 +71,8 @@ restored after.
 | 3 | **Identifiers inside encoded payloads** | `powershell -enc <base64>` | One opaque string. Decoding it means running an attacker-controlled decoder over untrusted input to find identifiers, which trades a disclosure risk for an execution one. |
 | 4 | **Semantic identification** | "the domain controller in the Bucharest office" | A model can describe a host from tokenised input without naming it. No tokeniser addresses this; the prompt and the reviewer do. |
 | 5 | **Identifiers with no class** | ticket ids, asset tags, serial numbers, licence keys, phone numbers, personal names as free text | The boundary covers host, account, email, IP and SID. Everything else has no class and no pattern, and inventing classes without measuring their prevalence is how a pattern nobody exercises gets shipped. |
-| 6 | **The map is the reverse index** | — | `investigation_token_maps` holds the real values; reversibility requires it. Narrowed since 2026-10-19 — the rows are ciphertext, so database read access alone no longer yields identifiers — but **not eliminated**: anyone who can read the table *and* hold `INTEGRATION_ENCRYPTION_KEY` has every identifier in it, and the application is both. |
-| 12 | **Role separation is not enforceable in this cluster** | — | Decision C asks for SELECT revoked from the application's general role. The app connects as `threatintel`, which is **superuser, createrole, createdb**, the table's owner, and the **only non-system role in the cluster** — so there is no second role to revoke from, and `REVOKE` against an owning superuser is a no-op besides. The clause that *is* enforced is the other one: no API or report path reaches the table, pinned by `test_no_api_or_report_path_can_reach_the_token_map_table`. Doing the role split properly means creating a non-superuser application role and migrating the running app onto it — a change to how the platform connects to its database, not a change to this table. Filed as backlog 40. |
+| 6 | **The map is the reverse index** | — | `investigation_token_maps` holds the real values; reversibility requires it. Narrowed since 2026-10-19 — the rows are ciphertext, so database read access alone no longer yields identifiers — but **not eliminated**, and the reason is worth stating precisely rather than comfortably. Reading an identifier now takes both the table and `INTEGRATION_ENCRYPTION_KEY`. The role split separates the table from the rest of the platform — `tip_app` has no privilege on it — but it does **not** separate the two secrets from each other: `tip_sanitizer`'s credentials and the encryption key are in the same `.env`, read by the same container. So anyone who can execute code in the api or worker container still has both. What the split buys is that a SQL defect in any other query, and a database read on its own, no longer do. |
+| 12 | ~~**Role separation is not enforceable in this cluster**~~ | — | **CLOSED the same day, 2026-10-19.** It read as accepted for about an hour. `tip_sanitizer` is now the only role with any privilege on `investigation_token_maps`; `tip_app` — what the API, worker and beat connect as — has none, cannot do DDL, and cannot call `pg_read_file`. `threatintel` is kept for migrations alone. `scripts/check_db_privileges.sql` asserts the matrix by introspection and `scripts/liveness.sh` runs it, because the test suite cannot see a grant: run against a database it could not reach at all, the unit suite produced ONE extra failure out of 3,281 tests. Backlog 40 has the detail. |
 | 13 | **The completion purge has no caller** | — | `purge_investigation(reason="completed")` exists and nothing calls it, because the agent loop that would own an investigation does not exist on this branch. So today the **only** thing that deletes a map is the 24-hour ceiling — meaning the warning in decision B would fire for every map, and would be right to. Pinned by `test_the_completion_purge_has_no_caller_yet`, which fails when the loop wires it up and forces this row to be retired. |
 | 7 | **Fingerprint collision** | — | 12 hex characters = 48 bits. The bound is the **birthday** bound, because a collision makes the cross-tenant check pass: 50% at ~20 million scopes. It was 6 characters until 2026-10-19, where the same bound was **~4,800 scopes** — about a month of investigations. A collision still requires the token index to exist in the other map, but that is a second lock, not the argument. |
 | 8 | **A caller's own traceback** | `b.tokenize("host EXPDC002")` | A traceback renders each frame's source line, so a literal written at the call site is leaked by the caller's code. The boundary cannot reach into its caller. It holds values only in locals, which Python does not render. **Callers pass values by variable.** |
@@ -192,16 +192,27 @@ If no key is configured, sealing **refuses**. The only other honest option is
 storing the reverse index for every identifier in the investigation in
 readable form, and an outage and a breach must not share a code path.
 
-**Role separation: cannot be done here, and the reason is not about this
-table.** Measured, not assumed: the app connects as `threatintel`, which is
-superuser, createrole, createdb, the owner of
-`investigation_token_maps`, and the only non-system role in the cluster.
-"SELECT revoked from the application's general role" therefore has no second
-role to revoke from, and a `REVOKE` against an owning superuser is a no-op in
-any case. Doing it properly means creating a non-superuser application role
-and migrating the running platform onto it — **backlog 40**, and a change to
-how this platform connects to its database rather than a change to this
-feature. Row 12 carries it as the accepted gap in the meantime.
+**Role separation: done, after being written up as impossible.** The first
+version of this document said it could not be done here, and the measurement
+behind that was right — the app connected as `threatintel`, superuser and
+owner and the only non-system role in the cluster, so there was no second role
+to revoke from. What was wrong was treating "no second role exists" as a
+property of the cluster rather than as the work. The roles now exist:
+
+| connection | role | may |
+|---|---|---|
+| `DATABASE_URL` / `DATABASE_SYNC_URL` | `tip_app` | DML on the application tables. No DDL. **Nothing** on `investigation_token_maps`. |
+| `DATABASE_SANITIZER_URL` | `tip_sanitizer` | DML on `investigation_token_maps` **and nothing else in the database**. |
+| `DATABASE_MIGRATION_URL` | `threatintel` | everything; Alembic only, never a serving process. |
+
+Verified against the running platform rather than argued: as `tip_app`,
+`SELECT` on the token map, `CREATE TABLE` and `pg_read_file` are all
+`InsufficientPrivilege`; as `tip_sanitizer`, every other table is too. The
+matrix is asserted by `scripts/check_db_privileges.sql`, which
+`scripts/liveness.sh` runs — not by a test, because the suite cannot see a
+grant at all. Backlog 40 carries the three consequences of the old
+arrangement, including that a SQL injection on that connection used to be a
+host takeover rather than a data read.
 
 The clause that *is* enforced today is the other one: no API or report path
 can reach the table. `InvestigationTokenMap` is referenced from exactly three

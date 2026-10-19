@@ -19,9 +19,23 @@ from sqlalchemy.pool import NullPool
 
 
 def server_url():
+    """The connection that may CREATE DATABASE — the migration one.
+
+    Not `database_url`. Since 2026-10-19 that is `tip_app`, which has
+    NOCREATEDB on purpose, so a scratch database cannot be created with it.
+    Creating and dropping a database is a privileged operation, so it belongs
+    on the privileged connection rather than being a reason to give the
+    application's role back a privilege it should not have.
+
+    `database_migration_url` is sync-shaped (psycopg2) because Alembic is sync;
+    the driver is swapped here because this helper is async.
+    """
     from app.config import get_settings
 
-    return make_url(get_settings().database_url)
+    url = make_url(get_settings().database_migration_url)
+    if url.drivername in ("postgresql", "postgresql+psycopg2"):
+        url = url.set(drivername="postgresql+asyncpg")
+    return url
 
 
 async def _reachable(url) -> bool:

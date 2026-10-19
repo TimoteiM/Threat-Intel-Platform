@@ -286,8 +286,46 @@ class Settings(BaseSettings):
     metrics_excluded_host_patterns: str = "%test-device%,%pftest%,%-teste-%"
 
     # —— Database ———
-    database_url: str = "postgresql+asyncpg://threatintel:threatintel@localhost:5432/threatintel"
-    database_sync_url: str = "postgresql://threatintel:threatintel@localhost:5432/threatintel"
+    #
+    # Three connections, because there are three jobs with different
+    # privileges. Until 2026-10-19 there was one role — superuser, createrole,
+    # createdb, and the owner of every table — and everything used it. See
+    # scripts/db_roles.sql and the README section "Database connections".
+    #
+    # The application's own connection. `tip_app`: DML on the application
+    # tables, no DDL, and NO access to investigation_token_maps.
+    database_url: str = "postgresql+asyncpg://tip_app:tip_app@localhost:5432/threatintel"
+    database_sync_url: str = "postgresql://tip_app:tip_app@localhost:5432/threatintel"
+
+    #: The token boundary's connection, and the only one that can read
+    #: `investigation_token_maps` — the table mapping `[HOST_a3f9c1_1]` back to
+    #: a real machine name. Separate from the one above so that a SQL defect
+    #: anywhere else in the platform cannot reach the reverse index.
+    #: Sync only: the one caller is the Celery purge sweep, and inventing an
+    #: async engine for a consumer that does not exist yet is how an untested
+    #: path gets shipped.
+    database_sanitizer_url: str = (
+        "postgresql://tip_sanitizer:tip_sanitizer@localhost:5432/threatintel"
+    )
+
+    #: Migrations only — Alembic, run by hand or by a deploy. This is the
+    #: superuser connection, and it is deliberately not the one the running
+    #: application holds: a SQL injection reaching a superuser connection is a
+    #: host takeover (`COPY ... PROGRAM`), not a data read.
+    database_migration_url: str = (
+        "postgresql://threatintel:threatintel@localhost:5432/threatintel"
+    )
+
+    #: Whether startup may create and alter tables.
+    #:
+    #: `False` everywhere the application runs as `tip_app`, which cannot do
+    #: DDL at all — so this is not a preference, it is a statement about which
+    #: role is connected. Migrations are the schema authority (backlog 25 is
+    #: the standing complaint that they were not the only one). With it off,
+    #: startup verifies the schema instead of repairing it, and refuses to
+    #: serve if core tables are missing rather than quietly creating empty
+    #: ones.
+    db_bootstrap_schema: bool = False
 
     # —— Redis ———
     redis_url: str = "redis://localhost:6379/0"

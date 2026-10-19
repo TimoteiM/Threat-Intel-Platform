@@ -25,8 +25,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set the DB URL from our config (overrides alembic.ini)
+#
+# `database_migration_url`, not `database_sync_url`. Since 2026-10-19 the
+# application connects as `tip_app`, which has DML and no DDL — so running
+# migrations on the application's connection fails with "must be owner of
+# table", and would fail *partway through* a migration rather than at its
+# start. Migrations are the one job that needs the owning superuser, and this
+# is the only place that URL is read. See scripts/db_roles.sql.
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_sync_url)
+config.set_main_option("sqlalchemy.url", settings.database_migration_url)
 
 target_metadata = Base.metadata
 

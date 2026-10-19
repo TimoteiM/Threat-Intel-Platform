@@ -35,9 +35,43 @@ logger = logging.getLogger(__name__)
 # ── Lifespan ──
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from sqlalchemy import text
     from app.models.database import Base  # noqa: F401 — import registers all models
 
+    # ── Schema: verified, or bootstrapped on request ──
+    #
+    # This block used to run `create_all` plus 20 ALTER/CREATE statements on
+    # every boot, which needs table ownership. Since 2026-10-19 the
+    # application connects as `tip_app`, which has DML and no DDL, so it
+    # cannot do any of it — and should not: migrations are the schema
+    # authority, and this was the second one (backlog 25).
+    #
+    # Measured before switching it off: against this database `create_all`
+    # creates nothing, so the DDL had already been dead weight for every boot.
+    #
+    # `db_bootstrap_schema` is for a fresh database on a developer's machine,
+    # where the connection is the owner. It is off by default, and off is what
+    # the deployment uses.
+    if not settings.db_bootstrap_schema:
+        await _verify_schema()
+    else:
+        await _bootstrap_schema()
+
+    await _configure_runtime()
+
+    yield
+    logger.info("Shutting down")
+
+
+async def _bootstrap_schema() -> None:
+    """Create and alter tables. Needs an owning connection; dev only."""
+    from sqlalchemy import text
+    from app.models.database import Base
+
+    logger.warning(
+        "DB_BOOTSTRAP_SCHEMA is on: creating and altering tables at startup. "
+        "This is a second schema authority alongside Alembic (backlog 25) and "
+        "requires an owning database role."
+    )
     async with async_engine.begin() as conn:
         # Create any tables that don't exist yet (idempotent)
         await conn.run_sync(Base.metadata.create_all)
@@ -77,8 +111,41 @@ async def lifespan(app: FastAPI):
         for stmt in col_migrations:
             await conn.execute(text(stmt))
 
-    logger.info("Database schema verified / migrated")
 
+async def _verify_schema() -> None:
+    """Check the schema instead of repairing it. The default path.
+
+    The dangerous direction is a fresh or half-migrated database with
+    bootstrap off: the application would come up, every route would fail on a
+    missing table, and the logs would blame whichever query ran first. So this
+    refuses to serve, naming the remedy.
+
+    It checks the model's own table list rather than a hand-written set of
+    names — a second list of tables is a list that goes stale, and this
+    codebase has eight of those.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from app.models.database import Base
+
+    async with async_engine.connect() as conn:
+        live = set(await conn.run_sync(lambda c: sa_inspect(c).get_table_names()))
+
+    missing = sorted(set(Base.metadata.tables) - live)
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} table(s) the models require are not in the "
+            f"database: {', '.join(missing[:10])}"
+            f"{'...' if len(missing) > 10 else ''}. Migrations are the schema "
+            f"authority — run `alembic upgrade head` (which uses "
+            f"DATABASE_MIGRATION_URL, the owning connection). Set "
+            f"DB_BOOTSTRAP_SCHEMA=true only on a developer database whose "
+            f"connection owns its tables."
+        )
+    logger.info("Schema verified: %d model tables present", len(Base.metadata.tables))
+
+
+async def _configure_runtime() -> None:
+    """Everything after the schema is settled. No `yield` — see `lifespan`."""
     # A session secret has to be settled before the first cookie is signed, and
     # there has to be an account to sign in with before default-deny bites.
     from app.security.bootstrap import (
@@ -100,8 +167,6 @@ async def lifespan(app: FastAPI):
         logger.info(f"Anthropic fallback: enabled (model={settings.anthropic_model})")
     else:
         logger.info("Anthropic fallback: disabled (set ANTHROPIC_API_KEY and ANTHROPIC_MODEL)")
-    yield
-    logger.info("Shutting down")
 
 
 # ── App ──

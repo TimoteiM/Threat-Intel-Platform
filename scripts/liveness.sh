@@ -331,7 +331,29 @@ if [[ "$push" != "pushed" || "$tree" != "tree clean" ]]; then
     line="$line · uncommitted or unpushed work is not running anywhere"
 fi
 
+# ── Database privileges ──
+#
+# The application connects as `tip_app`, which must not be able to reach
+# `investigation_token_maps` or do DDL, and the sanitizer must not be able to
+# reach anything else. This is here, rather than in the test suite, because
+# the suite cannot see it: measured on 2026-10-19, the full unit suite run
+# against a database it could not connect to at all produced ONE extra failure
+# out of 3,281 tests, and the integration suite skips when the server is
+# unreachable. A grant regression is therefore invisible to `pytest` and
+# visible here.
+priv_bad=0
+if priv_out="$(./scripts/check_db_privileges.sh 2>&1)"; then
+    line="$line · db privs ok"
+else
+    priv_bad=1
+    line="$line · DB PRIVILEGE DRIFT — scripts/provision_db_roles.sh"
+fi
+
 echo "$line"
+
+if (( priv_bad )); then
+    printf '%s\n' "$priv_out" | sed 's/^/    /'
+fi
 
 if (( env_bad )) && [[ -n "$_compose_json" ]]; then
     for svc in api worker beat; do
@@ -371,4 +393,8 @@ fi
 if (( serve_bad )) && [[ "$tree" == "tree clean" ]]; then
     exit 1
 fi
+
+# No dirty-tree exemption: a grant is a property of the database, not of the
+# working tree, so an edit cannot move it and there is nothing to excuse.
+(( priv_bad == 0 )) || exit 1
 (( env_bad == 0 )) || exit 1

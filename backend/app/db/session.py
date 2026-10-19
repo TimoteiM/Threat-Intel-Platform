@@ -101,6 +101,49 @@ sync_engine = create_engine(
 )
 
 
+# ─── The token boundary's own connection ───
+#
+# `investigation_token_maps` maps `[HOST_a3f9c1_1]` back to a real machine
+# name: it is the one table whose rows are, by construction, the identifiers
+# every other protection exists to remove. `tip_app` — the role the API, the
+# worker and beat connect as — has no privilege on it at all, so the boundary
+# cannot borrow the engines above and has to hold its own.
+#
+# The separation is enforced by the database rather than by this comment:
+# scripts/check_db_privileges.sql fails if `tip_app` can reach the table or if
+# `tip_sanitizer` can reach anything else, and scripts/liveness.sh runs it.
+#
+# Lazy, and unpooled. Lazy because a deployment that has not provisioned the
+# sanitizer role should fail when the boundary is used rather than when the
+# application imports — the boundary has no consumer in production yet, and
+# an import-time connection would take the whole API down for a feature
+# nothing calls. Unpooled for the reason celery_async_engine is: Celery runs a
+# threads pool here, and the purge sweep is the only caller.
+_sanitizer_engine = None
+
+
+def sanitizer_engine():
+    """The engine for the token map, built on first use.
+
+    Not a module-level global like the others: see above. Callers get the
+    same engine on every call, so the connection is still reused within a
+    process.
+    """
+    global _sanitizer_engine
+    if _sanitizer_engine is None:
+        _sanitizer_engine = create_engine(
+            _explicit_driver(settings.database_sanitizer_url),
+            # `echo` is NOT settings.is_development here, unlike every engine
+            # above. SQLAlchemy's echo logs statements with their bound
+            # parameters, and this connection's parameters are hostnames and
+            # account names — the exact values the boundary exists to keep out
+            # of model-facing text and out of logs.
+            echo=False,
+            poolclass=NullPool,
+        )
+    return _sanitizer_engine
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency — yields an async database session."""
     async with AsyncSessionLocal() as session:

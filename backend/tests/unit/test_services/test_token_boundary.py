@@ -858,31 +858,61 @@ def test_the_completion_purge_has_no_caller_yet():
     )
 
 
+def _modules_referencing(app_root, needles: tuple[str, ...]) -> list[str]:
+    """Modules whose **code** names one of these, ignoring comments.
+
+    Comments are stripped with `tokenize` rather than left in. The first
+    version of this check grepped the raw text and failed the moment a comment
+    in `db/session.py` explained *why* the sanitizer holds its own engine —
+    naming the table in prose is the opposite of reaching it, and a guard that
+    punishes the explanation teaches people to delete the explanation.
+    """
+    import io
+    import pathlib
+    import tokenize
+
+    found = []
+    for path in sorted(app_root.rglob("*.py")):
+        source = path.read_text()
+        if not any(n in source for n in needles):
+            continue
+        try:
+            code = "".join(
+                tok.string
+                for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+                if tok.type != tokenize.COMMENT
+            )
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            code = source          # unparseable: fall back to the strict read
+        if any(n in code for n in needles):
+            found.append(pathlib.Path(path).relative_to(app_root).as_posix())
+    return found
+
+
 def test_no_api_or_report_path_can_reach_the_token_map_table():
-    """Decision C's enforceable half.
+    """Decision C's other half, and the one that is enforced in code.
 
-    The role separation the decision asks for cannot be done today — the app
-    connects as `threatintel`, which is superuser and the table's owner, and
-    is the only non-system role in the cluster, so `REVOKE SELECT` from "the
-    application's general role" has no second role to revoke from. That is
-    reported in the register, not fixed here.
+    The role separation is now real — `tip_app` has no privilege on
+    `investigation_token_maps` and only `tip_sanitizer` does
+    (scripts/db_roles.sql) — but a database grant is checked by
+    scripts/check_db_privileges.sql, not by this suite. What this asserts is
+    the application-side half: the reverse index is *named* only by the
+    boundary, its mapping, its sweep and the engine it connects with.
 
-    What *is* enforceable in code is the other clause: no API or report path
-    that can reach it. The reverse index is reachable only from the boundary.
+    Docstrings count as code here, deliberately. A module that documents the
+    table in its docstring is close enough to it to be listed.
     """
     import pathlib
 
     app_root = pathlib.Path(tb.__file__).resolve().parent.parent
     allowed = {
-        "services/token_boundary.py",   # the boundary itself
-        "models/database.py",           # the mapping
-        "tasks/token_map_purge_task.py" # the ceiling sweep
+        "services/token_boundary.py",    # the boundary itself
+        "models/database.py",            # the mapping
+        "tasks/token_map_purge_task.py", # the ceiling sweep
+        "db/session.py",                 # the sanitizer engine, and only it
     }
-    reachable = sorted(
-        path.relative_to(app_root).as_posix()
-        for path in app_root.rglob("*.py")
-        if "InvestigationTokenMap" in path.read_text()
-        or "investigation_token_maps" in path.read_text()
+    reachable = _modules_referencing(
+        app_root, ("InvestigationTokenMap", "investigation_token_maps")
     )
     assert set(reachable) <= allowed, (
         f"the token map is referenced outside the boundary: "

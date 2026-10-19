@@ -119,8 +119,15 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
-      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
@@ -216,8 +223,15 @@ services:
     shm_size: '2gb'
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
-      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
@@ -259,8 +273,15 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://threatintel:threatintel@postgres:5432/threatintel
-      DATABASE_SYNC_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
+      # Three connections, three privilege levels — scripts/db_roles.sql and
+      # the README's "Database connections". The role names are here because
+      # they are not secret and seeing which role a service holds is the
+      # point; the passwords come from .env, which is gitignored.
+      DATABASE_URL: postgresql+asyncpg://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SYNC_URL: postgresql://tip_app:${TIP_APP_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      DATABASE_SANITIZER_URL: postgresql://tip_sanitizer:${TIP_SANITIZER_PASSWORD:?run scripts/provision_db_roles.sh}@postgres:5432/threatintel
+      # Alembic only. Never held by a serving process.
+      DATABASE_MIGRATION_URL: postgresql://threatintel:threatintel@postgres:5432/threatintel
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1

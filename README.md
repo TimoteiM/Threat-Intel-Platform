@@ -921,6 +921,75 @@ Investigations can be exported as:
 
 ---
 
+## Database connections
+
+**Three connections, three privilege levels.** Until 2026-10-19 there was one
+role — `threatintel`: superuser, createrole, createdb, owner of every table —
+and the API, the worker, beat and Alembic all connected as it.
+
+| setting | role | who holds it | may |
+|---|---|---|---|
+| `DATABASE_URL` (async) / `DATABASE_SYNC_URL` (sync) | `tip_app` | the API, the worker, beat | `SELECT, INSERT, UPDATE, DELETE` on the application tables. **No DDL.** No access to `investigation_token_maps`. `SELECT` only on `alembic_version`. |
+| `DATABASE_SANITIZER_URL` (sync) | `tip_sanitizer` | the token boundary alone | DML on `investigation_token_maps` **and nothing else in the database**. |
+| `DATABASE_MIGRATION_URL` (sync) | `threatintel` | **Alembic only** | everything. Never held by a serving process. |
+
+Defined in `scripts/db_roles.sql`; applied by `scripts/provision_db_roles.sh`,
+which generates the two passwords into `.env` (gitignored) and never prints
+them. Re-running it is safe and re-applies the grants.
+
+**Why the sanitizer is separate.** `investigation_token_maps` maps
+`[HOST_a3f9c1_1]` back to a real machine name: it is the one table whose rows
+are, by construction, the identifiers every other protection exists to remove.
+The rows are encrypted at rest (migration 071), so the role split is the
+second lock rather than the only one. `app/db/session.py:sanitizer_engine()`
+is the only engine that can reach it, and its `echo` is hard-coded to `False`
+— unlike the other engines, which follow `is_development` — because echoed SQL
+carries bound parameters, and this connection's parameters are hostnames and
+account names.
+
+**Why migrations are separate.** A SQL injection reaching a superuser
+connection is a host takeover (`COPY ... PROGRAM`, `pg_read_file`), not a data
+read. Migrations are the only job that needs ownership, and they run by hand
+or by a deploy rather than in response to a request.
+
+**Schema authority.** Migrations are it. Startup used to run `create_all` plus
+20 `ALTER`/`CREATE` statements on every boot — a second schema authority
+(backlog 25) — which `tip_app` cannot do at all. It is now off by default
+(`DB_BOOTSTRAP_SCHEMA=false`) and startup *verifies* the schema instead,
+refusing to serve if a model's table is missing rather than creating an empty
+one. Measured before switching it off: against the live database `create_all`
+created nothing, so the DDL had been dead weight on every boot.
+
+### Checking it
+
+```bash
+scripts/check_db_privileges.sh     # introspects; prints violations, exit 1
+scripts/liveness.sh                # runs the above as one of its limbs
+```
+
+**The suite cannot check this, and the number is worth knowing.** On
+2026-10-19 the full unit suite was run against a database it could not connect
+to at all: **one extra failure out of 3,281 tests**. The integration suite,
+which does use a database, *skips* when the server is unreachable. So "the
+tests pass" is compatible with every grant being wrong, and a missing grant
+would first appear in production. That is why the check is introspection in
+`liveness.sh` rather than a test, and why `scripts/check_db_privileges.sql`
+ends with two positive controls — a check that cannot see a violation reports
+a clean cluster forever.
+
+### Adding a table
+
+Nothing to do. `ALTER DEFAULT PRIVILEGES` grants `tip_app` DML on tables
+created by `threatintel`, which is the only role that can create them. Without
+that, a migration would add a table with no grant and the application would
+get `permission denied` on whichever code path touched it first — possibly
+hours later, in a Celery task nobody is watching. If you want certainty,
+re-run `scripts/provision_db_roles.sh`; `check_db_privileges.sh` reports a
+table the app cannot reach as `APP MISSING A GRANT`.
+
+A table that should be **restricted** like the token map needs an explicit
+`REVOKE` in `db_roles.sql` and a line in `check_db_privileges.sql`.
+
 ## Quick Start
 
 ### Prerequisites
@@ -941,10 +1010,15 @@ cp .env.example .env
 # 2. Start all services
 docker-compose up -d
 
-# 3. Run database migrations
-docker-compose exec api alembic upgrade head
+# 3. Create the database roles (generates passwords into .env, never prints them)
+scripts/provision_db_roles.sh
 
-# 4. Open the UI
+# 4. Run database migrations — these use DATABASE_MIGRATION_URL, the owning
+#    connection, not the one the application serves with. See "Database
+#    connections" above.
+docker compose exec api alembic upgrade head
+
+# 5. Open the UI
 # http://localhost:3000
 ```
 
