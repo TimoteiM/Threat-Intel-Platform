@@ -344,6 +344,165 @@ async def create_alert_investigation_from_raw_text(
     return await _wait_for_report(db, queued, timeout=wait_timeout)
 
 
+@router.patch("/tenants/{tenant_id}")
+async def onboard_tenant(
+    tenant_id: str,
+    db: DBSession,
+    body: dict[str, Any] = Body(...),
+    http_request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Confirm a client the ingest created, or rename one. Administrators only.
+
+    `_provision_tenant` mints a row the first time an alert names an unknown
+    tenant, because refusing that alert would lose it — but it marks the row
+    `provisional`, with a name derived mechanically from the id, precisely
+    because *a sender naming itself in a URL is not a decision to onboard a
+    client*. This is the route that turns that into a decision.
+
+    Until it existed, clearing `provisional` meant a hand-written UPDATE. That
+    is the same shape as the owner account that could only be disabled at the
+    database: a safeguard with no action to resolve it, which makes the
+    safeguard a dead end rather than a step.
+
+    **Activating is a judgement, so it is recorded as one.** Every change
+    writes a `tenant_events` row with both sides of it and who made it, in the
+    same transaction — a status column says what a tenant is now and can never
+    say who decided that.
+
+    Deliberately NOT here: deactivating or deleting a tenant. Alerts are
+    already landing against these ids, and removing the row they point at is a
+    different and larger decision than confirming one.
+    """
+    from app.api.auth import has_admin_rights
+    from app.models.database import Tenant, TenantEvent
+
+    identity = _identity(http_request)
+    if not identity:
+        raise HTTPException(401, "Sign in first.")
+    if not has_admin_rights(identity.get("role")):
+        # 403 rather than 404: the tenant list is already readable by this
+        # caller, so refusing to confirm one leaks nothing it cannot see.
+        raise HTTPException(403, "Administrator access is required to onboard a client.")
+
+    wanted = _validated_tenant_id(tenant_id)
+    if not wanted:
+        raise HTTPException(400, "A tenant id is required.")
+
+    row = (
+        await db.execute(select(Tenant).where(Tenant.tenant_id == wanted))
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(404, f"No client with id {wanted!r}.")
+
+    before_status, before_name = row.status, row.name
+
+    new_name = body.get("name")
+    if new_name is not None:
+        new_name = str(new_name).strip()
+        if not new_name:
+            raise HTTPException(400, "A client name cannot be blank.")
+        if len(new_name) > 255:
+            raise HTTPException(400, "A client name is at most 255 characters.")
+        row.name = new_name
+
+    new_status = body.get("status")
+    if new_status is not None:
+        new_status = str(new_status).strip().lower()
+        if new_status not in ("active", PROVISIONAL):
+            raise HTTPException(
+                400,
+                f"Status must be 'active' or {PROVISIONAL!r}. Deactivating a "
+                f"client is not done here — alerts are already arriving for "
+                f"this id, and the row they point at is not a toggle.",
+            )
+        row.status = new_status
+
+    note = body.get("note")
+    note = str(note).strip()[:2000] if note is not None else None
+
+    if row.status == before_status and row.name == before_name:
+        # Nothing changed, so nothing is recorded. An audit log that fills with
+        # no-op rows is one nobody reads.
+        return _tenant_json(row, changed=False)
+
+    db.add(
+        TenantEvent(
+            tenant_id=wanted,
+            action="onboarded" if (
+                before_status == PROVISIONAL and row.status == "active"
+            ) else "updated",
+            actor=str(identity.get("username") or identity.get("label") or "")[:128] or None,
+            actor_role=str(identity.get("role") or "")[:32] or None,
+            from_status=before_status,
+            to_status=row.status,
+            from_name=before_name,
+            to_name=row.name,
+            note=note,
+        )
+    )
+    await db.commit()
+    await db.refresh(row)
+    return _tenant_json(row, changed=True)
+
+
+def _tenant_json(row: Any, *, changed: bool) -> dict[str, Any]:
+    return {
+        "tenant_id": row.tenant_id,
+        "name": row.name,
+        "status": row.status,
+        "provisional": row.status == PROVISIONAL,
+        "changed": changed,
+    }
+
+
+@router.get("/tenants/{tenant_id}/events")
+async def tenant_events(
+    tenant_id: str,
+    db: DBSession,
+    http_request: Request = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """What has happened to this client, newest first.
+
+    Scoped like every other read: a caller who may not read this tenant's
+    alerts may not read its history either, and gets a 404 rather than a 403
+    so the endpoint does not confirm which clients exist.
+    """
+    from app.models.database import TenantEvent
+
+    wanted = _validated_tenant_id(tenant_id)
+    tenant_scope.assert_can_read(_scope(http_request), wanted)
+
+    rows = (
+        await db.execute(
+            select(TenantEvent)
+            .where(TenantEvent.tenant_id == wanted)
+            .order_by(TenantEvent.at.desc(), TenantEvent.id.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    return {
+        "tenant_id": wanted,
+        "events": [
+            {
+                "action": e.action,
+                "actor": e.actor,
+                "actor_role": e.actor_role,
+                "from_status": e.from_status,
+                "to_status": e.to_status,
+                "from_name": e.from_name,
+                "to_name": e.to_name,
+                "note": e.note,
+                "at": e.at.isoformat() if e.at else None,
+            }
+            for e in rows
+        ],
+        # An empty list is not "nothing happened": this table began on
+        # 2026-10-19 and nothing before it was backfilled, because inventing
+        # an actor is worse than having none.
+        "recorded_since": "2026-10-19",
+    }
+
+
 @router.post("/tenants/{tenant_id}")
 async def create_alert_investigation_for_tenant(
     tenant_id: str,

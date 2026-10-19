@@ -445,6 +445,46 @@ export interface TenantOption {
   name: string;
   status: string;
   run_count: number;
+  /** Created by an incoming alert naming this id, not by anyone deciding to
+   *  onboard a client — so the name is derived from the id and nobody has
+   *  confirmed it is real. `ClientFilter` surfaces these for confirmation. */
+  provisional?: boolean;
+}
+
+/** Confirm a client the ingest created, or rename one. Administrators only.
+ *  Every change writes a `tenant_events` row recording both sides of it. */
+export function onboardTenant(
+  tenantId: string,
+  body: { name?: string; status?: "active" | "provisional"; note?: string },
+) {
+  return request<{
+    tenant_id: string;
+    name: string;
+    status: string;
+    provisional: boolean;
+    changed: boolean;
+  }>(`/alert-investigations/tenants/${encodeURIComponent(tenantId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface TenantEvent {
+  action: string;
+  actor?: string | null;
+  actor_role?: string | null;
+  from_status?: string | null;
+  to_status?: string | null;
+  from_name?: string | null;
+  to_name?: string | null;
+  note?: string | null;
+  at?: string | null;
+}
+
+export function getTenantEvents(tenantId: string) {
+  return request<{ tenant_id: string; events: TenantEvent[]; recorded_since: string }>(
+    `/alert-investigations/tenants/${encodeURIComponent(tenantId)}/events`,
+  );
 }
 
 export interface TenantScope {

@@ -4,9 +4,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import ConsoleModule from "@/components/ui/ConsoleModule";
+import OnboardClients from "@/components/detections/OnboardClients";
 import TimeWindow, { toInstant } from "@/components/shared/TimeWindow";
 import PageHero from "@/components/ui/PageHero";
-import { alertInvestigationExportUrl, deleteAlertInvestigation, listAlertInvestigations, type TenantOption } from "@/lib/api";
+import { alertInvestigationExportUrl, deleteAlertInvestigation, getMe, listAlertInvestigations, type TenantOption } from "@/lib/api";
 import type { AlertInvestigationRun } from "@/lib/types";
 
 const VERDICT_COLORS: Record<string, string> = {
@@ -38,6 +39,10 @@ export default function AlertInvestigationsPage() {
   // carries an empty tenant_ids, so building the list here showed internal
   // staff no client to select.
   const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
+  // Whether this caller may confirm a client. Asked once: the onboarding
+  // route refuses a non-administrator, and showing a control that is going to
+  // 403 is worse than not showing it.
+  const [canOnboard, setCanOnboard] = useState(false);
   // The window the list is cut to. "All" by default, because this page is
   // where somebody goes looking for a specific alert they already know about,
   // and a window applied before they asked for one would hide it.
@@ -96,6 +101,21 @@ export default function AlertInvestigationsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Asked once, not per render. A failure here leaves `canOnboard` false,
+  // which hides the control rather than offering one that will be refused —
+  // the safe direction when the answer is unknown.
+  useEffect(() => {
+    let cancelled = false;
+    getMe()
+      .then((me) => {
+        if (!cancelled) setCanOnboard(me.role === "admin" || me.role === "owner");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Deleting the last row of the last page leaves the offset past the end,
   // which would render an empty list rather than the page that is now last.
@@ -163,6 +183,14 @@ export default function AlertInvestigationsPage() {
       />
 
       <TimeWindow value={{ hours, since, until }} onChange={applyWindow} />
+
+      {/* Above the list, not inside the selector: a <select> holds options,
+          and this is a decision. Renders only while something is waiting. */}
+      <OnboardClients
+        options={tenantOptions}
+        canOnboard={canOnboard}
+        onDone={() => void load()}
+      />
 
       <ConsoleModule
         title="Runs"

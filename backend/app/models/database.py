@@ -535,6 +535,47 @@ class Tenant(Base):
     )
 
 
+class TenantEvent(Base):
+    """What happened to a tenant, append-only.
+
+    `Tenant.status` answers *what is it now*. It cannot answer *who decided
+    that, when, and what was it called before* — a current-state column is not
+    a history, and reading one as a history is a mistake this platform has
+    made before (`ip_lookups`).
+
+    It exists because a tenant row created by an incoming alert carries a name
+    nobody chose and a status nobody set, and the act of confirming it is a
+    real administrative decision with no trace anywhere. That is backlog 29's
+    finding — **no administrative action on this platform is recorded** —
+    scoped to the one case that now has a user interface.
+
+    Rows are written and never updated. `integration_audit` was not reused:
+    it is integration configuration, and a table with two subjects is a table
+    whose rows have to be filtered before they mean anything.
+    """
+
+    __tablename__ = "tenant_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Deliberately not a foreign key: the event outlives the tenant row it
+    # describes, and "created by an alert, then removed" is the history most
+    # worth keeping.
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Both sides of the change, so no reader has to reconstruct the previous
+    # value from an earlier row that may not exist.
+    from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    to_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+
 class Client(Base):
     """Registered client organizations whose assets we monitor."""
     __tablename__ = "clients"
