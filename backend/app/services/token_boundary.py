@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -69,7 +70,16 @@ DEFAULT_TTL = timedelta(hours=6)
 #: `[HOST_a3f9c1_1]`. The fingerprint sits between the prefix and the index so
 #: the prefix still reads first — a model is being asked to reason about
 #: "HOST", and the scope is bookkeeping it never needs to understand.
-TOKEN_RE = re.compile(r"\[(?P<prefix>[A-Z]+)_(?P<fingerprint>[0-9a-f]{6})_(?P<index>\d+)\]")
+#: Twelve hex characters, not six. At 24 bits the birthday bound puts a 50%
+#: chance of a collision at roughly 4,800 scopes — and a collision is not
+#: cosmetic here: two scopes sharing a fingerprint make the cross-tenant check
+#: pass, which is the one check whose failure is a confident answer about
+#: another customer's estate. 48 bits moves that bound to ~20 million.
+FINGERPRINT_CHARS = 12
+
+TOKEN_RE = re.compile(
+    r"\[(?P<prefix>[A-Z]+)_(?P<fingerprint>[0-9a-f]{%d})_(?P<index>\d+)\]" % FINGERPRINT_CHARS
+)
 
 #: Anything bracket-shaped that could be a token. Used only to REFUSE: a
 #: string that looks like a token and does not parse is the model inventing
@@ -105,6 +115,157 @@ DECLARED_FIELDS: dict[str, str] = {
     "agent.ip": "IP",
     "users": "ACCOUNT",
 }
+
+# ── the extra pass: what the keyed detectors reject ──────────────────────
+#
+# `assistant_sanitizer_service` gates every host match on `_is_redactable_host`,
+# which requires a public or internal SUFFIX — so a single-label name is only
+# tokenised when something else about it looks host-like. Measured: a name with
+# no digit and no dot is never tokenised, even keyed. `computer="FILESERVER"`
+# passed through whole, and `MAILGW`, `EXCHANGE` and `PRINTSRV` with it.
+#
+# The gate is there for a reason: it was added after a .NET crash report had 35
+# stack-trace namespaces tokenised as hostnames. So this pass does not remove
+# it — it runs afterwards, over the KEYED positions only, where a field name
+# has already said "this is a host".
+#
+# **Deny-list, not allow-list.** An allow-list from an asset inventory makes
+# coverage depend on the inventory being complete, and an inventory is never
+# complete — the machine nobody registered is the one worth tokenising. So
+# everything in a host or account position is tokenised except a short list of
+# names that are identical on every Windows estate and carry analytical
+# meaning: an analyst reading "[ACCOUNT_3] created a service" has lost the
+# fact that it was SYSTEM.
+
+#: Principals that mean the same thing on every estate. Matched
+#: case-insensitively, and in their `DOMAIN\NAME` forms.
+BUILTIN_PRINCIPALS = frozenset({
+    "system", "localsystem", "local system", "local service", "network service",
+    "anonymous logon", "trustedinstaller", "everyone", "authenticated users",
+    "creator owner", "self", "iusr", "iwam", "nt authority", "nt service",
+    "builtin", "window manager", "font driver host", "umfd-0", "umfd-1",
+    "dwm-1", "dwm-2",
+})
+
+#: Authorities whose `DOMAIN\NAME` names a built-in rather than a real user.
+BUILTIN_AUTHORITIES = frozenset({"nt authority", "nt service", "builtin", "window manager"})
+
+#: Placeholders a host field carries when there is no host.
+BUILTIN_HOSTS = frozenset({"localhost", "unknown", "none", "null", "n/a", "-", "127.0.0.1"})
+
+_HOST_KEY = r"[A-Za-z0-9_]*?(?:hostname|computername|computer|host|server|device|workstation)"
+_ACCOUNT_KEY = r"[A-Za-z0-9_]*?(?:username|user|accountname|samaccountname|account)"
+_SEP = r'(?:(?:\\*")?\s*:\s*(?:\\*")|\s*[=:]\s*\\*"?)'
+
+#: A keyed host whose value the existing gate rejects: single label, no dot.
+KEYED_HOST_LAX_RE = re.compile(
+    rf'(?P<prefix>\b{_HOST_KEY}{_SEP})(?P<value>[A-Za-z][A-Za-z0-9_-]{{1,62}})(?![\w.-])',
+    re.IGNORECASE,
+)
+
+#: A keyed account, including the `DOMAIN\user` form.
+KEYED_ACCOUNT_LAX_RE = re.compile(
+    rf'(?P<prefix>\b{_ACCOUNT_KEY}{_SEP})'
+    rf'(?P<value>(?:[A-Za-z][A-Za-z0-9_.-]{{0,30}}\\)?[A-Za-z][A-Za-z0-9_.$-]{{0,62}})(?![\w.-])',
+    re.IGNORECASE,
+)
+
+#: `-User jdoe`, `/user jdoe` — a command-line SWITCH, where the separator is
+#: a space rather than `=` or `:`. Measured: `powershell ... -User jdoe` leaked
+#: the account out of a corpus pass.
+#:
+#: The leading `-` or `/` is required and is the whole safety of this pattern.
+#: Without it, `user\s+VALUE` matches "the user clicked the link" and
+#: tokenises `clicked` as an account — corrupting prose to hide an identifier
+#: that was never there.
+SWITCH_ACCOUNT_RE = re.compile(
+    r"(?P<prefix>(?:^|\s)[-/]{1,2}(?:user(?:name)?|account)\s+)"
+    r"(?P<value>(?:[A-Za-z][A-Za-z0-9_.-]{0,30}\\)?[A-Za-z][A-Za-z0-9_.$-]{0,62})(?![\w.-])",
+    re.IGNORECASE,
+)
+
+#: `INT\jdoe` standing alone in a sentence. Not preceded by a backslash, which
+#: is what separates it from a UNC share and from `C:\Users\jdoe` — in both of
+#: those the candidate "domain" is itself a path segment.
+BARE_DOMAIN_ACCOUNT_RE = re.compile(
+    r"(?<![\\\w:.-])(?P<value>[A-Za-z][A-Za-z0-9_-]{1,20}\\[A-Za-z][A-Za-z0-9_.$-]{0,62})(?![\w.-])"
+)
+
+#: The server in `\\EXPFS01\finance\q3.xlsx`. The share and path are left
+#: alone; the host is the identifier.
+UNC_HOST_RE = re.compile(r"(?<=\\\\)(?P<value>[A-Za-z][A-Za-z0-9_-]{1,62})(?=\\|$)")
+
+#: Candidates only. `ipaddress` decides — a shape-match counts `12:34:56` as an
+#: address, which is a timestamp, and measuring with the loose pattern said
+#: 89.5% of alert bodies carried IPv6 where validation says 1.2%.
+IPV6_CANDIDATE_RE = re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:])")
+
+
+#: Built-ins, as they appear in text, longest first so `NT AUTHORITY\\SYSTEM`
+#: wins over `SYSTEM`. The authority-qualified form takes any name, because
+#: `NT SERVICE\\MSSQLSERVER` is a service account and not a person.
+_PROTECT_RE = re.compile(
+    r"(?<![\w\\])(?:"
+    r"(?:NT\s+AUTHORITY|NT\s+SERVICE|BUILTIN|WINDOW\s+MANAGER|FONT\s+DRIVER\s+HOST)"
+    r"\\[A-Za-z0-9_.$-]{1,64}"
+    r"|" + "|".join(
+        re.escape(name) for name in sorted(BUILTIN_PRINCIPALS | BUILTIN_HOSTS, key=len, reverse=True)
+    ).replace(r"\ ", r"\s+") +
+    r")(?![\w.-])",
+    re.IGNORECASE,
+)
+
+#: NUL-delimited, because nothing in the detection pipeline matches a NUL and
+#: a protected span has to come back byte-identical.
+_SENTINEL = "\x00P{}\x00"
+_SENTINEL_RE = re.compile(r"\x00P(\d+)\x00")
+
+
+def _protect_builtins(text: str) -> tuple[str, dict[str, str]]:
+    """Hide built-in principals before the detectors run.
+
+    The deny-list cannot be applied afterwards: the existing account pattern
+    stops at a space, so `user="NT AUTHORITY\\SYSTEM"` is already two
+    fragments — `NT` tokenised and `AUTHORITY\\SYSTEM` left — by the time any
+    later pass sees it, and neither fragment is in the list. Measured: it came
+    back as two separate account tokens.
+    """
+    held: dict[str, str] = {}
+
+    def repl(match: "re.Match[str]") -> str:
+        key = _SENTINEL.format(len(held))
+        held[key] = match.group(0)
+        return key
+
+    return _PROTECT_RE.sub(repl, text), held
+
+
+def _restore_builtins(text: str, held: dict[str, str]) -> str:
+    if not held:
+        return text
+    return _SENTINEL_RE.sub(
+        lambda m: held.get(_SENTINEL.format(m.group(1)), m.group(0)), text
+    )
+
+
+def is_builtin_principal(value: str) -> bool:
+    """A name that means the same thing on every estate, in any of its forms."""
+    candidate = str(value or "").strip().strip('"').casefold()
+    if not candidate:
+        return True
+    if candidate in BUILTIN_PRINCIPALS or candidate in BUILTIN_HOSTS:
+        return True
+    if "\\" in candidate:
+        domain, _, name = candidate.rpartition("\\")
+        if domain in BUILTIN_AUTHORITIES:
+            return True
+        if name in BUILTIN_PRINCIPALS:
+            # `EXPDC002\SYSTEM` — the name is built in, but the domain half is
+            # a real machine, so only the fully built-in forms are kept.
+            return domain in BUILTIN_AUTHORITIES or domain in BUILTIN_HOSTS
+    # A machine account: `EXPDC002$` is the host, and is tokenised as one.
+    return False
+
 
 #: The minimal context each class's detector needs, synthesised around a bare
 #: value so the EXISTING regexes do the work. Reusing them is the point: a
@@ -183,12 +344,16 @@ def fingerprint_for(tenant_id: str, investigation_id: str) -> str:
     guessable (`c00`, a run uuid) and a fingerprint that can be computed from
     outside is one an attacker can forge onto a token.
 
-    Six characters is a collision every ~16.7M scopes. A collision does not
-    grant access on its own — the token index still has to exist in the other
-    map — but it is the bound, and it is stated rather than implied.
+    `FINGERPRINT_CHARS` is the width and it is load-bearing. A collision makes
+    two scopes indistinguishable, which makes the cross-tenant check pass — so
+    the bound is the birthday bound, not the preimage one: at 24 bits a 50%
+    chance arrives at ~4,800 scopes, which an estate reaches in a month of
+    investigations. At 48 bits it is ~20 million. A collision still does not
+    grant access on its own, because the token index must also exist in the
+    other map, but that is a second lock and not the argument.
     """
     material = f"{tenant_id}\x1f{investigation_id}".encode("utf-8", "replace")
-    return hmac.new(secrets._pepper(), material, hashlib.sha256).hexdigest()[:6]
+    return hmac.new(secrets._pepper(), material, hashlib.sha256).hexdigest()[:FINGERPRINT_CHARS]
 
 
 def _now() -> datetime:
@@ -335,6 +500,10 @@ class TokenBoundary:
         """
         if not value:
             return value
+        if is_builtin_principal(value):
+            # `agent.name = "localhost"` names no machine, and tokenising it
+            # costs the reader the fact that there was no host.
+            return value
         context = _CONTEXT.get(kind)
         if context is None:
             return self._tokenize_one(value)
@@ -347,6 +516,10 @@ class TokenBoundary:
     def _tokenize_one(self, text: str) -> str:
         if not text:
             return text
+        # Built-ins out of harm's way first, restored last. They are the one
+        # class that must stay readable: "[ACCOUNT_3] created a service" has
+        # lost the fact that it was SYSTEM, which is most of the finding.
+        text, held = _protect_builtins(text)
         # Detection is the existing service's. `existing_token_map` carries
         # this investigation's bare-form map in, so the same entity keeps the
         # same index across every call in the loop.
@@ -366,7 +539,71 @@ class TokenBoundary:
                 continue
             scoped_text = scoped_text.replace(bare, scoped)
             self._state.token_map[scoped] = value
-        return scoped_text
+        return _restore_builtins(self._extra_pass(scoped_text), held)
+
+    # -- the classes the keyed detectors reject ---------------------------
+
+    def _mint(self, value: str, prefix: str) -> str:
+        """A token for one value, reusing this map's existing one if any."""
+        for token, existing in self._state.token_map.items():
+            if existing == value:
+                return token
+        used = {
+            int(m.group("index"))
+            for m in (TOKEN_RE.fullmatch(t) for t in self._state.token_map)
+            if m is not None and m.group("prefix") == prefix
+        }
+        index = max(used) + 1 if used else 1
+        token = f"[{prefix}_{self.fingerprint}_{index}]"
+        self._state.token_map[token] = value
+        return token
+
+    def _extra_pass(self, text: str) -> str:
+        """Single-label names, `DOMAIN\\user`, UNC servers and IPv6.
+
+        Runs AFTER the existing detectors, over text that already carries
+        their tokens. Nothing here can match inside a token: a token has no
+        backslash, no colon, and its value position cannot begin with `[`.
+        """
+        out = text
+
+        def _keyed(match: "re.Match[str]", prefix: str) -> str:
+            value = match.group("value")
+            if is_builtin_principal(value) or TOKEN_RE.fullmatch(value):
+                return match.group(0)
+            return match.group("prefix") + self._mint(value, prefix)
+
+        out = KEYED_HOST_LAX_RE.sub(lambda m: _keyed(m, "HOST"), out)
+        out = KEYED_ACCOUNT_LAX_RE.sub(lambda m: _keyed(m, "ACCOUNT"), out)
+        out = SWITCH_ACCOUNT_RE.sub(lambda m: _keyed(m, "ACCOUNT"), out)
+
+        def _bare_account(match: "re.Match[str]") -> str:
+            value = match.group("value")
+            if is_builtin_principal(value):
+                return match.group(0)
+            return self._mint(value, "ACCOUNT")
+
+        out = BARE_DOMAIN_ACCOUNT_RE.sub(_bare_account, out)
+
+        def _unc(match: "re.Match[str]") -> str:
+            value = match.group("value")
+            if is_builtin_principal(value):
+                return match.group(0)
+            return self._mint(value, "HOST")
+
+        out = UNC_HOST_RE.sub(_unc, out)
+
+        def _v6(match: "re.Match[str]") -> str:
+            raw = match.group(0)
+            try:
+                ipaddress.IPv6Address(raw)
+            except ValueError:
+                # A timestamp, a MAC fragment, a version string. `ipaddress`
+                # is the authority and a shape match is not.
+                return raw
+            return self._mint(raw, "IP")
+
+        return IPV6_CANDIDATE_RE.sub(_v6, out)
 
     def _to_bare(self, scoped: str) -> str:
         match = TOKEN_RE.fullmatch(scoped)

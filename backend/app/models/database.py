@@ -557,7 +557,10 @@ class InvestigationTokenMap(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
     investigation_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    fingerprint: Mapped[str] = mapped_column(String(8), nullable=False)
+    # 16 for a 12-character fingerprint, with room. The width is not cosmetic:
+    # a collision makes two scopes indistinguishable and the cross-tenant
+    # check passes — see migration 070 for the birthday bound.
+    fingerprint: Mapped[str] = mapped_column(String(16), nullable=False)
     token_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -63,7 +63,7 @@ def upgrade() -> None:
             # Derived from (tenant, investigation) under the deployment pepper
             # and embedded in every token this map issues, so a token carries
             # the scope it was minted under and cannot be resolved by another.
-            sa.Column("fingerprint", sa.String(8), nullable=False),
+            sa.Column("fingerprint", sa.String(16), nullable=False),
             sa.Column(
                 "token_map", postgresql.JSONB,
                 nullable=False, server_default=sa.text("'{}'::jsonb"),

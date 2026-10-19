@@ -313,6 +313,113 @@ def test_the_corpus_actually_produced_tokens():
     assert len(tb.TOKEN_RE.findall(blob)) >= 10
 
 
+def test_the_scope_fingerprint_is_twelve_hex_characters():
+    """The width is a security parameter, so it is pinned.
+
+    A collision makes two scopes indistinguishable and the cross-tenant check
+    passes. The bound is the BIRTHDAY bound: at 24 bits a 50% chance arrives
+    at ~4,800 scopes, which an estate reaches in a month. At 48 bits it is
+    ~20 million. Narrowing this is a silent weakening, which is why a test
+    says the number out loud.
+    """
+    assert tb.FINGERPRINT_CHARS == 12
+    b = _boundary()
+    assert len(b.fingerprint) == 12
+    assert re.fullmatch(r"[0-9a-f]{12}", b.fingerprint)
+
+    b.tokenize('computer="EXPDC002"')
+    token = next(iter(b.token_map))
+    parsed = tb.TOKEN_RE.fullmatch(token)
+    assert parsed and len(parsed.group("fingerprint")) == 12
+
+    # A six-character fingerprint is now malformed, not merely foreign — the
+    # grammar refuses it before any map lookup happens.
+    with pytest.raises(tb.MalformedToken):
+        b.detokenize_query(f"h = [HOST_{b.fingerprint[:6]}_1]")
+
+
+# ── closed 2026-10-19 ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text, value",
+    [
+        ('computer="FILESERVER"', "FILESERVER"),
+        ('computer="MAILGW"', "MAILGW"),
+        ('hostname="EXCHANGE"', "EXCHANGE"),
+        ("User INT\\jdoe ran it", "INT\\jdoe"),
+        ("copied \\\\EXPFS01\\finance\\q3.xlsx", "EXPFS01"),
+        ("from fe80::1c2d:3e4f:5a6b:7c8d", "fe80::1c2d:3e4f:5a6b:7c8d"),
+        ("to 2a00:1450:4001:80e::200e", "2a00:1450:4001:80e::200e"),
+    ],
+)
+def test_the_classes_closed_on_2026_10_19(text, value):
+    """Single-label names, bare `DOMAIN\\user`, UNC servers and IPv6."""
+    b = _boundary()
+    assert value not in b.tokenize(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'user="NT AUTHORITY\\SYSTEM" started it',
+        'user="SYSTEM"',
+        'user="NT SERVICE\\MSSQLSERVER"',
+        "Account Name:  LOCAL SERVICE",
+        "Account Name:  NETWORK SERVICE",
+        'computer="localhost"',
+    ],
+)
+def test_universal_builtins_stay_readable(text):
+    """THE control on the deny-list. These mean the same thing on every
+    estate, and "[ACCOUNT_3] created a service" has lost the finding.
+
+    They are protected BEFORE the detectors run, because the account pattern
+    stops at a space: `NT AUTHORITY\\SYSTEM` was otherwise already two
+    fragments — `NT` tokenised, `AUTHORITY\\SYSTEM` left — before any
+    deny-list could see it, and neither fragment is a built-in.
+    """
+    b = _boundary()
+    assert b.tokenize(text) == text
+
+
+def test_a_name_that_merely_starts_like_a_builtin_is_tokenised():
+    """The deny-list is exact names, not prefixes. `systemadmin` is a person."""
+    b = _boundary()
+    assert "systemadmin" not in b.tokenize('user="systemadmin"')
+    assert "SYSTEMS-01" not in b.tokenize('computer="SYSTEMS-01"')
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["at 12:34:56 today", "nic 00:1A:2B:3C:4D:5E", "version 1:2:3", "ratio 10:20:30"],
+)
+def test_a_shape_that_is_not_an_address_is_left_alone(text):
+    """`ipaddress` decides, not the regex. Measuring IPv6 by shape said 89.5%
+    of alert bodies carried it; validating said 1.2%, and the difference was
+    timestamps."""
+    b = _boundary()
+    assert b.tokenize(text) == text
+
+
+def test_the_same_account_gets_one_token_keyed_or_bare():
+    """`user="INT\\jdoe"` and `INT\\jdoe` in a sentence are one person."""
+    b = _boundary()
+    out = b.tokenize('user="INT\\jdoe" and later INT\\jdoe again')
+    assert len([v for v in b.token_map.values() if v == "INT\\jdoe"]) == 1
+    assert out.count("[ACCOUNT_") == 2
+
+
+def test_a_unc_path_keeps_its_share_and_loses_its_server():
+    b = _boundary()
+    out = b.tokenize("copied \\\\EXPFS01\\finance\\q3.xlsx")
+    assert "EXPFS01" not in out
+    assert "finance" in out and "q3.xlsx" in out, (
+        "the share and file are not identifiers and removing them costs the "
+        "reader what happened"
+    )
+
+
 def test_the_known_gaps_are_still_these():
     """**This test asserts the boundary FAILS on these classes.**
 
@@ -322,17 +429,12 @@ def test_the_known_gaps_are_still_these():
     """
     b = _boundary()
     gaps = {
-        "bare DOMAIN\\user in free text": ("User INT\\jdoe ran it", "INT\\jdoe"),
-        "IPv6": ("from fe80::1c2d:3e4f:5a6b:7c8d", "fe80::1c2d:3e4f:5a6b:7c8d"),
-        "UNC path host": ("copied \\\\EXPFS01\\finance\\q3.xlsx", "EXPFS01"),
+        # Accepted: a MAC is an identifier, and no pattern covers it. Left
+        # open deliberately — see the risk register.
         "MAC address": ("nic 00:1A:2B:3C:4D:5E", "00:1A:2B:3C:4D:5E"),
+        # Accepted: a single-label name with NO key saying it is a host is
+        # indistinguishable from an ordinary word. The keyed form is closed.
         "bare NetBIOS host, no keyword": ("EXPREU002 reported", "EXPREU002"),
-        # Found while writing these tests, not predicted. A single-label
-        # hostname with no digit and no dot is never tokenised — not even
-        # with a key in front of it. `FILESERVER`, `MAILGW`, `EXCHANGE` and
-        # `PRINTSRV` are all ordinary names in a Windows estate.
-        "alphabetic hostname, keyed": ('computer="FILESERVER"', "FILESERVER"),
-        "alphabetic hostname, declared field": ("MAILGW", "MAILGW"),
     }
     still_missing = {
         label for label, (text, value) in gaps.items() if value in b.tokenize(text)
@@ -510,3 +612,34 @@ def test_a_secret_never_enters_the_reversible_map():
     b = _boundary()
     b.tokenize_records([{"full_log": "password=Sup3rSecret! host EXPDC002"}])
     assert all("Sup3rSecret" not in v for v in b.token_map.values())
+
+
+@pytest.mark.parametrize(
+    "text, value",
+    [
+        ("powershell -enc ZQBj -User jdoe", "jdoe"),
+        ("net use /user:INT\\mpopescu", "mpopescu"),
+        ("runas -username svc-backup", "svc-backup"),
+    ],
+)
+def test_an_account_passed_as_a_command_line_switch_is_tokenised(text, value):
+    """Found by re-measuring the corpus after the other closures: `-User jdoe`
+    uses a SPACE as its separator, so no `key=value` pattern reaches it."""
+    b = _boundary()
+    assert value not in b.tokenize(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the user clicked the link",
+        "the user account was locked out",
+        "a user reported the message",
+    ],
+)
+def test_prose_about_a_user_is_not_mistaken_for_one(text):
+    """THE control on the switch pattern, and the reason it requires a leading
+    `-` or `/`. Without that, `user\\s+VALUE` tokenises `clicked` — corrupting
+    the sentence to hide an identifier that was never in it."""
+    b = _boundary()
+    assert b.tokenize(text) == text
