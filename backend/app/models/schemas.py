@@ -849,8 +849,19 @@ class URLMLScoreEvidence(BaseModel):
     url: Optional[str] = None
     phishing_probability: float = 0.0
     risk_level: str = "low"
-    model_version: str = "lgbm-url-v1.0"
+    #: What scored it, and the version of that thing.
+    #:
+    #: The default was `"lgbm-url-v1.0"`, so a payload nobody set the field on
+    #: still claimed a LightGBM model had run — the default being the
+    #: strongest claim available, which is how a Pydantic default erases an
+    #: absence. `"unavailable"` is now the default and
+    #: `ml_url_model.version_for_source` fills it from the source that
+    #: actually produced the score.
+    model_source: str = ""
+    model_version: str = "unavailable"
     top_features: list[URLMLFeatureImpact] = []
+    #: Why the named scorer is not the configured one, when that applies.
+    error: Optional[str] = None
     raw: dict[str, Any] = {}
 
 

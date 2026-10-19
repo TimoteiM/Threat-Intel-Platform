@@ -37,7 +37,7 @@ from app.db.session import sync_engine
 from app.models.database import LookupCache
 from app.services.content_ml_service import classify_email_content_locally
 from app.services.ml_attachment_analyzer import analyze_attachments_static
-from app.services.ml_url_model import score_url
+from app.services.ml_url_model import UNAVAILABLE_VERSION, score_url
 from app.services.provider_usage_metrics import record_provider_request
 from app.services.risk_aggregator import aggregate_risk
 from app.services.url_lexical_ml_service import assess_url_lexical_risk
@@ -314,11 +314,16 @@ def _check_url(
         ml_url_score = score_url(lexical_target)
     except Exception as exc:
         logger.warning("URL ML model facade failed for URL %s: %s", lexical_target, exc)
+        # `model_version` was "lgbm-url-v1.0" here, on the path taken when the
+        # facade RAISED — so a crash was reported as a LightGBM model
+        # returning a phishing probability of 0.0. `risk_level: "unknown"` was
+        # the only thing contradicting it. The version now says nothing ran.
         ml_url_score = {
             "url": lexical_target,
             "phishing_probability": 0.0,
             "risk_level": "unknown",
-            "model_version": "lgbm-url-v1.0",
+            "model_source": "",
+            "model_version": UNAVAILABLE_VERSION,
             "top_features": [],
             "error": str(exc),
         }

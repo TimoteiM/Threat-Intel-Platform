@@ -185,7 +185,12 @@ def test_a_shape_only_verdict_does_not_move_the_risk_score():
     finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
     assert finding["severity"] == "informational"
     assert finding["title"] == "URL lexical ML observation"
-    assert any("Lexical ML" in line for line in report["key_evidence"]), "still shown to the analyst"
+    # "Lexical" rather than "Lexical ML": the label now names what actually
+    # scored it — "Lexical heuristic" for the built-in, "Lexical model" only
+    # for LightGBM — so that a reader can tell a heuristic score from a model
+    # score. This assertion is about the line being SHOWN, so it matches the
+    # part of the label that is not the naming decision.
+    assert any("Lexical" in line for line in report["key_evidence"]), "still shown to the analyst"
 
 
 def test_a_semantic_verdict_does_move_the_risk_score():
@@ -220,3 +225,49 @@ def test_both_paths_use_the_same_scorer():
     from app.tasks import analysis_task
 
     assert analysis_task._domain_weak_signal_score is de._domain_weak_signal_score
+
+
+# --- naming: a heuristic is not a model -------------------------------------
+
+
+def test_the_built_in_heuristic_is_not_called_a_model():
+    """`_inject_lexical_contribution` wrote "Lexical model (built_in)" into
+    both the findings text and the key-evidence line, so the report called a
+    hand-weighted logistic heuristic a model and a reader had to know what
+    `built_in` meant to tell the difference. Backlog 41 part 1."""
+    report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
+    lexical["model_source"] = "built_in"
+    _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
+
+    text = " ".join(report["key_evidence"]) + " ".join(
+        f["description"] for f in report["findings"]
+    )
+    assert "Lexical heuristic" in text
+    assert "Lexical model" not in text
+
+
+def test_a_real_model_score_is_called_a_model():
+    """The control for the test above: a check that only ever sees `built_in`
+    would pass with the word "model" deleted everywhere."""
+    report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
+    lexical["model_source"] = "lightgbm"
+    _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
+
+    text = " ".join(report["key_evidence"])
+    assert "Lexical model (lightgbm)" in text
+
+
+def test_the_skip_note_reaches_the_key_evidence_line():
+    """The whole point of part 1: an analyst reading the report can see that
+    the configured model did not run."""
+    report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
+    lexical["model_source"] = "built_in"
+    lexical["error"] = "Configured lexical model was not loaded: url_lexical_use_lightgbm is false."
+    _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
+
+    assert any("configured model not loaded" in line for line in report["key_evidence"])
+    finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
+    assert "not loaded" in finding["description"]

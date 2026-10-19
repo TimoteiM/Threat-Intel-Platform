@@ -2223,6 +2223,14 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     top = [str(x) for x in (lexical.get("top_features") or []) if str(x).strip()]
     model_source = str(lexical.get("model_source") or "unknown")
     calibrated = bool(lexical.get("calibration_applied"))
+    # "Lexical model (built_in)" called a hand-weighted logistic heuristic a
+    # model, in the findings text and the key-evidence line — so a reader
+    # could not tell a heuristic score from a trained-model score without
+    # knowing what `built_in` means. It is named for what it is, and the
+    # service's note (why a configured model did not run) is carried through
+    # rather than dropped here.
+    scorer = "Lexical model" if model_source == "lightgbm" else "Lexical heuristic"
+    model_note = str(lexical.get("error") or "").strip()
 
     # This blend is where the lexical model actually moved the number, and it ran
     # regardless of how the weak-signal cluster was gated: a long legitimate URL
@@ -2271,7 +2279,7 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
                 "id": "lexical_ml_contribution",
                 "title": "URL lexical ML observation" if shape_only else "URL lexical ML risk contribution",
                 "description": (
-                    f"Lexical model ({model_source}) scored this target as {lexical_label.upper()} "
+                    f"{scorer} ({model_source}) scored this target as {lexical_label.upper()} "
                     f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}, weight={lexical_weight:.2f}). "
                     f"Top features: {', '.join(top[:5]) if top else 'not available'}."
                     + (" Reported for review only: every feature behind this score describes the "
@@ -2281,6 +2289,7 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
                        " Scored because the model found "
                        + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
                        + ".")
+                    + (f" {model_note}" if model_note else "")
                 ),
                 "severity": "informational" if shape_only else sev,
                 "evidence_refs": ["url_lexical_ml.score", "url_lexical_ml.top_features"],
@@ -2291,11 +2300,12 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     key = report_data.get("key_evidence")
     key_evidence = key if isinstance(key, list) else []
     lexical_line = (
-        f"Lexical ML ({model_source}) {lexical_label} risk "
+        f"{scorer} ({model_source}) {lexical_label} risk "
         f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}"
         + (", calibration=on" if calibrated else ", calibration=off")
         + ")"
         + (" \u2014 shape-driven, not scored" if shape_only else "")
+        + (" \u2014 configured model not loaded" if model_note and model_source != "lightgbm" else "")
     )
     if lexical_line not in key_evidence:
         key_evidence.append(lexical_line)

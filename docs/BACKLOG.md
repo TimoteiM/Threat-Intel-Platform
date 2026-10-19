@@ -2224,6 +2224,10 @@ first one already arrived.
 
 ## 41 — A lexical model is configured, the flag that loads it is off, and nothing says so
 
+**Part 1 DONE 2026-10-19 — the skip is now reported, and no score changed.**
+**Part 2 OPEN, and it grew a second question. See the two sections at the end.**
+
+
 Found 2026-10-19 as the last surviving entry in
 `docs/testing/tolerated-failures.txt`, after the other twelve turned out to be
 one harness fault. This one fails in isolation too, so it is not the harness.
@@ -2276,3 +2280,81 @@ Do 3 first. Then 1 or 2 with the measurement that 3 makes possible.
 the consumer at `email_investigation_processing_service.py:527` and the email
 report that renders it — an `error` string appearing where `None` used to be
 is a UI change as well as a data one.
+
+### 41 part 1 — done: wherever the model is skipped, it says so
+
+Four places were asserting the opposite of the truth. None of the fixes
+changes a score; all of them change what a reader is told.
+
+| where | said | says now |
+|---|---|---|
+| `url_lexical_ml_service._infer_score` | `error: None` when a configured model was never consulted | states that the configured model was not loaded, that the flag is false, and that the score is the built-in heuristic's |
+| `ml_url_model.score_url` | `model_version: "lgbm-url-v1.0"` unconditionally | `version_for_source()` — `lgbm-url-v1.0` only when LightGBM ran, `built-in-lexical-v1` for the heuristic, `unavailable` for anything else |
+| `email_indicator_checks_service` exception path | `model_version: "lgbm-url-v1.0"` **on a crash**, beside `phishing_probability: 0.0` | `unavailable` |
+| `URLMLScoreEvidence.model_version` (Pydantic default) | `"lgbm-url-v1.0"` for a payload nobody set the field on | `"unavailable"` |
+| `analysis_task._inject_lexical_contribution` | "Lexical model (built_in)" in the findings text and the key-evidence line | "Lexical heuristic (built_in)", "Lexical model" only for LightGBM, and the skip note carried through |
+
+The note reaches the analyst without a frontend change:
+`LexicalRiskExplainer.tsx` already renders `Model note: {lexical.error}`, and
+`email_investigation_processing_service.py:527` already propagates the field —
+it was propagating `None`.
+
+Verified in the running container, not argued:
+
+```
+model_source        : built_in
+calibration_applied : True
+error               : Configured lexical model was not loaded: url_lexical_use_lightgbm
+                      is false. This score is from the built-in lexical heuristic, not
+                      from a trained model. Calibration from the configured model's
+                      metadata was applied to a built_in score; the model itself did
+                      not run.
+facade model_version: built-in-lexical-v1
+```
+
+The narrow claim matters: `error` means *something was configured and
+skipped*, not *the built-in scored this*. A deployment that never configured a
+model reports no error, because there is no skip — otherwise the field becomes
+a permanent warning and stops being read. Pinned by
+`test_no_configured_model_is_not_an_error`.
+
+**One thing adjacent and not fixed**, because it is a UI change I cannot
+verify without a login (see the standing note about the case page):
+`LexicalRiskExplainer.tsx` renders the score ring with no `enabled` guard, so
+the exception payload — `enabled: false, score: 0.0` — would draw "0% lexical
+risk, LOW" rather than the error. Same shape, different trigger: that one is a
+crash rather than a skip.
+
+### 41 part 2 — open: two score-changing decisions, one measurement
+
+**Do not do these without the measurement.** Both change every lexical score.
+
+**(a) Should `url_lexical_use_lightgbm` be on?** The measurement to run: both
+configurations over the corpus, the distribution of score changes, and the
+cases where the *verdict* flips — not just the score. Flips are the decision;
+a score moving 0.02 with the label unchanged is noise.
+
+**(b) Should calibration from a model that did not run be applied at all?**
+Found while doing part 1 and not in the original item. `assess_url_lexical_risk`
+loads the calibration curve from the configured model's `.metadata.json` and
+applies it to whatever produced the score. On this deployment the model file
+**and** its metadata both exist and the flag is off, so a curve fitted to
+LightGBM outputs is being applied to the built-in heuristic's output — on
+every URL where the curve returns a value. Measured: 2 of 3 sample URLs had
+`calibration_applied: True` with `model_source: built_in`.
+
+This is not a cosmetic mismatch. A calibration curve maps one scorer's output
+distribution onto observed probabilities; applied to a different scorer's
+output it is an arbitrary monotone transform. It may be making scores better
+or worse and nobody has looked.
+
+(b) interacts with (a), which is why they are one item: if the flag goes on,
+the calibration becomes correct by construction and (b) disappears. If the
+flag stays off, (b) is a live defect that needs its own before/after. So
+measure (a) first, and let its answer settle whether (b) needs its own.
+
+**The measurement must report at the grain of the decision**, which is the
+verdict, not the score: per-URL old score, new score, old label, new label,
+and the count and examples of label changes in each direction. A mean shift
+across all URLs would hide a small number of benign→high flips, which is the
+only outcome that reaches an analyst.

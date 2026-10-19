@@ -342,12 +342,17 @@ fi
 # unreachable. A grant regression is therefore invisible to `pytest` and
 # visible here.
 priv_bad=0
-if priv_out="$(./scripts/check_db_privileges.sh 2>&1)"; then
-    line="$line · db privs ok"
-else
-    priv_bad=1
-    line="$line · DB PRIVILEGE DRIFT — scripts/provision_db_roles.sh"
-fi
+priv_out="$(./scripts/check_db_privileges.sh 2>&1)"
+case $? in
+    0) line="$line · db privs ok" ;;
+    1) priv_bad=1
+       line="$line · DB PRIVILEGE DRIFT — scripts/provision_db_roles.sh" ;;
+    # Exit 2 is "the check could not run", which is NOT "the privileges
+    # match" — the distinction this script already makes for an unreadable
+    # fingerprint.
+    *) priv_bad=1
+       line="$line · DB PRIVILEGES NOT CHECKED" ;;
+esac
 
 echo "$line"
 

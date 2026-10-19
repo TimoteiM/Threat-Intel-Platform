@@ -1,7 +1,14 @@
 # The tolerated test failures, enumerated.
 #
-# "The same 13" was quoted on every sign-off (14 before 2026-10-19). The set is
-# now **1**, and the history below is kept because the shrinking is the point:
+# ***THE SET IS EMPTY. 3,280 passed, 0 failed, as of 2026-10-19.***
+#
+# There is no tolerated-failure baseline any more. A failing test is a
+# regression, full stop — compare against zero, not against a list. If an entry
+# is ever added below, it needs a reason in this file and a date, because the
+# whole history underneath says what happens to entries nobody questions.
+#
+# "The same 13" was quoted on every sign-off (14 before 2026-10-19). The
+# history below is kept because the shrinking is the point:
 # enumeration stopped the set growing silently, and then every entry that was
 # actually examined turned out to be either a harness fault with a one-line
 # fix or a live product defect. None of them was a test that deserved to fail.
@@ -40,41 +47,43 @@
 # The rule is now in docs/testing/writing-tests.md, because a fix that only
 # cleans up the existing instances invites the thirteenth.
 #
-# ─── the one that is left, and it is a live finding ───
+# ─── 1 → 0 (2026-10-19): the last one was a live defect, and it is fixed ───
 #
 # test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing
 #
-# Fails in isolation too, so it is not the harness. The test asserts that when
-# a lexical model path cannot be loaded, the result says so:
-#
-#     assert "error" in result
-#
-# It does not. `_infer_score` reports `error` only on the branch *after*
-# `_should_use_lightgbm()`, and that setting is False — so a configured model
-# path is never consulted and nothing records that it was skipped.
-#
-# Measured in the running container, which is what makes this a finding rather
-# than a test-environment artifact:
+# It failed in isolation too, so it was never the harness. It asserted that
+# when a lexical model cannot be loaded, the result says so — and it did not.
+# Measured in the running container:
 #
 #     url_lexical_use_lightgbm : False
-#     url_lexical_model_path   : SET
+#     url_lexical_model_path   : SET, and the file exists
+#     its .metadata.json       : exists
 #     lightgbm installed       : yes
 #
-# So somebody configured a model, the flag that would load it is off, every
-# URL is scored by the built-in heuristic, and
-# `email_investigation_processing_service.py:527` propagates
-# `lexical.get("error")` as None — which reads as "the model ran and found
-# nothing wrong". Two states with identical observations again.
+# So a model was configured, the flag that loads it was off, every URL was
+# scored by the built-in heuristic, and the payload said `error: None`. Worse,
+# two sibling fields asserted the opposite of the truth:
+# `ml_url_score.model_version` returned "lgbm-url-v1.0" unconditionally — on
+# the success path, on the exception path, and as the Pydantic default — and
+# the report called the heuristic "Lexical model (built_in)".
 #
-# NOT fixed here, because the remedy is a product decision rather than a
-# cleanup: either the flag should be on (which changes every lexical score and
-# needs its own before/after) or the configured path is stale and should be
-# cleared. Either way the silence is the defect. Filed as backlog 41.
+# Fixed as backlog 41 part 1, which changes no score: the skip is now stated
+# in `error` and reaches the report, the version names what actually ran, and
+# a heuristic is no longer called a model.
 #
-# So: the honest status of this file is "one entry, and it is a real defect we
-# have chosen not to fix yet" — not "one tolerated failure".
+# One thing part 1 deliberately did NOT change, because it moves scores:
+# calibration is loaded from the *model's* metadata and applied whatever
+# produced the score, so a curve fitted to LightGBM outputs is being applied
+# to the heuristic's output on this deployment. It is now reported. Whether to
+# stop is backlog 41 part 2.
 #
-# Format: one pytest node id per line. Compare with
+# ─── what the whole history says ───
+#
+# Every entry anybody actually asked about turned out to be either a one-line
+# harness fault or a live product defect. NONE was a test that deserved to
+# fail. The number was never a defect count; it was a question nobody had put,
+# and it sat unasked for seven days behind the words "the same 13".
+#
+# Format: one pytest node id per line, and there are none. Compare with
 #   pytest -q | grep '^FAILED' | sed 's/^FAILED //; s/ -.*//' | sort
 #
-tests/unit/test_services/test_url_lexical_ml_service.py::test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing

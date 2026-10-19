@@ -269,6 +269,25 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
     if calibrated is not None:
         score = calibrated
         inference.calibration_applied = True
+        # Reported, not changed — and the distinction matters.
+        #
+        # The calibration curve is loaded from the *model's* metadata file and
+        # applied here regardless of whether the model produced the score. On
+        # this deployment the model file and its `.metadata.json` both exist
+        # and the flag is off, so a curve fitted to LightGBM outputs is being
+        # applied to the built-in heuristic's output, and
+        # `calibration_applied: True` beside `model_source: built_in` reads as
+        # a calibrated model score.
+        #
+        # Saying so is reporting. *Not* applying it would change every lexical
+        # score on this deployment, which is a decision with a measurement
+        # attached rather than a cleanup — backlog 41 part 2.
+        if inference.model_source != "lightgbm":
+            note = (
+                f"Calibration from the configured model's metadata was applied "
+                f"to a {inference.model_source} score; the model itself did not run."
+            )
+            inference.error = f"{inference.error} {note}" if inference.error else note
     rule_floor = _rule_based_floor(features)
     rule_floor_applied = False
     if rule_floor is not None and rule_floor > score:
@@ -297,12 +316,32 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
 def _infer_score(features: dict[str, float], *, model_path_override: str | None = None) -> LexicalInferenceResult:
     if not _should_use_lightgbm():
         score, contribs = _score_built_in(features)
+        # A configured model that is never consulted has to say so.
+        #
+        # This branch returned no `error` at all, so a deployment with
+        # `url_lexical_model_path` SET and `url_lexical_use_lightgbm` FALSE —
+        # which is this one — emitted `error: None` beside a built-in score.
+        # Downstream, `email_investigation_processing_service` propagates that
+        # None into the report, where it reads as "the model ran and found
+        # nothing wrong". Two states with identical observations: a model that
+        # scored this URL, and a model nobody loaded.
+        #
+        # No error when nothing is configured: then the built-in is the
+        # intended scorer and there is no skip to report. The claim being made
+        # here is narrow — *something was configured and not used*.
+        configured = model_path_override or _configured_model_path()
+        skipped = (
+            "Configured lexical model was not loaded: url_lexical_use_lightgbm "
+            "is false. This score is from the built-in lexical heuristic, not "
+            "from a trained model."
+        ) if configured else None
         return LexicalInferenceResult(
             score=score,
             model_source="built_in",
             top_features=_top_features_from_contribs(contribs, 5),
             feature_contributions=contribs,
             raw_score=score,
+            error=skipped,
         )
 
     custom_path = model_path_override or _configured_model_path()

@@ -1,7 +1,8 @@
 # The tolerated test failures
 
-> **Resolved 2026-10-19. The set is 1, and that one is a live product defect
-> rather than a tolerated failure.** See `tolerated-failures.txt` for the
+> **Resolved 2026-10-19. The set is EMPTY — 3,280 passed, 0 failed.** There
+> is no baseline to compare against any more: a failing test is a regression.
+> See `tolerated-failures.txt` for the
 > current list and the diagnosis of each. This page is kept because how the
 > set was cleared is the useful part, and because the sentence further down
 > that says *"12 of the 14 pass in isolation and fail only in the full
@@ -17,9 +18,14 @@
 >   pytest resolves by walking `getattr(app, "x")` and which therefore
 >   depends on import order. Fixed by passing the module object. The rule is
 >   rule 2 in `writing-tests.md`.
-> * **The last one** fails in isolation too, and is a configured lexical
->   model that is never loaded because the flag that would load it is off,
->   with nothing recording that it was skipped. Backlog 41.
+> * **1 → 0**: the last one failed in isolation too, and was a live defect —
+>   a configured lexical model that is never loaded because the flag is off,
+>   with `error: None` beside the heuristic's score, a `model_version` that
+>   said `lgbm-url-v1.0` on every path including the Pydantic default, and a
+>   report calling the heuristic "Lexical model". Fixed in backlog 41 part 1,
+>   which changes no score. What part 1 left alone, because it *does* move
+>   scores: calibration from that model's metadata is applied to the
+>   heuristic's output. Reported now; the decision is part 2.
 >
 > **Every entry anybody actually asked about turned out to be either a
 > one-line harness fault or a real defect. None was a test that deserved to
@@ -42,7 +48,7 @@ rather than in a scratch file in a session directory.
     cd backend && .venv/bin/python -m pytest tests/unit -q
 
 Run from the **host venv**, never inside the container — the container cannot
-import `app.*`. Expected (2026-10-19): `1 failed, 7 skipped, 3 xfailed` and a
+import `app.*`. Expected (2026-10-19): `0 failed, 7 skipped, 3 xfailed` and a
 passing count that rises as tests are added. It was `14 failed` until the
 note at the top of this page.
 
