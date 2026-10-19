@@ -320,9 +320,10 @@ def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious(monkeypa
     alone. Forcing the shape gate on here keeps this test honest about which
     half it is exercising.
     """
-    import app.services.decision_engine as _de
-
-    monkeypatch.setattr(_de, "url_shape_affects_score", lambda *_a: True)
+    # The shape gate used to be forced on here to keep the test honest about
+    # which half it exercised. The gate is gone and shape cannot score in any
+    # configuration, so the forcing is removed and this test now exercises the
+    # semantic half only — which is the half it was always about.
     decision = build_decision_report(
         {
             "domain": "secure-louise.cole.activelyintimate.com",
@@ -525,29 +526,16 @@ def test_real_signals_still_reach_suspicious_and_malicious():
     )
     assert build_decision_report(shape_only, "domain")["classification"] == "benign"
 
-    # URL_SHAPE_AFFECTS_SCORE **no longer restores this**, and the narrowing
-    # is deliberate rather than a regression.
-    #
-    # The flag used to re-enable the lexical aggregate — the probability and
-    # its low/medium/high band — which contributed 2 points here. That
-    # aggregate was removed on 2026-10-19: measured against the only external
-    # labels available it ranked flagged URLs BELOW clean ones, and the
-    # heuristic called 1,008 of 1,535 corpus URLs high. A flag that could put
-    # it back was one edit away from undoing the decision, so there is nothing
-    # left for it to re-enable in the weak-signal cluster.
-    #
-    # The flag is not dead: it still decides whether a shape-only URL's score
-    # blends into the final risk score, pinned by
-    # test_weak_signal_scoring.py::test_the_flag_still_governs_the_risk_blend.
+    # There is no configuration that makes shape score. `URL_SHAPE_AFFECTS_SCORE`
+    # used to re-enable the lexical aggregate's 2 points here; the aggregate
+    # was removed on 2026-10-19 and the flag with it, because by then it gated
+    # nothing. Pinned by
+    # test_weak_signal_scoring.py::test_the_shape_flag_is_gone_rather_than_defaulted_off.
     # docs/design/lexical-scoring-retirement.md.
     import app.services.decision_engine as _de
 
-    _original = _de.url_shape_affects_score
-    _de.url_shape_affects_score = lambda *_a: True
-    try:
-        assert build_decision_report(shape_only, "domain")["classification"] == "benign"
-    finally:
-        _de.url_shape_affects_score = _original
+    assert not hasattr(_de, "url_shape_affects_score")
+    assert build_decision_report(shape_only, "domain")["classification"] == "benign"
 
 
 def test_missing_spf_and_dmarc_alone_does_not_make_a_domain_suspicious():

@@ -42,30 +42,26 @@ def _lexical(label, score, features=None, top=None):
     return payload
 
 
-# --- the gate ---------------------------------------------------------------
+# --- the gate, which no longer exists --------------------------------------
 
-def test_shape_does_not_score_by_default():
-    assert de.url_shape_affects_score() is False
+def test_the_shape_flag_is_gone_rather_than_defaulted_off():
+    """`URL_SHAPE_AFFECTS_SCORE` is removed, not set to false.
 
+    It gated two things: the lexical aggregate's points in the weak-signal
+    cluster, and the 25% blend into the risk score. Both were removed on
+    2026-10-19, so the flag had nothing left to switch — and an inert flag is
+    worse than no flag, because somebody sets it and expects shape to score.
 
-def test_the_setting_can_restore_the_old_behaviour():
-    """Injected rather than monkeypatched into app.config: this suite reloads
-    `app` through importlib elsewhere, and a dotted string target stops
-    resolving once it has."""
-    class _On:
-        url_shape_affects_score = True
-
-    class _Off:
-        url_shape_affects_score = False
-
-    assert de.url_shape_affects_score(_On()) is True
-    assert de.url_shape_affects_score(_Off()) is False
-
-
-def test_the_field_defaults_to_off():
+    What it never switched off was the semantic half, which still scores
+    unconditionally, as named observations. See
+    docs/design/lexical-scoring-retirement.md.
+    """
     from app.config import Settings
 
-    assert Settings.model_fields["url_shape_affects_score"].default is False
+    assert "url_shape_affects_score" not in Settings.model_fields
+    assert not hasattr(de, "url_shape_affects_score")
+    import app.tasks.analysis_task as at
+    assert not hasattr(at, "url_shape_affects_score")
 
 
 # --- what counts as semantic ------------------------------------------------
@@ -78,14 +74,14 @@ def test_a_real_sharepoint_link_scores_high_on_shape_alone():
         "AllItems.aspx?id=%2Fsites%2FFinance%2FShared%20Documents%2FFY26%20Budget"
         "%20Review%2Epptx&parent=%2Fsites%2FFinance"
     )
-    # There is no label to assert any more. The premise is unchanged and is
-    # now stated on the score, which is what the band was derived from: a
-    # genuine SharePoint link scores as high as this heuristic goes.
-    assert lexical["score"] >= 0.65
+    # There is no score and no label left to assert. The premise this test
+    # was written to defend — that a genuine SharePoint deep link looks
+    # alarming to a shape heuristic — is now expressed as the thing that
+    # matters: it produces no checkable observation, so nothing about it
+    # reaches a verdict.
+    assert "score" not in lexical
     assert "label" not in lexical
     assert semantic_features_present(lexical) == []
-    # And the point of the retirement: nothing about this URL is a checkable
-    # observation, so the report now says so instead of printing 0.99.
     assert lexical["observations"] == []
 
     score, reasons = de._domain_weak_signal_score({"url_lexical_ml": lexical})
@@ -170,29 +166,17 @@ def test_shape_alone_cannot_reach_the_threshold():
     assert de._domain_weak_signal_score(evidence)[0] < 3
 
 
-def test_the_flag_restores_shape_scoring():
-    lexical = _lexical("high", 0.71, features={"url_length": 210.0, "entropy": 4.7})
-    off, _ = de._domain_weak_signal_score({"url_lexical_ml": lexical})
+def test_shape_alone_cannot_score_at_all_now():
+    """There is no longer a configuration in which URL shape scores.
 
-    import app.services.decision_engine as module
-    original = module.url_shape_affects_score
-    module.url_shape_affects_score = lambda *a, **k: True
-    try:
-        on, reasons = de._domain_weak_signal_score({"url_lexical_ml": lexical})
-    finally:
-        module.url_shape_affects_score = original
-
-    # **The flag no longer restores aggregate scoring here, and that is the
-    # change rather than a regression.** It used to add 2 points from the
-    # probability band. The band is gone, so there is nothing for the flag to
-    # re-enable in the weak-signal cluster: a shape-only URL scores 0 whether
-    # the flag is on or off.
-    #
-    # The flag is NOT dead — it still decides whether the probability blends
-    # into the final risk score in `_inject_lexical_contribution`, which
-    # `test_the_flag_still_governs_the_risk_blend` pins. Its meaning narrowed
-    # from "shape can score anywhere" to "shape can move the risk blend".
-    assert off == 0 and on == 0
+    This test used to flip `url_shape_affects_score` and assert the points
+    came back. The flag is gone and so are the points: a shape-only URL
+    contributes 0 to the weak-signal cluster, unconditionally.
+    """
+    lexical = _lexical("high", 0.99, features={"url_length": 300.0, "entropy": 5.0,
+                                               "subdomain_depth": 5.0})
+    score, reasons = de._domain_weak_signal_score({"url_lexical_ml": lexical})
+    assert score == 0
     assert not any("risk" in r.lower() for r in reasons)
 
 
@@ -225,21 +209,24 @@ def test_a_shape_only_verdict_does_not_move_the_risk_score():
     assert report["key_evidence"] == [], "nothing to show when there is no observation"
 
 
-def test_a_semantic_verdict_does_move_the_risk_score():
+def test_a_semantic_verdict_no_longer_moves_the_risk_score():
     lexical = _lexical("high", 0.85, features={"has_punycode": 1.0, "has_sensitive_keyword": 1.0})
     report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
     _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
 
-    assert report["risk_score"] > 20
+    # **The blend is gone.** This used to lift 20/100 to 40/100 because the
+    # lexical score was 0.85 and carried 25% of the weight. Measured before
+    # removing it: a median 13 points on 575 of 2,669 stored reports, with no
+    # band change, because the final score is clamped into the band of the
+    # classification and the classification does not read the probability.
+    assert report["risk_score"] == 20
     finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
-    # Never "high". A severity on a lexical observation is the band this change
-    # removed wearing a different field name.
     assert finding["severity"] == "informational"
+    # The observations are still reported — they are the evidence.
     assert "punycode" in finding["description"]
-    # And the blend is DISCLOSED: the probability no longer appears as a
-    # verdict, but where it still moves the risk score the points are named.
-    assert "moved the risk score by" in finding["description"]
     assert any("URL structure" in line for line in report["key_evidence"])
+    # And no points disclosure, because there are no points.
+    assert "moved the risk score" not in finding["description"]
 
 
 def test_a_shape_only_verdict_does_not_invent_a_score_from_nothing():
@@ -282,31 +269,28 @@ def test_the_report_names_observations_and_never_a_probability():
         assert banned not in text, f"{banned!r} is still printed in the report"
 
 
-def test_the_flag_still_governs_the_risk_blend():
-    """The other half of `test_the_flag_restores_shape_scoring`.
+def test_nothing_about_the_url_reaches_the_risk_score():
+    """The whole of the decision, in one assertion.
 
-    `url_shape_affects_score` lost its effect on the weak-signal cluster when
-    the aggregate went, but it still decides whether a shape-only URL's
-    probability blends into the final risk score. Pinned so the narrowing is a
-    recorded decision rather than something that quietly became total.
+    Every lexical payload shape — shape-only, semantic, every semantic feature
+    at once — leaves the risk score exactly as it found it. There is no flag
+    and no weight that changes this.
     """
-    import app.tasks.analysis_task as at
+    from app.services.url_lexical_ml_service import SEMANTIC_FEATURES
 
-    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
-
-    off = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
-    _inject_lexical_contribution(off, {"url_lexical_ml": lexical})
-    assert off["risk_score"] == 20
-
-    original = at.url_shape_affects_score
-    at.url_shape_affects_score = lambda *a, **k: True
-    try:
-        on = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
-        _inject_lexical_contribution(on, {"url_lexical_ml": lexical})
-    finally:
-        at.url_shape_affects_score = original
-
-    assert on["risk_score"] > 20, "the flag no longer reaches the blend either"
+    cases = [
+        _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6}),
+        _lexical("high", 0.85, features={"has_punycode": 1.0, "has_sensitive_keyword": 1.0}),
+        _lexical("high", 0.99, features={name: 1.0 for name in SEMANTIC_FEATURES}),
+        _lexical("low", 0.01, features={}),
+    ]
+    for lexical in cases:
+        report = {"risk_score": 37, "classification": "suspicious",
+                  "findings": [], "key_evidence": []}
+        _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
+        assert report["risk_score"] == 37, lexical.get("observations")
+    # The rationale says so rather than printing a weight of 0.00.
+    assert "does not contribute to the risk score" in report["risk_rationale"]
 
 
 def test_an_unassessed_url_is_not_reported_as_a_clean_one():

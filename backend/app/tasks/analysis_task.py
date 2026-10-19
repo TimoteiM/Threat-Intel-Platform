@@ -32,7 +32,6 @@ from app.services.decision_engine import (
     community_listing_weight,
     apply_decision_to_report,
     build_decision_report,
-    url_shape_affects_score,
     # This module carried its own fork of the weak-signal scorer. The fork had
     # drifted: no domain-age rule, no self-pivot check, and shared hosting and
     # spoofability still scoring on their own. The two paths returned different
@@ -971,14 +970,16 @@ def run_analysis(
                 evidence_data["url_lexical_ml"] = assess_url_lexical_risk(lexical_target)
         except Exception as e:
             logger.warning(f"[{investigation_id}] URL lexical ML scoring failed: {e}")
+            # A crash, not a result. This used to emit `score: 0.0` and
+            # `label: "low"` — a failure reported as "this URL looks fine".
+            # `enabled: False` and the reason is the whole payload; the report
+            # renders "URL structure not assessed" from it.
             evidence_data["url_lexical_ml"] = {
+                "enabled": False,
                 "model_source": "built_in",
-                "score": 0.0,
-                "label": "low",
+                "observations": [],
                 "top_features": [],
                 "feature_contributions": {},
-                "thresholds": {"low_max": 0.30, "medium_max": 0.65},
-                "weights": {"lexical_weight": 0.25},
                 "error": str(e),
             }
         _time_phase("url_lexical_ml", lexical_phase_start)
@@ -2248,7 +2249,6 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         _note_lexical_not_assessed(report_data, str(lexical.get("error") or ""))
         return
 
-    lexical_score = float(lexical.get("score") or 0.0)
     observations = [
         str(o.get("statement") or "") for o in (lexical.get("observations") or [])
         if isinstance(o, dict) and str(o.get("statement") or "").strip()
@@ -2263,20 +2263,29 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     # TLD. Shape-only verdicts are still reported, and still shown in key
     # evidence; they just stop arithmetic.
     semantic = semantic_features_present(lexical)
-    shape_only = not semantic and not url_shape_affects_score()
-    lexical_weight = 0.0 if shape_only else 0.25
 
+    # **The blend is gone.** The lexical probability contributes nothing to the
+    # risk score — not weighted, not disclosed in points, not at all.
+    #
+    # It used to be `0.75 * reputation + 0.25 * lexical` whenever any semantic
+    # feature was present, which was 575 of 2,669 stored reports, with a median
+    # lexical score of 0.9999 — so it was adding a median **13 risk points**.
+    # Measured before removing it (docs/design/lexical-scoring-retirement.md):
+    # the score drops by a median 13 points on those reports and the BAND does
+    # not move, because the final score is clamped into the band of the
+    # report's `classification` and the classification no longer depends on the
+    # lexical probability at all. Of 2,669 reports exactly ONE changes the band
+    # its score falls in, and it is an `inconclusive` report, which carries no
+    # band to be clamped to.
+    #
+    # The named observations still score, in the decision engine's weak-signal
+    # cluster, where each one is a reason an analyst can check.
     rep_score = report_data.get("risk_score")
     rep_norm = 0.5 if rep_score is None else max(0.0, min(1.0, float(rep_score) / 100.0))
-    if shape_only:
-        blended = rep_norm
-        # None rather than 50 when nothing upstream produced a score: inventing a
-        # midpoint from a signal we just declined to count is worse than leaving
-        # the field as we found it.
-        blended_score = None if rep_score is None else int(round(rep_norm * 100))
-    else:
-        blended = (1.0 - lexical_weight) * rep_norm + lexical_weight * lexical_score
-        blended_score = int(round(blended * 100))
+    # None rather than 50 when nothing upstream produced a score: inventing a
+    # midpoint from a signal we are not counting is worse than leaving the
+    # field as we found it.
+    blended_score = None if rep_score is None else int(round(rep_norm * 100))
 
     floor_score, floor_reasons = _trusted_external_risk_floor(evidence_data)
     if floor_score and (blended_score is None or blended_score < floor_score):
@@ -2315,18 +2324,6 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
                 "statement about the URL string only — it says nothing about the "
                 "content, ownership, reputation or behaviour of the destination."
             )
-        # `points_added` is the one place the retired probability still acts:
-        # the blend below. Disclosed rather than left implicit, because a risk
-        # score partly driven by a number the report no longer shows would be
-        # worse than showing the number. Backlog 41 carries the decision on
-        # whether the blend survives at all.
-        if not shape_only and blended_score is not None and rep_score is not None:
-            points_added = blended_score - int(round(rep_norm * 100))
-            if points_added:
-                description += (
-                    f" The URL-structure signal moved the risk score by "
-                    f"{points_added:+d} points (weight {lexical_weight:.2f})."
-                )
         findings.append(
             {
                 "id": "lexical_ml_contribution",
@@ -2363,25 +2360,12 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     if blended_score is not None:
         report_data["risk_score"] = _score_within_classification_band(blended_score, report_data)
     rationale = str(report_data.get("risk_rationale") or "").strip()
-    if shape_only:
-        # No number printed here. Nothing was contributed, so there is nothing
-        # to disclose — and printing a probability that moved nothing is
-        # exactly the "reads as a measurement" problem.
-        blend_note = (
-            "URL structure did not affect the risk score: no observation was found "
-            "beyond the URL's size and shape, which long legitimate links share. "
-            f"Final risk is reputation only ({rep_norm:.4f})."
-        )
-    else:
-        # Where the retired probability still ACTS, its value is disclosed.
-        # This is the arithmetic of the score, not a verdict about the URL:
-        # named `url_structure_component` rather than "lexical model", and it
-        # appears only on the path where it changed the number.
-        blend_note = (
-            f"Final risk uses blended scoring: reputation_weight={1.0 - lexical_weight:.2f}, "
-            f"url_structure_weight={lexical_weight:.2f}, reputation_component={rep_norm:.4f}, "
-            f"url_structure_component={lexical_score:.4f}, final={blended:.4f}."
-        )
+    # One note, because there is one behaviour: URL structure does not enter
+    # the risk score. There is no weight to report and no component to print.
+    blend_note = (
+        "URL structure does not contribute to the risk score. Its observations "
+        f"are reported as evidence; final risk is reputation only ({rep_norm:.4f})."
+    )
     if floor_reasons:
         blend_note += f" External intelligence floor enforced at {blended_score}/100."
     report_data["risk_rationale"] = (rationale + " " + blend_note).strip()

@@ -2231,41 +2231,35 @@ the calibration curve removed, the LightGBM artefact retired (settings deleted,
 not defaulted to false), and the probability and its label dropped from the
 report while the named rule observations stayed.
 
-**STILL OPEN, and it is the one thing the decision's premise did not cover:
-the risk-score blend.** The demotion was taken as presentational on the
-grounds that the weak-signal gate already stops shape-only verdicts scoring.
-That holds only for shape-only verdicts — when any semantic feature is
-present the gate opens and the lexical score contributes 25% of the blend.
-Measured over the stored reports:
+**CLOSED 2026-10-19. The blend is removed too** — the probability contributes
+nothing to the risk score: not weighted, not disclosed in points, not in the
+payload. `URL_SHAPE_AFFECTS_SCORE` went with it, because by then it gated
+nothing.
 
-| | |
+Measured before removing it, since a band shift was the stop condition:
+
+| blend-active reports (n = 575) | |
 |---|---|
-| investigations where the blend is active | **584 of 2,667** |
-| their median lexical score | **0.9999** |
-| median stored risk score | **62.0** |
-| implied median pre-blend risk | **49.3** |
-| **median points the blend adds** | **+12.7** |
-| investigations where it adds ≥10 points | **521** |
+| score delta | min −19, **p50 −13**, max +7 |
+| **band label changes** | **1 of 2,669 reports** |
 
-So the probability is still moving the number on 22% of URL investigations.
-It was **not** removed with the rest, because that is a score change of that
-size and belongs to its own decision. What changed is that it is now
-disclosed: the finding says "The URL-structure signal moved the risk score by
-+N points (weight 0.25)" where it moved anything, and prints no number where
-it moved nothing.
+The bands do not move, and structurally cannot for a classified report: the
+score is clamped into the band of the `classification`, and the classification
+does not read the lexical probability. The only unclamped reports are 42
+`inconclusive` ones; two had the blend active and one changed band. So the
+thresholds were not absorbing the blend — the classification was — and
+re-tuning them does not arise.
 
-Two smaller open things from the same work:
+Accepted gaps are now a register in `docs/design/lexical-scoring-retirement.md`,
+including the one that is a real loss:
 
-* **The gate narrowed and lost some real signal.** `label == "high"` fired on
-  1,008 of 1,535 corpus URLs; the replacement predicate fires on 376, a
-  strict subset. Most of what it drops is infrastructure (Windows Update,
-  Office CDN, OCSP responders, SharePoint). But long machine-generated
-  hostnames on ordinary TLDs drop too —
-  `1bf5d9p.1bf5d9c8d3dbb6665bfabbbd0a2b0f866f777ca9.com`. Adding
-  `digit_heavy_and_high_entropy` + `deep_subdomains_and_many_params` as an
-  escalating combination would recover them; it was not done because the
-  floor never had that rule and inventing one is the shape-based reasoning
-  the measurement argues against.
+* **DGA-shaped hostnames no longer trip the suspicious-URL gate** —
+  `1bf5d9p.1bf5d9c8d3dbb6665bfabbbd0a2b0f866f777ca9.com`. Marked a deliberate
+  non-rule: the floor never had it, and entropy (AUC 0.269) and digit ratio
+  (0.327) are both the wrong side of a coin flip on this corpus. **If analysts
+  report missing these, that register row is where the evidence goes** — a few
+  real misses from people reading the alerts beat the corpus statistic,
+  because they are measured at the grain of the decision.
 * **The model file is still on disk**, referenced by nothing. Deleting an ops
   artefact was not part of the decision.
 

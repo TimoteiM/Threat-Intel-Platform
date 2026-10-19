@@ -148,50 +148,61 @@ combination would recover them. **That was not done**, because it is a rule
 the floor never had and inventing one would be exactly the shape-based
 reasoning the measurement argues against. It is a decision, not an oversight.
 
-### The flag's meaning narrowed
+### The blend is removed
 
-`URL_SHAPE_AFFECTS_SCORE` used to re-enable the aggregate's points in the
-weak-signal cluster. With the aggregate gone there is nothing there for it to
-re-enable, so a shape-only URL now scores 0 in that cluster whether the flag
-is on or off.
+The decision was first taken on the understanding that demoting the score is
+presentational, because the weak-signal gate already stops shape-only verdicts
+moving the risk score. **That was true only for shape-only verdicts.** When
+any semantic feature was present the gate opened and the lexical score
+contributed 25% of the blended risk — on 575 of 2,669 stored reports, with a
+median lexical score of **0.9999**, so it was adding a median **+12.7 risk
+points** and ≥10 points on 521 of them.
 
-It is **not dead**: it still decides whether a shape-only URL's score blends
-into the final risk score. Its meaning went from "shape can score anywhere" to
-"shape can move the risk blend". Both halves are pinned —
-`test_decision_engine.py` for the part that no longer happens,
-`test_the_flag_still_governs_the_risk_blend` for the part that does.
+It is now gone: not weighted, not disclosed in points, not in the payload.
+`score` no longer leaves `assess_url_lexical_risk`, and `weights`,
+`rule_floor_applied` and `_rule_based_floor` went with it — the weight existed
+only to blend a score and the floor only to raise one. The floor's tiers
+survive as `ESCALATING_COMBINATIONS`, which is what the gates read.
 
-### The blend, which is not presentational
+**Measured before removing it, because the band shift was the stop condition:**
 
-The decision was taken on the understanding that demoting the score is
-presentational, because the weak-signal gate already stops shape-only
-verdicts moving the risk score. **That is true only for shape-only verdicts.**
-When any semantic feature is present the gate opens and the lexical score
-contributes 25% of the blended risk.
-
-Measured over the stored reports:
-
-| | |
+| blend-active reports (n = 575) | |
 |---|---|
-| investigations where the blend is active | **584 of 2,667** |
-| their median lexical score | **0.9999** |
-| their median stored risk score | **62.0** |
-| implied median pre-blend risk | **49.3** |
-| **median points the blend adds** | **+12.7** |
-| investigations where it adds ≥10 points | **521** |
+| score delta | min −19, p10 −15, **p50 −13**, p90 −10, max +7 |
+| reports where the score moves | 571 of 575 |
+| **band label changes** | **1 of 2,669 reports** |
 
-So the score is not decoration on 22% of URL investigations; it is adding a
-median 12.7 risk points, across a band boundary in many cases.
+| band label | before | after |
+|---|---|---|
+| benign | 19 | 19 |
+| suspicious | 551 | 551 |
+| malicious | 5 | 5 |
 
-**It was therefore not removed here.** Removing it is a score change of that
-size and belongs with a decision, not inside a presentational one. What
-changed instead is that it is now **disclosed**: where the blend moves the
-number, the finding says so — "The URL-structure signal moved the risk score
-by +18 points (weight 0.25)" — and where it moves nothing, no number is
-printed at all. A risk score partly driven by a figure the report no longer
-shows would have been worse than showing the figure.
+**The bands do not shift, and the reason is structural rather than lucky.**
+The final score is clamped into the band of the report's `classification` by
+`_score_within_classification_band`, and the classification is set upstream
+and — since the lexical aggregate was removed from the decision engine — does
+not read the lexical probability at all. So for any classified report the band
+is pinned by the classification and the blend only ever moved the number
+*within* it. Measured: the score's band equals the classification on 2,581 of
+2,627 banded reports (98.2%).
 
-**This is the open item.** Backlog 41.
+The only reports not clamped are the 42 `inconclusive` ones, which carry no
+band. Two of those had the blend active and **one** changes the band its score
+falls in. That is the entire band exposure of this change: one report in
+2,669.
+
+So the thresholds were **not** absorbing the blend — the classification was,
+and re-tuning thresholds does not arise.
+
+### The flag went too
+
+`URL_SHAPE_AFFECTS_SCORE` gated two things: the aggregate's points in the
+weak-signal cluster, and this blend. With both gone it switched nothing, and
+an inert flag is worse than no flag because somebody sets it and expects shape
+to score. The setting, the `url_shape_affects_score()` helper and its import
+are removed. What it never switched off was the semantic half, which still
+scores unconditionally as named observations.
 
 ### Absence is not a low score
 
@@ -203,6 +214,21 @@ assessed" saying *"This is an absence of evidence, not an absence of risk"*,
 and the frontend renders a "Not assessed" panel. If no reason was recorded,
 the finding says that too, because a silent absence is the defect one level
 down.
+
+---
+
+## Accepted gaps
+
+Where this leaves the platform worse, recorded so the evidence has somewhere
+to go. The register is the point of the document: these are what a reviewer
+argues with.
+
+| # | gap | example | why it is accepted |
+|---|---|---|---|
+| 1 | **DGA-shaped hostnames no longer trip the suspicious-URL gate** | `1bf5d9p.1bf5d9c8d3dbb6665bfabbbd0a2b0f866f777ca9.com` | **A deliberate non-rule.** These trip `digit_heavy_and_high_entropy`, which is reported as an observation but is not an escalating combination on its own, and `.com` is not a disposable TLD — so the gate does not fire. Adding `digit_heavy_and_high_entropy` + `deep_subdomains_and_many_params` as a combination would recover them. **It was not added because the rule floor never had it**, and the measurement argues against inventing shape-based rules: against the only external labels available, entropy scores AUC 0.269 and `digit_ratio` 0.327 — both the wrong side of a coin flip on this corpus, and the flagged URLs are the *tidier* ones. Inventing a rule here would be adding exactly the kind of reasoning that produced 1,008 high verdicts out of 1,535. **If analysts report missing these, this row is where that evidence goes** — a handful of real misses from people who looked at the alerts is worth more than the corpus statistic, because it is a measurement at the grain of the decision rather than of the URL string. |
+| 2 | **The gate narrowed from 1,008 of 1,535 URLs to 376** | — | A strict subset: nothing is newly flagged. Most of what it drops is infrastructure that was being marked suspicious on URL shape — `ctldl.windowsupdate.com`, `1d.tlu.dl.delivery.mp.microsoft.com`, `f.c2r.ts.cdn.office.net`, `ocsp.globalsign.com`, `ts-ocsp.ws.symantec.com`, `edgedl.me.gvt1.com`, `pov-my.sharepoint.com`. Accepted because a gate firing on two thirds of everything is not a gate. Row 1 is the part of this that is a real loss. |
+| 3 | **The model file is still on disk** | `url_lexical_lightgbm.txt` | Referenced by nothing. Deleting an ops artefact was not part of the decision, and the settings that pointed at it are gone, so it cannot be reached by configuration. This document is what somebody who finds it will read. |
+| 4 | **`lightgbm` is still an installed dependency** | — | Nothing imports it. Removing it from the image is a rebuild with its own blast radius and was not part of this change. Harmless, and worth doing when the image is next touched for another reason. |
 
 ---
 

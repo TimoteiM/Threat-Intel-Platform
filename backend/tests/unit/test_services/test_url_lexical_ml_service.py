@@ -63,15 +63,24 @@ def test_there_is_no_calibration_left_to_misapply():
     assert "calibration_applied" not in result
 
 
-def test_no_probability_band_is_reported():
-    """Decision 3: the number may stay in the payload for the one consumer
-    that blends it; the LABEL and its thresholds may not exist at all, because
-    a band is what makes a probability read as a measurement."""
+def test_no_probability_leaves_this_module_at_all():
+    """The probability is gone from the payload, not merely unbanded.
+
+    It survived one more turn than the label did, for the 25% risk blend. That
+    blend was removed on 2026-10-19 — measured at a median 13 risk points on
+    575 of 2,669 stored reports, with no band change — so nothing reads the
+    number and it is no longer returned. With it went `weights` and
+    `rule_floor_applied`: the weight existed to blend a score and the floor to
+    raise one.
+    """
     result = assess_url_lexical_risk(
         "http://secure-update-account-login.verify-paypa1-example.top/auth?session=1"
     )
-    assert "label" not in result
-    assert "thresholds" not in result
+    for gone in ("score", "label", "thresholds", "weights", "raw_score",
+                 "calibration_applied", "rule_floor_applied"):
+        assert gone not in result, f"{gone} is still in the payload"
+    assert not hasattr(mod, "_rule_based_floor")
+    assert not hasattr(mod, "LEXICAL_WEIGHT")
     assert not hasattr(mod, "_score_to_label")
     assert not hasattr(mod, "LOW_THRESHOLD")
     assert not hasattr(mod, "HIGH_THRESHOLD")
@@ -82,8 +91,7 @@ def test_the_old_signature_still_works_so_callers_do_not_raise():
     would turn a retirement into a crash for any caller still passing it."""
     a = assess_url_lexical_risk("https://example.com")
     b = assess_url_lexical_risk("https://example.com", model_path_override="/no/such/model.txt")
-    assert a["observations"] == b["observations"]
-    assert a["score"] == b["score"]
+    assert a == b
 
 
 # ── the observations, which are what is reported ─────────────────────────

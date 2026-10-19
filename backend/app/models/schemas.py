@@ -841,16 +841,13 @@ class URLLexicalMLEvidence(BaseModel):
     top_features: list[str] = []
     feature_contributions: dict[str, float] = {}
     features: dict[str, float] = {}
-    weights: dict[str, float] = {"lexical_weight": 0.25}
-    rule_floor_applied: bool = False
     error: Optional[str] = None
-    #: NOT reported. No `label`, no `thresholds`, no `calibration_applied`:
-    #: removed 2026-10-19 with the model and its calibration curve, because a
-    #: probability beside a low/medium/high band reads as a measurement and
-    #: this one ranked below a coin flip against external labels. It survives
-    #: for one consumer, the risk-score blend, which now discloses the points
-    #: it contributes. See docs/design/lexical-scoring-retirement.md.
-    score: float = 0.0
+    #: There is no `score`, `label`, `thresholds`, `weights`,
+    #: `calibration_applied` or `rule_floor_applied`. The probability and
+    #: everything that existed to band it, weight it or raise it were removed
+    #: on 2026-10-19: it is not reported, not blended into the risk score and
+    #: not disclosed in points. The reportable output is `observations`.
+    #: docs/design/lexical-scoring-retirement.md.
 
 
 class URLMLFeatureImpact(BaseModel):

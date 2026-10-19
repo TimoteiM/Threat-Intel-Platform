@@ -618,11 +618,16 @@ class Settings(BaseSettings):
     # still worth an analyst's eye; what they no longer do is decide.
     #
     # Set true to restore the previous behaviour.
-    # Whether URL-*shape* signals (length, entropy, depth, dot count, and the
-    # lexical model's aggregate score, which they dominate) may move a verdict.
-    # Off: they are reported, and only semantic features escalate. See
-    # docs/weak-signals.md.
-    url_shape_affects_score: bool = False
+    # `url_shape_affects_score` was removed on 2026-10-19 because it became
+    # inert, and an inert flag is worse than no flag: someone sets it and
+    # expects shape to score.
+    #
+    # It existed to gate "URL shape, and the lexical model's aggregate score,
+    # which shape dominates". Both of those are gone — the aggregate from the
+    # decision engine and the 25% blend from the risk score — so the flag had
+    # nothing left to switch. What it never switched off is the semantic half,
+    # which still scores unconditionally as named observations.
+    # docs/design/lexical-scoring-retirement.md.
 
     default_collectors: str = "dns,http,tls,whois,asn,intel,vt,threat_feeds,brave_osint,urlscan,hybrid_analysis,cape"
     # Collectors that never run on the automatic alert path, however they would

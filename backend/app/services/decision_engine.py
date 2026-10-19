@@ -1199,34 +1199,6 @@ def _anyrun_heuristic_observations(hybrid: dict[str, Any]) -> list[str]:
     return observations
 
 
-def url_shape_affects_score(settings: Any = None) -> bool:
-    """Whether URL-*shape* signals may move a verdict.
-
-    Off by default. Shape means the features that grow with any URL: length,
-    entropy, dot count, subdomain depth, path depth — plus the lexical model's
-    aggregate score, which those features dominate. A legitimate deep link into
-    SharePoint or Office scores MEDIUM on all of them, and that was enough,
-    with a shared-hosting observation and a registrar pivot, to reach the three
-    points that make a domain "suspicious" with nothing suspicious found.
-
-    What this does *not* switch off is the semantic half. A sensitive keyword,
-    punycode, a raw-IP host, an @ in the URL, a shortener, a throwaway TLD —
-    those assert something about intent rather than size, and they still score.
-    The list is SEMANTIC_FEATURES in url_lexical_ml_service, which is the one
-    place it is defined.
-
-    Both scoring paths — here and the deterministic one in analysis_task — read
-    this, so they cannot disagree.
-
-    `settings` is injectable so a test need not monkeypatch a dotted path into
-    app.config: this suite reloads `app` through importlib in places, and a
-    string target like "app.config.get_settings" then fails to resolve.
-    """
-    if settings is None:
-        from app.config import get_settings
-
-        settings = get_settings()
-    return bool(getattr(settings, "url_shape_affects_score", False))
 
 
 def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http: bool = False) -> tuple[int, list[str]]:
@@ -1247,7 +1219,7 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
         # The aggregate probability and its low/medium/high band are gone from
         # here, not merely ungated.
         #
-        # They used to contribute 1 or 2 points when `url_shape_affects_score()`
+        # They used to contribute 1 or 2 points when a now-removed flag
         # allowed it, and to be appended as a reason either way — "Lexical
         # model high risk (0.99)". Measured on 2026-10-19 against the only
         # external labels available, that number ranked flagged URLs BELOW

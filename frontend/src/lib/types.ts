@@ -526,17 +526,13 @@ export interface URLLexicalMLEvidence {
   top_features?: string[];
   feature_contributions?: Record<string, number>;
   features?: Record<string, number>;
-  weights?: Record<string, number>;
-  rule_floor_applied?: boolean;
   error?: string;
   /**
-   * NOT rendered. No `label`, no `thresholds`, no `calibration_applied`:
-   * removed 2026-10-19 with the model and its calibration curve. A
-   * probability beside a low/medium/high band reads as a measurement, and
-   * this one ranked below a coin flip against external labels. It survives in
-   * the payload for one backend consumer, the risk-score blend.
+   * There is no `score`, `label`, `thresholds`, `weights` or
+   * `rule_floor_applied`. The probability and everything that banded or
+   * weighted it were removed on 2026-10-19 — it is not reported and no longer
+   * contributes to the risk score. The reportable output is `observations`.
    */
-  score?: number;
 }
 
 export interface URLLexicalObservation {

@@ -49,9 +49,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
-from app.config import get_settings
-
-LEXICAL_WEIGHT = 0.25
+# `LEXICAL_WEIGHT = 0.25` was the share of the final risk score this signal
+# carried. The blend it fed was removed on 2026-10-19, so the constant has no
+# meaning left and is not kept as documentation of a weight nothing applies.
+# docs/design/lexical-scoring-retirement.md.
 
 FEATURE_ORDER = [
     "url_length",
@@ -400,14 +401,10 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
     model to point it at. See the module docstring.
     """
     features = extract_url_lexical_features(url)
-    score, contribs = _score_built_in(features)
-    score = max(0.0, min(1.0, float(score)))
-
-    rule_floor = _rule_based_floor(features)
-    rule_floor_applied = False
-    if rule_floor is not None and rule_floor > score:
-        score = rule_floor
-        rule_floor_applied = True
+    # `_score_built_in` is still called, for its per-feature contributions
+    # only: they rank which measured values are worth showing. The scalar it
+    # returns is discarded and no longer leaves this function.
+    _unused_score, contribs = _score_built_in(features)
 
     result: dict[str, Any] = {
         "enabled": True,
@@ -419,17 +416,14 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
         "features": features,
         "top_features": _top_features_from_contribs(contribs, 5),
         "feature_contributions": contribs,
-        "rule_floor_applied": rule_floor_applied,
-        # NOT reported as a verdict. No `label`, no `thresholds`: a
-        # probability beside a low/medium/high band reads as a measurement,
-        # and against the only external labels available this one scored below
-        # a coin flip. It remains in the payload for exactly one consumer —
-        # the risk-score blend in `analysis_task._inject_lexical_contribution`,
-        # which discloses the points it adds — and that blend is the open
-        # question in backlog 41.
-        "score": round(score, 4),
-        "weights": {"lexical_weight": LEXICAL_WEIGHT},
     }
+    # There is **no score in the payload.** Not reported, not weighted, not
+    # blended, not disclosed in points — the probability contributes nothing
+    # anywhere, which is the whole of the 2026-10-19 decision.
+    #
+    # `rule_floor_applied` and `weights` went with it: the floor existed only
+    # to raise a score and the weight only to blend one. The floor's tiers
+    # survive as `ESCALATING_COMBINATIONS`, which is what the gates now read.
     return result
 
 
@@ -524,23 +518,6 @@ def _shannon_entropy(text: str) -> float:
     return round(entropy, 6)
 
 
-def _rule_based_floor(features: dict[str, float]) -> float | None:
-    # Practical safeguards for high-confidence lexical phishing patterns.
-    if float(features.get("has_ip_host", 0.0)) >= 1.0 or float(features.get("has_at_symbol", 0.0)) >= 1.0:
-        return 0.90
-    if float(features.get("has_punycode", 0.0)) >= 1.0 and float(features.get("has_sensitive_keyword", 0.0)) >= 1.0:
-        return 0.85
-    if float(features.get("has_suspicious_tld", 0.0)) >= 1.0 and float(features.get("has_sensitive_keyword", 0.0)) >= 1.0:
-        return 0.72
-    if (
-        float(features.get("has_suspicious_tld", 0.0)) >= 1.0
-        and float(features.get("digit_ratio", 0.0)) >= 0.2
-        and float(features.get("entropy", 0.0)) >= 4.0
-    ):
-        return 0.65
-    if float(features.get("subdomain_depth", 0.0)) >= 4.0 and float(features.get("query_param_count", 0.0)) >= 5.0:
-        return 0.55
-    return None
 
 
 def write_builtin_model_json(path: str) -> None:
