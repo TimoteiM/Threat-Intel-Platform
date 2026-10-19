@@ -1,6 +1,6 @@
 # The tolerated test failures, enumerated.
 #
-# "The same 14" is quoted on every sign-off. Enumeration stopped the set
+# "The same 13" is quoted on every sign-off (14 until 2026-10-19). Enumeration stopped the set
 # growing silently; it did NOT establish that any of them should be tolerated.
 # Per the README rule on exemptions: a carve-out added for a false positive
 # keeps quieting the true one, so each entry needs a premise verified
@@ -14,14 +14,27 @@
 #     fault rather than a product one.
 #
 #   * That grouping does NOT cover the set, and the first entry checked
-#     disproved it. `test_dns.py::test_empty_evidence_on_failure` fails on
-#     `assert 'completed' == 'failed'`: the DNS collector reports *completed*
+#     disproved it. `test_dns.py::test_empty_evidence_on_failure` failed on
+#     `assert 'completed' == 'failed'`: the DNS collector reported *completed*
 #     for a run that produced no evidence. That is the absence-read-as-value
-#     class this project tracks, and it is a candidate live defect sitting
-#     inside the tolerated set — not a broken test.
+#     class this project tracks, and it was a live defect sitting inside the
+#     tolerated set — not a broken test.
 #
-# So the set has at least two causes and one plausible real defect. Treat
-# "the same 14" as a stability check only: it proves no NEW failure appeared.
+#     **FIXED 2026-10-19, and the test was right all along.** The collector
+#     caught each lookup exception, logged it at DEBUG and moved on, so a DNS
+#     outage returned a completed run with empty evidence. Now: every failed
+#     lookup is recorded; all seven failing raises `DNSLookupError` and the
+#     run is marked failed; a partial failure still completes with a note per
+#     lookup that could not be checked; and `NoNameservers` is counted as a
+#     failure rather than an answer. The set is **13**.
+#
+#     Scale: of 2,603 stored DNS runs, exactly ONE had ever been recorded as
+#     failed, and 290 of 2,602 completed runs carry no records at all — the
+#     upper bound on how many were reporting an outage as "no DNS records".
+#
+# So the set has at least two causes, and the one plausible real defect in it
+# turned out to be real. Treat
+# "the same 13" as a stability check only: it proves no NEW failure appeared.
 # It does not say these fourteen are acceptable, because nobody has asked
 # each one why. Filed as backlog 14.
 #
@@ -30,7 +43,6 @@
 #
 tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_keeps_observed_results_when_no_hits_match_security_filter
 tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_run_builds_brave_osint_evidence
-tests/unit/test_collectors/test_dns.py::TestDNSCollector::test_empty_evidence_on_failure
 tests/unit/test_collectors/test_intel_collector_timeouts.py::test_check_urlhaus_uses_explicit_timeout
 tests/unit/test_collectors/test_intel_collector_timeouts.py::test_query_crtsh_uses_explicit_timeout
 tests/unit/test_collectors/test_intel_collector_timeouts.py::test_spamhaus_public_resolver_response_is_not_blocklist_hit
