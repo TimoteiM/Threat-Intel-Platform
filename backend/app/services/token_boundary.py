@@ -53,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import json
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -62,10 +63,26 @@ from typing import Any, Callable, Iterable, Sequence
 from app.services import log_secret_sanitizer as secrets
 from app.services.assistant_sanitizer_service import sanitize_entries
 
-#: How long a map lives if the caller does not say. An investigation is
-#: minutes; this is generous enough to survive a retry and short enough that a
-#: forgotten map is not an indefinite copy of customer identifiers.
-DEFAULT_TTL = timedelta(hours=6)
+#: The **backstop**, not the lifetime. A map is meant to be purged when its
+#: investigation completes; this is what catches the ones that are abandoned
+#: or crash.
+#:
+#: Six hours was the number before, and it was a number chosen for an agent
+#: loop that does not exist yet — so it could not have been measured and was
+#: not. The real duration gets measured in lab testing; until then the ceiling
+#: is deliberately generous, because a map expiring mid-investigation fails
+#: the investigation, while a map living a few hours too long is bounded by
+#: this constant and visible when it fires.
+CEILING = timedelta(hours=24)
+
+#: Kept as the name callers pass, now meaning the ceiling.
+DEFAULT_TTL = CEILING
+
+#: Why a map was deleted. A ceiling purge is a SIGNAL — it means either the
+#: ceiling is wrong or investigations are leaking — and routine housekeeping
+#: and a leak indicator must not arrive as the same number.
+PURGE_COMPLETED = "completed"
+PURGE_CEILING = "ceiling"
 
 #: `[HOST_a3f9c1_1]`. The fingerprint sits between the prefix and the index so
 #: the prefix still reads first — a model is being asked to reason about
@@ -324,6 +341,37 @@ class Detokenized:
         return f"<Detokenized {self.substitutions} values, {len(self._text)} chars>"
 
     __str__ = __repr__
+
+
+@dataclass(frozen=True)
+class PurgeResult:
+    """What a purge deleted and why.
+
+    `reason` is the whole point of this type. A map removed because its
+    investigation finished is housekeeping; a map removed because it hit the
+    wall-clock ceiling is a leak indicator, and a single `deleted: int` makes
+    those indistinguishable.
+
+    The boundary does not log it — it holds identifiers and imports no logger,
+    asserted by a test. The caller surfaces it: `warning` is the sentence to
+    log when one fired, and is `None` when nothing needs saying.
+    """
+
+    reason: str
+    deleted: int
+    scopes: tuple[str, ...] = ()
+
+    @property
+    def warning(self) -> str | None:
+        if self.reason != PURGE_CEILING or not self.deleted:
+            return None
+        return (
+            f"{self.deleted} token map(s) reached the {CEILING} wall-clock "
+            f"ceiling instead of being purged on completion: "
+            f"{', '.join(self.scopes[:10])}. Either the ceiling is too short "
+            f"for a real investigation, or investigations are finishing "
+            f"without purging their map."
+        )
 
 
 @dataclass
@@ -719,6 +767,49 @@ class TokenBoundary:
 # ── persistence ──────────────────────────────────────────────────────────
 
 
+def _seal(token_map: dict[str, str]) -> tuple[str | None, str | None]:
+    """The map as a ciphertext, under a key held outside the database.
+
+    Reuses the box that already seals integration credentials. If no key is
+    configured the map is **not** written: storing it in the clear would be
+    the state this change exists to end, and failing loudly is the only other
+    honest option.
+    """
+    from app.security import secret_box
+
+    # `from_settings()`, never `SecretBox()`. The bare constructor takes its
+    # keys as an argument and defaults to none, so it is *never* configured —
+    # which made this function raise on every call, in production as much as
+    # in a test, until a test asserted a round trip rather than a refusal.
+    box = secret_box.from_settings()
+    if not box.configured:
+        raise TokenBoundaryError(
+            "no INTEGRATION_ENCRYPTION_KEY is configured, so a token map "
+            "cannot be sealed. It is not written in the clear: the map is the "
+            "reverse index for every identifier in the investigation."
+        )
+    sealed = box.encrypt(json.dumps(token_map, separators=(",", ":"), sort_keys=True))
+    return sealed.ciphertext, sealed.key_id
+
+
+def _open_sealed(ciphertext: str | None) -> dict[str, str]:
+    """The map back. An unreadable row is empty, not an exception.
+
+    A key rotated past its retirement leaves a row nothing can open. That is
+    recoverable — the investigation re-tokenises — where raising would fail
+    the run over a map that was only ever a cache of its own work.
+    """
+    if not ciphertext:
+        return {}
+    from app.security import secret_box
+    from app.security.secret_box import SecretBoxUndecryptable
+
+    try:
+        return dict(json.loads(secret_box.from_settings().decrypt(ciphertext)))
+    except (SecretBoxUndecryptable, ValueError, TypeError):
+        return {}
+
+
 def open_boundary(
     db: Any,
     *,
@@ -751,12 +842,14 @@ def open_boundary(
         .one_or_none()
     )
     if row is None:
+        ciphertext, key_id = _seal({})
         row = InvestigationTokenMap(
             id=uuid.uuid4(),
             tenant_id=tenant,
             investigation_id=investigation,
             fingerprint=fingerprint_for(tenant, investigation),
-            token_map={},
+            token_map_ciphertext=ciphertext,
+            token_map_key_id=key_id,
             expires_at=now() + ttl,
         )
         db.add(row)
@@ -767,7 +860,7 @@ def open_boundary(
             tenant_id=row.tenant_id,
             investigation_id=row.investigation_id,
             fingerprint=row.fingerprint,
-            token_map=dict(row.token_map or {}),
+            token_map=_open_sealed(row.token_map_ciphertext),
             expires_at=row.expires_at,
         ),
         now=now,
@@ -788,46 +881,59 @@ def save_boundary(db: Any, boundary: TokenBoundary) -> None:
     )
     if row is None:
         return
-    row.token_map = boundary.token_map
+    row.token_map_ciphertext, row.token_map_key_id = _seal(boundary.token_map)
     db.flush()
 
 
-def purge_expired(db: Any, *, now: Callable[[], datetime] = _now) -> int:
-    """Delete every map whose lifetime has ended. Returns how many.
+def purge_expired(db: Any, *, now: Callable[[], datetime] = _now) -> PurgeResult:
+    """The **backstop**: maps that reached the wall-clock ceiling.
 
-    The lifetime is the point: this table holds real identifiers in exchange
-    for reversibility, so something has to actually remove them. A TTL column
-    nothing deletes on is a comment.
+    Every row this deletes is one whose investigation did not purge its own
+    map, so the result carries `PURGE_CEILING` and a `warning` for the caller
+    to surface. Routine housekeeping and a leak indicator must not arrive as
+    the same number.
     """
     from app.models.database import InvestigationTokenMap
 
-    deleted = (
+    due = (
         db.query(InvestigationTokenMap)
         .filter(InvestigationTokenMap.expires_at < now())
-        .delete(synchronize_session=False)
+        .all()
     )
+    scopes = tuple(f"{r.tenant_id}/{r.investigation_id}" for r in due)
+    for row in due:
+        db.delete(row)
     db.flush()
-    return int(deleted or 0)
+    return PurgeResult(reason=PURGE_CEILING, deleted=len(due), scopes=scopes)
 
 
-def purge_investigation(db: Any, *, tenant_id: str, investigation_id: str) -> int:
-    """Delete one investigation's map, before its TTL.
+def purge_investigation(
+    db: Any, *, tenant_id: str, investigation_id: str, reason: str = PURGE_COMPLETED
+) -> PurgeResult:
+    """The **normal** end of a map: its investigation finished.
 
-    For the end of a run: the map is only needed while the loop is running,
-    and keeping it until expiry is keeping identifiers for no reason.
+    This is what should delete almost every row. The ceiling in
+    `purge_expired` exists for the ones that never get here, and the two are
+    separate functions so the reason is recorded rather than inferred from
+    which code path happened to run.
     """
     from app.models.database import InvestigationTokenMap
 
+    tenant = str(tenant_id or "").strip()
+    investigation = str(investigation_id or "").strip()
     deleted = (
         db.query(InvestigationTokenMap)
         .filter(
-            InvestigationTokenMap.tenant_id == str(tenant_id or "").strip(),
-            InvestigationTokenMap.investigation_id == str(investigation_id or "").strip(),
+            InvestigationTokenMap.tenant_id == tenant,
+            InvestigationTokenMap.investigation_id == investigation,
         )
         .delete(synchronize_session=False)
     )
     db.flush()
-    return int(deleted or 0)
+    return PurgeResult(
+        reason=reason, deleted=int(deleted or 0),
+        scopes=((f"{tenant}/{investigation}",) if deleted else ()),
+    )
 
 
 # ── for tests and callers without a database ─────────────────────────────

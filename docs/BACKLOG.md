@@ -2160,3 +2160,45 @@ The 18 cancelled all carry a `completed_at`, so whoever cancelled them did it
 through a path that closed them properly; the four failed include one with a
 `completed_at` and three without, which is a smaller inconsistency in the same
 column.
+
+## 40 — The platform connects to its database as a superuser, and it is the only role
+
+Measured on 2026-10-19 while trying to do something smaller: restrict read
+access to `investigation_token_maps`, the table holding the reverse index from
+tokens back to real hostnames and accounts.
+
+```
+rolname      | superuser | createrole | createdb
+threatintel  | t         | t          | t
+```
+
+`threatintel` is what the API, the worker and Alembic all connect as. It is
+also the **only non-system role in the cluster** and the owner of every table.
+
+Three consequences, in increasing order of how much they cost:
+
+1. **Least privilege is not expressible.** Any request to revoke a privilege
+   from "the application's role" has no second role to grant it to instead,
+   and a `REVOKE` against an owning superuser is a no-op regardless. This
+   blocked decision C on the token boundary (see
+   `docs/design/token-boundary-gaps.md`, row 12), and it will block the next
+   such request identically.
+2. **A SQL injection reaching the connection is a cluster takeover**, not a
+   data read: `COPY … PROGRAM` and `pg_read_file` are available to superuser,
+   so the blast radius is the host rather than the database.
+3. **Migrations and the running application are indistinguishable at the
+   database.** Nothing in Postgres' own audit trail separates a schema change
+   from ordinary traffic, because they arrive as the same principal.
+
+The work is a non-superuser application role with `SELECT, INSERT, UPDATE,
+DELETE` on the application tables and nothing else, Alembic keeping a
+privileged role of its own, and the running containers migrated onto the new
+one. The dangerous direction is doing it partially — a role missing one grant
+fails at runtime on whichever code path happens to need it, which may be
+hours later and in a task nobody is watching. So: enumerate the grants from
+the schema rather than from the errors, and verify by running the full suite
+against the new role before the old one is taken away.
+
+Not urgent in the sense that nothing is broken today. Urgent in the sense that
+it is a precondition for a class of request that will keep arriving, and the
+first one already arrived.

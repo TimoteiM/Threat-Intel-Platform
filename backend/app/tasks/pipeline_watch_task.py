@@ -134,8 +134,12 @@ def succeeded(result: Any) -> bool:
     return result.get("ran") is not False
 
 
-async def _record_heartbeat(name: str, result: dict[str, Any]) -> None:
+async def record_heartbeat(name: str, result: dict[str, Any]) -> None:
     """Write that this watch finished. Success path only.
+
+    Public, and the only implementation. `token_map_purge_task` reports
+    through this rather than writing its own upsert: two writers to one
+    heartbeat table is how the second one ends up the stale one.
 
     Not in a `finally`, and not before the work: a heartbeat that survives the
     failure it exists to expose is worse than none, because it actively
@@ -208,7 +212,7 @@ def _run_watch(name: str, work: Any) -> dict[str, Any]:
             pass
         return _failure(name, exc)
     try:
-        asyncio.run(_record_heartbeat(name, result))
+        asyncio.run(record_heartbeat(name, result))
     except Exception as exc:  # noqa: BLE001
         # The work succeeded; only the record of it failed. Say so rather than
         # reporting the watch as failed, which would be a different lie.

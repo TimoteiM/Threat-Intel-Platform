@@ -143,6 +143,15 @@ celery_app.conf.update(
             "task": "app.tasks.case_closure_task.close_quiet_cases",
             "schedule": crontab(minute="*"),
         },
+        # The backstop for investigation token maps. Hourly, because the
+        # ceiling is 24 hours and a pass an hour late costs an hour of a map
+        # that has already outlived its investigation by a day. Every row it
+        # deletes is one an investigation failed to purge, so the task logs a
+        # WARNING rather than a count.
+        "token-map-ceiling-sweep": {
+            "task": "app.tasks.token_map_purge_task.purge_token_maps",
+            "schedule": crontab(minute=23),
+        },
         "alert-log-context-sweep": {
             "task": "app.tasks.alert_log_followup_task.sweep_alert_log_context",
             "schedule": crontab(minute="*"),
@@ -230,4 +239,10 @@ celery_app.autodiscover_tasks([
     # the symptom is stored IP verdicts that keep getting older — which looks
     # exactly like a refresh working on addresses nobody happens to view.
     "app.tasks.ip_refresh_task",
+    # Eighth. This one is the backstop that reports when token maps outlive
+    # their investigations, so unregistered it fails in the most fitting way
+    # available: the maps are never deleted, the identifiers they hold stay
+    # in the database indefinitely, and the warning that would have said so
+    # is the thing that never ran.
+    "app.tasks.token_map_purge_task",
 ])

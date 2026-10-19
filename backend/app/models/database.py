@@ -561,7 +561,16 @@ class InvestigationTokenMap(Base):
     # a collision makes two scopes indistinguishable and the cross-tenant
     # check passes — see migration 070 for the birthday bound.
     fingerprint: Mapped[str] = mapped_column(String(16), nullable=False)
-    token_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Sealed, not JSONB. This column held real hostnames, accounts and
+    # addresses in readable form — by construction, since reversibility is the
+    # point — so anyone who could read the table had every identifier the
+    # tokenisation existed to protect. Fernet under INTEGRATION_ENCRYPTION_KEY,
+    # which lives in the environment and not in the database.
+    #
+    # Nothing is lost by making it opaque to SQL: the map was already read and
+    # written whole and never queried by key.
+    token_map_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_map_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

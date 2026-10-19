@@ -643,3 +643,252 @@ def test_prose_about_a_user_is_not_mistaken_for_one(text):
     the sentence to hide an identifier that was never in it."""
     b = _boundary()
     assert b.tokenize(text) == text
+
+
+# ── lifetime: completion, with a ceiling as the backstop ─────────────────
+
+
+def test_the_ceiling_is_twenty_four_hours_and_is_not_the_lifetime():
+    """Six hours was a number chosen for a loop that does not exist yet, so it
+    could not have been measured. The lifetime is "until the investigation
+    completes"; this is only what catches the ones that never do."""
+    assert tb.CEILING == timedelta(hours=24)
+    assert tb.DEFAULT_TTL == tb.CEILING
+
+
+def test_a_completion_purge_and_a_ceiling_purge_are_distinguishable():
+    """A single `deleted: int` makes housekeeping and a leak indicator the
+    same number. They are different findings and carry different reasons."""
+    completed = tb.PurgeResult(reason=tb.PURGE_COMPLETED, deleted=3)
+    ceiling = tb.PurgeResult(reason=tb.PURGE_CEILING, deleted=3, scopes=("c00/run-1",))
+
+    assert completed.warning is None, "routine housekeeping must not warn"
+    assert ceiling.warning is not None
+    assert "ceiling" in ceiling.warning
+    assert "c00/run-1" in ceiling.warning
+    assert "investigations are finishing without purging" in ceiling.warning
+
+
+def test_a_ceiling_purge_that_deleted_nothing_says_nothing():
+    assert tb.PurgeResult(reason=tb.PURGE_CEILING, deleted=0).warning is None
+
+
+def test_the_boundary_returns_the_warning_and_does_not_log_it():
+    """The division of labour: this module handles identifiers in every call
+    and imports no logger, so it states the fact and the caller reports it.
+    `test_nothing_in_the_boundary_logs` is the other half of this."""
+    import inspect
+
+    from app.tasks import token_map_purge_task
+
+    source = inspect.getsource(token_map_purge_task)
+    assert "logger.warning" in source, "nothing surfaces the ceiling firing"
+    assert "result.warning" in source
+
+
+# ── encryption at rest ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def sealing_key(monkeypatch):
+    """A key for this run only, generated rather than written down.
+
+    It patches `from_settings` — the factory the boundary calls — because
+    patching `SecretBox` instead is how `_seal` came to call the bare
+    constructor, which takes no keys and is therefore never configured. A
+    test that fakes the thing under test agrees with itself (rule 20).
+    """
+    from app.security import secret_box
+    from app.security.secret_box import SecretBox, generate_key
+
+    box = SecretBox([generate_key()])
+    # The module OBJECT, not the dotted string. A string target is
+    # resolved with getattr(app, "security"), and 24 of the errors in
+    # docs/testing/tolerated-failures.txt are exactly that resolution
+    # failing once some other test has run first.
+    monkeypatch.setattr(secret_box, "from_settings", lambda: box)
+    return box
+
+
+def test_the_map_is_sealed_before_it_is_stored(sealing_key):
+    """The column held real hostnames and accounts in readable form, which is
+    the state this closes: a database read alone no longer yields them."""
+    sealed, key = tb._seal({"[HOST_abc_1]": "EXPDC002"})
+    assert sealed and "EXPDC002" not in sealed
+    assert key
+    assert tb._open_sealed(sealed) == {"[HOST_abc_1]": "EXPDC002"}
+
+
+def test_an_unopenable_map_is_empty_rather_than_an_exception(sealing_key):
+    """A key rotated past retirement leaves a row nothing can open. The
+    investigation re-tokenises; raising would fail the run over what was only
+    ever a cache of its own work."""
+    assert tb._open_sealed("not-a-fernet-token") == {}
+    assert tb._open_sealed(None) == {}
+    assert tb._open_sealed("") == {}
+
+
+def test_sealing_refuses_rather_than_writing_identifiers_in_the_clear(monkeypatch):
+    """The only two honest options when no key is configured are to fail or to
+    store the reverse index for every identifier in the investigation in
+    readable form. It fails."""
+    from app.security import secret_box
+    from app.security.secret_box import SecretBox
+
+    monkeypatch.setattr(secret_box, "from_settings", lambda: SecretBox([]))
+    with pytest.raises(tb.TokenBoundaryError) as exc:
+        tb._seal({"[HOST_abc_1]": "EXPDC002"})
+    assert "EXPDC002" not in str(exc.value)
+
+
+# ── the two sanitisers have diverged, and it is pinned ───────────────────
+
+
+@pytest.mark.parametrize(
+    "text, value",
+    [
+        ('computer="FILESERVER"', "FILESERVER"),
+        ("User INT\\jdoe ran it", "INT\\jdoe"),
+        ("copied \\\\EXPFS01\\finance\\q3.xlsx", "EXPFS01"),
+        ("from fe80::1c2d:3e4f:5a6b:7c8d", "fe80::1c2d:3e4f:5a6b:7c8d"),
+        ("powershell -User jdoe", "jdoe"),
+    ],
+)
+def test_the_shipped_alert_pipeline_still_has_the_gaps_the_boundary_closed(text, value):
+    """**This asserts the SHIPPED path is still worse than the boundary.**
+
+    The closures on 2026-10-19 are in `token_boundary`. `AssistantService`'s
+    own path — which is what analyses every real alert today — calls
+    `assistant_sanitizer_service` directly and has none of them.
+
+    That divergence is deliberate: widening detection in the shipped path
+    changes what every existing report says, which needs its own evidence. But
+    a deliberate divergence that nothing measures is one that widens silently,
+    so this test is the measurement. **When it fails, the two paths converged
+    — check which way, and update the register.**
+    """
+    from app.services.assistant_sanitizer_service import sanitize_entry
+
+    shipped = sanitize_entry(text).sanitized_text
+    assert value in shipped, (
+        f"the shipped pipeline now tokenises {value!r}; the register says it "
+        f"does not. Update the divergence row."
+    )
+
+    boundary = _boundary().tokenize(text)
+    assert value not in boundary, "the boundary regressed to the shipped behaviour"
+
+
+def test_the_two_paths_agree_on_what_they_both_cover():
+    """The divergence is additive, not a fork. Everything the shipped path
+    tokenises, the boundary tokenises too — a boundary that *stopped*
+    tokenising something would be a regression hiding inside the difference.
+    """
+    from app.services.assistant_sanitizer_service import sanitize_entry
+
+    text = (
+        'computer="EXPDC002" srcuser="INT\\jdoe" from 10.1.2.3 '
+        "mail ana.popovici@expertware.net sid S-1-5-21-1786752729-1-1001"
+    )
+    shipped_values = set(sanitize_entry(text).token_map.values())
+    boundary = _boundary()
+    boundary.tokenize(text)
+    boundary_values = set(boundary.token_map.values())
+
+    assert shipped_values, "fixture tokenised nothing in the shipped path"
+    assert shipped_values <= boundary_values, (
+        f"the boundary no longer covers what the shipped path does: "
+        f"{shipped_values - boundary_values}"
+    )
+
+
+def test_sealing_goes_through_the_deployment_s_configured_key(monkeypatch):
+    """The seam, not the halves.
+
+    `_seal` and `SecretBox` were each correct and the call between them was
+    not: `SecretBox()` takes its keys as an argument and defaults to none, so
+    it is never configured and `_seal` raised on every call. Both unit tests
+    would have passed. This one patches *settings* and lets the real
+    `from_settings()` run, which is the only version that would have caught
+    it.
+    """
+    from app import config as app_config
+    from app.config import get_settings
+    from app.security.secret_box import generate_key
+
+    real = get_settings()
+    key = generate_key()
+
+    class _Settings:
+        integration_encryption_key = key
+        integration_encryption_keys_retired = ""
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    monkeypatch.setattr(app_config, "get_settings", lambda: _Settings())
+
+    sealed, key_id = tb._seal({"[HOST_abc_1]": "EXPDC002"})
+    assert "EXPDC002" not in sealed
+    assert tb._open_sealed(sealed)["[HOST_abc_1]"] == "EXPDC002"
+
+
+def test_the_completion_purge_has_no_caller_yet():
+    """**A pin on an absence.** `purge_investigation` is the normal end of a
+    map, and nothing calls it: the agent loop that would own an investigation
+    does not exist on this branch. So in deployment today the only thing that
+    deletes a map is the 24-hour ceiling — which means the warning it raises
+    would fire for every map, and would be telling the truth.
+
+    This fails the moment the loop wires it up, which is the point: the
+    register says "unwired" and must stop saying it then.
+    """
+    import pathlib
+
+    root = pathlib.Path(tb.__file__).resolve().parent.parent
+    callers = [
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if path.name != "token_boundary.py" and "purge_investigation" in path.read_text()
+    ]
+    assert callers == [], (
+        f"purge_investigation now has callers ({callers}); the register's "
+        f"'the completion purge is unwired' row is stale, and the ceiling "
+        f"warning should no longer fire for every map."
+    )
+
+
+def test_no_api_or_report_path_can_reach_the_token_map_table():
+    """Decision C's enforceable half.
+
+    The role separation the decision asks for cannot be done today — the app
+    connects as `threatintel`, which is superuser and the table's owner, and
+    is the only non-system role in the cluster, so `REVOKE SELECT` from "the
+    application's general role" has no second role to revoke from. That is
+    reported in the register, not fixed here.
+
+    What *is* enforceable in code is the other clause: no API or report path
+    that can reach it. The reverse index is reachable only from the boundary.
+    """
+    import pathlib
+
+    app_root = pathlib.Path(tb.__file__).resolve().parent.parent
+    allowed = {
+        "services/token_boundary.py",   # the boundary itself
+        "models/database.py",           # the mapping
+        "tasks/token_map_purge_task.py" # the ceiling sweep
+    }
+    reachable = sorted(
+        path.relative_to(app_root).as_posix()
+        for path in app_root.rglob("*.py")
+        if "InvestigationTokenMap" in path.read_text()
+        or "investigation_token_maps" in path.read_text()
+    )
+    assert set(reachable) <= allowed, (
+        f"the token map is referenced outside the boundary: "
+        f"{sorted(set(reachable) - allowed)}. It is the one table whose rows "
+        f"are the identifiers everything else protects."
+    )
+    assert "services/token_boundary.py" in reachable, (
+        "the check found nothing at all, so it is not measuring anything"
+    )

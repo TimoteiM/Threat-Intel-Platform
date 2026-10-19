@@ -179,6 +179,12 @@ INSTRUMENTED = frozenset({
     "ingest_watch",
     "graph_materialise_sweep",
     "emitter_freshness_shadow",
+    # Added 2026-10-19 with the task itself. It does work rather than watch,
+    # which would ordinarily put it below — but the work is deleting rows from
+    # a table no API or report path can reach, by design, so nothing else can
+    # notice it accumulating. Silence and health are indistinguishable, which
+    # is this set's criterion.
+    "purge_token_maps",
 })
 
 #: Scheduled tasks that record no heartbeat, named rather than counted.
