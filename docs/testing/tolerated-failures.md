@@ -1,7 +1,32 @@
 # The tolerated test failures
 
-`backend/tests/unit` has **14 failing tests** that predate this
-week's work. Every suite run this week has been reported as "the same 14 as
+> **Resolved 2026-10-19. The set is 1, and that one is a live product defect
+> rather than a tolerated failure.** See `tolerated-failures.txt` for the
+> current list and the diagnosis of each. This page is kept because how the
+> set was cleared is the useful part, and because the sentence further down
+> that says *"12 of the 14 pass in isolation and fail only in the full
+> suite"* had the answer in it for seven days and was labelled a hypothesis
+> nobody had tested.
+>
+> * **14 → 13**: `test_dns.py::test_empty_evidence_on_failure` was a **live
+>   defect**. The DNS collector reported `completed` for runs that produced
+>   no evidence, so an outage was indistinguishable from "no DNS records".
+>   The test had been right since it was written.
+> * **13 → 1**: 12 shared one cause, in the tests rather than the product —
+>   `monkeypatch.setattr("app.x.y", v)` with a dotted string target, which
+>   pytest resolves by walking `getattr(app, "x")` and which therefore
+>   depends on import order. Fixed by passing the module object. The rule is
+>   rule 2 in `writing-tests.md`.
+> * **The last one** fails in isolation too, and is a configured lexical
+>   model that is never loaded because the flag that would load it is off,
+>   with nothing recording that it was skipped. Backlog 41.
+>
+> **Every entry anybody actually asked about turned out to be either a
+> one-line harness fault or a real defect. None was a test that deserved to
+> fail.** The set was never a defect count; it was a question nobody had put.
+
+`backend/tests/unit` had **14 failing tests** that predated the week of
+2026-10-12. Every suite run that week was reported as "the same 14 as
 baseline", compared against a list captured on 2026-10-12 — a real control,
 because it proves no change added a failure, and a quiet hazard, because it
 turned 14 into a constant of the project rather than a defect count.
@@ -17,8 +42,9 @@ rather than in a scratch file in a session directory.
     cd backend && .venv/bin/python -m pytest tests/unit -q
 
 Run from the **host venv**, never inside the container — the container cannot
-import `app.*`. Expected: `14 failed, 5 skipped, 1 xfailed` and a
-passing count that rises as tests are added.
+import `app.*`. Expected (2026-10-19): `1 failed, 7 skipped, 3 xfailed` and a
+passing count that rises as tests are added. It was `14 failed` until the
+note at the top of this page.
 
 ## The 14
 

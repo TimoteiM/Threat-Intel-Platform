@@ -2,6 +2,17 @@ from types import SimpleNamespace
 
 from app.collectors.intel_collector import IntelCollector
 
+from app.collectors import intel_collector as _mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 
 class _Resp:
     def __init__(self, status_code=200, payload=None):
@@ -28,7 +39,7 @@ def test_query_crtsh_uses_explicit_timeout(monkeypatch):
         seen["timeout"] = timeout
         return _Resp(200, [])
 
-    monkeypatch.setattr("app.collectors.intel_collector.requests.get", _fake_get)
+    monkeypatch.setattr(_mod.requests, "get", _fake_get)
     c = _collector()
     c._query_crtsh("example.com", timeout=7)
     assert seen["timeout"] == 7
@@ -42,9 +53,9 @@ def test_check_urlhaus_uses_explicit_timeout(monkeypatch):
         seen["headers"] = headers or {}
         return _Resp(200, {"query_status": "no_results"})
 
-    monkeypatch.setattr("app.collectors.intel_collector.requests.post", _fake_post)
+    monkeypatch.setattr(_mod.requests, "post", _fake_post)
     monkeypatch.setattr(
-        "app.collectors.intel_collector.get_settings",
+        _mod, "get_settings",
         lambda: SimpleNamespace(abusech_auth_key="test-key-not-a-real-one"),
     )
     c = _collector()
@@ -59,8 +70,8 @@ def test_spamhaus_public_resolver_response_is_not_blocklist_hit(monkeypatch):
     def _fake_getaddrinfo(query, port, family):
         return [(family, None, None, "", ("127.255.255.254", 0))]
 
-    monkeypatch.setattr("app.collectors.intel_collector.DNSBL_LISTS", [("dbl.spamhaus.org", "Spamhaus DBL")])
-    monkeypatch.setattr("app.collectors.intel_collector.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(_mod, "DNSBL_LISTS", [("dbl.spamhaus.org", "Spamhaus DBL")])
+    monkeypatch.setattr(_mod.socket, "getaddrinfo", _fake_getaddrinfo)
 
     c = _collector()
     c._dnsbl_notes = []
@@ -80,8 +91,8 @@ def test_spamhaus_reputation_response_is_blocklist_hit(monkeypatch):
     def _fake_getaddrinfo(query, port, family):
         return [(family, None, None, "", ("127.0.1.2", 0))]
 
-    monkeypatch.setattr("app.collectors.intel_collector.DNSBL_LISTS", [("dbl.spamhaus.org", "Spamhaus DBL")])
-    monkeypatch.setattr("app.collectors.intel_collector.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(_mod, "DNSBL_LISTS", [("dbl.spamhaus.org", "Spamhaus DBL")])
+    monkeypatch.setattr(_mod.socket, "getaddrinfo", _fake_getaddrinfo)
 
     c = _collector()
     hits = c._check_dns_blocklists("listed.example")
@@ -106,7 +117,7 @@ def test_spamhaus_sia_domain_query_uses_bearer_token(monkeypatch):
         seen["timeout"] = timeout
         return _SiaResp()
 
-    monkeypatch.setattr("app.collectors.intel_collector.requests.get", _fake_get)
+    monkeypatch.setattr(_mod.requests, "get", _fake_get)
 
     c = _collector()
     result = c._query_spamhaus_sia_domain(
@@ -138,7 +149,7 @@ def test_spamhaus_sia_refresh_token_uses_login_endpoint(monkeypatch):
         seen["timeout"] = timeout
         return _LoginResp()
 
-    monkeypatch.setattr("app.collectors.intel_collector.requests.post", _fake_post)
+    monkeypatch.setattr(_mod.requests, "post", _fake_post)
 
     c = _collector()
     token = c._refresh_spamhaus_sia_token(

@@ -8,6 +8,18 @@ import sqlalchemy.orm
 from app.models.database import Evidence, Investigation
 from app.tasks.analysis_task import _persist_results
 
+from app.db import session as _session_mod
+from app.tasks import analysis_task as _mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 
 class _FakeScalarResult:
     def __init__(self, scalar=None, scalars_list=None):
@@ -85,9 +97,9 @@ def test_persist_results_updates_existing_evidence_row(monkeypatch):
     fake_session = _FakeSession(inv, existing)
 
     monkeypatch.setattr(sqlalchemy.orm, "Session", _SessionFactory(fake_session))
-    monkeypatch.setattr("app.db.session.sync_engine", object())
-    monkeypatch.setattr("app.tasks.analysis_task._check_client_alerts_sync", lambda *args, **kwargs: None)
-    monkeypatch.setattr("app.tasks.analysis_task._update_batch_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_session_mod, "sync_engine", object())
+    monkeypatch.setattr(_mod, "_check_client_alerts_sync", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_mod, "_update_batch_progress", lambda *args, **kwargs: None)
 
     evidence_data = {"domain": "example.com", "signals": [{"id": "sig1"}], "data_gaps": [], "external_context": {"source": "test"}}
     report_data = {

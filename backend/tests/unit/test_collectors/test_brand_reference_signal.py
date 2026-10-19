@@ -28,6 +28,17 @@ import pytest
 
 from app.collectors.http_collector import KNOWN_BRANDS
 
+from app import config as _config_mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 BRAND_MARKER = "Third-party brand reference"
 
 
@@ -86,7 +97,7 @@ def _run_content_analysis(monkeypatch, body: str, host: str, enabled: bool):
     monkeypatch.setattr(mod, "get_settings",
                         lambda: _settings(brand_reference_signal_enabled=enabled),
                         raising=False)
-    monkeypatch.setattr("app.config.get_settings",
+    monkeypatch.setattr(_config_mod, "get_settings",
                         lambda: _settings(brand_reference_signal_enabled=enabled))
 
     collector = mod.HTTPCollector(

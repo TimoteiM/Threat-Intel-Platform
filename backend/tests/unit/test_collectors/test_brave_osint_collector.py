@@ -6,6 +6,17 @@ from app.collectors.brave_osint_collector import (
     score_results,
 )
 
+from app.collectors import brave_osint_collector as _mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 
 def test_generate_queries_uses_single_exact_domain_query():
     queries = generate_queries(
@@ -78,9 +89,9 @@ def test_collector_run_builds_brave_osint_evidence(monkeypatch):
         brave_search_base_url = "https://api.search.brave.com/res/v1/web/search"
         brave_search_count = 10
 
-    monkeypatch.setattr("app.collectors.brave_osint_collector.get_settings", lambda: _Settings())
+    monkeypatch.setattr(_mod, "get_settings", lambda: _Settings())
     monkeypatch.setattr(
-        "app.collectors.brave_osint_collector.search_brave",
+        _mod, "search_brave",
         lambda *args, **kwargs: [
             {
                 "title": "Revantage phishing campaign discussed",
@@ -113,9 +124,9 @@ def test_collector_keeps_observed_results_when_no_hits_match_security_filter(mon
         brave_search_base_url = "https://api.search.brave.com/res/v1/web/search"
         brave_search_count = 10
 
-    monkeypatch.setattr("app.collectors.brave_osint_collector.get_settings", lambda: _Settings())
+    monkeypatch.setattr(_mod, "get_settings", lambda: _Settings())
     monkeypatch.setattr(
-        "app.collectors.brave_osint_collector.search_brave",
+        _mod, "search_brave",
         lambda *args, **kwargs: [
             {
                 "title": "Revantage official website",

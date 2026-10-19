@@ -1,56 +1,80 @@
 # The tolerated test failures, enumerated.
 #
-# "The same 13" is quoted on every sign-off (14 until 2026-10-19). Enumeration stopped the set
-# growing silently; it did NOT establish that any of them should be tolerated.
-# Per the README rule on exemptions: a carve-out added for a false positive
-# keeps quieting the true one, so each entry needs a premise verified
-# independently of the sign-off that cites it. **None of these has one yet.**
+# "The same 13" was quoted on every sign-off (14 before 2026-10-19). The set is
+# now **1**, and the history below is kept because the shrinking is the point:
+# enumeration stopped the set growing silently, and then every entry that was
+# actually examined turned out to be either a harness fault with a one-line
+# fix or a live product defect. None of them was a test that deserved to fail.
 #
-# What is established, 2026-10-14:
+# ─── 14 → 13 (2026-10-19): a live defect, found by asking one entry why ───
 #
-#   * The run produces ~27 errors across the 14, dominated by 24 of
-#     `AttributeError: module 'app' has no attribute 'collectors' | 'db' |
-#     'tasks'` — monkeypatch target resolution, which would be a harness
-#     fault rather than a product one.
+# `test_dns.py::test_empty_evidence_on_failure` failed on
+# `assert 'completed' == 'failed'`: the DNS collector reported *completed* for
+# a run that produced no evidence. The collector caught each lookup exception,
+# logged it at DEBUG and moved on, so a DNS outage returned a completed run
+# with empty evidence — the absence-read-as-value class this project tracks.
+# Fixed; the test was right all along.
 #
-#   * That grouping does NOT cover the set, and the first entry checked
-#     disproved it. `test_dns.py::test_empty_evidence_on_failure` failed on
-#     `assert 'completed' == 'failed'`: the DNS collector reported *completed*
-#     for a run that produced no evidence. That is the absence-read-as-value
-#     class this project tracks, and it was a live defect sitting inside the
-#     tolerated set — not a broken test.
+# Scale: of 2,603 stored DNS runs, exactly ONE had ever been recorded as
+# failed, and 290 of 2,602 completed runs carry no records at all — the upper
+# bound on how many were reporting an outage as "no DNS records".
 #
-#     **FIXED 2026-10-19, and the test was right all along.** The collector
-#     caught each lookup exception, logged it at DEBUG and moved on, so a DNS
-#     outage returned a completed run with empty evidence. Now: every failed
-#     lookup is recorded; all seven failing raises `DNSLookupError` and the
-#     run is marked failed; a partial failure still completes with a note per
-#     lookup that could not be checked; and `NoNameservers` is counted as a
-#     failure rather than an answer. The set is **13**.
+# ─── 13 → 1 (2026-10-19): the harness fault, fixed ───
 #
-#     Scale: of 2,603 stored DNS runs, exactly ONE had ever been recorded as
-#     failed, and 290 of 2,602 completed runs carry no records at all — the
-#     upper bound on how many were reporting an outage as "no DNS records".
+# 12 of the remaining 13 shared one cause, and it was in the tests rather than
+# the product: `monkeypatch.setattr("app.x.y.attr", value)`. pytest resolves a
+# dotted string target by walking `getattr(app, "x")` from an already-imported
+# `app`, and in a full-suite run that walk raises
 #
-# So the set has at least two causes, and the one plausible real defect in it
-# turned out to be real. Treat
-# "the same 13" as a stability check only: it proves no NEW failure appeared.
-# It does not say these fourteen are acceptable, because nobody has asked
-# each one why. Filed as backlog 14.
+#     AttributeError: module 'app' has no attribute 'collectors'  (and 'db', 'tasks')
+#
+# while an isolated run of the same file passes. 27 errors across 6 files.
+#
+# The fix is to pass the module OBJECT — `monkeypatch.setattr(mod, "attr", v)`
+# — which is already resolved, so there is no walk to fail. All 12 cleared.
+# Found while fixing four new tests that had failed the same way, which is the
+# only reason anybody looked: the cause had been written down as "monkeypatch
+# target resolution, which would be a harness fault rather than a product one"
+# and left there for five days.
+#
+# The rule is now in docs/testing/writing-tests.md, because a fix that only
+# cleans up the existing instances invites the thirteenth.
+#
+# ─── the one that is left, and it is a live finding ───
+#
+# test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing
+#
+# Fails in isolation too, so it is not the harness. The test asserts that when
+# a lexical model path cannot be loaded, the result says so:
+#
+#     assert "error" in result
+#
+# It does not. `_infer_score` reports `error` only on the branch *after*
+# `_should_use_lightgbm()`, and that setting is False — so a configured model
+# path is never consulted and nothing records that it was skipped.
+#
+# Measured in the running container, which is what makes this a finding rather
+# than a test-environment artifact:
+#
+#     url_lexical_use_lightgbm : False
+#     url_lexical_model_path   : SET
+#     lightgbm installed       : yes
+#
+# So somebody configured a model, the flag that would load it is off, every
+# URL is scored by the built-in heuristic, and
+# `email_investigation_processing_service.py:527` propagates
+# `lexical.get("error")` as None — which reads as "the model ran and found
+# nothing wrong". Two states with identical observations again.
+#
+# NOT fixed here, because the remedy is a product decision rather than a
+# cleanup: either the flag should be on (which changes every lexical score and
+# needs its own before/after) or the configured path is stale and should be
+# cleared. Either way the silence is the defect. Filed as backlog 41.
+#
+# So: the honest status of this file is "one entry, and it is a real defect we
+# have chosen not to fix yet" — not "one tolerated failure".
 #
 # Format: one pytest node id per line. Compare with
 #   pytest -q | grep '^FAILED' | sed 's/^FAILED //; s/ -.*//' | sort
 #
-tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_keeps_observed_results_when_no_hits_match_security_filter
-tests/unit/test_collectors/test_brave_osint_collector.py::test_collector_run_builds_brave_osint_evidence
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_check_urlhaus_uses_explicit_timeout
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_query_crtsh_uses_explicit_timeout
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_spamhaus_public_resolver_response_is_not_blocklist_hit
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_spamhaus_reputation_response_is_blocklist_hit
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_spamhaus_sia_domain_query_uses_bearer_token
-tests/unit/test_collectors/test_intel_collector_timeouts.py::test_spamhaus_sia_refresh_token_uses_login_endpoint
-tests/unit/test_collectors/test_urlscan_collector.py::test_accepted_scan_is_not_resubmitted_when_result_is_still_processing
 tests/unit/test_services/test_url_lexical_ml_service.py::test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing
-tests/unit/test_tasks/test_analysis_compact_evidence.py::test_run_analyst_with_compaction_does_not_retry_non_size_errors
-tests/unit/test_tasks/test_analysis_compact_evidence.py::test_run_analyst_with_compaction_retries_prompt_too_long
-tests/unit/test_tasks/test_analysis_persistence.py::test_persist_results_updates_existing_evidence_row

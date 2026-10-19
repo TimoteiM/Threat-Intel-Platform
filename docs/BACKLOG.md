@@ -2221,3 +2221,58 @@ against the new role before the old one is taken away.
 Not urgent in the sense that nothing is broken today. Urgent in the sense that
 it is a precondition for a class of request that will keep arriving, and the
 first one already arrived.
+
+## 41 — A lexical model is configured, the flag that loads it is off, and nothing says so
+
+Found 2026-10-19 as the last surviving entry in
+`docs/testing/tolerated-failures.txt`, after the other twelve turned out to be
+one harness fault. This one fails in isolation too, so it is not the harness.
+
+`test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing`
+asserts that when a lexical model cannot be loaded, the result says so:
+
+```python
+assert "error" in result
+```
+
+It does not. `url_lexical_ml_service._infer_score` reports `error` only on the
+branch **after** `_should_use_lightgbm()`, so when that setting is False the
+configured path is never consulted and nothing records that it was skipped.
+
+Measured in the running container, which is what makes this a finding rather
+than a test-environment artifact:
+
+| | |
+|---|---|
+| `url_lexical_use_lightgbm` | **False** |
+| `url_lexical_model_path` | **set** |
+| `lightgbm` installed | yes |
+
+So somebody configured a model, the flag that would load it is off, every URL
+is scored by the built-in lexical heuristic, and
+`email_investigation_processing_service.py:527` propagates
+`lexical.get("error")` as `None` — which reads as "the model ran and found
+nothing wrong". Two states with identical observations: *a model that scored
+this URL* and *a model that was never loaded*.
+
+**Not fixed, because the remedy is a decision rather than a cleanup.** Three
+options, and they are not equivalent:
+
+1. **Turn the flag on.** Changes every lexical score in the platform. Needs a
+   before/after against the corpus, not a config edit — and the measurement
+   should come first, because "the model is better than the heuristic" is
+   currently an assumption with no number behind it.
+2. **Clear the path.** If it is stale, the honest state is "no model
+   configured", which the built-in branch already describes correctly.
+3. **Report the skip either way.** This one is not optional and is small: a
+   configured path that is not consulted should appear in the result as the
+   reason, so option 1 or 2 can be chosen from evidence instead of from this
+   note. The absence convention (`app/services/absence.py`) already has the
+   vocabulary.
+
+Do 3 first. Then 1 or 2 with the measurement that 3 makes possible.
+
+**Who else reads this field.** Before changing the shape of the result, check
+the consumer at `email_investigation_processing_service.py:527` and the email
+report that renders it — an `error` string appearing where `None` used to be
+is a UI change as well as a data one.

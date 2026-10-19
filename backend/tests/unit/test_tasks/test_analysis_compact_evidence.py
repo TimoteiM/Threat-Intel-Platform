@@ -12,6 +12,17 @@ from app.tasks.analysis_task import (
     _run_analyst_with_compaction,
 )
 
+from app.tasks import analysis_task as _mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 
 def test_compact_evidence_trims_large_lists_for_llm():
     evidence = {
@@ -254,7 +265,7 @@ def test_run_analyst_with_compaction_retries_prompt_too_long(monkeypatch):
             "claude-haiku-4-5-20251001",
         )
 
-    monkeypatch.setattr("app.tasks.analysis_task._run_analyst_sync", fake_run_analyst_sync)
+    monkeypatch.setattr(_mod, "_run_analyst_sync", fake_run_analyst_sync)
 
     report, tier, actual_model = _run_analyst_with_compaction(
         {"domain": "example.com", "investigation_id": "x", "timestamps": {}},
@@ -275,7 +286,7 @@ def test_run_analyst_with_compaction_does_not_retry_non_size_errors(monkeypatch)
         calls.append(evidence_data["_analyst_compaction_tier"])
         raise RuntimeError("Error code: 429 - rate limited")
 
-    monkeypatch.setattr("app.tasks.analysis_task._run_analyst_sync", fake_run_analyst_sync)
+    monkeypatch.setattr(_mod, "_run_analyst_sync", fake_run_analyst_sync)
 
     with pytest.raises(RuntimeError, match="rate limited"):
         _run_analyst_with_compaction(

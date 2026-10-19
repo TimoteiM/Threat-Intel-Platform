@@ -1,6 +1,17 @@
 from app.collectors.urlscan_collector import URLScanCollector
 from types import SimpleNamespace
 
+from app.collectors import urlscan_collector as _mod
+
+# The module object, never the dotted string form.
+#
+# `monkeypatch.setattr("app.x.y.attr", v)` is resolved by walking
+# `getattr(app, "x")` from an already-imported `app`, and in a full-suite run
+# that walk raises `AttributeError: module 'app' has no attribute 'x'` while an
+# isolated run of this file passes. That is what put these tests in
+# docs/testing/tolerated-failures.txt. A module object is already resolved, so
+# there is no walk to fail. See docs/testing/writing-tests.md.
+
 
 def _collector(observable: str, observable_type: str) -> URLScanCollector:
     return URLScanCollector(
@@ -35,7 +46,7 @@ def test_accepted_scan_is_not_resubmitted_when_result_is_still_processing(monkey
     collector = _collector("example.com", "domain")
     submitted = []
     monkeypatch.setattr(
-        "app.collectors.urlscan_collector.get_settings",
+        _mod, "get_settings",
         lambda: SimpleNamespace(urlscan_api_key="configured", urlscan_analysis_timeout_seconds=75),
     )
     monkeypatch.setattr(collector, "_search_existing", lambda evidence, headers: {})
