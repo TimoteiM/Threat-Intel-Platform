@@ -62,6 +62,7 @@ class DNSEvidence(BaseModel):
     dmarc: Optional[str] = None
     spf: Optional[str] = None
     has_dnssec: Optional[bool] = None
+    notes: list[str] = []
 
 
 # ─── WHOIS ───
