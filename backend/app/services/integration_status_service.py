@@ -468,18 +468,34 @@ class ToolSpec:
 #: `INTEGRATION_SPEC`, so the declaration lives beside the thing it describes
 #: and this module carries no tool names, labels or categories of its own —
 #: which is what the catalogue-derivation tests require.
-_SPEC_MODULES = ("app.services.opensearch_tenants",)
+_SPEC_MODULES = (
+    "app.services.opensearch_tenants",
+    # The per-client platforms (Exabeam, SentinelOne, Cortex), declared
+    # together because they share a shape and a loader. They arrive through
+    # `INTEGRATION_SPECS` (plural) below.
+    "app.services.client_sources",
+)
 
 
 def _declared_elsewhere() -> dict[str, dict[str, Any]]:
-    """`INTEGRATION_SPEC` from every module that declares one."""
+    """`INTEGRATION_SPEC` or `INTEGRATION_SPECS` from every declaring module.
+
+    Both forms, because one module can own several tools of the same shape —
+    `client_sources` declares the three per-client platforms together, and
+    splitting them into three near-empty modules to satisfy a singular name
+    would be bookkeeping, not structure.
+    """
     import importlib
 
     out: dict[str, dict[str, Any]] = {}
     for path in _SPEC_MODULES:
-        spec = getattr(importlib.import_module(path), "INTEGRATION_SPEC", None)
+        module = importlib.import_module(path)
+        spec = getattr(module, "INTEGRATION_SPEC", None)
         if isinstance(spec, dict) and spec.get("tool"):
             out[str(spec["tool"])] = spec
+        for many in getattr(module, "INTEGRATION_SPECS", None) or ():
+            if isinstance(many, dict) and many.get("tool"):
+                out[str(many["tool"])] = many
     return out
 
 

@@ -113,6 +113,26 @@ REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM tip_sanitizer;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM tip_sanitizer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE investigation_token_maps TO tip_sanitizer;
 
+-- ─── 4b. row-level security, which these grants make possible ───────────
+--
+-- `tenant_integrations` holds the per-client source map: one row per (client,
+-- platform) with that client's connection details and encrypted credential.
+-- Migration 072 puts a row-level policy on it —
+--     USING (tenant_id = current_setting('app.tenant_id', true))
+-- — so a query from the application role sees one client's rows and no
+-- others, and an unbound session sees none at all.
+--
+-- **That policy only binds because of the grants above.** Row-level security
+-- does not apply to a table's owner or to a role with BYPASSRLS. While the
+-- application connected as `threatintel` the policy would have been
+-- decoration. `tip_app` owns nothing and has neither attribute, which is what
+-- turns a convention into a control.
+--
+-- Nothing to grant here; it is recorded because someone reading this file to
+-- understand what `tip_app` can see would otherwise miss a second layer that
+-- narrows it further. scripts/check_db_privileges.sql asserts the policy is
+-- present and still reads the setting.
+
 -- ─── 5. tables that do not exist yet ────────────────────────────────────
 --
 -- Without this, the next migration creates a table owned by `threatintel`

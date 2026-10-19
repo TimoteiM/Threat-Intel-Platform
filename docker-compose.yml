@@ -149,6 +149,10 @@ services:
       start_period: 10s
     volumes:
       - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
       - artifacts:/app/artifacts
       # The internal CA that signed the CAPE reverse proxy's certificate.
       # Read-only, and a single file rather than the whole secrets/ directory
@@ -247,6 +251,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
       - artifacts:/app/artifacts
       # The internal CA that signed the CAPE reverse proxy's certificate.
       # Read-only, and a single file rather than the whole secrets/ directory
@@ -294,6 +302,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      # The per-client source map: which platforms each client runs and how to
+      # reach each one. Deployment input, read-only, and carries no
+      # credentials — those are in tenant_integrations, encrypted.
+      - ./config:/config:ro
       # The internal CA that signed the CAPE reverse proxy's certificate.
       # Read-only, and a single file rather than the whole secrets/ directory
       # so these containers can see the trust anchor and nothing else that

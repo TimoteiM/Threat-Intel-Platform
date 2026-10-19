@@ -90,6 +90,41 @@ WHERE NOT EXISTS (
       AND array_to_string(d.defaclacl, ',') LIKE '%tip_app=%'
 );
 
+-- ─── 8. row-level security on the per-client source map ─────────────────
+--
+-- `tenant_integrations` carries one row per (client, platform) with that
+-- client's connection details and encrypted credential. The control is that a
+-- run carrying tenant X can only ever reach X's sources, and it is enforced by
+-- a policy rather than by every query remembering to filter — which is only
+-- possible because `tip_app` owns nothing and has no BYPASSRLS.
+--
+-- Checked here rather than in a test because the suite cannot see it: a
+-- dropped policy leaves every query working and every row visible.
+
+SELECT 'RLS DISABLED ON tenant_integrations' AS violation, 'tenant_integrations' AS rolname,
+       'row_security' AS holds
+WHERE NOT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'tenant_integrations' AND relrowsecurity
+);
+
+SELECT 'RLS POLICY MISSING ON tenant_integrations' AS violation,
+       'tenant_integrations_tenant_isolation' AS rolname, 'policy' AS holds
+WHERE NOT EXISTS (
+    SELECT 1 FROM pg_policy
+    WHERE polrelid = 'tenant_integrations'::regclass
+      AND polname = 'tenant_integrations_tenant_isolation'
+);
+
+-- And that the policy still reads the setting it is supposed to. A policy
+-- rewritten to `USING (true)` is present, enabled, and useless.
+SELECT 'RLS POLICY NO LONGER BINDS A TENANT' AS violation,
+       'tenant_integrations_tenant_isolation' AS rolname,
+       pg_get_expr(polqual, polrelid) AS holds
+FROM pg_policy
+WHERE polrelid = 'tenant_integrations'::regclass
+  AND polname = 'tenant_integrations_tenant_isolation'
+  AND pg_get_expr(polqual, polrelid) NOT LIKE '%app.tenant_id%';
+
 -- ─── positive controls ──────────────────────────────────────────────────
 --
 -- Everything above is written so that silence means "clean". A check whose
@@ -108,3 +143,7 @@ WHERE NOT has_table_privilege('tip_app', 'client_alerts', 'SELECT');
 SELECT 'CONTROL FAILED: the sanitizer cannot reach its own table' AS violation,
        'tip_sanitizer' AS rolname, 'SELECT on investigation_token_maps' AS holds
 WHERE NOT has_table_privilege('tip_sanitizer', 'investigation_token_maps', 'SELECT');
+
+SELECT 'CONTROL FAILED: cannot see the RLS policy at all' AS violation,
+       'pg_policy' AS rolname, 'introspection' AS holds
+WHERE NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'tenant_integrations'::regclass);
