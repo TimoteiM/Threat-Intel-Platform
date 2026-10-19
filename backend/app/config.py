@@ -266,8 +266,22 @@ class Settings(BaseSettings):
     hybrid_analysis_base_url: str = "https://hybrid-analysis.com/api/v2"
     hybrid_analysis_environment_id: int = 160
     google_safe_browsing_api_key: str = ""
-    url_lexical_model_path: str = ""
-    url_lexical_use_lightgbm: bool = False
+    # `url_lexical_model_path` and `url_lexical_use_lightgbm` were removed on
+    # 2026-10-19 and are deliberately NOT replaced with a disabled flag.
+    #
+    # The artefact they pointed at reported `accuracy@0.5` of 0.9692 in its own
+    # metadata against an always-benign baseline of 0.9698 — worse than
+    # predicting "benign" for everything, which is effectively what it did,
+    # since 99% of its validation predictions were below 0.31 and nothing
+    # reached the 0.5 decision point. On our own corpus it could not produce a
+    # high verdict at all (0 of 1,535 above 0.65) and 633 of 1,535 URLs shared
+    # a single output value.
+    #
+    # A flag defaulting to false would have left it one edit away for whoever
+    # found the model file and read only its name. There is no setting to
+    # change, and docs/design/lexical-scoring-retirement.md says why.
+    # `extra="ignore"` above means a leftover URL_LEXICAL_* in an environment
+    # is inert rather than an error.
     api_health_daily_limit_overrides: str = ""
     api_health_monthly_limit_overrides: str = ""
 

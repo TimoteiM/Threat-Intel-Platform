@@ -1483,9 +1483,16 @@ export default function EmailInvestigationsPage() {
                               URLScan: {u.urlscan.verdict || "unknown"}{typeof u.urlscan.score === "number" ? ` (${u.urlscan.score})` : ""}
                             </div>
                           )}
+                          {/* Was "Lexical ML: HIGH (0.990)". The band and the
+                              probability were removed on 2026-10-19 — see
+                              docs/design/lexical-scoring-retirement.md. What
+                              is shown now is the count of checkable facts,
+                              with the facts themselves in the technical
+                              evidence tab. */}
                           <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 3 }}>
-                            Lexical ML: {String(u?.ml_url_score?.risk_level || u?.lexical_ml?.label || "unknown").toUpperCase()}
-                            {typeof u?.lexical_ml?.score === "number" ? ` (${u.lexical_ml.score.toFixed(3)})` : ""}
+                            URL structure: {(u?.lexical_ml?.observations?.length ?? 0) > 0
+                              ? `${u.lexical_ml.observations.length} observation${u.lexical_ml.observations.length === 1 ? "" : "s"}`
+                              : u?.lexical_ml?.enabled === false ? "not assessed" : "nothing notable"}
                           </div>
                         </div>
                         {/* Final URL + behavior */}

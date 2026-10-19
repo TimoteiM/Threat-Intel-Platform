@@ -2226,7 +2226,48 @@ first one already arrived.
 
 **Part 1 DONE 2026-10-19 — the skip is now reported, and no score changed.**
 **Part 2 MEASURED 2026-10-19 — `docs/measurements/url-lexical-three-arms.md`.**
-**The decision is open and is yours; the measurement is done.**
+**DECIDED AND IMPLEMENTED 2026-10-19 — `docs/design/lexical-scoring-retirement.md`:**
+the calibration curve removed, the LightGBM artefact retired (settings deleted,
+not defaulted to false), and the probability and its label dropped from the
+report while the named rule observations stayed.
+
+**STILL OPEN, and it is the one thing the decision's premise did not cover:
+the risk-score blend.** The demotion was taken as presentational on the
+grounds that the weak-signal gate already stops shape-only verdicts scoring.
+That holds only for shape-only verdicts — when any semantic feature is
+present the gate opens and the lexical score contributes 25% of the blend.
+Measured over the stored reports:
+
+| | |
+|---|---|
+| investigations where the blend is active | **584 of 2,667** |
+| their median lexical score | **0.9999** |
+| median stored risk score | **62.0** |
+| implied median pre-blend risk | **49.3** |
+| **median points the blend adds** | **+12.7** |
+| investigations where it adds ≥10 points | **521** |
+
+So the probability is still moving the number on 22% of URL investigations.
+It was **not** removed with the rest, because that is a score change of that
+size and belongs to its own decision. What changed is that it is now
+disclosed: the finding says "The URL-structure signal moved the risk score by
++N points (weight 0.25)" where it moved anything, and prints no number where
+it moved nothing.
+
+Two smaller open things from the same work:
+
+* **The gate narrowed and lost some real signal.** `label == "high"` fired on
+  1,008 of 1,535 corpus URLs; the replacement predicate fires on 376, a
+  strict subset. Most of what it drops is infrastructure (Windows Update,
+  Office CDN, OCSP responders, SharePoint). But long machine-generated
+  hostnames on ordinary TLDs drop too —
+  `1bf5d9p.1bf5d9c8d3dbb6665bfabbbd0a2b0f866f777ca9.com`. Adding
+  `digit_heavy_and_high_entropy` + `deep_subdomains_and_many_params` as an
+  escalating combination would recover them; it was not done because the
+  floor never had that rule and inventing one is the shape-based reasoning
+  the measurement argues against.
+* **The model file is still on disk**, referenced by nothing. Deleting an ops
+  artefact was not part of the decision.
 
 Headlines from that page, so this item is not a pointer to a pointer:
 

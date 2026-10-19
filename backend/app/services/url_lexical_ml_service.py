@@ -1,11 +1,41 @@
 """
-URL lexical phishing scoring service.
+URL lexical observations.
 
-Features:
-- Deterministic lexical feature extraction from URL string
-- Primary LightGBM model inference (if model file configured/available)
-- Built-in heuristic fallback model (no external dependency required)
-- Top feature explainability (Top 5)
+Deterministic facts about how a URL is written — a raw-IP host, an `@`, a
+punycode hostname, a sensitive keyword, a disposable TLD, a shortener — each
+one checkable by a person looking at the URL, plus the numeric features behind
+them.
+
+**There is no model and no probability verdict here any more.** Three things
+were removed on 2026-10-19; `docs/measurements/url-lexical-three-arms.md` has
+the measurements and docs/design/lexical-scoring-retirement.md the decisions.
+
+1. **The LightGBM artefact is retired.** Its own metadata reported
+   `accuracy@0.5` of 0.9692 against an always-benign baseline of 0.9698 — it
+   scored worse than predicting "benign" for everything, which is effectively
+   what it did, since 99% of its validation predictions fell below 0.31 and
+   nothing reached the 0.5 decision point. On our corpus it could not produce
+   a high verdict at all (0 of 1,535 above 0.65) and 633 URLs shared a single
+   output value. The settings that pointed at it are gone, so it cannot be
+   switched back on by someone who has read only the filename.
+
+2. **The calibration curve is removed, not gated.** It was loaded by model
+   path and applied to whatever produced the score, so with the model off a
+   curve fitted to LightGBM's output distribution was being applied to the
+   heuristic's. Measured effect: 217 scores moved, all 217 upward, promoting
+   171 URLs from `low` to `medium` — among them `aka.ms` and GitHub's avatar
+   CDN.
+
+3. **The aggregate probability and its low/medium/high label are no longer
+   reported.** The rule observations stayed, because that is where every
+   genuine high verdict came from: all 376 of them in the model arm, and the
+   named features are what the decision engine scores. A probability with a
+   label reads as a measurement, and this one was not one.
+
+`score` still exists in the payload because one consumer still blends it into
+the risk score — see `analysis_task._inject_lexical_contribution`, which now
+discloses that contribution in points rather than leaving it implicit. That
+blend is the last place the number acts and is the open question in backlog 41.
 """
 
 from __future__ import annotations
@@ -21,13 +51,6 @@ from urllib.parse import parse_qsl, urlparse
 
 from app.config import get_settings
 
-try:
-    import lightgbm as lgb
-except Exception:  # pragma: no cover - runtime fallback when lightgbm not installed
-    lgb = None
-
-LOW_THRESHOLD = 0.30
-HIGH_THRESHOLD = 0.65
 LEXICAL_WEIGHT = 0.25
 
 FEATURE_ORDER = [
@@ -208,15 +231,6 @@ _BUILT_IN_MODEL: dict[str, Any] = {
 }
 
 
-@dataclass
-class LexicalInferenceResult:
-    score: float
-    model_source: str
-    top_features: list[str]
-    feature_contributions: dict[str, float]
-    raw_score: float | None = None
-    calibration_applied: bool = False
-    error: str | None = None
 
 
 def extract_url_lexical_features(url: str) -> dict[str, float]:
@@ -258,36 +272,137 @@ def extract_url_lexical_features(url: str) -> dict[str, float]:
     }
 
 
+#: Every individual fact about a URL string that this platform will report.
+#:
+#: One entry per *fact*, not per combination, and the reported set is a
+#: superset of the set the decision engine scores — otherwise something could
+#: move the risk score without appearing in the report, which is the defect
+#: the probability had. Each statement is checkable by a person reading the
+#: URL, which a probability is not.
+RULE_OBSERVATIONS: tuple[tuple[str, str], ...] = (
+    ("ip_host", "The hostname is a raw IP address rather than a domain name."),
+    ("at_symbol", "The URL contains an @, which makes the visible start of the link misleading."),
+    ("punycode", "The hostname uses punycode, which can imitate another name."),
+    ("sensitive_keyword", "The URL contains a sensitive keyword such as secure, login or account."),
+    ("disposable_tld", "The top-level domain is one commonly used for disposable domains."),
+    ("shortener", "The hostname is a URL shortener, so the real destination is hidden until followed."),
+    ("abnormal_port", "The URL names a non-standard web port."),
+    ("brand_keyword", "The URL contains brand wording outside the legitimate root domain."),
+    ("deep_subdomains_and_many_params",
+     "The hostname is four or more levels deep and the URL carries five or more query parameters."),
+    ("digit_heavy_and_high_entropy",
+     "The URL is digit-heavy and high-entropy, so it reads as machine-generated."),
+)
+
+_OBSERVATION_TEXT = dict(RULE_OBSERVATIONS)
+
+#: Which facts, in which combinations, used to put a URL at or above the old
+#: `high` band through the rule floor. Kept as combinations because that is
+#: the judgement the floor encoded and it is worth preserving: a raw-IP host
+#: or an `@` was enough on its own (floor 0.90), punycode needed a keyword
+#: beside it (0.85), a disposable TLD needed a keyword (0.72) or a
+#: machine-generated look (0.65).
+#:
+#: Two gates used to ask `lexical.label == "high"` — `_url_is_risky` in the
+#: email pipeline and the narrative's suspicious-URL list. With the band gone
+#: they need a predicate, and these are it: specific facts a person can check,
+#: rather than a number above a threshold. A single weak fact is deliberately
+#: NOT enough — `sensitive_keyword` alone fires on an enormous amount of
+#: legitimate mail, and `shortener` alone is how half of marketing email is
+#: written.
+ESCALATING_COMBINATIONS: tuple[tuple[str, ...], ...] = (
+    ("ip_host",),
+    ("at_symbol",),
+    ("punycode", "sensitive_keyword"),
+    ("disposable_tld", "sensitive_keyword"),
+    ("disposable_tld", "digit_heavy_and_high_entropy"),
+)
+
+
+def url_lexical_observations(features: dict[str, float]) -> list[dict[str, str]]:
+    """The named, checkable facts true of this URL.
+
+    In a fixed order, so two reports on the same URL agree. No weights and no
+    total: a count of observations is a score with the honesty removed.
+    """
+    f = lambda k: float(features.get(k, 0.0))
+    found: list[str] = []
+
+    if f("has_ip_host") >= 1.0:
+        found.append("ip_host")
+    if f("has_at_symbol") >= 1.0:
+        found.append("at_symbol")
+    if f("has_punycode") >= 1.0:
+        found.append("punycode")
+    if f("has_sensitive_keyword") >= 1.0:
+        found.append("sensitive_keyword")
+    if f("has_suspicious_tld") >= 1.0:
+        found.append("disposable_tld")
+    if f("is_shortener") >= 1.0:
+        found.append("shortener")
+    if f("has_abnormal_port") >= 1.0:
+        found.append("abnormal_port")
+    if f("brand_keyword_count") >= 1.0:
+        found.append("brand_keyword")
+    if f("subdomain_depth") >= 4.0 and f("query_param_count") >= 5.0:
+        found.append("deep_subdomains_and_many_params")
+    if f("digit_ratio") >= 0.2 and f("entropy") >= 4.0:
+        found.append("digit_heavy_and_high_entropy")
+
+    order = [c for c, _ in RULE_OBSERVATIONS]
+    found.sort(key=order.index)
+    return [{"code": c, "statement": _OBSERVATION_TEXT[c]} for c in found]
+
+
+def observation_codes(lexical: Any) -> list[str]:
+    """The observation codes in a payload, derived if the field is absent.
+
+    Stored evidence written before `observations` existed carries `features`
+    and no observations. Returning an empty list for those would present an
+    absence as a fact — every historical record would read as "nothing was
+    observed about this URL".
+    """
+    if not isinstance(lexical, dict):
+        return []
+    codes = [
+        str(o.get("code") or "")
+        for o in (lexical.get("observations") or [])
+        if isinstance(o, dict) and o.get("code")
+    ]
+    if codes:
+        return codes
+    features = lexical.get("features")
+    if isinstance(features, dict):
+        return [o["code"] for o in url_lexical_observations(features)]
+    return []
+
+
+def strong_observations(lexical: Any) -> list[str]:
+    """The codes taking part in a satisfied escalating combination.
+
+    Returns the facts themselves rather than a verdict, so a caller that gates
+    on this can also say which fact it gated on.
+    """
+    present = set(observation_codes(lexical))
+    strong: list[str] = []
+    for combination in ESCALATING_COMBINATIONS:
+        if all(code in present for code in combination):
+            strong.extend(combination)
+    order = [c for c, _ in RULE_OBSERVATIONS]
+    return sorted(set(strong), key=order.index)
+
+
 def assess_url_lexical_risk(url: str, model_path_override: str | None = None) -> dict[str, Any]:
+    """Lexical observations about a URL, and the features behind them.
+
+    `model_path_override` is accepted and ignored. It is kept so that callers
+    and tests written against the old signature do not raise; there is no
+    model to point it at. See the module docstring.
+    """
     features = extract_url_lexical_features(url)
-    model_path = model_path_override or _configured_model_path()
-    inference = _infer_score(features, model_path_override=model_path)
-    raw_score = max(0.0, min(1.0, float(inference.raw_score if inference.raw_score is not None else inference.score)))
-    score = max(0.0, min(1.0, float(inference.score)))
-    calibration_meta = _load_calibration_metadata(model_path) if model_path else {}
-    calibrated = _calibrate_score(score, calibration_meta)
-    if calibrated is not None:
-        score = calibrated
-        inference.calibration_applied = True
-        # Reported, not changed — and the distinction matters.
-        #
-        # The calibration curve is loaded from the *model's* metadata file and
-        # applied here regardless of whether the model produced the score. On
-        # this deployment the model file and its `.metadata.json` both exist
-        # and the flag is off, so a curve fitted to LightGBM outputs is being
-        # applied to the built-in heuristic's output, and
-        # `calibration_applied: True` beside `model_source: built_in` reads as
-        # a calibrated model score.
-        #
-        # Saying so is reporting. *Not* applying it would change every lexical
-        # score on this deployment, which is a decision with a measurement
-        # attached rather than a cleanup — backlog 41 part 2.
-        if inference.model_source != "lightgbm":
-            note = (
-                f"Calibration from the configured model's metadata was applied "
-                f"to a {inference.model_source} score; the model itself did not run."
-            )
-            inference.error = f"{inference.error} {note}" if inference.error else note
+    score, contribs = _score_built_in(features)
+    score = max(0.0, min(1.0, float(score)))
+
     rule_floor = _rule_based_floor(features)
     rule_floor_applied = False
     if rule_floor is not None and rule_floor > score:
@@ -296,137 +411,36 @@ def assess_url_lexical_risk(url: str, model_path_override: str | None = None) ->
 
     result: dict[str, Any] = {
         "enabled": True,
-        "model_source": inference.model_source,
-        "raw_score": round(raw_score, 4),
-        "score": round(score, 4),
-        "label": _score_to_label(score),
-        "thresholds": {"low_max": LOW_THRESHOLD, "medium_max": HIGH_THRESHOLD},
+        # The only scorer there is. Kept rather than dropped because stored
+        # evidence carries it and a reader comparing an old record to a new
+        # one should see that the field still means the same thing.
+        "model_source": "built_in",
+        "observations": url_lexical_observations(features),
         "features": features,
-        "top_features": _ensure_top_features(inference.top_features, features, inference.model_source)[:5],
-        "feature_contributions": inference.feature_contributions,
-        "calibration_applied": bool(inference.calibration_applied),
+        "top_features": _top_features_from_contribs(contribs, 5),
+        "feature_contributions": contribs,
         "rule_floor_applied": rule_floor_applied,
+        # NOT reported as a verdict. No `label`, no `thresholds`: a
+        # probability beside a low/medium/high band reads as a measurement,
+        # and against the only external labels available this one scored below
+        # a coin flip. It remains in the payload for exactly one consumer —
+        # the risk-score blend in `analysis_task._inject_lexical_contribution`,
+        # which discloses the points it adds — and that blend is the open
+        # question in backlog 41.
+        "score": round(score, 4),
         "weights": {"lexical_weight": LEXICAL_WEIGHT},
     }
-    if inference.error:
-        result["error"] = inference.error
     return result
 
 
-def _infer_score(features: dict[str, float], *, model_path_override: str | None = None) -> LexicalInferenceResult:
-    if not _should_use_lightgbm():
-        score, contribs = _score_built_in(features)
-        # A configured model that is never consulted has to say so.
-        #
-        # This branch returned no `error` at all, so a deployment with
-        # `url_lexical_model_path` SET and `url_lexical_use_lightgbm` FALSE —
-        # which is this one — emitted `error: None` beside a built-in score.
-        # Downstream, `email_investigation_processing_service` propagates that
-        # None into the report, where it reads as "the model ran and found
-        # nothing wrong". Two states with identical observations: a model that
-        # scored this URL, and a model nobody loaded.
-        #
-        # No error when nothing is configured: then the built-in is the
-        # intended scorer and there is no skip to report. The claim being made
-        # here is narrow — *something was configured and not used*.
-        configured = model_path_override or _configured_model_path()
-        skipped = (
-            "Configured lexical model was not loaded: url_lexical_use_lightgbm "
-            "is false. This score is from the built-in lexical heuristic, not "
-            "from a trained model."
-        ) if configured else None
-        return LexicalInferenceResult(
-            score=score,
-            model_source="built_in",
-            top_features=_top_features_from_contribs(contribs, 5),
-            feature_contributions=contribs,
-            raw_score=score,
-            error=skipped,
-        )
-
-    custom_path = model_path_override or _configured_model_path()
-    if custom_path:
-        lgbm, load_error = _load_lightgbm_model(custom_path)
-        if lgbm is not None:
-            score, contribs = _score_lightgbm(features, lgbm)
-            return LexicalInferenceResult(
-                score=score,
-                model_source="lightgbm",
-                top_features=_top_features_from_contribs(contribs, 5),
-                feature_contributions=contribs,
-                raw_score=score,
-            )
-        score, contribs = _score_built_in(features)
-        return LexicalInferenceResult(
-            score=score,
-            model_source="built_in",
-            top_features=_top_features_from_contribs(contribs, 5),
-            feature_contributions=contribs,
-            raw_score=score,
-            error=load_error,
-        )
-
-    score, contribs = _score_built_in(features)
-    return LexicalInferenceResult(
-        score=score,
-        model_source="built_in",
-        top_features=_top_features_from_contribs(contribs, 5),
-        feature_contributions=contribs,
-        raw_score=score,
-    )
 
 
-def _configured_model_path() -> str | None:
-    path = (get_settings().url_lexical_model_path or "").strip()
-    return path or None
 
 
-def _should_use_lightgbm() -> bool:
-    try:
-        return bool(get_settings().url_lexical_use_lightgbm)
-    except Exception:
-        return False
 
 
-@lru_cache(maxsize=4)
-def _load_lightgbm_model(path: str) -> tuple[Any | None, str | None]:
-    if lgb is None:
-        return None, "LightGBM not installed; falling back to built-in lexical model"
-    p = Path(path)
-    if not p.exists():
-        return None, f"LightGBM model file not found: {path}"
-    try:
-        booster = lgb.Booster(model_file=str(p))
-        return booster, None
-    except Exception as exc:
-        return None, f"Unable to load LightGBM model: {exc}"
 
 
-def _score_lightgbm(features: dict[str, float], booster: Any) -> tuple[float, dict[str, float]]:
-    row = _ordered_vector(features)
-    feature_names = list(booster.feature_name() or [])
-    if not feature_names:
-        feature_names = FEATURE_ORDER[:]
-
-    score_raw = booster.predict([row], num_iteration=booster.best_iteration)
-    score = float(score_raw[0]) if score_raw else 0.0
-
-    contribs: dict[str, float] = {}
-    try:
-        contrib_raw = booster.predict([row], pred_contrib=True, num_iteration=booster.best_iteration)
-        if contrib_raw:
-            vals = list(contrib_raw[0])
-            if len(vals) >= len(feature_names):
-                for idx, name in enumerate(feature_names):
-                    if idx < len(vals):
-                        contribs[name] = float(vals[idx])
-    except Exception:
-        contribs = {}
-
-    if not contribs:
-        contribs = _fallback_lightgbm_feature_contribs(features, booster, feature_names)
-
-    return score, contribs
 
 
 def _score_built_in(features: dict[str, float]) -> tuple[float, dict[str, float]]:
@@ -442,8 +456,6 @@ def _score_built_in(features: dict[str, float]) -> tuple[float, dict[str, float]
     return score, contribs
 
 
-def _ordered_vector(features: dict[str, float]) -> list[float]:
-    return [float(features.get(name, 0.0)) for name in FEATURE_ORDER]
 
 
 def _top_features_from_contribs(contribs: dict[str, float], limit: int) -> list[str]:
@@ -451,139 +463,16 @@ def _top_features_from_contribs(contribs: dict[str, float], limit: int) -> list[
     return [name for name, _ in ranked[:limit]]
 
 
-def _ensure_top_features(top_features: list[str], features: dict[str, float], model_source: str) -> list[str]:
-    if top_features:
-        return top_features
-    ranked = _fallback_feature_rank(features, model_source=model_source)
-    return [name for name, _ in ranked]
 
 
-def _fallback_feature_rank(features: dict[str, float], *, model_source: str) -> list[tuple[str, float]]:
-    # Prioritize security-relevant lexical signals when explainability payload is missing.
-    weights = {
-        "has_ip_host": 8.0,
-        "has_at_symbol": 7.0,
-        "has_punycode": 6.0,
-        "has_suspicious_tld": 5.5,
-        "has_sensitive_keyword": 5.0,
-        "is_shortener": 4.5,
-        "brand_keyword_count": 3.5,
-        "subdomain_depth": 2.5,
-        "digit_ratio": 2.2,
-        "entropy": 1.6,
-        "hyphen_count": 1.2,
-        "query_param_count": 1.0,
-        "has_abnormal_port": 1.0,
-        "uses_https": -0.8,
-    }
-    ranked = []
-    for name in FEATURE_ORDER:
-        value = float(features.get(name, 0.0))
-        if value <= 0 and name != "uses_https":
-            continue
-        score = abs(value * float(weights.get(name, 0.2)))
-        if score > 0:
-            ranked.append((name, score))
-    ranked.sort(key=lambda kv: kv[1], reverse=True)
-    return ranked[:5]
 
 
-def _fallback_lightgbm_feature_contribs(
-    features: dict[str, float],
-    booster: Any,
-    feature_names: list[str],
-) -> dict[str, float]:
-    contribs: dict[str, float] = {}
-    try:
-        gains = list(booster.feature_importance(importance_type="gain") or [])
-    except Exception:
-        gains = []
-    if gains and feature_names:
-        for idx, name in enumerate(feature_names):
-            if idx >= len(gains):
-                break
-            gain = float(gains[idx])
-            value = float(features.get(name, 0.0))
-            if gain == 0.0 and value == 0.0:
-                continue
-            contribs[name] = gain * value
-    if not contribs:
-        for name, score in _fallback_feature_rank(features, model_source="lightgbm"):
-            contribs[name] = float(score)
-    return contribs
 
 
-def _score_to_label(score: float) -> str:
-    if score < LOW_THRESHOLD:
-        return "low"
-    if score <= HIGH_THRESHOLD:
-        return "medium"
-    return "high"
 
 
-@lru_cache(maxsize=4)
-def _load_calibration_metadata(model_path: str) -> dict[str, Any]:
-    path = (model_path or "").strip()
-    if not path:
-        return {}
-    p = Path(path)
-    candidates = [p.with_suffix(".metadata.json"), Path(str(p) + ".metadata.json")]
-    for candidate in candidates:
-        if not candidate.exists():
-            continue
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-            calib = payload.get("calibration") or {}
-            if isinstance(calib, dict):
-                # Backward compatibility:
-                # old format: {"method":"bin_interpolation","bins":{"method":"...","bins":[...],"enabled":...}}
-                nested_bins = calib.get("bins")
-                if isinstance(nested_bins, dict):
-                    normalized = dict(nested_bins)
-                    if "method" not in normalized and isinstance(calib.get("method"), str):
-                        normalized["method"] = calib.get("method")
-                    return normalized
-                return calib
-        except Exception:
-            continue
-    return {}
 
 
-def _calibrate_score(score: float, calibration_meta: dict[str, Any]) -> float | None:
-    if not isinstance(calibration_meta, dict):
-        return None
-    if calibration_meta.get("enabled") is False:
-        return None
-    bins = calibration_meta.get("bins")
-    if not isinstance(bins, list) or len(bins) < 2:
-        return None
-    points: list[tuple[float, float]] = []
-    for row in bins:
-        if not isinstance(row, dict):
-            continue
-        x = row.get("pred_mean")
-        y = row.get("actual_rate")
-        try:
-            px = float(x)
-            py = float(y)
-        except Exception:
-            continue
-        points.append((max(0.0, min(1.0, px)), max(0.0, min(1.0, py))))
-    if len(points) < 2:
-        return None
-    points.sort(key=lambda t: t[0])
-    x = max(0.0, min(1.0, float(score)))
-    # Avoid edge extrapolation that can over-correct scores when calibration bins
-    # cover only a narrow probability range from imbalanced validation data.
-    if x <= points[0][0] or x >= points[-1][0]:
-        return None
-    for i in range(1, len(points)):
-        x0, y0 = points[i - 1]
-        x1, y1 = points[i]
-        if x0 <= x <= x1 and x1 > x0:
-            t = (x - x0) / (x1 - x0)
-            return round(max(0.01, min(0.99, (1.0 - t) * y0 + t * y1)), 6)
-    return None
 
 
 def _is_ip_like_host(host: str) -> bool:

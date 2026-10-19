@@ -525,14 +525,27 @@ def test_real_signals_still_reach_suspicious_and_malicious():
     )
     assert build_decision_report(shape_only, "domain")["classification"] == "benign"
 
-    # URL_SHAPE_AFFECTS_SCORE restores the old behaviour, pinned here so the
-    # capability is kept rather than merely removed.
+    # URL_SHAPE_AFFECTS_SCORE **no longer restores this**, and the narrowing
+    # is deliberate rather than a regression.
+    #
+    # The flag used to re-enable the lexical aggregate — the probability and
+    # its low/medium/high band — which contributed 2 points here. That
+    # aggregate was removed on 2026-10-19: measured against the only external
+    # labels available it ranked flagged URLs BELOW clean ones, and the
+    # heuristic called 1,008 of 1,535 corpus URLs high. A flag that could put
+    # it back was one edit away from undoing the decision, so there is nothing
+    # left for it to re-enable in the weak-signal cluster.
+    #
+    # The flag is not dead: it still decides whether a shape-only URL's score
+    # blends into the final risk score, pinned by
+    # test_weak_signal_scoring.py::test_the_flag_still_governs_the_risk_blend.
+    # docs/design/lexical-scoring-retirement.md.
     import app.services.decision_engine as _de
 
     _original = _de.url_shape_affects_score
     _de.url_shape_affects_score = lambda *_a: True
     try:
-        assert build_decision_report(shape_only, "domain")["classification"] == "suspicious"
+        assert build_decision_report(shape_only, "domain")["classification"] == "benign"
     finally:
         _de.url_shape_affects_score = _original
 

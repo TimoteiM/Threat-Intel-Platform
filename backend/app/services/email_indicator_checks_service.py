@@ -300,11 +300,15 @@ def _check_url(
         lexical_ml = assess_url_lexical_risk(lexical_target)
     except Exception as exc:
         logger.warning("URL lexical ML failed for URL %s: %s", lexical_target, exc)
+        # `score: 0.0` with `label: "unknown"` was a crash reported as a
+        # score, and 0.0 is a legitimate value meaning "nothing unusual about
+        # this URL's shape". No score and no observations: `enabled: False`
+        # plus the reason is the whole payload, and the report renders a
+        # "Not assessed" panel from it.
         lexical_ml = {
             "enabled": False,
             "model_source": "built_in",
-            "score": 0.0,
-            "label": "unknown",
+            "observations": [],
             "top_features": [],
             "feature_contributions": {},
             "error": str(exc),
@@ -314,16 +318,15 @@ def _check_url(
         ml_url_score = score_url(lexical_target)
     except Exception as exc:
         logger.warning("URL ML model facade failed for URL %s: %s", lexical_target, exc)
-        # `model_version` was "lgbm-url-v1.0" here, on the path taken when the
-        # facade RAISED — so a crash was reported as a LightGBM model
-        # returning a phishing probability of 0.0. `risk_level: "unknown"` was
-        # the only thing contradicting it. The version now says nothing ran.
+        # This path is taken when the facade RAISED. It used to report
+        # `model_version: "lgbm-url-v1.0"` and `phishing_probability: 0.0` —
+        # a crash dressed as a model returning "no risk". There is no
+        # probability and no model any more, so the honest payload carries no
+        # observations and says why.
         ml_url_score = {
             "url": lexical_target,
-            "phishing_probability": 0.0,
-            "risk_level": "unknown",
-            "model_source": "",
-            "model_version": UNAVAILABLE_VERSION,
+            "scorer": UNAVAILABLE_VERSION,
+            "observations": [],
             "top_features": [],
             "error": str(exc),
         }

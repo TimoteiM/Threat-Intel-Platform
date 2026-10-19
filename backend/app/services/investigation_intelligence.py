@@ -41,8 +41,12 @@ EVIDENCE_MATRIX_FALLBACK_REFS: tuple[tuple[str, str], ...] = (
     ("opencti.score", "OpenCTI score"),
     ("opencti.observable_value", "OpenCTI matched observable"),
     ("hybrid_analysis.items", "Sandbox submissions"),
-    ("url_lexical_ml.score", "URL lexical ML score"),
-    ("ml_url_score.score", "Normalized URL ML score"),
+    # Was ("url_lexical_ml.score", "URL lexical ML score") and
+    # ("ml_url_score.score", "Normalized URL ML score"). The probability is no
+    # longer reported (docs/design/lexical-scoring-retirement.md), and the
+    # second path never resolved in any case: the facade's field was
+    # `phishing_probability`, never `score`.
+    ("url_lexical_ml.observations", "URL structure observations"),
     ("url_behavior.classification", "URL behavior classification"),
     ("http.final_url", "HTTP final URL"),
     ("http.final_status_code", "HTTP final status"),

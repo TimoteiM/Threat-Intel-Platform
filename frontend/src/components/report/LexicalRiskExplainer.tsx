@@ -33,11 +33,13 @@ function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
-function scoreTone(score: number) {
-  if (score < .3) return { label: "Low", color: "#2ecc71", summary: "The URL structure looks mostly typical." };
-  if (score <= .65) return { label: "Medium", color: "#f0a050", summary: "The URL contains structural patterns worth reviewing." };
-  return { label: "High", color: "#f07050", summary: "The URL structure resembles patterns often seen in phishing links." };
-}
+// `scoreTone` is gone with the probability it coloured.
+//
+// It mapped a number to Low / Medium / High with a traffic-light colour, which
+// is the single thing that made a shape heuristic read as a verdict. Measured
+// against the only external labels available, that number ranked flagged URLs
+// below clean ones; on our own corpus it called 1,008 of 1,535 URLs high.
+// docs/design/lexical-scoring-retirement.md.
 
 export default function LexicalRiskExplainer({ lexical, normalized }: {
   lexical: URLLexicalMLEvidence;
@@ -72,16 +74,7 @@ export default function LexicalRiskExplainer({ lexical, normalized }: {
     );
   }
 
-  const score = clamp(
-    typeof normalized?.phishing_probability === "number"
-      ? normalized.phishing_probability
-      : Number(lexical?.score || 0),
-  );
-  const tone = scoreTone(score);
-  const thresholds = lexical?.thresholds || {};
-  const lowMax = Number(thresholds.low_max ?? .3);
-  const mediumMax = Number(thresholds.medium_max ?? .65);
-  const lexicalWeight = clamp(Number(lexical?.weights?.lexical_weight ?? .25));
+  const observations = lexical?.observations || [];
   const features = lexical?.features || {};
   const contributions = lexical?.feature_contributions || {};
   const topNames = (lexical?.top_features || []).slice(0, 5);
@@ -89,78 +82,72 @@ export default function LexicalRiskExplainer({ lexical, normalized }: {
 
   return (
     <div className={styles.explainer}>
-      <div className={styles.hero} style={{ "--score-color": tone.color } as React.CSSProperties}>
-        <div className={styles.scoreRing} style={{ "--score": `${score * 360}deg` } as React.CSSProperties}>
-          <div><strong>{Math.round(score * 100)}%</strong><span>lexical risk</span></div>
-        </div>
+      <div className={styles.hero}>
         <div className={styles.heroCopy}>
-          <div className={styles.eyebrow}>URL structure assessment</div>
-          <div className={styles.titleLine}><h4>{tone.label} lexical risk</h4><span>{String(lexical?.model_source || "built-in").replaceAll("_", " ")}</span></div>
-          <p><strong>{tone.summary}</strong> This probability is based only on how the URL is written—its length, characters, hostname, path, and keywords.</p>
-          <div className={styles.boundary}><span>Important</span> It does not inspect page content, ownership, reputation, redirects, or sandbox behavior, so it cannot determine the final verdict by itself.</div>
+          <div className={styles.eyebrow}>URL structure</div>
+          <div className={styles.titleLine}>
+            <h4>{observations.length ? `${observations.length} observation${observations.length === 1 ? "" : "s"}` : "Nothing notable"}</h4>
+            <span>no score</span>
+          </div>
+          <p>
+            <strong>
+              {observations.length
+                ? "Each statement below is a fact about how this URL is written, checkable against the link itself."
+                : "Nothing about how this URL is written stood out."}
+            </strong>{" "}
+            This describes the URL text only — its hostname, path, characters and keywords.
+          </p>
+          <div className={styles.boundary}>
+            <span>Important</span> It does not inspect page content, ownership, reputation,
+            redirects or sandbox behaviour, so it cannot determine a verdict by itself.
+            These observations are evidence for one, not one themselves.
+          </div>
         </div>
       </div>
 
-      <div className={styles.scaleCard}>
-        <div className={styles.scaleHeader}>
-          <div><strong>How to read {Math.round(score * 100)}%</strong><span>The marker shows where this URL falls across the model’s three bands.</span></div>
-          <span className={styles.currentBand} style={{ color: tone.color }}>{tone.label}</span>
+      {observations.length > 0 && (
+        <div className={styles.features}>
+          {observations.map((observation) => (
+            <div className={styles.feature} key={observation.code}>
+              <div className={styles.featureTop}>
+                <div><strong>{observation.code.replaceAll("_", " ")}</strong></div>
+              </div>
+              <p>{observation.statement}</p>
+            </div>
+          ))}
         </div>
-        <div className={styles.scale}>
-          <div className={styles.lowBand} style={{ width: `${lowMax * 100}%` }} />
-          <div className={styles.mediumBand} style={{ width: `${(mediumMax - lowMax) * 100}%` }} />
-          <div className={styles.highBand} style={{ width: `${(1 - mediumMax) * 100}%` }} />
-          <div className={styles.marker} style={{ left: `${score * 100}%`, color: tone.color }}><span>{Math.round(score * 100)}%</span></div>
-        </div>
-        <div className={styles.legend}>
-          <span><i className={styles.lowDot} /><b>Low</b> 0–{Math.round(lowMax * 100)}% · few suspicious URL patterns</span>
-          <span><i className={styles.mediumDot} /><b>Medium</b> {Math.round(lowMax * 100)}–{Math.round(mediumMax * 100)}% · review with other evidence</span>
-          <span><i className={styles.highDot} /><b>High</b> above {Math.round(mediumMax * 100)}% · strong structural resemblance</span>
-        </div>
-      </div>
-
-      <div className={styles.contextGrid}>
-        <div className={styles.contextCard}>
-          <div className={styles.contextIcon}>¼</div>
-          <div><strong>Contribution to final risk</strong><p>Lexical ML has a <b>{Math.round(lexicalWeight * 100)}% weight</b> in the blended calculation. At this score, its weighted contribution is about <b>{(score * lexicalWeight * 100).toFixed(1)} points</b> on a 0–100 scale before other decision rules.</p></div>
-        </div>
-        <div className={styles.contextCard}>
-          <div className={styles.contextIcon}>◎</div>
-          <div><strong>What “probability” means</strong><p>It is the model’s confidence that the URL text resembles its learned phishing patterns—not a claim that there is a {Math.round(score * 100)}% real-world chance the site is malicious.</p></div>
-        </div>
-      </div>
+      )}
 
       <div className={styles.featuresHeader}>
-        <div><strong>What influenced this score</strong><span>Features are ranked by model impact and translated below.</span></div>
-        <span>{topNames.length} strongest signals</span>
+        <div>
+          <strong>Measured values behind these observations</strong>
+          <span>The numbers the statements above were derived from, for anyone checking them.</span>
+        </div>
+        <span>{topNames.length} shown</span>
       </div>
       {topNames.length ? (
         <div className={styles.features}>
           {topNames.map((name) => {
-            const copy = FEATURE_COPY[name] || { label: name.replaceAll("_", " "), description: "A structural value used by the lexical model.", value: (v: number) => String(v) };
+            const copy = FEATURE_COPY[name] || { label: name.replaceAll("_", " "), description: "A structural value measured from the URL.", value: (v: number) => String(v) };
             const value = Number(features[name] ?? 0);
             const impact = Number(contributions[name] ?? 0);
-            const direction = impact < 0 ? "lowers" : "raises";
             return (
               <div className={styles.feature} key={name}>
                 <div className={styles.featureTop}>
                   <div><strong>{copy.label}</strong><span>{copy.value(value)}</span></div>
-                  <span className={impact < 0 ? styles.protective : styles.risky}>{impact < 0 ? "Lowers risk" : "Raises risk"}</span>
                 </div>
                 <p>{copy.description}</p>
                 <div className={styles.impactTrack}><span className={impact < 0 ? styles.protectiveBar : styles.riskyBar} style={{ width: `${Math.max(8, Math.abs(impact) / maxImpact * 100)}%` }} /></div>
-                <div className={styles.impactLabel}>Relative influence · {direction} the lexical score</div>
+                <div className={styles.impactLabel}>Relative magnitude among the values shown</div>
               </div>
             );
           })}
         </div>
-      ) : <div className={styles.noFeatures}>The model did not provide feature-level explanations for this result.</div>}
+      ) : <div className={styles.noFeatures}>No measured values were recorded for this URL.</div>}
 
-      {(lexical?.calibration_applied || lexical?.rule_floor_applied || lexical?.error) && (
+      {lexical?.error && (
         <div className={styles.technicalNote}>
-          {lexical.calibration_applied && <span>Score calibration was applied.</span>}
-          {lexical.rule_floor_applied && <span>A safety rule raised the minimum score.</span>}
-          {lexical.error && <span>Model note: {lexical.error}</span>}
+          <span>Note: {lexical.error}</span>
         </div>
       )}
     </div>

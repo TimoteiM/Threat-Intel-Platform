@@ -278,8 +278,11 @@ def _build_url_assessments_fallback(checks: dict[str, Any]) -> list[dict[str, st
             malicious_count=int(vt.get("malicious_count") or 0),
             suspicious_count=int(vt.get("suspicious_count") or 0),
             total_vendors=int(vt.get("total_vendors") or 0),
-            lexical_label=str(lexical.get("label") or "unknown").lower(),
-            lexical_score=float(lexical.get("score") or 0.0),
+            lexical_statements=[
+                _OBSERVATION_STATEMENTS[code]
+                for code in _strong_observation_codes(lexical)
+                if code in _OBSERVATION_STATEMENTS
+            ],
         )
         out.append(
             {
@@ -300,8 +303,7 @@ def _build_url_reasoning(
     malicious_count: int,
     suspicious_count: int,
     total_vendors: int,
-    lexical_label: str,
-    lexical_score: float,
+    lexical_statements: list[str],
 ) -> str:
     target = final_url if final_url != "Not present in the provided evidence." else url
     host = ""
@@ -328,11 +330,16 @@ def _build_url_reasoning(
 
     if verdict == "clean":
         if host:
-            if lexical_label in {"high", "medium"}:
+            # Was "lexical ML is medium risk (score=0.472)". A probability to
+            # three decimal places reads as a measurement; the statement
+            # behind it is something the analyst can confirm by looking at the
+            # URL in the same sentence.
+            if lexical_statements:
                 return (
                     f"This URL points to {host}{path if path else ''}. VirusTotal is clean, "
-                    f"but lexical ML is {lexical_label} risk (score={lexical_score:.3f}); "
-                    "treat as potentially deceptive until validated."
+                    f"but the URL itself is written in a way worth checking: "
+                    f"{' '.join(lexical_statements)} "
+                    "Treat as potentially deceptive until validated."
                 )
             if host.lower().endswith("w3.org"):
                 return (
@@ -460,6 +467,24 @@ CLEAN_URL_SAMPLE = 5
 
 _RISKY_VERDICTS = {"malicious", "suspicious"}
 
+#: Imported once so the narrative and the gates below cannot disagree about
+#: which observations count as strong.
+from app.services.url_lexical_ml_service import (
+    RULE_OBSERVATIONS as _OBSERVATION_ROWS,
+    strong_observations as _strong_observation_codes,
+)
+
+_OBSERVATION_STATEMENTS = dict(_OBSERVATION_ROWS)
+
+
+def _lexical_strong(lexical: Any) -> bool:
+    """Whether the URL carries a strong lexical observation.
+
+    One import site for the predicate that replaced `label == "high"`, so the
+    two gates and the narrative cannot drift apart.
+    """
+    return bool(_strong_observation_codes(lexical))
+
 
 def _url_is_risky(item: dict[str, Any]) -> bool:
     """Anything that would change an analyst's mind about this URL."""
@@ -474,8 +499,13 @@ def _url_is_risky(item: dict[str, Any]) -> bool:
         behavior.get("credential_form_present") or behavior.get("ua_cloaking_detected")
     ):
         return True
-    lexical = item.get("lexical_ml")
-    if isinstance(lexical, dict) and str(lexical.get("label") or "").lower() == "high":
+    # Was `lexical.label == "high"`. The band is gone, and it was firing on
+    # 1,008 of 1,535 corpus URLs — two thirds of everything, mostly on URL
+    # length and entropy. The predicate is now a specific checkable fact: a
+    # raw-IP host, an @, punycode with a keyword, or a disposable TLD with a
+    # keyword. See docs/design/lexical-scoring-retirement.md for the
+    # before/after count.
+    if _lexical_strong(item.get("lexical_ml")):
         return True
     return False
 
@@ -518,11 +548,16 @@ def _compact_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                     "error": anyrun_url.get("error"),
                 },
                 "urlscan": item.get("urlscan") or {},
+                # No `score` and no `label`. The reportable output is the
+                # named observations — facts a reader can check against the
+                # URL — because the probability ranked below a coin flip
+                # against external labels and the band beside it made it read
+                # as a measurement. docs/design/lexical-scoring-retirement.md.
                 "lexical_ml": {
                     "target_url": lexical.get("target_url"),
+                    "enabled": lexical.get("enabled", True),
                     "model_source": lexical.get("model_source"),
-                    "score": lexical.get("score"),
-                    "label": lexical.get("label"),
+                    "observations": lexical.get("observations") or [],
                     "top_features": lexical.get("top_features") or [],
                     "error": lexical.get("error"),
                 },
@@ -1126,11 +1161,13 @@ def _summarize_urls(checks: dict[str, Any], resolution: dict[str, Any]) -> tuple
         lexical = item.get("lexical_ml") or {}
         ss = item.get("screenshot") or {}
         verdict = str(vt.get("verdict") or "unknown").lower()
-        lexical_label = str(lexical.get("label") or "unknown").lower()
         final_url = str(ss.get("final_url") or item.get("url") or NOT_PRESENT)
         if final_url and final_url != NOT_PRESENT:
             destinations.append(final_url)
-        if verdict in {"suspicious", "malicious"} or lexical_label in {"high", "medium"}:
+        # `lexical_label in {"high","medium"}` was broader still than the gate
+        # above — it put a URL in the analyst-facing suspicious list on a
+        # medium shape score.
+        if verdict in {"suspicious", "malicious"} or _lexical_strong(lexical):
             suspicious_urls.append(str(item.get("url") or final_url))
 
     summary = _summarize_url_destinations(items)
@@ -1390,7 +1427,7 @@ def _compact_suspicious_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
         vt_v = str((item.get("vt") or {}).get("verdict") or "").lower()
         anyrun_v = str((item.get("anyrun") or {}).get("verdict") or "").lower()
         anyrun_score = float((item.get("anyrun") or {}).get("threat_score") or 0)
-        lexical_label = str((item.get("lexical_ml") or {}).get("label") or "").lower()
+        lexical_strong = _lexical_strong(item.get("lexical_ml") or {})
         cred_form = bool((item.get("url_behavior") or {}).get("credential_form_present"))
         # Only treat AnyRun "malicious" as a risky signal if threat_score >= 95
         # Below that threshold it is treated as suspicious (cross-validation with VT required)
@@ -1417,7 +1454,7 @@ def _compact_suspicious_checks_for_ai(checks: dict[str, Any]) -> dict[str, Any]:
                         "threat_score": anyrun.get("threat_score"),
                     },
                     "final_url": ss.get("final_url") or behavior.get("final_url"),
-                    "lexical_ml": {"label": lexical.get("label"), "score": lexical.get("score")},
+                    "lexical_ml": {"observations": lexical.get("observations") or []},
                     "url_behavior": {
                         "redirect_count": behavior.get("redirect_count"),
                         "credential_form_present": behavior.get("credential_form_present"),

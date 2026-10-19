@@ -23,14 +23,25 @@ def test_compact_checks_keeps_lexical_ml_section() -> None:
             {
                 "url": "https://example.com",
                 "vt": {"verdict": "clean"},
-                "lexical_ml": {"score": 0.12, "label": "low", "model_source": "built_in"},
+                "lexical_ml": {
+                    "model_source": "built_in",
+                    "observations": [
+                        {"code": "shortener",
+                         "statement": "The hostname is a URL shortener, so the real destination is hidden until followed."},
+                    ],
+                },
                 "screenshot": {"captured": False, "final_url": None, "error": "Not requested"},
             }
         ],
     }
     compact = processing_svc._compact_checks_for_ai(checks)
     assert len(compact["urls"]) == 1
-    assert compact["urls"][0]["lexical_ml"]["label"] == "low"
+    # The named observations, not a label. The AI payload used to carry
+    # `label: "low"` and a probability, which is a verdict handed to the model
+    # as if it were evidence.
+    assert [o["code"] for o in compact["urls"][0]["lexical_ml"]["observations"]] == ["shortener"]
+    assert "label" not in compact["urls"][0]["lexical_ml"]
+    assert "score" not in compact["urls"][0]["lexical_ml"]
 
 
 def test_compact_checks_for_ai_keeps_only_risky_urls() -> None:
@@ -44,7 +55,7 @@ def test_compact_checks_for_ai_keeps_only_risky_urls() -> None:
                 "vt": {"verdict": "clean"},
                 "effective_verdict": "clean",
                 "anyrun": {"verdict": "unknown"},
-                "lexical_ml": {"score": 0.12, "label": "low", "model_source": "built_in"},
+                "lexical_ml": {"model_source": "built_in", "observations": []},
                 "url_behavior": {"credential_form_present": False, "behavior_score": 0.0},
                 "screenshot": {"captured": False, "final_url": None, "error": "Not requested"},
             },

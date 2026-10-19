@@ -825,19 +825,32 @@ class URLScanEvidence(BaseModel):
     notes: list[str] = []
 
 
+class URLLexicalObservation(BaseModel):
+    """One checkable fact about how a URL is written."""
+    code: str
+    statement: str
+
+
 class URLLexicalMLEvidence(BaseModel):
+    #: False when the assessment did not run. The report renders a
+    #: "Not assessed" panel rather than a score of 0.
+    enabled: bool = True
     model_source: str = "built_in"
-    score: float = 0.0
-    label: str = "low"
+    #: The named observations. This is the reportable output.
+    observations: list[URLLexicalObservation] = []
     top_features: list[str] = []
     feature_contributions: dict[str, float] = {}
     features: dict[str, float] = {}
-    thresholds: dict[str, float] = {"low_max": 0.30, "medium_max": 0.65}
     weights: dict[str, float] = {"lexical_weight": 0.25}
-    raw_score: Optional[float] = None
-    calibration_applied: bool = False
     rule_floor_applied: bool = False
     error: Optional[str] = None
+    #: NOT reported. No `label`, no `thresholds`, no `calibration_applied`:
+    #: removed 2026-10-19 with the model and its calibration curve, because a
+    #: probability beside a low/medium/high band reads as a measurement and
+    #: this one ranked below a coin flip against external labels. It survives
+    #: for one consumer, the risk-score blend, which now discloses the points
+    #: it contributes. See docs/design/lexical-scoring-retirement.md.
+    score: float = 0.0
 
 
 class URLMLFeatureImpact(BaseModel):
@@ -847,20 +860,15 @@ class URLMLFeatureImpact(BaseModel):
 
 class URLMLScoreEvidence(BaseModel):
     url: Optional[str] = None
-    phishing_probability: float = 0.0
-    risk_level: str = "low"
-    #: What scored it, and the version of that thing.
-    #:
-    #: The default was `"lgbm-url-v1.0"`, so a payload nobody set the field on
-    #: still claimed a LightGBM model had run — the default being the
+    #: What produced the observations. Not a model version — there is no
+    #: model. The default was `"lgbm-url-v1.0"`, so a payload nobody set the
+    #: field on still claimed a LightGBM model had run: the default being the
     #: strongest claim available, which is how a Pydantic default erases an
-    #: absence. `"unavailable"` is now the default and
-    #: `ml_url_model.version_for_source` fills it from the source that
-    #: actually produced the score.
-    model_source: str = ""
-    model_version: str = "unavailable"
+    #: absence.
+    scorer: str = "unavailable"
+    observations: list[URLLexicalObservation] = []
     top_features: list[URLMLFeatureImpact] = []
-    #: Why the named scorer is not the configured one, when that applies.
+    #: Why there are no observations, when that applies.
     error: Optional[str] = None
     raw: dict[str, Any] = {}
 

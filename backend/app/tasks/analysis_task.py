@@ -2207,6 +2207,31 @@ def _is_parser_fallback_report(report_data: dict) -> bool:
     )
 
 
+def _note_lexical_not_assessed(report_data: dict, reason: str) -> None:
+    """Record that the URL was not assessed, rather than scoring it 0.
+
+    The exception path emits `enabled: False` with no observations. A reader
+    must be able to tell "nothing notable about this URL" from "we did not
+    look", and the two used to produce the same finding.
+    """
+    findings = report_data.get("findings")
+    findings = findings if isinstance(findings, list) else []
+    if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
+        findings.append({
+            "id": "lexical_ml_contribution",
+            "title": "URL structure not assessed",
+            "description": (
+                "No URL structure observations are available for this target. This is "
+                "an absence of evidence, not an absence of risk."
+                + (f" Reason: {reason}" if reason.strip() else
+                   " No reason was recorded, which is itself a defect.")
+            ),
+            "severity": "informational",
+            "evidence_refs": ["url_lexical_ml.error"],
+        })
+        report_data["findings"] = findings
+
+
 def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None:
     """
     Ensure lexical ML appears in Findings and contributes 20-30% to final risk score.
@@ -2217,19 +2242,17 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
     if not isinstance(lexical, dict) or not lexical:
         return
 
+    # The assessment did not run at all — `enabled: False` and a reason.
+    # Nothing to report but the reason, and certainly not a score of 0.
+    if lexical.get("enabled") is False:
+        _note_lexical_not_assessed(report_data, str(lexical.get("error") or ""))
+        return
+
     lexical_score = float(lexical.get("score") or 0.0)
-    lexical_raw = float(lexical.get("raw_score") or lexical_score)
-    lexical_label = str(lexical.get("label") or "unknown").lower()
-    top = [str(x) for x in (lexical.get("top_features") or []) if str(x).strip()]
-    model_source = str(lexical.get("model_source") or "unknown")
-    calibrated = bool(lexical.get("calibration_applied"))
-    # "Lexical model (built_in)" called a hand-weighted logistic heuristic a
-    # model, in the findings text and the key-evidence line — so a reader
-    # could not tell a heuristic score from a trained-model score without
-    # knowing what `built_in` means. It is named for what it is, and the
-    # service's note (why a configured model did not run) is carried through
-    # rather than dropped here.
-    scorer = "Lexical model" if model_source == "lightgbm" else "Lexical heuristic"
+    observations = [
+        str(o.get("statement") or "") for o in (lexical.get("observations") or [])
+        if isinstance(o, dict) and str(o.get("statement") or "").strip()
+    ]
     model_note = str(lexical.get("error") or "").strip()
 
     # This blend is where the lexical model actually moved the number, and it ran
@@ -2270,45 +2293,60 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
             if str(report_data.get("recommended_action") or "").lower() in {"", "allow", "monitor"}:
                 report_data["recommended_action"] = "investigate"
 
+    # The finding names what was observed, and nothing else.
+    #
+    # It used to read "Lexical heuristic (built_in) scored this target as HIGH
+    # (raw=0.9904, calibrated=0.9904, weight=0.25)". The probability and the
+    # band are gone: measured against the only external labels available, that
+    # number ranked flagged URLs below clean ones, and a figure printed to
+    # four decimal places beside a severity word is read as a measurement.
+    # What is left is a list of statements a reader can check against the URL.
     existing = report_data.get("findings")
     findings = existing if isinstance(existing, list) else []
     if not any(isinstance(f, dict) and str(f.get("id")) == "lexical_ml_contribution" for f in findings):
-        sev = "high" if lexical_label == "high" else ("medium" if lexical_label == "medium" else "low")
+        if observations:
+            description = (
+                "URL structure observations, each checkable against the link itself: "
+                + " ".join(observations)
+            )
+        else:
+            description = (
+                "No notable observations about how this URL is written. This is a "
+                "statement about the URL string only — it says nothing about the "
+                "content, ownership, reputation or behaviour of the destination."
+            )
+        # `points_added` is the one place the retired probability still acts:
+        # the blend below. Disclosed rather than left implicit, because a risk
+        # score partly driven by a number the report no longer shows would be
+        # worse than showing the number. Backlog 41 carries the decision on
+        # whether the blend survives at all.
+        if not shape_only and blended_score is not None and rep_score is not None:
+            points_added = blended_score - int(round(rep_norm * 100))
+            if points_added:
+                description += (
+                    f" The URL-structure signal moved the risk score by "
+                    f"{points_added:+d} points (weight {lexical_weight:.2f})."
+                )
         findings.append(
             {
                 "id": "lexical_ml_contribution",
-                "title": "URL lexical ML observation" if shape_only else "URL lexical ML risk contribution",
-                "description": (
-                    f"{scorer} ({model_source}) scored this target as {lexical_label.upper()} "
-                    f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}, weight={lexical_weight:.2f}). "
-                    f"Top features: {', '.join(top[:5]) if top else 'not available'}."
-                    + (" Reported for review only: every feature behind this score describes the "
-                       "URL's size and structure, which long legitimate links share, so it did not "
-                       "affect the risk score."
-                       if shape_only else
-                       " Scored because the model found "
-                       + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
-                       + ".")
-                    + (f" {model_note}" if model_note else "")
-                ),
-                "severity": "informational" if shape_only else sev,
-                "evidence_refs": ["url_lexical_ml.score", "url_lexical_ml.top_features"],
+                "title": "URL structure observations",
+                "description": description + (f" {model_note}" if model_note else ""),
+                # Never "high": a severity on a lexical observation is the band
+                # this change removed, wearing a different field name. The
+                # observations are evidence for a verdict, not a verdict.
+                "severity": "informational",
+                "evidence_refs": ["url_lexical_ml.observations", "url_lexical_ml.features"],
             }
         )
         report_data["findings"] = findings
 
     key = report_data.get("key_evidence")
     key_evidence = key if isinstance(key, list) else []
-    lexical_line = (
-        f"{scorer} ({model_source}) {lexical_label} risk "
-        f"(raw={lexical_raw:.4f}, calibrated={lexical_score:.4f}"
-        + (", calibration=on" if calibrated else ", calibration=off")
-        + ")"
-        + (" \u2014 shape-driven, not scored" if shape_only else "")
-        + (" \u2014 configured model not loaded" if model_note and model_source != "lightgbm" else "")
-    )
-    if lexical_line not in key_evidence:
-        key_evidence.append(lexical_line)
+    if observations:
+        lexical_line = "URL structure: " + " ".join(observations)
+        if lexical_line not in key_evidence:
+            key_evidence.append(lexical_line)
     if floor_reasons:
         floor_line = (
             f"Trusted external intelligence floor applied at {blended_score}/100 due to: "
@@ -2316,22 +2354,33 @@ def _inject_lexical_contribution(report_data: dict, evidence_data: dict) -> None
         )
         if floor_line not in key_evidence:
             key_evidence.append(floor_line)
-        report_data["key_evidence"] = key_evidence
+    # Outside the `if`: the assignment used to sit inside the floor-reasons
+    # branch, so on a report that arrived without a `key_evidence` key at all
+    # the observation line was built and thrown away.
+    report_data["key_evidence"] = key_evidence
 
     # Apply blended score only when a numeric score exists or can be inferred.
     if blended_score is not None:
         report_data["risk_score"] = _score_within_classification_band(blended_score, report_data)
     rationale = str(report_data.get("risk_rationale") or "").strip()
     if shape_only:
+        # No number printed here. Nothing was contributed, so there is nothing
+        # to disclose — and printing a probability that moved nothing is
+        # exactly the "reads as a measurement" problem.
         blend_note = (
-            f"Lexical model excluded from scoring: lexical_component={lexical_score:.4f} rests on "
-            f"URL shape alone, so final risk is reputation only ({rep_norm:.4f})."
+            "URL structure did not affect the risk score: no observation was found "
+            "beyond the URL's size and shape, which long legitimate links share. "
+            f"Final risk is reputation only ({rep_norm:.4f})."
         )
     else:
+        # Where the retired probability still ACTS, its value is disclosed.
+        # This is the arithmetic of the score, not a verdict about the URL:
+        # named `url_structure_component` rather than "lexical model", and it
+        # appears only on the path where it changed the number.
         blend_note = (
             f"Final risk uses blended scoring: reputation_weight={1.0 - lexical_weight:.2f}, "
-            f"lexical_weight={lexical_weight:.2f}, reputation_component={rep_norm:.4f}, "
-            f"lexical_component={lexical_score:.4f}, final={blended:.4f}."
+            f"url_structure_weight={lexical_weight:.2f}, reputation_component={rep_norm:.4f}, "
+            f"url_structure_component={lexical_score:.4f}, final={blended:.4f}."
         )
     if floor_reasons:
         blend_note += f" External intelligence floor enforced at {blended_score}/100."

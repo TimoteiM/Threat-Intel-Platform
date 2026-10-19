@@ -1,5 +1,17 @@
 # Three arms over the URL corpus
 
+> **Decided 2026-10-19.** The calibration curve was removed, the LightGBM
+> artefact retired outright, and the probability and its label dropped from
+> the report. See `docs/design/lexical-scoring-retirement.md` for what was
+> done and what it cost. **The one thing still open is the risk-score blend**,
+> which turned out not to be presentational: it adds a median +12.7 risk
+> points on 584 of 2,667 investigations.
+>
+> **If you quote the AUC figures below, quote their cause in the same breath**
+> — see "On quoting the AUC" in the design note. A number below 0.5 against a
+> proxy whose flagged URLs are shorter and tidier is a statement about the
+> proxy's fit to this corpus, not a verdict on the scorers.
+
 **Backlog 41 part 2.** Measured 2026-10-19 against 1,535 distinct URL
 observables — every `investigations.domain` with `observable_type='url'`
 matching `^https?://`.
@@ -196,14 +208,23 @@ anyone ran it.
 flagged URL scores above a random clean one.** It is threshold-free, so it
 cannot be an artefact of where `low`/`medium`/`high` sit.
 
-| scorer | AUC |
+| scorer | AUC against this proxy, whose flagged URLs are measurably shorter and tidier |
 |---|---|
 | arm 1 — current | **0.242** |
 | arm 2 — raw heuristic | **0.228** |
 | arm 3 — LightGBM | **0.318** |
 
-**All three are far below 0.5.** They rank VT-flagged URLs *lower* than
-VT-clean ones — worse than a coin flip, consistently.
+**All three are far below 0.5 against this proxy — and the proxy's flagged
+URLs are measurably shorter and tidier than its clean ones, which is why.**
+Those two halves belong in the same sentence every time the number is quoted.
+The table's own header carries the caveat because a row lifted out of a table
+loses its surrounding prose; the column heading travels with it.
+
+A sub-0.5 AUC here is a statement about **the proxy's fit to this corpus**,
+not a finding that the scorers are reliably inverted — a reliably inverted
+scorer would be useful upside down, and these are not. The defensible reading
+is narrower and still enough for the decision: **these scorers carry no usable
+signal on this estate.**
 
 The metric was controlled before this was believed:
 
@@ -215,7 +236,9 @@ The metric was controlled before this was believed:
 | random score, 5 draws | 0.447, 0.489, 0.549, 0.492, 0.551 | ~0.5 |
 
 **The cause is measured, and it is not a bug in any arm.** On this corpus the
-features themselves point the wrong way:
+features themselves point the wrong way — so the sub-0.5 figures above are the
+corpus and the proxy disagreeing with the premise of lexical scoring, not
+three scorers each being wrong in the same direction by coincidence:
 
 | feature | flagged median | clean median | feature AUC |
 |---|---|---|---|

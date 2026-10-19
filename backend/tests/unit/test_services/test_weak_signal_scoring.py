@@ -18,14 +18,25 @@ from app.services.url_lexical_ml_service import (
     SEMANTIC_FEATURES,
     assess_url_lexical_risk,
     semantic_features_present,
+    url_lexical_observations,
 )
 from app.tasks.analysis_task import _inject_lexical_contribution
 
 
 def _lexical(label, score, features=None, top=None):
-    payload = {"label": label, "score": score}
+    """A lexical payload. `label` is accepted and discarded.
+
+    The low/medium/high band was removed on 2026-10-19 with the model and its
+    calibration (docs/design/lexical-scoring-retirement.md). The parameter
+    stays so these tests keep reading as the scenarios they describe — "a
+    medium-scoring shape-only URL" — without every call site growing a comment
+    about a field that no longer exists. `score` survives because the risk
+    blend still reads it.
+    """
+    payload = {"score": score}
     if features is not None:
         payload["features"] = features
+        payload["observations"] = url_lexical_observations(features)
     if top is not None:
         payload["top_features"] = top
     return payload
@@ -67,12 +78,22 @@ def test_a_real_sharepoint_link_scores_high_on_shape_alone():
         "AllItems.aspx?id=%2Fsites%2FFinance%2FShared%20Documents%2FFY26%20Budget"
         "%20Review%2Epptx&parent=%2Fsites%2FFinance"
     )
-    assert lexical["label"] == "high"
+    # There is no label to assert any more. The premise is unchanged and is
+    # now stated on the score, which is what the band was derived from: a
+    # genuine SharePoint link scores as high as this heuristic goes.
+    assert lexical["score"] >= 0.65
+    assert "label" not in lexical
     assert semantic_features_present(lexical) == []
+    # And the point of the retirement: nothing about this URL is a checkable
+    # observation, so the report now says so instead of printing 0.99.
+    assert lexical["observations"] == []
 
     score, reasons = de._domain_weak_signal_score({"url_lexical_ml": lexical})
     assert score == 0
-    assert any("not scored" in r for r in reasons), "the observation must still be shown"
+    # The reason list no longer carries "Lexical model high risk (0.99) —
+    # driven by URL shape, not scored". A shape-only URL now contributes no
+    # reason at all, because the only thing there was to say was the number.
+    assert not any("risk" in r.lower() for r in reasons)
 
 
 def test_brand_keyword_count_is_not_treated_as_semantic():
@@ -161,8 +182,18 @@ def test_the_flag_restores_shape_scoring():
     finally:
         module.url_shape_affects_score = original
 
-    assert off == 0 and on == 2
-    assert not any("not scored" in r for r in reasons)
+    # **The flag no longer restores aggregate scoring here, and that is the
+    # change rather than a regression.** It used to add 2 points from the
+    # probability band. The band is gone, so there is nothing for the flag to
+    # re-enable in the weak-signal cluster: a shape-only URL scores 0 whether
+    # the flag is on or off.
+    #
+    # The flag is NOT dead — it still decides whether the probability blends
+    # into the final risk score in `_inject_lexical_contribution`, which
+    # `test_the_flag_still_governs_the_risk_blend` pins. Its meaning narrowed
+    # from "shape can score anywhere" to "shape can move the risk blend".
+    assert off == 0 and on == 0
+    assert not any("risk" in r.lower() for r in reasons)
 
 
 def test_the_lexical_block_can_never_outweigh_its_old_ceiling():
@@ -184,13 +215,14 @@ def test_a_shape_only_verdict_does_not_move_the_risk_score():
     assert report["risk_score"] == 20
     finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
     assert finding["severity"] == "informational"
-    assert finding["title"] == "URL lexical ML observation"
-    # "Lexical" rather than "Lexical ML": the label now names what actually
-    # scored it — "Lexical heuristic" for the built-in, "Lexical model" only
-    # for LightGBM — so that a reader can tell a heuristic score from a model
-    # score. This assertion is about the line being SHOWN, so it matches the
-    # part of the label that is not the naming decision.
-    assert any("Lexical" in line for line in report["key_evidence"]), "still shown to the analyst"
+    assert finding["title"] == "URL structure observations"
+    # No probability anywhere in the finding, which is the decision.
+    assert "0.56" not in finding["description"]
+    assert "MEDIUM" not in finding["description"]
+    # A shape-only URL has nothing checkable to report, and the finding says
+    # that in words instead of printing a number that moved nothing.
+    assert "No notable observations" in finding["description"]
+    assert report["key_evidence"] == [], "nothing to show when there is no observation"
 
 
 def test_a_semantic_verdict_does_move_the_risk_score():
@@ -200,8 +232,14 @@ def test_a_semantic_verdict_does_move_the_risk_score():
 
     assert report["risk_score"] > 20
     finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
-    assert finding["severity"] == "high"
+    # Never "high". A severity on a lexical observation is the band this change
+    # removed wearing a different field name.
+    assert finding["severity"] == "informational"
     assert "punycode" in finding["description"]
+    # And the blend is DISCLOSED: the probability no longer appears as a
+    # verdict, but where it still moves the risk score the points are named.
+    assert "moved the risk score by" in finding["description"]
+    assert any("URL structure" in line for line in report["key_evidence"])
 
 
 def test_a_shape_only_verdict_does_not_invent_a_score_from_nothing():
@@ -227,47 +265,80 @@ def test_both_paths_use_the_same_scorer():
     assert analysis_task._domain_weak_signal_score is de._domain_weak_signal_score
 
 
-# --- naming: a heuristic is not a model -------------------------------------
+# --- what the report says now -------------------------------------------------
 
 
-def test_the_built_in_heuristic_is_not_called_a_model():
-    """`_inject_lexical_contribution` wrote "Lexical model (built_in)" into
-    both the findings text and the key-evidence line, so the report called a
-    hand-weighted logistic heuristic a model and a reader had to know what
-    `built_in` meant to tell the difference. Backlog 41 part 1."""
+def test_the_report_names_observations_and_never_a_probability():
     report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
-    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
-    lexical["model_source"] = "built_in"
+    lexical = _lexical("high", 0.9, features={"has_ip_host": 1.0, "has_sensitive_keyword": 1.0})
     _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
 
     text = " ".join(report["key_evidence"]) + " ".join(
         f["description"] for f in report["findings"]
     )
-    assert "Lexical heuristic" in text
-    assert "Lexical model" not in text
+    assert "raw IP address" in text
+    assert "sensitive keyword" in text
+    for banned in ("Lexical model", "lexical ML is", "HIGH", "MEDIUM", "0.9000", "raw=", "calibrated="):
+        assert banned not in text, f"{banned!r} is still printed in the report"
 
 
-def test_a_real_model_score_is_called_a_model():
-    """The control for the test above: a check that only ever sees `built_in`
-    would pass with the word "model" deleted everywhere."""
-    report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+def test_the_flag_still_governs_the_risk_blend():
+    """The other half of `test_the_flag_restores_shape_scoring`.
+
+    `url_shape_affects_score` lost its effect on the weak-signal cluster when
+    the aggregate went, but it still decides whether a shape-only URL's
+    probability blends into the final risk score. Pinned so the narrowing is a
+    recorded decision rather than something that quietly became total.
+    """
+    import app.tasks.analysis_task as at
+
     lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
-    lexical["model_source"] = "lightgbm"
-    _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
 
-    text = " ".join(report["key_evidence"])
-    assert "Lexical model (lightgbm)" in text
+    off = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+    _inject_lexical_contribution(off, {"url_lexical_ml": lexical})
+    assert off["risk_score"] == 20
+
+    original = at.url_shape_affects_score
+    at.url_shape_affects_score = lambda *a, **k: True
+    try:
+        on = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
+        _inject_lexical_contribution(on, {"url_lexical_ml": lexical})
+    finally:
+        at.url_shape_affects_score = original
+
+    assert on["risk_score"] > 20, "the flag no longer reaches the blend either"
 
 
-def test_the_skip_note_reaches_the_key_evidence_line():
-    """The whole point of part 1: an analyst reading the report can see that
-    the configured model did not run."""
-    report = {"risk_score": 20, "classification": "benign", "findings": [], "key_evidence": []}
-    lexical = _lexical("medium", 0.56, features={"url_length": 190.0, "entropy": 4.6})
-    lexical["model_source"] = "built_in"
-    lexical["error"] = "Configured lexical model was not loaded: url_lexical_use_lightgbm is false."
-    _inject_lexical_contribution(report, {"url_lexical_ml": lexical})
+def test_an_unassessed_url_is_not_reported_as_a_clean_one():
+    """`enabled: False` is the exception path. It used to arrive with
+    `score: 0.0`, which is a legitimate value meaning "nothing unusual"."""
+    report = {"risk_score": 40, "classification": "benign", "findings": [], "key_evidence": []}
+    _inject_lexical_contribution(
+        report, {"url_lexical_ml": {"enabled": False, "error": "urlparse blew up"}}
+    )
 
-    assert any("configured model not loaded" in line for line in report["key_evidence"])
+    assert report["risk_score"] == 40, "a failure must not move the score"
     finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
-    assert "not loaded" in finding["description"]
+    assert finding["title"] == "URL structure not assessed"
+    assert "absence of evidence, not an absence of risk" in finding["description"]
+    assert "urlparse blew up" in finding["description"]
+
+
+def test_an_unassessed_url_with_no_reason_says_that_too():
+    report = {"risk_score": 40, "classification": "benign", "findings": [], "key_evidence": []}
+    _inject_lexical_contribution(report, {"url_lexical_ml": {"enabled": False}})
+    finding = next(f for f in report["findings"] if f["id"] == "lexical_ml_contribution")
+    assert "No reason was recorded" in finding["description"]
+
+
+def test_strong_observations_are_derived_for_evidence_written_before_the_field_existed():
+    """Stored evidence has `features` but no `observations`. Returning an empty
+    list for those would present an absence as a fact — every historical
+    record would read as "no observations found"."""
+    from app.services.url_lexical_ml_service import strong_observations
+
+    legacy = {"features": {"has_ip_host": 1.0}, "score": 0.9}
+    assert strong_observations(legacy) == ["ip_host"]
+    assert strong_observations({"features": {"url_length": 200.0}}) == []
+    assert strong_observations({}) == []
+    assert strong_observations(None) == []

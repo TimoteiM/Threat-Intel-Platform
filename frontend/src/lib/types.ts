@@ -521,17 +521,27 @@ export interface URLLexicalMLEvidence {
    */
   enabled?: boolean;
   model_source?: string;
-  score?: number;
-  label?: "low" | "medium" | "high" | string;
+  /** The named, checkable facts. This is the reportable output. */
+  observations?: URLLexicalObservation[];
   top_features?: string[];
   feature_contributions?: Record<string, number>;
   features?: Record<string, number>;
-  thresholds?: Record<string, number>;
   weights?: Record<string, number>;
-  raw_score?: number;
-  calibration_applied?: boolean;
   rule_floor_applied?: boolean;
   error?: string;
+  /**
+   * NOT rendered. No `label`, no `thresholds`, no `calibration_applied`:
+   * removed 2026-10-19 with the model and its calibration curve. A
+   * probability beside a low/medium/high band reads as a measurement, and
+   * this one ranked below a coin flip against external labels. It survives in
+   * the payload for one backend consumer, the risk-score blend.
+   */
+  score?: number;
+}
+
+export interface URLLexicalObservation {
+  code: string;
+  statement: string;
 }
 
 export interface URLMLFeatureImpact {
@@ -541,10 +551,11 @@ export interface URLMLFeatureImpact {
 
 export interface URLMLScoreEvidence {
   url?: string;
-  phishing_probability: number;
-  risk_level: string;
-  model_version: string;
+  /** What produced the observations. Not a model version — there is no model. */
+  scorer?: string;
+  observations?: URLLexicalObservation[];
   top_features: URLMLFeatureImpact[];
+  error?: string;
   raw?: Record<string, any>;
 }
 

@@ -1244,38 +1244,25 @@ def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http:
     if not isinstance(lexical, dict) or not lexical:
         lexical = (evidence_data.get("ml_url_score") or {}).get("raw") or evidence_data.get("ml_url_score") or {}
     if isinstance(lexical, dict):
-        label = str(lexical.get("label") or lexical.get("risk_level") or "").lower()
-        try:
-            lexical_score = float(lexical.get("score") or lexical.get("phishing_probability") or 0.0)
-        except Exception:
-            lexical_score = 0.0
-
-        # The model's aggregate verdict is dominated by shape, so by default it
-        # is reported and not counted. Its semantic features are counted either
-        # way — see url_shape_affects_score.
-        if label == "high" or lexical_score >= 0.65:
-            aggregate, aggregate_points = f"Lexical model high risk ({lexical_score:.2f})", 2
-        elif label == "medium" or lexical_score >= 0.45:
-            aggregate, aggregate_points = f"Lexical model medium risk ({lexical_score:.2f})", 1
-        else:
-            aggregate, aggregate_points = "", 0
-        # Capped at two so this block can never contribute more than the
-        # aggregate used to, and so a single long URL tripping several of them
-        # cannot escalate on its own.
+        # The aggregate probability and its low/medium/high band are gone from
+        # here, not merely ungated.
+        #
+        # They used to contribute 1 or 2 points when `url_shape_affects_score()`
+        # allowed it, and to be appended as a reason either way — "Lexical
+        # model high risk (0.99)". Measured on 2026-10-19 against the only
+        # external labels available, that number ranked flagged URLs BELOW
+        # clean ones, and the heuristic called 1,008 of 1,535 corpus URLs high.
+        # See docs/measurements/url-lexical-three-arms.md.
+        #
+        # The named observations stay and still score, because they are where
+        # every genuine high verdict came from and because each one is a fact
+        # an analyst can check against the URL in front of them. Capped at two
+        # so a single long URL tripping several cannot escalate on its own.
         semantic = semantic_features_present(lexical)
-
-        if aggregate and url_shape_affects_score():
-            score += aggregate_points
-            reasons.append(aggregate)
-        elif aggregate and semantic:
-            reasons.append(f"{aggregate} — aggregate not scored, but see below")
-        elif aggregate:
-            reasons.append(f"{aggregate} — driven by URL shape, not scored")
-
         if semantic:
             score += 2 if len(semantic) > 1 else 1
             reasons.append(
-                "Lexical model found "
+                "URL structure: "
                 + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
             )
 
