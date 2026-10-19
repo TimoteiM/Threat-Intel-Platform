@@ -17,6 +17,10 @@ from app.models.schemas import CollectorMeta, DNSEvidence, DNSRecord
 logger = logging.getLogger(__name__)
 
 
+class DNSLookupError(Exception):
+    """Every DNS lookup errored — no answer was obtained at all."""
+
+
 class DNSCollector(BaseCollector):
     name = "dns"
 
@@ -38,6 +42,8 @@ class DNSCollector(BaseCollector):
         }
 
         all_records: list[DNSRecord] = []
+        failures: list[tuple[str, Exception]] = []
+        total_lookups = len(record_map) + 1  # + DMARC
 
         for rtype, field_name in record_map.items():
             try:
@@ -53,14 +59,14 @@ class DNSCollector(BaseCollector):
                         ttl=answers.rrset.ttl if answers.rrset else None,
                     ))
                 setattr(evidence, field_name, values)
-            except (
-                dns.resolver.NoAnswer,
-                dns.resolver.NXDOMAIN,
-                dns.resolver.NoNameservers,
-            ):
+            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
                 pass
             except Exception as e:
-                logger.debug(f"DNS {rtype} lookup failed for {self.domain}: {e}")
+                # Includes NoNameservers: dnspython raises it when every
+                # nameserver errored, socket errors included, so it is not
+                # an answer about the domain.
+                logger.warning(f"DNS {rtype} lookup failed for {self.domain}: {e}")
+                failures.append((rtype, e))
 
         # ── DMARC (TXT record at _dmarc.{domain}) ──
         try:
@@ -75,8 +81,23 @@ class DNSCollector(BaseCollector):
                         value=val,
                     ))
                     break
-        except Exception:
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
             pass
+        except Exception as e:
+            logger.warning(f"DNS DMARC lookup failed for {self.domain}: {e}")
+            failures.append(("DMARC", e))
+
+        # ── All lookups failed: report failure, not "no records" ──
+        if len(failures) == total_lookups:
+            raise DNSLookupError(
+                f"all {total_lookups} DNS lookups failed for {self.domain}: "
+                f"{self._summarize_failures(failures)}"
+            )
+
+        for label, e in failures:
+            evidence.notes.append(
+                f"DNS {label} lookup failed: {type(e).__name__}: {e}"
+            )
 
         # ── Extract SPF from TXT records ──
         for txt in evidence.txt:
@@ -96,3 +117,13 @@ class DNSCollector(BaseCollector):
 
     def _empty_evidence(self, meta: CollectorMeta) -> DNSEvidence:
         return DNSEvidence(meta=meta)
+
+    @staticmethod
+    def _summarize_failures(failures: list[tuple[str, Exception]]) -> str:
+        """Group identical errors: 'Timeout: ... (A, AAAA, MX)'."""
+        grouped: dict[str, list[str]] = {}
+        for label, e in failures:
+            grouped.setdefault(f"{type(e).__name__}: {e}", []).append(label)
+        return "; ".join(
+            f"{error} ({', '.join(labels)})" for error, labels in grouped.items()
+        )
