@@ -512,6 +512,14 @@ export interface URLScanEvidence {
 }
 
 export interface URLLexicalMLEvidence {
+  /**
+   * False when the assessment did not run — the backend's exception path
+   * emits `enabled: false` with `score: 0.0`, and a 0.0 renders as "0% / Low"
+   * unless something checks this first. Optional, so a payload from before
+   * this field existed keeps its current rendering rather than being treated
+   * as disabled.
+   */
+  enabled?: boolean;
   model_source?: string;
   score?: number;
   label?: "low" | "medium" | "high" | string;

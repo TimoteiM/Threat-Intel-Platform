@@ -2225,7 +2225,34 @@ first one already arrived.
 ## 41 — A lexical model is configured, the flag that loads it is off, and nothing says so
 
 **Part 1 DONE 2026-10-19 — the skip is now reported, and no score changed.**
-**Part 2 OPEN, and it grew a second question. See the two sections at the end.**
+**Part 2 MEASURED 2026-10-19 — `docs/measurements/url-lexical-three-arms.md`.**
+**The decision is open and is yours; the measurement is done.**
+
+Headlines from that page, so this item is not a pointer to a pointer:
+
+* **Neither ground truth exists.** The model's metadata carries summary
+  metrics only, and its training files are Windows paths on a developer's
+  machine. `analyst_feedback` has 6 rows, all on `alert_run`, none on a URL.
+  So the arm comparison is change, not improvement.
+* **The foreign calibration curve only ever inflates** — 217 rows moved, 217
+  up, 0 down — and only the most benign-looking URLs, because its domain
+  (0.0224–0.3174) is the model's output range and anything above it is
+  returned untouched. Its whole effect is promoting **171 URLs from `low` to
+  `medium`**, among them `aka.ms` and GitHub's avatar CDN.
+* **The model cannot produce a `high` verdict.** 0 of 1,535 URLs score above
+  0.65; 90.4% land in a band 0.04 wide; 633 share one value. All **376** of
+  arm 3's `high` labels come from the rule floor (`has_ip_host` or
+  `has_at_symbol`), none from the model.
+* **The model's own metadata said so already**: `accuracy@0.5` = 0.9692
+  against an always-benign baseline of 0.9698 — worse than predicting benign
+  for everything, which it effectively does, since 99% of its validation
+  predictions fall below 0.31 and nothing reaches the 0.5 decision point.
+* **Against an external proxy** (646 URLs with an exact-match VirusTotal
+  verdict, 118 flagged) all three arms score **below 0.5 AUC** — 0.242,
+  0.228, 0.318. The metric was controlled (perfect 1.0, inverted 0.0,
+  constant 0.5, random ~0.5). The cause is measured: flagged URLs are
+  *shorter* (median 42 chars vs 153), so every shape feature is
+  anti-predictive here — `url_length` alone has AUC 0.257.
 
 
 Found 2026-10-19 as the last surviving entry in

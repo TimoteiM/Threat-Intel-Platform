@@ -43,6 +43,35 @@ export default function LexicalRiskExplainer({ lexical, normalized }: {
   lexical: URLLexicalMLEvidence;
   normalized?: URLMLScoreEvidence;
 }) {
+  // The assessment did not run.
+  //
+  // The backend's exception path emits `enabled: false` with `score: 0.0`,
+  // and 0.0 is a legitimate score meaning "nothing suspicious about this
+  // URL's shape" — so without this guard a crash drew a green ring reading
+  // "0% lexical risk / Low". Same defect as the `error: null` that was
+  // propagated for a skipped model, with a crash as the trigger instead.
+  //
+  // `=== false` rather than falsy: a payload from before the backend set
+  // this field has `enabled` undefined, and treating that as disabled would
+  // blank the panel on every historical report.
+  if (lexical?.enabled === false) {
+    return (
+      <div className={styles.explainer}>
+        <div className={styles.hero}>
+          <div className={styles.heroCopy}>
+            <div className={styles.eyebrow}>URL structure assessment</div>
+            <div className={styles.titleLine}><h4>Not assessed</h4><span>no score</span></div>
+            <p><strong>This URL was not scored.</strong> No lexical risk value is
+              available, which is different from a low one.</p>
+            <div className={styles.boundary}>
+              <span>Reason</span> {lexical?.error || "The assessment did not complete and recorded no reason."}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const score = clamp(
     typeof normalized?.phishing_probability === "number"
       ? normalized.phishing_probability
