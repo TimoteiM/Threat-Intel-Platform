@@ -535,6 +535,41 @@ class Tenant(Base):
     )
 
 
+class InvestigationTokenMap(Base):
+    """The reversible identifier map for one investigation, with an end.
+
+    Held so a model can reason in `[HOST_a3f9c1_1]` while the queries it asks
+    for are executed against the real hostname — and so the results coming
+    back can be tokenised with *the same* map, because a result tokenised
+    under a fresh map is one the model cannot join to the alert it came from.
+
+    Three columns carry the properties the assistant's `token_map_json` does
+    not have. `tenant_id` and `investigation_id` scope it; `fingerprint` is
+    stamped into every token this map issues, so a token names the scope it
+    was minted under and another tenant's boundary refuses it rather than
+    resolving it to a different machine. `expires_at` ends it: this table
+    holds real identifiers in exchange for reversibility, and a map with no
+    expiry is an indefinite copy of them.
+    """
+
+    __tablename__ = "investigation_token_maps"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    investigation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(8), nullable=False)
+    token_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("uq_token_map_scope", "tenant_id", "investigation_id", unique=True),
+        Index("ix_token_map_expires_at", "expires_at"),
+    )
+
+
 class TenantEvent(Base):
     """What happened to a tenant, append-only.
 

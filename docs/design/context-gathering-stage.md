@@ -245,7 +245,21 @@ in the tail, and the tail should be measured before it is served.
 | the secret layer | `log_secret_sanitizer` — HMAC placeholders, **non-reversible by design** | **must stay non-reversible** |
 | order | secrets first (`sanitize_records` on `full_log`, `message`, `process.command_line`, then `fence`), identifiers second | the same order applies to every result the stage brings back |
 
-### What does not exist
+### Built 2026-10-19 on branch `query-agent`
+
+`app/services/token_boundary.py` closes items 1-6 below, with migration 069
+(`investigation_token_maps`) for the scoped, expiring map. What it still
+misses is enumerated in
+[token-boundary-gaps.md](token-boundary-gaps.md) — measured, not estimated,
+and pinned by a test that asserts the gaps are still open.
+
+One finding changed the design: **bare `[HOST_1]` tokens are textually
+identical across investigations**, so a token from one tenant does not fail
+under another's map — it resolves to a different host and answers
+confidently about the wrong estate. The scope therefore lives *in* the token
+(`[HOST_a3f9c1_1]`), which turns that into a refusal.
+
+### What did not exist before it
 
 1. **Restoration is applied to the report, after the model.** There is no
    mid-flight, because there is no loop. For an agent the map has to exist
