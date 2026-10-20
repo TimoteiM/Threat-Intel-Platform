@@ -370,8 +370,10 @@ async def _verify_now(
     # it. Seven saves were recorded against one tenant while the operator was
     # told each one failed.
     #
-    # Recorded as a state rather than raised, because "stored, and nothing can
-    # test it yet" is a true description that the page already renders.
+    # Returned as a state rather than raised — and NOT recorded, see below.
+    # "Stored, and nothing can test it yet" is a true description, and it is
+    # derived from the absence of a health entry rather than written into the
+    # map of what happened when we called.
     if not status.has_connector(tool):
         result = {
             "state": status.CONFIGURED_UNVERIFIED,
@@ -383,11 +385,14 @@ async def _verify_now(
             ),
             "failure_kind": "not_implemented",
         }
-        await creds.record_health(
-            db, tenant_id=tenant_id, tool=tool,
-            direction=str(result["direction"]), result=result,
-            scope=scope, actor=actor,
-        )
+        # **Not recorded.** The health map holds the outcome of a real
+        # authenticated call, and no call was made — there is no connector to
+        # make one with. Writing "no call happened" into the map that answers
+        # "what happened when we called" is a category error, and it showed:
+        # once the entry carried a timestamp the reader treated the state as
+        # an unrecognised outcome and reported FAILING for a credential that
+        # was fine. The absence is derived by `_state_for_direction` instead,
+        # which knows whether a connector exists.
         return result
 
     verifier = _verifier_for(tool)

@@ -163,6 +163,13 @@ def warrant_for(
 #: from the past does not clear a present failure.
 _PROMOTABLE = frozenset({NOT_CONFIGURED, CONFIGURED_UNVERIFIED})
 
+#: States that describe the ABSENCE of a verification rather than the result
+#: of one. A health entry carrying one of these records that no call was
+#: made; only `verified_ok` and `verified_failing` are outcomes.
+_NON_OUTCOME_STATES = frozenset({
+    NOT_CONFIGURED, CONFIGURED_UNVERIFIED, NOT_IMPLEMENTED,
+})
+
 
 #: States in which a last success means the tool has STOPPED rather than
 #: merely being absent. `not_implemented` is excluded deliberately: no
@@ -653,7 +660,22 @@ def _state_for_direction(row: Any, direction: str) -> dict[str, Any]:
     """
     health = row.health if isinstance(row.health, dict) else {}
     entry = health.get(direction)
-    if not isinstance(entry, dict) or not entry.get("checked_at"):
+    stored_state = (
+        str(entry.get("state") or "").strip() if isinstance(entry, dict) else ""
+    )
+    # A health entry is **the outcome of a real call**, and the only outcomes
+    # are `verified_ok` and `verified_failing`. The other states in `STATES`
+    # describe the *absence* of one, so an entry carrying one of those is not
+    # an outcome at all — it is a record that no call happened, whatever else
+    # it has in it.
+    #
+    # This is forgiving on purpose. A "no connector yet" result was written
+    # into this map on 2026-10-20, and once it carried a timestamp it reached
+    # the unrecognised-state branch below and reported FAILING to an operator
+    # whose credential was fine. The writer no longer does that; this makes
+    # the rows already written read correctly without touching them.
+    if not isinstance(entry, dict) or not entry.get("checked_at") \
+            or stored_state in _NON_OUTCOME_STATES:
         # No call has been made. **Why not** is the part that matters, and
         # telling an operator to "run Test connection" for a tool with no
         # connector is an instruction they cannot carry out — they configured
@@ -681,7 +703,7 @@ def _state_for_direction(row: Any, direction: str) -> dict[str, Any]:
                 "with it. Saved is not working — run Test connection."
             ),
         }
-    state = str(entry.get("state") or "").strip()
+    state = stored_state
     if state not in (VERIFIED_OK, VERIFIED_FAILING):
         # An unrecognised stored state is not quietly read as healthy.
         return {

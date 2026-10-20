@@ -532,3 +532,60 @@ def test_record_health_stamps_the_timestamp_the_reader_requires():
         "record_health no longer guarantees checked_at; every caller must "
         "now remember it, and one will not"
     )
+
+
+def test_a_non_outcome_in_the_health_map_is_not_read_as_a_failure():
+    """A health entry is the outcome of a real call. The other states describe
+    the absence of one.
+
+    On 2026-10-20 a "no connector yet" result was written into this map. Once
+    it carried a timestamp it reached the unrecognised-state branch and the
+    card read **FAILING** — to an operator whose credential was correct, taken
+    from a working automation. Three wrong answers in a row from the same
+    small mistake: first "run Test connection", then "not verified", then
+    "failing".
+    """
+    from types import SimpleNamespace
+
+    from app.services.integration_status_service import (
+        CONFIGURED_UNVERIFIED, INGEST, VERIFIED_FAILING, _state_for_direction,
+    )
+
+    stored = {INGEST: {
+        "state": CONFIGURED_UNVERIFIED,
+        "reason": "Saved. Exabeam has no connector in this platform yet.",
+        "checked_at": "2026-10-20T10:26:28+00:00",
+        "failure_kind": "not_implemented",
+    }}
+    out = _state_for_direction(SimpleNamespace(tool="exabeam", health=stored), INGEST)
+    assert out["state"] == CONFIGURED_UNVERIFIED, "a non-outcome read as a verdict"
+    assert "no connector" in out["reason"].lower()
+    assert "does not recognise" not in out["reason"]
+
+    # The control, and the reason that branch exists: a state this code has
+    # genuinely never seen must NOT be read as working.
+    unknown = {INGEST: {"state": "something_new",
+                        "checked_at": "2026-10-20T10:26:28+00:00"}}
+    out = _state_for_direction(SimpleNamespace(tool="falcon", health=unknown), INGEST)
+    assert out["state"] == VERIFIED_FAILING
+    assert out["failure_kind"] == "unrecognised"
+
+
+def test_the_verify_path_writes_nothing_when_there_was_no_call():
+    """The fix for the above at the writing end.
+
+    Deriving the absence is right; recording it as an outcome is a category
+    error — "no call happened" does not belong in the map that answers "what
+    happened when we called".
+    """
+    import inspect
+
+    from app.api import integrations as api
+
+    source = inspect.getsource(api._verify_now)
+    guard = source.index("has_connector")
+    after = source[guard:source.index("verifier = _verifier_for(tool)")]
+    assert "record_health" not in after, (
+        "the no-connector branch records health again; that entry is what "
+        "made a correct credential report FAILING"
+    )
