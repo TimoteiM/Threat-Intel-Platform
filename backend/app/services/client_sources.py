@@ -146,8 +146,13 @@ PLATFORMS: dict[str, PlatformSpec] = {
     # values for fields I had invented, one of which ("the search base URL")
     # has no obvious answer because it was not a real setting.
     #
-    # This set comes from the TraceCat automation that already talks to this
-    # Exabeam: **a username and a token**, and one base URL. A field nobody
+    # This set comes from Exabeam's own API reference for
+    # `POST /search/v2/events`: OAuth2 with an `Authorization: Bearer` token,
+    # against `api.<region>.exabeam.cloud`. That supersedes the earlier
+    # `username` + `token` pair, which was inferred from a sentence about a
+    # TraceCat automation rather than read from the API contract — the host
+    # matters as much as the fields, and the one an operator entered was the
+    # Advanced Analytics web address, which is a different system. A field nobody
     # can fill is worse than a field that is missing, so anything not
     # evidenced is left out until the connector needs it — adding one later
     # is cheap.
@@ -156,11 +161,17 @@ PLATFORMS: dict[str, PlatformSpec] = {
         label="Exabeam",
         category="siem",
         config_fields={
-            "base_url": "Base URL of this client's Exabeam, e.g. https://aa.client.exabeam.com",
+            "base_url": (
+                "The Exabeam API host, e.g. https://api.eu.exabeam.cloud — NOT "
+                "the Advanced Analytics web address. The search API lives at "
+                "api.<region>.exabeam.cloud."
+            ),
         },
         secret_fields={
-            "username": "The service account the API calls authenticate as.",
-            "token": "That account's API token. Never shared between clients.",
+            "token": (
+                "The OAuth2 bearer token, sent as `Authorization: Bearer`. "
+                "Never shared between clients."
+            ),
         },
         required=("base_url",),
     ),

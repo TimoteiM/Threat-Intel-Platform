@@ -33,7 +33,7 @@ assertion.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,12 +82,30 @@ class OpenedCredential:
     client_id: str
     client_secret: str
     config: dict[str, Any]
+    #: Every stored secret field, by the name the spec declares.
+    #:
+    #: `client_id` and `client_secret` above are the two Falcon happens to
+    #: use, and until 2026-10-20 they were the *only* two a connector could
+    #: reach: this class named them literally, so a spec declaring anything
+    #: else — Exabeam's bearer `token`, Cortex's `api_key_id` — had its
+    #: credential sealed correctly and then dropped on the way out. The spec
+    #: said one thing and the opener assumed another.
+    #:
+    #: Defaults to empty rather than being required, so existing callers that
+    #: construct this with two positional secrets keep working.
+    secrets: dict[str, str] = field(default_factory=dict)
+
+    def get(self, name: str, default: str = "") -> str:
+        """One declared secret field by name. Never logged, never returned."""
+        return str(self.secrets.get(name) or default)
 
     def __repr__(self) -> str:  # pragma: no cover - defensive
+        # Field NAMES are safe and useful — "which of these is missing" is the
+        # first question when a connector fails. Values never appear.
+        names = ",".join(sorted(self.secrets)) or "client_id,client_secret"
         return (
             f"OpenedCredential(tenant_id={self.tenant_id!r}, "
-            f"tool={self.tool!r}, client_id='[redacted]', "
-            f"client_secret='[redacted]')"
+            f"tool={self.tool!r}, secrets=[{names}] all '[redacted]')"
         )
 
     __str__ = __repr__
@@ -245,6 +263,7 @@ async def open_for_tenant(
         client_id=str(blob.get("client_id") or ""),
         client_secret=str(blob.get("client_secret") or ""),
         config=row.config if isinstance(row.config, dict) else {},
+        secrets={k: str(v) for k, v in blob.items() if v is not None},
     )
 
 
@@ -290,6 +309,7 @@ def open_for_tenant_sync(tenant_id: str, tool: str) -> OpenedCredential:
             client_id=str(blob.get("client_id") or ""),
             client_secret=str(blob.get("client_secret") or ""),
             config=row.config if isinstance(row.config, dict) else {},
+            secrets={k: str(v) for k, v in blob.items() if v is not None},
         )
 
 

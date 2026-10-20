@@ -396,11 +396,26 @@ async def _verify_now(
         return result
 
     verifier = _verifier_for(tool)
-    result = verifier(
-        client_id=opened.client_id,
-        client_secret=opened.client_secret,
-        config=opened.config,
-    )
+    # `secrets` only when the verifier declares it.
+    #
+    # Falcon's `verify` takes `client_id`/`client_secret` and nothing else, so
+    # passing the whole blob unconditionally would break the one connector
+    # that works. A connector whose credential is not a client id and secret
+    # — Exabeam's bearer token — declares `secrets` and receives it. Decided
+    # by the callee's own signature rather than by a list of tool names here.
+    import inspect
+
+    call: dict[str, Any] = {
+        "client_id": opened.client_id,
+        "client_secret": opened.client_secret,
+        "config": opened.config,
+    }
+    try:
+        if "secrets" in inspect.signature(verifier).parameters:
+            call["secrets"] = opened.secrets
+    except (TypeError, ValueError):  # pragma: no cover - builtins have no signature
+        pass
+    result = verifier(**call)
     await creds.record_health(
         db, tenant_id=tenant_id, tool=tool,
         direction=str(result.get("direction") or status.ENRICHMENT),

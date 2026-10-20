@@ -409,7 +409,10 @@ def test_declaring_a_spec_does_not_claim_a_connector():
     from app.services.integration_status_service import catalogue, has_connector
 
     cat = catalogue()
-    for tool in ("exabeam", "sentinelone", "cortex"):
+    # Exabeam moved on 2026-10-20: `app/integrations/exabeam_client.py` was
+    # built against the published search API, so it is no longer in this
+    # list. The test said that would happen and it did.
+    for tool in ("sentinelone", "cortex"):
         assert tool in cat, f"{tool} should still be in the catalogue"
         assert has_connector(tool) is False, (
             f"{tool} reports a connector; if one was built, this test and the "
@@ -418,6 +421,7 @@ def test_declaring_a_spec_does_not_claim_a_connector():
     # The control: a tool that DOES have a connector must say so, or the
     # check above would pass with `has_connector` returning False always.
     assert has_connector("falcon") is True
+    assert has_connector("exabeam") is True
     assert has_connector("opensearch") is True, (
         "deployment-managed tools answer through their verifier, not an "
         "app.integrations module"
@@ -453,10 +457,11 @@ def test_the_catalogue_payload_tells_the_ui_which_are_testable():
 
     payload = {spec.tool: spec.as_json() for spec in catalogue().values()}
     assert payload["falcon"]["implemented"] is True
-    assert payload["exabeam"]["implemented"] is False
+    assert payload["exabeam"]["implemented"] is True
+    assert payload["sentinelone"]["implemented"] is False
     # The fields are still declared, so the form can still be rendered.
-    assert payload["exabeam"]["config_fields"]
-    assert payload["exabeam"]["secret_fields"]
+    assert payload["sentinelone"]["config_fields"]
+    assert payload["sentinelone"]["secret_fields"]
 
 
 def test_the_verify_path_records_a_state_instead_of_raising():
@@ -501,12 +506,13 @@ def test_an_untestable_tool_is_not_told_to_run_a_test():
         CONFIGURED_UNVERIFIED, INGEST, _state_for_direction,
     )
 
-    no_connector = SimpleNamespace(tool="exabeam", health={})
+    no_connector = SimpleNamespace(tool="sentinelone", health={})
     out = _state_for_direction(no_connector, INGEST)
     assert out["state"] == CONFIGURED_UNVERIFIED
     assert out["failure_kind"] == "not_implemented"
     assert "no connector" in out["reason"].lower()
     assert "Test connection" not in out["reason"]
+    assert "SentinelOne" in out["reason"], "the label should name the tool"
 
     # The control: a tool that HAS a connector still gets the instruction,
     # because for that one it is an instruction worth following.
@@ -553,11 +559,11 @@ def test_a_non_outcome_in_the_health_map_is_not_read_as_a_failure():
 
     stored = {INGEST: {
         "state": CONFIGURED_UNVERIFIED,
-        "reason": "Saved. Exabeam has no connector in this platform yet.",
+        "reason": "Saved. SentinelOne has no connector in this platform yet.",
         "checked_at": "2026-10-20T10:26:28+00:00",
         "failure_kind": "not_implemented",
     }}
-    out = _state_for_direction(SimpleNamespace(tool="exabeam", health=stored), INGEST)
+    out = _state_for_direction(SimpleNamespace(tool="sentinelone", health=stored), INGEST)
     assert out["state"] == CONFIGURED_UNVERIFIED, "a non-outcome read as a verdict"
     assert "no connector" in out["reason"].lower()
     assert "does not recognise" not in out["reason"]
