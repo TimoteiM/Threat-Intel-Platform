@@ -341,6 +341,19 @@ fi
 # out of 3,281 tests, and the integration suite skips when the server is
 # unreachable. A grant regression is therefore invisible to `pytest` and
 # visible here.
+# Prints "<role> super|notsuper", or nothing if it cannot connect. A role it
+# cannot read is NOT a pass: "could not check" is not "it matches".
+_role_py='
+from sqlalchemy import create_engine, text
+from app.config import get_settings
+from app.db.session import _explicit_driver
+e = create_engine(_explicit_driver(get_settings().database_sync_url))
+with e.connect() as c:
+    who = c.execute(text("SELECT current_user")).scalar()
+    sup = c.execute(text("SELECT usesuper FROM pg_user WHERE usename=current_user")).scalar()
+print(who, "super" if sup else "notsuper")
+'
+
 priv_bad=0
 priv_out="$(./scripts/check_db_privileges.sh 2>&1)"
 case $? in
@@ -353,6 +366,39 @@ case $? in
     *) priv_bad=1
        line="$line · DB PRIVILEGES NOT CHECKED" ;;
 esac
+
+# ── The application's own connection is not an owner ──
+#
+# The grants and the row-level policy are both properties of the ROLE the
+# application connects as, so a correct database plus a misdirected
+# DATABASE_SYNC_URL is an unprotected deployment. Until 2026-10-20 the host
+# `.env` pointed that variable at `threatintel` — superuser and owner — so RLS
+# exempted everything run from the host venv while the containers were
+# protected. Checked in both places, because "it works in the container" was
+# exactly the wrong conclusion that divergence invites.
+role_bad=0
+role_note=""
+for where in host api; do
+    # `tail -1`: importing app.config prints a banner, so the answer is the
+    # last line, not the whole capture.
+    if [[ "$where" == host ]]; then
+        who=$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && \
+              .venv/bin/python -c "$_role_py" 2>/dev/null | tail -1)
+    else
+        who=$(docker compose exec -T -e PYTHONPATH=/app api \
+              python -c "$_role_py" 2>/dev/null | tr -d '\r' | tail -1)
+    fi
+    case "$who" in
+        "tip_app notsuper") ;;
+        "") role_bad=1; role_note="$role_note $where:unreadable" ;;
+        *)  role_bad=1; role_note="$role_note $where:$who" ;;
+    esac
+done
+if (( role_bad )); then
+    line="$line · APP ROLE WRONG:${role_note} — DATABASE_SYNC_URL must be tip_app"
+else
+    line="$line · app role ok"
+fi
 
 echo "$line"
 
@@ -402,4 +448,7 @@ fi
 # No dirty-tree exemption: a grant is a property of the database, not of the
 # working tree, so an edit cannot move it and there is nothing to excuse.
 (( priv_bad == 0 )) || exit 1
+# Same reasoning as the privileges limb: the role a process connects as is not
+# a property of the working tree, so there is no dirty-tree exemption.
+(( role_bad == 0 )) || exit 1
 (( env_bad == 0 )) || exit 1

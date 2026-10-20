@@ -28,7 +28,6 @@ VALID = """
 version: 1
 clients:
   - tenant_id: c00
-    name: Client Zero
     platforms:
       - platform: exabeam
         connection:
@@ -116,8 +115,11 @@ def test_the_credential_service_accepts_these_tools():
 def test_a_valid_map_loads(tmp_path):
     loaded = cs.load(_write(tmp_path, VALID))
     assert set(loaded) == {"c00"}
-    assert loaded["c00"].name == "Client Zero"
     assert loaded["c00"].platforms() == ("exabeam", "sentinelone")
+    assert not hasattr(loaded["c00"], "name"), (
+        "the map carries a client name again; it duplicates tenants.name and "
+        "puts the customer list in the repository"
+    )
     assert loaded["c00"].sources[0].connection["base_url"] == "https://aa.c00.example"
 
 
@@ -156,7 +158,6 @@ def test_a_missing_required_field_is_refused(tmp_path):
 version: 1
 clients:
   - tenant_id: c00
-    name: Client Zero
     platforms:
       - platform: cortex
         connection:
@@ -176,7 +177,6 @@ def test_an_empty_value_is_refused(tmp_path):
 def test_a_duplicate_tenant_is_refused(tmp_path):
     body = VALID + """
   - tenant_id: c00
-    name: Client Zero Again
     platforms: []
 """
     with pytest.raises(SourceMapInvalid) as exc:
@@ -320,3 +320,31 @@ def test_bind_tenant_passes_the_tenant_as_a_parameter_not_as_sql():
     assert "c00" not in seen["sql"], "the tenant id was formatted into the SQL"
     assert seen["params"]["value"] == "c00'; RESET ROLE; --"
     assert seen["params"]["name"] == cs.TENANT_SETTING
+
+
+# ── the name belongs to the database, not the file ───────────────────────
+
+
+def test_a_client_name_in_the_file_is_refused(tmp_path):
+    """Refused, not ignored.
+
+    A `name:` the loader skipped would look like it worked, and the next
+    person would add the whole customer list — which is the thing keeping it
+    out of the repository prevents. The refusal names where the value lives.
+    """
+    body = VALID.replace("  - tenant_id: c00\n",
+                         "  - tenant_id: c00\n    name: Client Zero\n")
+    with pytest.raises(SourceMapInvalid) as exc:
+        cs.load(_write(tmp_path, body))
+    message = str(exc.value)
+    assert "tenants.name" in message
+    assert "--render" in message, "the refusal must say how to read the map instead"
+
+
+def test_the_entry_exposes_no_name_attribute():
+    """Asserted on the type, not on an instance, so an entry built by any path
+    cannot carry one."""
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(cs.ClientEntry)}
+    assert fields == {"tenant_id", "sources"}, fields

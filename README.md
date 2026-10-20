@@ -931,7 +931,24 @@ and the API, the worker, beat and Alembic all connected as it.
 |---|---|---|---|
 | `DATABASE_URL` (async) / `DATABASE_SYNC_URL` (sync) | `tip_app` | the API, the worker, beat | `SELECT, INSERT, UPDATE, DELETE` on the application tables. **No DDL.** No access to `investigation_token_maps`. `SELECT` only on `alembic_version`. |
 | `DATABASE_SANITIZER_URL` (sync) | `tip_sanitizer` | the token boundary alone | DML on `investigation_token_maps` **and nothing else in the database**. |
-| `DATABASE_MIGRATION_URL` (sync) | `threatintel` | **Alembic only** | everything. Never held by a serving process. |
+| `DATABASE_MIGRATION_URL` (sync) | `threatintel` | **Alembic, the integration scratch database, and `scripts/apply_client_sources.py`** | everything. Never held by a serving process. |
+
+**The same roles on the host as in the container.** Until 2026-10-20 `.env`
+pointed the application URLs at `threatintel` for host-side use, so anything
+run from the host venv connected as the owner — and row-level security exempts
+an owner, which meant the isolation policy on `tenant_integrations` protected
+the containers and nothing else. Both now point at `tip_app`, ownership is
+asked for by name through `DATABASE_MIGRATION_URL`, and `scripts/liveness.sh`
+fails if either the host or the container resolves the application URL to a
+superuser.
+
+**Row-level security.** `tenant_integrations` carries a policy of
+`tenant_id = current_setting('app.tenant_id')`, so a query from the
+application role sees one client's rows, a query that explicitly asks for
+another client's gets none, and an unbound session gets none at all. It binds
+only because `tip_app` owns nothing and has no `BYPASSRLS` — the role split
+above is what makes it more than decoration. See
+`docs/design/client-source-map.md`.
 
 Defined in `scripts/db_roles.sql`; applied by `scripts/provision_db_roles.sh`,
 which generates the two passwords into `.env` (gitignored) and never prints

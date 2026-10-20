@@ -217,10 +217,16 @@ class ClientSource:
 
 @dataclass(frozen=True)
 class ClientEntry:
-    """One client and every platform it runs."""
+    """One client and every platform it runs.
+
+    **No name.** The client's name is `tenants.name` in the database, and a
+    copy of it here could disagree with the row it duplicates. It also keeps
+    the customer list out of the repository's history, which no rotation
+    undoes. `scripts/apply_client_sources.py --render` joins the names back on
+    for anyone who wants to read the map.
+    """
 
     tenant_id: str
-    name: str
     sources: tuple[ClientSource, ...] = field(default_factory=tuple)
 
     def platforms(self) -> tuple[str, ...]:
@@ -275,7 +281,19 @@ def load(path: Path | str | None = None) -> dict[str, ClientEntry]:
                 f"Two entries for one client means one of them is being "
                 f"ignored, and which one depends on iteration order."
             )
-        name = str(entry.get("name") or "").strip()
+        # Refused, not ignored. A `name:` that the loader skipped would look
+        # like it worked, and the next person would add the whole customer
+        # list — which is the thing this decision keeps out of the repository.
+        # The error says where the name actually lives.
+        if "name" in entry:
+            raise SourceMapInvalid(
+                f"{where}: `name` is not part of the source map. A client's "
+                f"name is `tenants.name` in the database; a copy here can "
+                f"disagree with it, and committing it puts the customer list "
+                f"in the repository's history. Use "
+                f"`scripts/apply_client_sources.py --render` to read the map "
+                f"with names joined on."
+            )
         platforms = entry.get("platforms") or []
         if not isinstance(platforms, list):
             raise SourceMapInvalid(f"{where}: `platforms` must be a list")
@@ -331,9 +349,7 @@ def load(path: Path | str | None = None) -> dict[str, ClientEntry]:
                 connection={k: str(v) for k, v in connection.items()},
             ))
 
-        out[tenant_id] = ClientEntry(
-            tenant_id=tenant_id, name=name, sources=tuple(sources)
-        )
+        out[tenant_id] = ClientEntry(tenant_id=tenant_id, sources=tuple(sources))
     return out
 
 

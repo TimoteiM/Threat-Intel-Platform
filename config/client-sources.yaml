@@ -26,6 +26,11 @@
 #   * every `required` field for the platform must be present and non-empty
 #   * `tenant_id` must be unique across clients, and unique per platform within
 #     a client
+#   * `name` is REFUSED. A client's name is `tenants.name` in the database; a
+#     copy here can disagree with the row it duplicates, and committing it
+#     would put the customer list in this repository's history, which no
+#     rotation undoes. To read the map with names joined on, run
+#     `scripts/apply_client_sources.py --render`
 #   * a key that looks like a secret (token, key, password, secret) under
 #     `connection` is a refusal naming the field, because the one thing this
 #     file must never carry is the thing that grants access
@@ -49,23 +54,42 @@ version: 1
 # `reconcile()` reports an empty map, rather than the platform believing in a
 # client called "example".
 #
+# ─── the shape, with one worked example ────────────────────────────────────
+#
+# `zz-example` is a fake tenant running all three platforms, so the shape is
+# visible without any real client in the file. It is commented out: live, it
+# would be a client the platform believes in, and `--render` would report it as
+# having no row in `tenants`.
+#
+# Every value below is made up. The field names are not — they are the
+# platforms' declared `config_fields`, and anything else is refused.
+#
 # clients:
-#   - tenant_id: c00                      # must match tenants.tenant_id
-#     name: Example Client NV             # for reports; not an identifier
+#   - tenant_id: zz-example          # must match tenants.tenant_id exactly
 #     platforms:
+#
 #       - platform: exabeam
 #         connection:
-#           base_url: https://example.exabeam.local
-#           data_lake_url: https://example-dl.exabeam.local
-#           site_id: example-site
-#         # credentials: set via the API, never here
+#           base_url: https://aa.zz-example.internal        # required
+#           data_lake_url: https://dl.zz-example.internal   # optional
+#           site_id: zz-example-main                        # optional
+#         # credential (api_key) is set through the API, never here
+#
 #       - platform: sentinelone
 #         connection:
-#           console_url: https://example.sentinelone.net
-#           site_ids: s-1234,s-5678
+#           console_url: https://zz-example.sentinelone.net  # required
+#           site_ids: s-1111111111,s-2222222222              # optional
+#           account_id: a-3333333333                         # optional
+#         # credential (api_token) — scoped to THESE site ids only
+#
 #       - platform: cortex
 #         connection:
-#           api_url: https://api-example.xdr.paloaltonetworks.com
-#           tenant_name: example
+#           api_url: https://api-zz-example.xdr.paloaltonetworks.com  # required
+#           tenant_name: zz-example                                   # optional
+#         # credentials (api_key, api_key_id)
+#
+# A client running only one platform has a one-entry `platforms:` list. A
+# client running none has `platforms: []`, which is a different and honest
+# state from not being in this file at all.
 
 clients: []

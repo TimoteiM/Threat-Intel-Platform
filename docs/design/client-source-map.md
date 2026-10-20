@@ -126,12 +126,38 @@ no policy in this database can undo that. If the provider will only issue a
 broad key, that is worth knowing before the structure is populated, because
 the answer is a different integration design, not a different config file.
 
-**5. A decision that is yours, not mine:** should customer names live in a git
-repository? The file currently needs `name:` per client, which would put
-Telenet's customer list in the repo's history. The alternative is the file
-carrying only `tenant_id` — an opaque code — with names held in the `tenants`
-table and joined at render time. I have not chosen; the file supports both,
-and `name` is not an identifier anywhere in the code.
+**5. Names are not needed — decided 2026-10-20.** The map carries `tenant_id`
+only. A name in the file would duplicate `tenants.name` and could disagree
+with the row it copies, and it would put the customer list in the
+repository's history, which no rotation undoes. A `name:` key is now
+**refused** by the loader rather than ignored, because a skipped key looks
+like it worked and invites the whole list.
+
+To read the map with names on, `scripts/apply_client_sources.py --render`
+joins them from `tenants`:
+
+```
+zz-example  —  Example Client NV
+    Exabeam (exabeam)
+        base_url = https://aa.zz-example.internal
+        data_lake_url = https://dl.zz-example.internal
+        site_id = zz-example-main
+        credentials (set via API, not shown here): api_key
+    SentinelOne (sentinelone)
+        account_id = a-3333333333
+        console_url = https://zz-example.sentinelone.net
+        site_ids = s-1111111111,s-2222222222
+        credentials (set via API, not shown here): api_token
+    Cortex XDR (cortex)
+        api_url = https://api-zz-example.xdr.paloaltonetworks.com
+        tenant_name = zz-example
+        credentials (set via API, not shown here): api_key, api_key_id
+```
+
+A tenant in the map with no row in `tenants` renders as
+`** NOT IN tenants — onboard this tenant first **` and exits 1, rather than
+printing a blank name — a blank would read as a client whose name nobody
+filled in, when the client does not exist in the database at all.
 
 ## What onboarding a new client would look like
 
@@ -160,11 +186,52 @@ because step 2 was done correctly.
 
 ---
 
+## The host/container divergence, closed 2026-10-20
+
+Until today `.env` pointed `DATABASE_SYNC_URL` at `threatintel` — superuser
+and owner of every table — for host-side use, while the containers used
+`tip_app`. **Row-level security exempts an owner**, so the policy protected
+the containers and nothing run from the host venv. The isolation test caught
+it only because one assertion checked the fail-closed direction and read 2
+rows from a session bound to nobody; the cross-tenant assertion alone would
+have gone green.
+
+A control that holds in the container and not on a laptop is one ad-hoc script
+away from a wrong conclusion about whether it holds at all.
+
+**What changed:**
+
+| variable | role | read by |
+|---|---|---|
+| `DATABASE_URL`, `DATABASE_SYNC_URL` | `tip_app` | everything that serves a request, in the container **and** on the host |
+| `DATABASE_SANITIZER_URL` | `tip_sanitizer` | the token boundary alone |
+| `DATABASE_MIGRATION_URL` | `threatintel` | `alembic/env.py`, `tests/integration/_scratch_db.py` (CREATE DATABASE), `scripts/apply_client_sources.py` — **nothing that serves a request** |
+
+**Ownership is asked for by name.** There is no fallback: a caller that needs
+DDL or a cross-tenant write names `database_migration_url`. Audited — those
+three are its only readers, and every other consumer of a database URL takes
+the application one.
+
+**Two controls, so it cannot drift back:**
+
+* `scripts/liveness.sh` has an **app role** limb. It connects on
+  `DATABASE_SYNC_URL` from both the host venv and the api container and fails
+  unless each answers `tip_app` and not-superuser. A role it cannot read is a
+  failure too, because "could not check" is not "it matches". No dirty-tree
+  exemption: the role a process connects as is not a property of the working
+  tree.
+* `tests/integration/test_client_source_isolation.py` now reads
+  `database_sync_url` again — the real variable — and asserts the role it got
+  is `tip_app`, not a superuser, and not the table's owner, before any
+  isolation assertion runs. Together those make the test file a control on
+  the divergence: re-point the URL and it fails loudly instead of passing
+  vacuously, which is the opposite of what happened the first time.
+
 ## Still open
 
 | | |
 |---|---|
-| **Host-side tooling connects as the owner.** `.env` points `DATABASE_SYNC_URL` at `threatintel`, so anything run from the host venv — including tests, unless they build their own connection — bypasses the row-level policy. The containers use `tip_app`. Pointing the host variable at `tip_app` would make host runs match production; it is a one-line change I have not made because it affects whatever else is run from that venv, and because `DATABASE_MIGRATION_URL` already covers the cases that genuinely need the owner. |
+| ~~Host-side tooling connects as the owner.~~ **Closed 2026-10-20** — see "The host/container divergence" above. |
 | **No connectors.** Nothing yet reads from Exabeam, SentinelOne or Cortex. The specs declare the shape; the query path that will use them does not exist. |
 | **The credential columns are not separately restricted.** `tip_app` can read `tenant_integrations.secret_ciphertext` (it is encrypted, and `integration_credential_service` is the only decrypting module, write-only and scope-enforced). A column-level grant plus a dedicated role — the pattern used for the token map — would narrow it further. Not done: it needs the credential service to hold its own connection, which is a bigger change than this one. |
 | **`apply --apply` never deletes.** A row in the database the file does not declare is reported and left alone. Deleting would mean a YAML edit can disconnect a client's platform. |

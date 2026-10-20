@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -47,46 +46,31 @@ def _owner_engine():
 
 
 def _app_engine():
-    """A connection as `tip_app` specifically, built rather than inherited.
+    """The application's own connection, as configured.
 
-    **Not `database_sync_url`.** On this box `.env` still points that at
-    `threatintel` for host-side use, so a host test run would connect as the
-    table's owner — which bypasses row-level security and makes every
-    assertion below pass for the wrong reason. The first version of this file
-    did inherit it, and the fail-closed test caught it by reading 2 rows from
-    an unbound session.
+    **`database_sync_url`, deliberately.** An earlier version of this file
+    built the `tip_app` connection by hand, because on 2026-10-19 that
+    variable still pointed at `threatintel` on the host — superuser and table
+    owner, which row-level security exempts — so the isolation assertions
+    below passed while nothing was isolated. The fail-closed test caught it by
+    reading 2 rows from a session bound to nobody.
 
-    The role is the subject of these tests, so it is named here. The password
-    comes from the environment that `scripts/provision_db_roles.sh` wrote.
+    That divergence was closed on 2026-10-20: the host `.env` now points the
+    application URLs at `tip_app`, the same role the containers use, and the
+    owning connection lives under `DATABASE_MIGRATION_URL` where anything
+    needing ownership asks for it by name.
+
+    So this reads the real variable again — and the fixture asserts the role it
+    got. **Those two together make this file a control on the divergence**: if
+    anyone re-points the application URL at an owner, these tests fail loudly
+    instead of passing vacuously, which is the opposite of what happened the
+    first time.
     """
     from app.config import get_settings
+    from app.db.session import _explicit_driver
 
-    password = (os.environ.get("TIP_APP_PASSWORD") or "").strip()
-    if not password:
-        password = _password_from_env_file("TIP_APP_PASSWORD")
-    if not password:
-        pytest.skip(
-            "TIP_APP_PASSWORD is not available, so a connection as the "
-            "restricted role cannot be built. Run scripts/provision_db_roles.sh. "
-            "These tests are skipped rather than run as whatever "
-            "DATABASE_SYNC_URL happens to point at: as the table owner they "
-            "would all pass and prove nothing."
-        )
-    base = make_url(get_settings().database_migration_url)
-    url = base.set(drivername="postgresql+psycopg2",
-                   username="tip_app", password=password)
-    return create_engine(url, poolclass=NullPool)
-
-
-def _password_from_env_file(name: str) -> str:
-    """Read one value out of .env without exporting the whole file."""
-    env_file = Path(__file__).resolve().parents[3] / ".env"
-    if not env_file.exists():
-        return ""
-    for line in env_file.read_text().splitlines():
-        if line.startswith(f"{name}="):
-            return line.split("=", 1)[1].strip()
-    return ""
+    return create_engine(_explicit_driver(get_settings().database_sync_url),
+                         poolclass=NullPool)
 
 
 def _reachable(engine) -> bool:
@@ -107,8 +91,9 @@ def seeded():
     app_engine = _app_engine()
     if not _reachable(app_engine):
         pytest.skip(
-            "no Postgres reachable as the application role — run "
-            "scripts/provision_db_roles.sh"
+            "no Postgres reachable on the application connection — run "
+            "scripts/provision_db_roles.sh, which creates the role the "
+            "application URLs name"
         )
     # The premise of every assertion below, checked rather than assumed.
     # Row-level security does not apply to a superuser or to the table's
@@ -124,7 +109,12 @@ def seeded():
         table_owner = conn.execute(text(
             "SELECT tableowner FROM pg_tables WHERE tablename = 'tenant_integrations'"
         )).scalar()
-    assert who == "tip_app", f"connected as {who!r}, not the restricted role"
+    assert who == "tip_app", (
+        f"the application connection resolves to {who!r}, not the restricted "
+        f"role. DATABASE_SYNC_URL has been re-pointed; the row-level policy "
+        f"does not apply to an owner and every assertion below would pass "
+        f"while nothing was isolated. scripts/liveness.sh checks this too."
+    )
     assert not is_super, "the restricted role is a superuser; RLS cannot bind"
     assert who != table_owner, f"{who!r} owns the table, so RLS does not apply to it"
     with Session(owner) as db:
@@ -169,7 +159,6 @@ def test_the_resolver_refuses_a_tenant_outside_the_scope(tmp_path):
         "version: 1\n"
         "clients:\n"
         f"  - tenant_id: {TENANT_A}\n"
-        "    name: A\n"
         "    platforms:\n"
         "      - platform: sentinelone\n"
         "        connection:\n"

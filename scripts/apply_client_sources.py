@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Apply config/client-sources.yaml into `tenant_integrations`, or check it.
 
-    scripts/apply_client_sources.py --check    # report differences, change nothing
-    scripts/apply_client_sources.py --apply    # write the file's connection details
+    scripts/apply_client_sources.py --check     # report differences, change nothing
+    scripts/apply_client_sources.py --render    # read the map with client names joined on
+    scripts/apply_client_sources.py --apply     # write the file's connection details
 
 Run inside the api container, which has the application package and the
 database:
 
     docker compose exec -T -e PYTHONPATH=/app api python /app/../scripts/apply_client_sources.py --check
+
+**The map carries no client names.** A name is `tenants.name` in the database;
+a copy in the YAML could disagree with the row it duplicates, and committing
+it would put the customer list in the repository's history, which no rotation
+undoes. `--render` joins the names back on, which is what to run when somebody
+wants to read the map rather than edit it.
 
 **Connection details only. Never credentials.** A credential is set through
 the API into `tenant_integrations.secret_ciphertext`, encrypted under
@@ -67,6 +74,8 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true",
                        help="report differences and change nothing")
+    group.add_argument("--render", action="store_true",
+                       help="print the map with client names joined from `tenants`")
     group.add_argument("--apply", action="store_true",
                        help="write the file's connection details into the database")
     parser.add_argument("--map", default=None, help="an alternative map file")
@@ -85,6 +94,44 @@ def main() -> int:
     with Session(engine) as db:
         who = db.execute(text("SELECT current_user")).scalar()
         print(f"connected as: {who}")
+
+        if args.render:
+            names = {
+                r[0]: (r[1] or "")
+                for r in db.execute(text("SELECT tenant_id, name FROM tenants"))
+            }
+            if not expected:
+                print("\nthe source map declares no clients")
+                return 0
+            print()
+            for tenant_id, entry in sorted(expected.items()):
+                # A tenant in the map with no row in `tenants` is reported as
+                # such rather than printed with a blank name: the blank would
+                # read as a client whose name nobody filled in, when in fact
+                # the client does not exist in the database at all.
+                label = names.get(tenant_id)
+                if label is None:
+                    shown = "** NOT IN tenants — onboard this tenant first **"
+                elif not label.strip():
+                    shown = "(tenants.name is empty)"
+                else:
+                    shown = label
+                print(f"{tenant_id}  —  {shown}")
+                if not entry.sources:
+                    print("    (no platforms declared)")
+                for source in entry.sources:
+                    spec = source.spec
+                    print(f"    {spec.label} ({source.platform})")
+                    for key in sorted(source.connection):
+                        print(f"        {key} = {source.connection[key]}")
+                    secrets = ", ".join(sorted(spec.secret_fields)) or "none"
+                    print(f"        credentials (set via API, not shown here): {secrets}")
+            missing = sorted(set(expected) - set(names))
+            if missing:
+                print(f"\n{len(missing)} tenant(s) in the map with no row in "
+                      f"`tenants`: {', '.join(missing)}")
+                return 1
+            return 0
 
         if args.check:
             findings = client_sources.reconcile(_rows(db), args.map)
