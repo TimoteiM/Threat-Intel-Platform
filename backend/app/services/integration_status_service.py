@@ -460,6 +460,13 @@ class ToolSpec:
             # Names and descriptions only. A secret field is declared so the
             # UI can render an input; its value is never read back.
             "secret_fields": dict(self.secret_fields),
+            # Whether code exists that can talk to this tool, as against
+            # fields being declared for it. The UI needs the difference: a
+            # platform with a spec and no connector can have its connection
+            # details recorded, and cannot be tested. Offering "Save and test"
+            # for one of those is what produced seven HTTP 400s against a
+            # credential that had saved correctly every time.
+            "implemented": has_connector(self.tool),
         }
 
 
@@ -543,6 +550,35 @@ def catalogue() -> dict[str, ToolSpec]:
             secret_fields=dict(getattr(cls, "integration_secret_fields", {}) or {}),
         )
     return out
+
+
+def has_connector(tool: str) -> bool:
+    """Whether code exists that can actually talk to this tool.
+
+    Derived by import, like every other dispatch in this module — a list of
+    implemented tools here would be the tenth hand-maintained registry, and a
+    tool missing from it would be unconfigurable with nothing to say so.
+
+    **A spec and a connector are different things**, which is what this
+    function exists to separate. `client_sources` declares Exabeam,
+    SentinelOne and Cortex so their connection fields have one definition and
+    the credential store knows their shape; none of them has a client module
+    yet. Before this existed, `not_implemented` meant "absent from the
+    catalogue", so declaring a spec silently promoted a platform to
+    configurable-and-testable, and "Save and test" answered HTTP 400 from an
+    import error.
+    """
+    import importlib.util
+
+    spec = catalogue().get(tool)
+    if spec is None:
+        return False
+    if spec.managed == "deployment":
+        return deployment_verifier_for(tool) is not None
+    try:
+        return importlib.util.find_spec(f"app.integrations.{tool}_client") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def deployment_verifier_for(tool: str) -> Any:

@@ -800,15 +800,35 @@ export default function IntegrationsPage() {
                         </label>
                       )
                     )}
+                    {/* A platform whose fields are declared but whose
+                        connector does not exist yet can have its connection
+                        details recorded and cannot be tested. Saying "Save
+                        and test" there promises something the platform cannot
+                        do, and the attempt answered HTTP 400 while the
+                        credential had in fact saved. */}
                     <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
                       Secrets are stored encrypted and are never shown again.
-                      Saving tests the connection immediately; a credential
-                      that fails is saved and shown as failing, with the
-                      reason.
+                      {spec?.implemented === false ? (
+                        <>
+                          {" "}
+                          <strong>No connector exists for {spec.label} yet</strong>,
+                          so what you enter is stored and cannot be tested. It will
+                          show as configured, unverified until one is built.
+                        </>
+                      ) : (
+                        <>
+                          {" "}
+                          Saving tests the connection immediately; a credential
+                          that fails is saved and shown as failing, with the
+                          reason.
+                        </>
+                      )}
                     </div>
                     <div>
                       <Button onClick={() => onSave(t.tool, spec)} disabled={busy === t.tool}>
-                        {busy === t.tool ? "Saving and testing…" : "Save and test"}
+                        {busy === t.tool
+                          ? (spec?.implemented === false ? "Saving…" : "Saving and testing…")
+                          : (spec?.implemented === false ? "Save" : "Save and test")}
                       </Button>
                     </div>
                   </div>

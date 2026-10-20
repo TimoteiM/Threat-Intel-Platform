@@ -360,6 +360,36 @@ async def _verify_now(
         )
         return result
 
+    # A tool whose fields are declared but whose connector does not exist yet.
+    #
+    # `_verifier_for` imports `app.integrations.{tool}_client` and raises HTTP
+    # 400 when there is no module. That turned "Save and test" into an error
+    # for Exabeam, SentinelOne and Cortex the moment their specs joined the
+    # catalogue — and the error was misleading twice over: the credential HAD
+    # been saved a moment earlier by `configure`, and nothing was wrong with
+    # it. Seven saves were recorded against one tenant while the operator was
+    # told each one failed.
+    #
+    # Recorded as a state rather than raised, because "stored, and nothing can
+    # test it yet" is a true description that the page already renders.
+    if not status.has_connector(tool):
+        result = {
+            "state": status.CONFIGURED_UNVERIFIED,
+            "direction": spec.directions[0] if spec.directions else status.INGEST,
+            "reason": (
+                f"Saved. {spec.label} has no connector in this platform yet, so "
+                f"the credential cannot be tested — this is an absence of "
+                f"capability, not a problem with what you entered."
+            ),
+            "failure_kind": "not_implemented",
+        }
+        await creds.record_health(
+            db, tenant_id=tenant_id, tool=tool,
+            direction=str(result["direction"]), result=result,
+            scope=scope, actor=actor,
+        )
+        return result
+
     verifier = _verifier_for(tool)
     result = verifier(
         client_id=opened.client_id,

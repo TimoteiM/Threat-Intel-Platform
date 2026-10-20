@@ -390,3 +390,97 @@ def test_the_category_is_not_hard_coded_in_the_status_service():
             f"{banned!r} is a string literal in integration_status_service; "
             "categories belong on the collectors"
         )
+
+
+# ── a spec is not a connector ────────────────────────────────────────────
+#
+# On 2026-10-20 an operator configured Exabeam seven times and was told each
+# attempt failed with HTTP 400. Every one had saved correctly: the 400 came
+# from the verification step afterwards, where `_verifier_for` imports
+# `app.integrations.exabeam_client` and there is no such module.
+#
+# The cause was mine. `not_implemented` had meant "absent from the
+# catalogue", so declaring the Exabeam/SentinelOne/Cortex specs — which exist
+# so their connection fields have one definition — silently promoted three
+# platforms to configurable-and-testable.
+
+
+def test_declaring_a_spec_does_not_claim_a_connector():
+    from app.services.integration_status_service import catalogue, has_connector
+
+    cat = catalogue()
+    for tool in ("exabeam", "sentinelone", "cortex"):
+        assert tool in cat, f"{tool} should still be in the catalogue"
+        assert has_connector(tool) is False, (
+            f"{tool} reports a connector; if one was built, this test and the "
+            f"'no connector yet' copy in the UI are both stale"
+        )
+    # The control: a tool that DOES have a connector must say so, or the
+    # check above would pass with `has_connector` returning False always.
+    assert has_connector("falcon") is True
+    assert has_connector("opensearch") is True, (
+        "deployment-managed tools answer through their verifier, not an "
+        "app.integrations module"
+    )
+
+
+def test_has_connector_is_derived_not_listed():
+    """Resolved by import, like every other dispatch in this module. A list of
+    implemented tools would be the tenth hand-maintained registry, and a tool
+    missing from it would be unconfigurable with nothing to say so."""
+    import inspect
+
+    from app.services import integration_status_service as st
+
+    source = inspect.getsource(st.has_connector)
+    assert "find_spec" in source
+    for tool in ("exabeam", "sentinelone", "cortex", "falcon"):
+        assert f'"{tool}"' not in source, f"{tool} is named in has_connector"
+
+
+def test_an_unknown_tool_has_no_connector():
+    from app.services.integration_status_service import has_connector
+
+    assert has_connector("no-such-tool") is False
+    assert has_connector("") is False
+
+
+def test_the_catalogue_payload_tells_the_ui_which_are_testable():
+    """The UI needs the difference: a platform with a spec and no connector
+    can have its connection details recorded and cannot be tested. Offering
+    'Save and test' for one of those is what produced the 400s."""
+    from app.services.integration_status_service import catalogue
+
+    payload = {spec.tool: spec.as_json() for spec in catalogue().values()}
+    assert payload["falcon"]["implemented"] is True
+    assert payload["exabeam"]["implemented"] is False
+    # The fields are still declared, so the form can still be rendered.
+    assert payload["exabeam"]["config_fields"]
+    assert payload["exabeam"]["secret_fields"]
+
+
+def test_the_verify_path_records_a_state_instead_of_raising():
+    """`_verify_now` must not raise for a tool with no connector.
+
+    Asserted on the source rather than by calling it, because calling it needs
+    a database and an opened credential; the behaviour under test is the
+    branch order — the `has_connector` check has to come BEFORE
+    `_verifier_for`, which is what raised the 400.
+    """
+    import inspect
+
+    from app.api import integrations as api
+
+    source = inspect.getsource(api._verify_now)
+    guard = source.index("has_connector")
+    # `verifier = _verifier_for(tool)`, the whole assignment: searching for
+    # `_verifier_for(tool)` alone also matches `deployment_verifier_for(tool)`
+    # thirty lines earlier, which made this assertion compare the wrong two
+    # positions and fail for the wrong reason.
+    lookup = source.index("verifier = _verifier_for(tool)")
+    assert guard < lookup, (
+        "_verifier_for runs before the has_connector guard, so a tool with no "
+        "connector still raises instead of recording a state"
+    )
+    assert "CONFIGURED_UNVERIFIED" in source
+    assert "not_implemented" in source
