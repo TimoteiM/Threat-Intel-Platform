@@ -833,28 +833,33 @@ def test_sealing_goes_through_the_deployment_s_configured_key(monkeypatch):
     assert tb._open_sealed(sealed)["[HOST_abc_1]"] == "EXPDC002"
 
 
-def test_the_completion_purge_has_no_caller_yet():
-    """**A pin on an absence.** `purge_investigation` is the normal end of a
-    map, and nothing calls it: the agent loop that would own an investigation
-    does not exist on this branch. So in deployment today the only thing that
-    deletes a map is the 24-hour ceiling — which means the warning it raises
-    would fire for every map, and would be telling the truth.
+def test_the_completion_purge_is_wired_to_the_gathering_loop():
+    """**This test used to assert the opposite, and said so.**
 
-    This fails the moment the loop wires it up, which is the point: the
-    register says "unwired" and must stop saying it then.
+    It pinned an absence: `purge_investigation` existed and nothing called
+    it, because the loop that owns an investigation did not exist. The note
+    attached to it said it would fail the day somebody wired it up, and that
+    the register row claiming "unwired" would then have to be retired. The
+    loop was built on 2026-10-20 and both happened.
+
+    So today the ceiling sweep is a **backstop** rather than the only thing
+    that deletes a map, and its warning means what it says again: a map that
+    reaches 24 hours is one an investigation failed to purge.
     """
     import pathlib
 
     root = pathlib.Path(tb.__file__).resolve().parent.parent
-    callers = [
+    callers = sorted(
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
         if path.name != "token_boundary.py" and "purge_investigation" in path.read_text()
-    ]
-    assert callers == [], (
-        f"purge_investigation now has callers ({callers}); the register's "
-        f"'the completion purge is unwired' row is stale, and the ceiling "
-        f"warning should no longer fire for every map."
+    )
+    assert callers, (
+        "nothing calls purge_investigation; the completion purge is unwired "
+        "again and every token map now lives to the 24-hour ceiling"
+    )
+    assert "services/context_gathering/loop.py" in callers, (
+        f"the gathering loop no longer purges; callers are {callers}"
     )
 
 

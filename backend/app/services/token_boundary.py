@@ -537,6 +537,31 @@ class TokenBoundary:
             return self._tokenize_one(text)
         return node
 
+    def tokenize_value(self, value: str, kind: str) -> str:
+        """Tokenise one value whose class the caller already knows.
+
+        `tokenize()` reads prose and needs context — `computer="FILESERVER"`
+        is a host because of the key beside it, and a bare `EXPDC001` is
+        indistinguishable from an ordinary word (register row 1). A caller
+        holding a join key *knows* it is a host, and had no way to say so:
+        the gathering stage tokenised its selectors with `tokenize()` and a
+        real hostname went straight into the record.
+
+        `kind` is a token prefix — "HOST", "ACCOUNT", "IP". An unknown kind
+        is a programming error and raises, rather than silently returning the
+        value, because silently returning it is the defect this exists to
+        fix.
+        """
+        if kind not in _CONTEXT:
+            raise ValueError(
+                f"unknown token kind {kind!r}; known: "
+                f"{', '.join(sorted(_CONTEXT))}"
+            )
+        text = str(value or "").strip()
+        if not text:
+            return text
+        return self._tokenize_as(text, kind)
+
     def _tokenize_as(self, value: str, kind: str) -> str:
         """One bare value, tokenised as a known class.
 

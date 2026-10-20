@@ -311,6 +311,57 @@ confidently about the wrong estate. The scope therefore lives *in* the token
 
 ---
 
+## 4b. Built against a mock, 2026-10-20
+
+`app/services/context_gathering/` — playbook, agent, loop, mock source. No
+connector and no credentials: the loop, the budget, the stop rule and the
+record are what needed building, and a real platform would have made every
+test cost somebody's quota.
+
+**Measured on the mock corpus, weighted to the real class shares:**
+
+| event class | share | playbook | hop | total | events | from the hop |
+|---|---|---|---|---|---|---|
+| Sysmon 10 process access | 26% | 3 | 0 | 3 | 6 | 0 |
+| Sysmon 18/17 named pipe | 36% | 3 | 0 | 3 | 5 | 0 |
+| Sysmon 18, no hash on the alert | 5% | 2 | 1 | 3 | 5 | **3** |
+| 18456 SQL logon failure | 5% | 4 | 0 | 4 | 4 | 0 |
+| 4738 account change | 1% | 2 | 1 | 3 | 4 | **2** |
+| tail — no playbook row | 19% | 0 | 3 | 3 | 4 | **4** |
+| a host that answers nothing | 8% | 3 | 0 | 3 | 0 | 0 |
+
+**3.05 queries per investigation**, 79% playbook and 21% hop.
+
+**The hop never fires on 75% of the corpus** — every class the playbook
+covers with the alert's own keys. Where it does fire it is the only thing
+that runs (the tail) or it recovers a query the playbook had to skip for a
+missing selector. That is §3's prediction holding: the agent's marginal value
+is in the tail.
+
+**What is real here and what is not.** The class shares are measured over
+7,516 runs. The *shape* of the finding is structural — the hop is defined to
+act only on indicators the alert did not carry, so it cannot fire where the
+playbook already has them. The **event counts are my mock's invention** and
+say nothing about what a real platform returns.
+
+Three defects the mock caught before any of this touched a real platform, all
+of them in the agent rather than the plumbing:
+
+1. it pivoted on `agent.ip` — on every record by construction, so true of
+   every row and able to discriminate between none;
+2. it could not see a **hash at all**, because it looked for token-shaped
+   values and the boundary deliberately leaves a SHA-256 alone;
+3. it required an indicator to appear on two hosts before pivoting, which can
+   never fire on the single-host result that pivoting exists to widen.
+
+And two in the boundary's use, caught by tests rather than by a leak: a bare
+selector like `EXPDC001` has no key beside it so `tokenize()` returned it
+unchanged — `tokenize_value(value, kind)` was added for callers that know the
+class — and a vendor's composite `key`/`id` carries a hostname that no
+detector can see, so those fields are digested rather than tokenised.
+
+---
+
 ## 5. Failure modes
 
 ### Runaway query loops
