@@ -610,3 +610,126 @@ def test_a_report_with_no_agent_query_says_so_rather_than_omitting_it():
 
     composed = report.compose(record=_gather())
     assert "Chosen by the agent: none" in composed
+
+
+# ── the sweep: no raw value on ANY surface the stage produces ────────────
+
+
+#: Values that exist nowhere in the mock corpus, so finding one in an output
+#: means it travelled there from the input rather than being a coincidence.
+SENTINEL_HOST = "ZZSENTINELHOST01"
+SENTINEL_USER = "ZZDOM\\zz_sentinel_user"
+SENTINEL_IP = "203.0.113.77"
+
+
+def test_no_raw_identifier_reaches_any_surface_the_stage_produces():
+    """**Mechanical, not visual.**
+
+    The report section that printed the alert's own fields was found by
+    reading the output. That does not scale and it does not survive the next
+    surface somebody adds, so this enumerates every output the stage has and
+    asserts the sentinels are in none of them.
+
+    A new surface added without a line here is the gap this is meant to
+    close — so the list is asserted to be the complete set of public
+    producers, below.
+    """
+    from app.services.alert_body_investigation_service import _build_log_digest
+    from app.services.context_gathering import projection, report
+
+    from datetime import datetime, timezone
+
+    boundary = tb.in_memory(tenant_id="c00", investigation_id="sweep")
+    record = _gather(
+        boundary=boundary,
+        # Without this the digest builder answers `no_alert_time` and returns
+        # an empty string, and the sweep would pass over it by having nothing
+        # to look at. The length control below caught exactly that.
+        event_time=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc),
+        selectors={"host": SENTINEL_HOST, "user": SENTINEL_USER,
+                   "ip": SENTINEL_IP, "hash": SPREAD_HASH},
+    )
+    context = projection.to_log_context(record)
+
+    # **With autosend ON**, which is not this deployment's setting.
+    #
+    # `_build_log_digest` selects events and then returns an empty digest
+    # unless `alert_log_ai_autosend` is set, so with the default the model
+    # receives nothing and this surface would be swept by having nothing on
+    # it. The configuration worth checking is the one where the text is
+    # actually sent, and a sweep that only passes in the safe configuration
+    # is not a sweep.
+    import app.services.alert_body_investigation_service as svc
+
+    original = svc.get_settings
+
+    class _Autosend:
+        alert_log_ai_autosend = True
+
+        def __getattr__(self, name):
+            return getattr(original(), name)
+
+    svc.get_settings = lambda: _Autosend()
+    try:
+        digest, _ = _build_log_digest(context, "alert body", {"event_id": "10"},
+                                      indicators=[])
+    finally:
+        svc.get_settings = original
+
+    surfaces = {
+        "record.as_json()": record.as_json(),
+        "projection.to_log_context()": context,
+        "projection.sources_block()": projection.sources_block(record),
+        "report.compose()": report.compose(record=record),
+        "analysis digest": digest or "",
+    }
+    for name, surface in surfaces.items():
+        blob = repr(surface)
+        for sentinel in (SENTINEL_HOST, SENTINEL_USER, SENTINEL_IP):
+            assert sentinel not in blob, f"{sentinel!r} reached {name}"
+        # And the control: the surface is not empty, or it would pass by
+        # containing nothing at all.
+        assert len(blob) > 50, f"{name} produced nothing to check"
+
+
+def test_render_is_the_only_surface_that_shows_real_names():
+    """The counterpart of the sweep: exactly one producer detokenises, and a
+    test that only asserted absence everywhere would also pass if the stage
+    produced nothing anybody could read."""
+    from app.services.context_gathering import report
+
+    boundary = tb.in_memory(tenant_id="c00", investigation_id="sweep2")
+    record = _gather(boundary=boundary,
+                     selectors={"host": SENTINEL_HOST, "process": "x", "hash": SPREAD_HASH})
+    assert SENTINEL_HOST not in report.compose(record=record)
+    assert SENTINEL_HOST in report.render(record=record, boundary=boundary)
+
+
+def test_the_sweep_covers_every_public_producer_of_the_stage():
+    """A new output surface added without a line in the sweep would pass by
+    not being looked at — the shape this codebase has found eight times in
+    hand-maintained lists.
+
+    So the set of public functions that build something a caller reads is
+    derived here and compared against what the sweep enumerates.
+    """
+    import inspect
+
+    from app.services.context_gathering import projection, report
+
+    producers = set()
+    for module in (projection, report):
+        for name, obj in vars(module).items():
+            if name.startswith("_") or not inspect.isfunction(obj):
+                continue
+            if obj.__module__ != module.__name__:
+                continue
+            producers.add(f"{module.__name__.rsplit('.', 1)[1]}.{name}")
+
+    swept = {"projection.to_log_context", "projection.sources_block",
+             "report.compose"}
+    detokenising = {"report.render"}
+    assert producers == swept | detokenising, (
+        f"a producer is neither swept nor declared as the detokenising one: "
+        f"{producers - (swept | detokenising)}"
+    )

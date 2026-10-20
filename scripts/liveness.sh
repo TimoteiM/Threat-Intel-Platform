@@ -341,17 +341,16 @@ fi
 # out of 3,281 tests, and the integration suite skips when the server is
 # unreachable. A grant regression is therefore invisible to `pytest` and
 # visible here.
-# Prints "<role> super|notsuper", or nothing if it cannot connect. A role it
-# cannot read is NOT a pass: "could not check" is not "it matches".
+# Every database connection the code can read: present, reachable, and
+# resolving to the role it is supposed to. Prints nothing when clean.
+#
+# `app.db.connection_check` derives the set from `Settings` rather than
+# listing it, so a connection added without an entry saying who it opens as
+# fails here instead of going unchecked.
 _role_py='
-from sqlalchemy import create_engine, text
-from app.config import get_settings
-from app.db.session import _explicit_driver
-e = create_engine(_explicit_driver(get_settings().database_sync_url))
-with e.connect() as c:
-    who = c.execute(text("SELECT current_user")).scalar()
-    sup = c.execute(text("SELECT usesuper FROM pg_user WHERE usename=current_user")).scalar()
-print(who, "super" if sup else "notsuper")
+from app.db.connection_check import check
+for problem in check():
+    print(problem)
 '
 
 priv_bad=0
@@ -367,43 +366,68 @@ case $? in
        line="$line · DB PRIVILEGES NOT CHECKED" ;;
 esac
 
-# ── The application's own connection is not an owner ──
+# ── Database connections: present, and opening as the right role ──
 #
-# The grants and the row-level policy are both properties of the ROLE the
-# application connects as, so a correct database plus a misdirected
-# DATABASE_SYNC_URL is an unprotected deployment. Until 2026-10-20 the host
-# `.env` pointed that variable at `threatintel` — superuser and owner — so RLS
-# exempted everything run from the host venv while the containers were
-# protected. Checked in both places, because "it works in the container" was
-# exactly the wrong conclusion that divergence invites.
+# The grants and the row-level policy are both properties of the ROLE a
+# process connects as, so a correct database plus a misdirected URL is an
+# unprotected deployment. Three faults of that shape in two days, and every
+# one of them was a variable that was NOT SET falling back to a default:
+# the host pointing at the owning superuser while the containers did not, a
+# migration URL that existed nowhere, and a sanitizer URL missed when the
+# other three were fixed.
+#
+# So presence is asserted separately from role — a variable that is absent
+# and a variable that is wrong need different fixes, and only one of them is
+# visible from the database.
+#
+# Checked in BOTH places, because "it works in the container" is exactly the
+# wrong conclusion this class of divergence invites.
 role_bad=0
 role_note=""
+# Initialised because `set -u` is on and the append below is in the failure
+# branch — which had never run until the first control pointed a connection
+# at the wrong role, and then died here instead of reporting it. The limb
+# still exited non-zero, for the wrong reason and with nothing useful said.
+role_detail=""
 for where in host api; do
-    # `tail -1`: importing app.config prints a banner, so the answer is the
-    # last line, not the whole capture.
     if [[ "$where" == host ]]; then
-        who=$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && \
-              .venv/bin/python -c "$_role_py" 2>/dev/null | tail -1)
+        out=$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && \
+              .venv/bin/python -c "$_role_py" 2>&1)
+        status=$?
     else
-        who=$(docker compose exec -T -e PYTHONPATH=/app api \
-              python -c "$_role_py" 2>/dev/null | tr -d '\r' | tail -1)
+        out=$(docker compose exec -T -e PYTHONPATH=/app api \
+              python -c "$_role_py" 2>&1 | tr -d '\r')
+        status=$?
     fi
-    case "$who" in
-        "tip_app notsuper") ;;
-        "") role_bad=1; role_note="$role_note $where:unreadable" ;;
-        *)  role_bad=1; role_note="$role_note $where:$who" ;;
-    esac
+    # Drop the config banner the app prints on import; a problem line never
+    # starts with it.
+    out=$(printf '%s\n' "$out" | grep -v '^\[config\]' | grep -v '^[[:space:]]*$' || true)
+    if (( status != 0 )); then
+        role_bad=1
+        role_note="$role_note ${where}:could-not-check"
+    elif [[ -n "$out" ]]; then
+        role_bad=1
+        # `printf '%s'` emits no trailing newline, so `wc -l` counted one
+        # problem as zero. "0-problem(s)" beside a failure is the kind of
+        # line that gets read as noise.
+        role_note="$role_note ${where}:$(printf '%s\n' "$out" | wc -l | tr -d ' ')-problem(s)"
+        role_detail="$role_detail
+    ${where}: $(printf '%s' "$out" | tr '\n' '; ')"
+    fi
 done
 if (( role_bad )); then
-    line="$line · APP ROLE WRONG:${role_note} — DATABASE_SYNC_URL must be tip_app"
+    line="$line · DB CONNECTIONS WRONG:${role_note}"
 else
-    line="$line · app role ok"
+    line="$line · db connections ok"
 fi
 
 echo "$line"
 
 if (( priv_bad )); then
     printf '%s\n' "$priv_out" | sed 's/^/    /'
+fi
+if (( role_bad )) && [[ -n "${role_detail:-}" ]]; then
+    printf '%s\n' "$role_detail"
 fi
 
 if (( env_bad )) && [[ -n "$_compose_json" ]]; then

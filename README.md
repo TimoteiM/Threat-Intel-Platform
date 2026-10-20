@@ -923,7 +923,7 @@ Investigations can be exported as:
 
 ## Database connections
 
-**Three connections, three privilege levels.** Until 2026-10-19 there was one
+**Four settings, three privilege levels.** Until 2026-10-19 there was one
 role — `threatintel`: superuser, createrole, createdb, owner of every table —
 and the API, the worker, beat and Alembic all connected as it.
 
@@ -937,10 +937,34 @@ and the API, the worker, beat and Alembic all connected as it.
 pointed the application URLs at `threatintel` for host-side use, so anything
 run from the host venv connected as the owner — and row-level security exempts
 an owner, which meant the isolation policy on `tenant_integrations` protected
-the containers and nothing else. Both now point at `tip_app`, ownership is
-asked for by name through `DATABASE_MIGRATION_URL`, and `scripts/liveness.sh`
-fails if either the host or the container resolves the application URL to a
-superuser.
+the containers and nothing else. Both now point at `tip_app` and ownership is
+asked for by name through `DATABASE_MIGRATION_URL`.
+
+**Checked as a class, not an instance.** That divergence was the third fault
+of one shape, and all three were a **variable that was not set** falling back
+to a default: the host application URL resolving to the owner, a
+`DATABASE_MIGRATION_URL` that existed nowhere, and a `DATABASE_SANITIZER_URL`
+missed when the other three were corrected. A default is what makes this
+quiet — the application starts, the connection works, and the principal is
+wrong.
+
+So `app/db/connection_check.py` **derives** the set of connections from
+`Settings` rather than listing it, and for each one asserts that the variable
+is *present* (separately from being correct, because an absent variable and a
+wrong one need different fixes and only one of them is visible from the
+database), that it can be opened, and that it resolves to the role named in
+`CONNECTION_ROLES`. `scripts/liveness.sh` runs it **on the host and in the api
+container** and fails on any of the four: `absent`, `unreachable`,
+`wrong_role`, or `undeclared`.
+
+`undeclared` is the one that makes it a class: a fifth `database_*_url` added
+to `Settings` with no entry saying which role it opens as fails the limb,
+rather than going unexamined because nobody remembered to add it to a list.
+All four kinds have been driven to failure against this deployment, and the
+first control found the limb's own failure branch had never run — `set -u`
+killed it on an uninitialised variable, so it exited non-zero for the wrong
+reason and said nothing useful. `tests/unit/test_db/test_connection_check.py`
+pins each kind.
 
 **Row-level security.** `tenant_integrations` carries a policy of
 `tenant_id = current_setting('app.tenant_id')`, so a query from the
