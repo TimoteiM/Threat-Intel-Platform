@@ -70,10 +70,13 @@ version: 1
 #
 #       - platform: exabeam
 #         connection:
-#           base_url: https://aa.zz-example.internal        # required
-#           data_lake_url: https://dl.zz-example.internal   # optional
-#           site_id: zz-example-main                        # optional
-#         # credential (api_key) is set through the API, never here
+#           base_url: https://aa.zz-example.exabeam.com     # required, and the only one
+#         # credentials (username, token) are set through the API, never here.
+#         # This set comes from a TraceCat automation that already talks to an
+#         # Exabeam — a username and a token. The earlier version of this spec
+#         # invented `data_lake_url`, `site_id` and a single `api_key`, and an
+#         # operator was then asked to find values for fields that were not
+#         # real settings.
 #
 #       - platform: sentinelone
 #         connection:

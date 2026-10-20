@@ -94,7 +94,7 @@ config-field schema all see them with nothing to update.
 
 | platform | connection fields (in the YAML) | required | credential (API only) |
 |---|---|---|---|
-| **exabeam** | `base_url`, `data_lake_url`, `site_id` | `base_url` | `api_key` |
+| **exabeam** | `base_url` | `base_url` | `username`, `token` |
 | **sentinelone** | `console_url`, `site_ids`, `account_id` | `console_url` | `api_token` |
 | **cortex** | `api_url`, `tenant_name` | `api_url` | `api_key`, `api_key_id` |
 
@@ -112,7 +112,12 @@ table today.
 If a client runs something not in that list, say which and it gets a spec.
 
 **3. The connection details per platform**, exactly the fields in the table
-above. Nothing else is accepted — an undeclared key is refused rather than
+above — and treat **SentinelOne and Cortex as unverified**. Exabeam's fields
+now come from a TraceCat automation that works against a real Exabeam: a
+username, a token and one base URL. The other two are still my guess, and the
+first guess cost an operator seven failed save attempts and a hunt for a
+"search base URL" that was never a setting. **Settle them against a working
+call before asking anyone to fill them in.** Nothing else is accepted — an undeclared key is refused rather than
 ignored. If a field I have declared turns out not to exist for a given
 deployment, or one is missing, that is a spec change and worth telling me.
 
@@ -139,10 +144,8 @@ joins them from `tenants`:
 ```
 zz-example  —  Example Client NV
     Exabeam (exabeam)
-        base_url = https://aa.zz-example.internal
-        data_lake_url = https://dl.zz-example.internal
-        site_id = zz-example-main
-        credentials (set via API, not shown here): api_key
+        base_url = https://aa.zz-example.exabeam.com
+        credentials (set via API, not shown here): token, username
     SentinelOne (sentinelone)
         account_id = a-3333333333
         console_url = https://zz-example.sentinelone.net

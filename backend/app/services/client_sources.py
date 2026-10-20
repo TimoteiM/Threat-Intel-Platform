@@ -140,20 +140,37 @@ class PlatformSpec:
 
 
 PLATFORMS: dict[str, PlatformSpec] = {
+    # **Evidenced, not guessed.** The first version of this spec declared
+    # `data_lake_url`, `site_id` and a single `api_key`, none of which came
+    # from anything that works — and the operator was then asked to find
+    # values for fields I had invented, one of which ("the search base URL")
+    # has no obvious answer because it was not a real setting.
+    #
+    # This set comes from the TraceCat automation that already talks to this
+    # Exabeam: **a username and a token**, and one base URL. A field nobody
+    # can fill is worse than a field that is missing, so anything not
+    # evidenced is left out until the connector needs it — adding one later
+    # is cheap.
     "exabeam": PlatformSpec(
         tool="exabeam",
         label="Exabeam",
         category="siem",
         config_fields={
-            "base_url": "Advanced Analytics base URL, e.g. https://aa.client.example",
-            "data_lake_url": "Data Lake / search base URL, if separate from base_url.",
-            "site_id": "The site or instance identifier, when the client runs more than one.",
+            "base_url": "Base URL of this client's Exabeam, e.g. https://aa.client.exabeam.com",
         },
         secret_fields={
-            "api_key": "API key for this client's instance. Never shared between clients.",
+            "username": "The service account the API calls authenticate as.",
+            "token": "That account's API token. Never shared between clients.",
         },
         required=("base_url",),
     ),
+    # **Still a guess, and marked as one.** Unlike Exabeam above, nothing in
+    # this deployment demonstrates SentinelOne's or Cortex's auth shape — no
+    # automation, no connector, no documentation in this repo. The fields
+    # below are plausible and unverified, and they should be settled against
+    # a working call before anybody is asked to fill them in. Doing that for
+    # Exabeam cost an operator seven failed attempts and a hunt for a setting
+    # that did not exist.
     "sentinelone": PlatformSpec(
         tool="sentinelone",
         label="SentinelOne",

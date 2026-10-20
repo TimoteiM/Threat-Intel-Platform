@@ -32,7 +32,6 @@ clients:
       - platform: exabeam
         connection:
           base_url: https://aa.c00.example
-          site_id: c00-main
       - platform: sentinelone
         connection:
           console_url: https://c00.sentinelone.net
@@ -129,7 +128,7 @@ def test_a_secret_shaped_key_is_refused(tmp_path, key):
     """**The refusal that matters most.** This file is committed. A credential
     in it is a credential in the repository's history, where no rotation
     removes it."""
-    body = VALID.replace("          site_id: c00-main", f"          {key}: whatever")
+    body = VALID.replace("          site_ids: s-1,s-2", f"          {key}: whatever")
     with pytest.raises(SourceMapInvalid) as exc:
         cs.load(_write(tmp_path, body))
     assert key in str(exc.value)
@@ -139,7 +138,7 @@ def test_a_secret_shaped_key_is_refused(tmp_path, key):
 def test_an_undeclared_connection_key_is_refused(tmp_path):
     """A typo must not be a setting that is silently ignored — that is how a
     connection ends up pointing at a default nobody chose."""
-    body = VALID.replace("          site_id: c00-main", "          base_rul: oops")
+    body = VALID.replace("          site_ids: s-1,s-2", "          base_rul: oops")
     with pytest.raises(SourceMapInvalid) as exc:
         cs.load(_write(tmp_path, body))
     assert "base_rul" in str(exc.value)
@@ -169,7 +168,7 @@ clients:
 
 
 def test_an_empty_value_is_refused(tmp_path):
-    body = VALID.replace("          site_id: c00-main", '          site_id: ""')
+    body = VALID.replace("          site_ids: s-1,s-2", '          site_ids: ""')
     with pytest.raises(SourceMapInvalid):
         cs.load(_write(tmp_path, body))
 
@@ -242,7 +241,7 @@ def test_a_client_with_no_entry_is_empty_not_an_error(tmp_path):
 def test_reconcile_is_silent_when_the_file_and_the_database_agree(tmp_path):
     rows = [
         {"tenant_id": "c00", "tool": "exabeam",
-         "config": {"base_url": "https://aa.c00.example", "site_id": "c00-main"}},
+         "config": {"base_url": "https://aa.c00.example"}},
         {"tenant_id": "c00", "tool": "sentinelone",
          "config": {"console_url": "https://c00.sentinelone.net", "site_ids": "s-1,s-2"}},
     ]
@@ -257,7 +256,7 @@ def test_reconcile_reports_a_client_in_the_file_but_not_configured(tmp_path):
 def test_reconcile_reports_a_platform_configured_but_not_declared(tmp_path):
     rows = [
         {"tenant_id": "c00", "tool": "exabeam",
-         "config": {"base_url": "https://aa.c00.example", "site_id": "c00-main"}},
+         "config": {"base_url": "https://aa.c00.example"}},
         {"tenant_id": "c00", "tool": "sentinelone",
          "config": {"console_url": "https://c00.sentinelone.net", "site_ids": "s-1,s-2"}},
         {"tenant_id": "c42", "tool": "cortex", "config": {"api_url": "https://x"}},
@@ -269,7 +268,7 @@ def test_reconcile_reports_a_platform_configured_but_not_declared(tmp_path):
 def test_reconcile_reports_a_connection_that_drifted(tmp_path):
     rows = [
         {"tenant_id": "c00", "tool": "exabeam",
-         "config": {"base_url": "https://CHANGED.example", "site_id": "c00-main"}},
+         "config": {"base_url": "https://CHANGED.example"}},
         {"tenant_id": "c00", "tool": "sentinelone",
          "config": {"console_url": "https://c00.sentinelone.net", "site_ids": "s-1,s-2"}},
     ]
@@ -283,7 +282,7 @@ def test_reconcile_ignores_integrations_that_are_not_client_platforms(tmp_path):
     reported as undeclared, or the check becomes noise and stops being read."""
     rows = [
         {"tenant_id": "c00", "tool": "exabeam",
-         "config": {"base_url": "https://aa.c00.example", "site_id": "c00-main"}},
+         "config": {"base_url": "https://aa.c00.example"}},
         {"tenant_id": "c00", "tool": "sentinelone",
          "config": {"console_url": "https://c00.sentinelone.net", "site_ids": "s-1,s-2"}},
         {"tenant_id": "c00", "tool": "opensearch", "config": {"nodes": "https://os"}},
