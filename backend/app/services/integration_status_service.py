@@ -654,6 +654,25 @@ def _state_for_direction(row: Any, direction: str) -> dict[str, Any]:
     health = row.health if isinstance(row.health, dict) else {}
     entry = health.get(direction)
     if not isinstance(entry, dict) or not entry.get("checked_at"):
+        # No call has been made. **Why not** is the part that matters, and
+        # telling an operator to "run Test connection" for a tool with no
+        # connector is an instruction they cannot carry out — they configured
+        # Exabeam correctly, were told it was not verified, and had nothing
+        # to do about it.
+        tool = str(getattr(row, "tool", "") or "")
+        if not has_connector(tool):
+            spec = catalogue().get(tool)
+            label = spec.label if spec else tool
+            return {
+                "state": CONFIGURED_UNVERIFIED,
+                "checked_at": None,
+                "reason": (
+                    f"Stored, and not testable: no connector for {label} "
+                    f"exists in this platform yet. Nothing is wrong with the "
+                    f"credential — there is no code to try it with."
+                ),
+                "failure_kind": "not_implemented",
+            }
         return {
             "state": CONFIGURED_UNVERIFIED,
             "checked_at": None,

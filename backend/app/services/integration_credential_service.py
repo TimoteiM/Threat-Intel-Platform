@@ -321,9 +321,17 @@ async def record_health(
         )
     health = dict(row.health or {})
     # The token status travels; the token never does.
-    health[direction] = {
-        k: v for k, v in result.items() if k != "access_token"
-    }
+    stored = {k: v for k, v in result.items() if k != "access_token"}
+    # `checked_at` is stamped here rather than left to each caller.
+    #
+    # The reader treats an entry without it as "no call has ever been made"
+    # and discards everything else in the entry, so a caller that forgets it
+    # writes a reason nobody will ever see. One did: the not-implemented
+    # branch recorded a perfectly good explanation and the page showed the
+    # generic "run Test connection" instead. A field a reader requires is
+    # guaranteed by the writer, not by every writer remembering.
+    stored.setdefault("checked_at", datetime.now(timezone.utc).isoformat())
+    health[direction] = stored
     row.health = health
     row.updated_at = datetime.now(timezone.utc)
 

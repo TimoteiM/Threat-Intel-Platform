@@ -484,3 +484,51 @@ def test_the_verify_path_records_a_state_instead_of_raising():
     )
     assert "CONFIGURED_UNVERIFIED" in source
     assert "not_implemented" in source
+
+
+def test_an_untestable_tool_is_not_told_to_run_a_test():
+    """The copy an operator reads when a credential is stored and no connector
+    exists.
+
+    They configured Exabeam correctly with the credentials from a working
+    TraceCat automation and the card said *"Saved is not working — run Test
+    connection"*, beside a Test connection button. Both were instructions they
+    could not carry out: there is no code to try the credential with.
+    """
+    from types import SimpleNamespace
+
+    from app.services.integration_status_service import (
+        CONFIGURED_UNVERIFIED, INGEST, _state_for_direction,
+    )
+
+    no_connector = SimpleNamespace(tool="exabeam", health={})
+    out = _state_for_direction(no_connector, INGEST)
+    assert out["state"] == CONFIGURED_UNVERIFIED
+    assert out["failure_kind"] == "not_implemented"
+    assert "no connector" in out["reason"].lower()
+    assert "Test connection" not in out["reason"]
+
+    # The control: a tool that HAS a connector still gets the instruction,
+    # because for that one it is an instruction worth following.
+    has_connector_row = SimpleNamespace(tool="falcon", health={})
+    out = _state_for_direction(has_connector_row, INGEST)
+    assert "Test connection" in out["reason"]
+
+
+def test_record_health_stamps_the_timestamp_the_reader_requires():
+    """A field a reader requires is guaranteed by the writer.
+
+    `_state_for_direction` treats an entry with no `checked_at` as "no call
+    has ever been made" and discards the rest of it, so a caller that forgot
+    the stamp wrote a reason nobody would ever see. One did, and the page
+    showed the generic copy over a perfectly good explanation.
+    """
+    import inspect
+
+    from app.services import integration_credential_service as creds
+
+    source = inspect.getsource(creds.record_health)
+    assert 'setdefault("checked_at"' in source, (
+        "record_health no longer guarantees checked_at; every caller must "
+        "now remember it, and one will not"
+    )

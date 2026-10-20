@@ -747,8 +747,15 @@ export default function IntegrationsPage() {
                       </Button>
                     )}
                     {/* A deployment-configured tool has no stored credential,
-                        so it is always testable and never removable. */}
-                    {(t.configured || spec?.managed === "deployment") && (
+                        so it is always testable and never removable.
+
+                        A tool with no connector is never testable: offering
+                        the button told an operator to run a test that cannot
+                        run, next to a status saying the credential was not
+                        verified. They had configured it correctly and there
+                        was nothing they could do. */}
+                    {(t.configured || spec?.managed === "deployment") &&
+                      spec?.implemented !== false && (
                       <Button onClick={() => onVerify(t.tool)} disabled={busy === t.tool}>
                         {busy === t.tool ? "Testing…" : "Test connection"}
                       </Button>
