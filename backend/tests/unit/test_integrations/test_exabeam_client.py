@@ -325,3 +325,93 @@ def test_a_missing_field_is_named(monkeypatch, config, secrets, missing):
     out = ex.verify(config=config, secrets=secrets)
     assert out["failure_kind"] == "not_configured"
     assert missing in out["reason"]
+
+
+# ── a bounded read is a sample unless it carries its total ───────────────
+
+
+def test_a_search_reports_its_total_and_whether_it_is_complete(monkeypatch):
+    """`limit` without a total is a claim about what you did not see.
+
+    Exabeam answers with `totalRows`, so the honest form costs nothing. A
+    caller reporting "50 events" when there were 4,000 is the failure this
+    exists for.
+    """
+    cap = _Exchange(search_body={
+        "rows": [{"time": "t1"}, {"time": "t2"}], "totalRows": 4000})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                    fields=["time"], start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc), limit=2)
+    assert len(out.rows) == 2
+    assert out.total == 4000
+    assert out.complete is False
+
+
+def test_a_search_that_returned_everything_says_so(monkeypatch):
+    cap = _Exchange(search_body={"rows": [{"time": "t1"}], "totalRows": 1})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                    fields=["time"], start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc))
+    assert out.complete is True and out.total == 1
+
+
+def test_a_missing_total_is_not_read_as_completeness(monkeypatch):
+    """No total means we cannot say whether these are all of them, and the
+    safe answer to that is "no" — not `len(rows)`, which would quietly assert
+    completeness from the sample itself."""
+    cap = _Exchange(search_body={"rows": [{"time": "t1"}]})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                    fields=["time"], start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc))
+    assert out.complete is False
+
+
+def test_the_verify_query_uses_values_exabeam_documents(monkeypatch):
+    """`filter="*"` was sent first and refused: `Invalid filter value *`. The
+    wildcard is documented for `fields`, not for `filter`. These two values
+    come from Exabeam's own examples."""
+    cap = _Exchange()
+    _verify(monkeypatch, cap)
+    payload = cap.search_calls[0][1]
+    assert payload["filter"] == ex.VERIFY_FILTER == ""
+    assert payload["fields"] == list(ex.VERIFY_FIELDS) == ["time"]
+    assert "*" not in payload["filter"]
+
+
+def test_a_rejected_query_carries_exabeams_own_complaint(monkeypatch):
+    """A 400 means the request failed validation before it ran, so the body is
+    Exabeam's message about OUR query rather than anybody's log data.
+
+    Suppressing it cost a round trip: "Exabeam answered HTTP 400 to a
+    one-minute search" is true, useless, and left an operator with nothing to
+    act on while the answer was sitting in the response.
+    """
+    cap = _Exchange(search_status=400, search_body={
+        "errors": [{"code": "AAA_ESA_1000_400", "message": "Invalid filter value *"}]})
+    out = _verify(monkeypatch, cap)
+    assert out["failure_kind"] == "bad_request"
+    assert "Invalid filter value" in out["reason"]
+    assert "not the credential" in out["reason"]
+
+
+def test_the_complaint_is_bounded_and_scrubbed(monkeypatch):
+    """Defensive: a validation message is about our request, but if one ever
+    quoted the headers it received, the token must not travel with it."""
+    cap = _Exchange(search_status=400,
+                    search_body={"echo": f"Bearer {TOKEN}", "pad": "x" * 2000})
+    out = _verify(monkeypatch, cap)
+    assert TOKEN not in out["reason"]
+    assert len(out["reason"]) < 800
+
+
+def test_a_server_error_still_withholds_the_body(monkeypatch):
+    """The control for the two tests above: 4xx is a complaint about our
+    request, 5xx may carry anything, and only the first is safe to echo."""
+    secret_event = "user=jdoe host=EXPDC001"
+    out = _verify(monkeypatch, _Exchange(search_status=503,
+                                         search_body={"events": [secret_event]}))
+    assert "jdoe" not in out["reason"]
+    assert out["failure_kind"] == "http_error"

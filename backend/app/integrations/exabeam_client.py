@@ -39,6 +39,7 @@ echoed into an exception message.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -52,6 +53,18 @@ SEARCH_PATH = "/search/v2/events"
 #: Exabeam's documented default. Sent explicitly so a change to their default
 #: cannot silently change how much this platform asks for.
 DEFAULT_LIMIT = 3000
+
+#: What a verification searches for. Named constants because they are the
+#: part most likely to need correcting against the live API, and a reader
+#: should find them without reading the function.
+#:
+#: `filter=""` is what Exabeam's own Field Summary example sends. `"*"` was
+#: tried first and refused outright — `Invalid filter value *` — because the
+#: wildcard belongs to `fields`, not `filter`.
+VERIFY_FILTER = ""
+#: `time` appears in Exabeam's documented examples. A single field, because a
+#: verification needs a 200 and not a row of anybody's log data.
+VERIFY_FIELDS: tuple[str, ...] = ("time",)
 
 #: Long enough for a multi-year search to start returning, short enough that a
 #: verification does not hold a request open. Exabeam's own console warns that
@@ -141,6 +154,57 @@ def bearer_token(*, base_url: str, client_id: str, client_secret: str,
     return token
 
 
+#: How much of a validation message to carry. Long enough for a real
+#: complaint, short enough that it cannot become a transcript.
+_DETAIL_LIMIT = 400
+
+
+def _client_error_detail(response: Any, token: str = "") -> str:
+    """Exabeam's own complaint about OUR request, safe to show.
+
+    **A 4xx body is different from every other body here.** A 2xx carries
+    customer log events and a 5xx may carry anything, so neither is ever
+    echoed. A 400 means the request failed validation before it ran: it is a
+    message about the query this platform sent, and suppressing it hides the
+    only thing that says what is wrong.
+
+    That suppression cost a round trip — "Exabeam answered HTTP 400 to a
+    one-minute search" is true, useless, and left an operator with nothing to
+    act on while the answer was in the response.
+
+    Defensive anyway: bounded, and scrubbed of the token in case a validation
+    message ever quotes the headers it received.
+    """
+    try:
+        text = (response.text or "").strip()
+    except Exception:  # noqa: BLE001 - a body that will not decode is not a detail
+        return ""
+    if token:
+        text = text.replace(token, "[redacted]")
+    text = " ".join(text.split())
+    return text[:_DETAIL_LIMIT]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Rows, how many there were, and whether these are all of them.
+
+    The triple rather than a bare list, which is this codebase's standing rule
+    for a bounded read: `limit` without a total is a claim about what you did
+    not see. Exabeam answers with `totalRows`, so the honest form costs
+    nothing — and a caller that reports "50 events" when there were 4,000 is
+    the failure the rule exists for.
+    """
+
+    rows: list[dict[str, Any]]
+    total: int
+    complete: bool
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+
 def _base_url(config: dict[str, Any]) -> str:
     raw = str((config or {}).get("base_url") or "").strip()
     return raw.rstrip("/")
@@ -162,9 +226,10 @@ def search(
 ) -> dict[str, Any]:
     """One search, as the API documents it.
 
-    Returns the decoded body. Raises `httpx.HTTPStatusError` on a non-2xx,
-    with the response body deliberately **not** attached to the message: a
-    search response carries customer log events.
+    Returns a `SearchResult` — rows, the total Exabeam reports, and whether
+    these are all of them. Raises `httpx.HTTPStatusError` on a non-2xx, with
+    the response body deliberately **not** attached to the message: a search
+    response carries customer log events.
     """
     if not base_url:
         raise ValueError("no base_url configured for this tenant's Exabeam")
@@ -195,7 +260,21 @@ def search(
         timeout=timeout,
     )
     response.raise_for_status()
-    return response.json()
+    body = response.json() if response.content else {}
+    if not isinstance(body, dict):
+        body = {}
+    rows = body.get("rows")
+    rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    try:
+        total = int(body.get("totalRows"))
+    except (TypeError, ValueError):
+        # No total means we cannot say whether these are all of them, and the
+        # safe answer to that is "no" rather than len(rows).
+        total = len(rows)
+        complete = False
+    else:
+        complete = len(rows) >= total
+    return SearchResult(rows=rows, total=total, complete=complete, raw=body)
 
 
 def verify(*, client_id: str = "", client_secret: str = "",
@@ -276,13 +355,17 @@ def verify(*, client_id: str = "", client_secret: str = "",
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=1)
     try:
-        body = search(
+        search(
             token=token,
             base_url=base_url,
-            # The cheapest filter that is still a real query. `filter` is a
-            # required parameter, so there is no "empty search" to send.
-            filter_expression="*",
-            fields=["id"],
+            # Both values are taken from Exabeam's own examples rather than
+            # invented. The first attempt sent `filter="*"` and Exabeam
+            # answered `Invalid filter value *` — the wildcard is documented
+            # for `fields`, not for `filter`. An empty filter is what their
+            # Field Summary example sends, and `time` is one of the field
+            # names their examples use.
+            filter_expression=VERIFY_FILTER,
+            fields=list(VERIFY_FIELDS),
             start_time=start,
             end_time=end,
             limit=1,
@@ -306,6 +389,17 @@ def verify(*, client_id: str = "", client_secret: str = "",
                 f"not the Advanced Analytics web address."
             )
             kind = "wrong_host"
+        elif code in (400, 422):
+            # The request was rejected before it ran, so the body is Exabeam's
+            # complaint about our query rather than anybody's log data.
+            detail = _client_error_detail(exc.response, token)
+            reason = (
+                f"Exabeam rejected the search request itself (HTTP {code}). "
+                f"This is the query this platform sent, not the credential"
+                + (f". Exabeam said: {detail}" if detail else
+                   " — and Exabeam returned no explanation with it.")
+            )
+            kind = "bad_request"
         else:
             # The body is NOT included: a search response carries customer log
             # events, and this string reaches the page and the audit row.
@@ -328,17 +422,13 @@ def verify(*, client_id: str = "", client_secret: str = "",
                 "reason": f"Unexpected {type(exc).__name__} during verification.",
                 "failure_kind": "error"}
 
-    # A count, never the events. The number of rows a one-minute window
-    # happened to hold says nothing anybody needs and the rows are customer
-    # log data.
-    rows = body.get("rows") if isinstance(body, dict) else None
-    shape = "rows" if isinstance(rows, list) else ",".join(
-        sorted(body)[:4]) if isinstance(body, dict) else type(body).__name__
+    # Neither the events nor how many there were. A verification proves the
+    # credential works; the contents and the volume of a one-minute window are
+    # the customer's, and this string is stored, rendered and audited.
     return {
         "state": status.VERIFIED_OK,
         "direction": status.INGEST,
         "reason": (
-            f"Authenticated search against {base_url}{SEARCH_PATH} succeeded "
-            f"(response shape: {shape})."
+            f"Authenticated search against {base_url}{SEARCH_PATH} succeeded."
         ),
     }
