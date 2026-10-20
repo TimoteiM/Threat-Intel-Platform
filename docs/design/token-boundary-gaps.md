@@ -187,6 +187,41 @@ this path — wrong, because a layer below was doing part of the job. The
 second read the outgoing payload and got the answer. Measure where the data
 leaves, not at the nearest convenient surface.
 
+### The separator, measured on ingest — and what the alert body still leaks
+
+Asked whether alert bodies reach the shipped detectors already escaped, the
+way the digest does. **They do not**: zero escaped quotes from either the
+SentinelOne or the Exabeam workflow. `_flatten` stringifies with
+`str(value)`, and `_clean_message` actively un-escapes a JSON-quoted message.
+
+But the same family of fault is there under a different separator. Ingest
+flattening emits `key: value` with a **colon**, and the shipped account
+detector misses that too:
+
+| text as the detector sees it | shipped | boundary |
+|---|---|---|
+| `user="sentuseralpha"` | tokenised | tokenised |
+| `user: sentuseralpha` | **CLEAR** | tokenised |
+| `user=sentuseralpha` | tokenised | tokenised |
+| `user=\"sentuseralpha\"` | **CLEAR** | tokenised |
+
+So `keyed account | tokenised` in the row-11 table holds for exactly one of
+the three shapes this platform produces. The consequence is visible per
+shipper: a **SentinelOne** alert leaks the account, because a structured post
+is flattened to a colon; the **same alert from Exabeam** does not, because it
+arrives as raw log lines carrying `user="…"`. The shipper's format decides.
+
+**And the alert body leaks every class the digest now protects.** Measured at
+the wire — `(system, user_text)` as `_call_with_fallback` receives it — all
+six gap classes and the keyed-account class reach the model in the clear from
+the alert text, while the digest half tokenises all seven at the boundary.
+The 2026-10-20 change is **one field short**: it closed the half that is off
+by default and left the half that runs on every alert.
+
+Full tables, probe point and method:
+`docs/measurements/outgoing-payload-identifier-states.md`, re-runnable with
+`scripts/measure_outgoing_payload.py`.
+
 ### Not an identifier, found while measuring: `--token=VALUE`
 
 `log_secret_sanitizer` recognises `password=`, `-Password`, `api_key=` and
