@@ -186,6 +186,128 @@ def apply(stmt: Any, column: Any, scope: TenantScope) -> Any:
     return stmt.where(clause(column, scope))
 
 
+#: The Postgres session setting the row-level policy on
+#: `tenant_integrations` reads. One definition, because a typo in it does not
+#: fail — it reads as "no scope bound", which the policy answers with zero
+#: rows. Safe, and silent, so it gets exactly one spelling.
+SCOPE_SETTING = "app.tenant_scope"
+
+#: What `*` means in that setting. Not a tenant id anything can have.
+ALL_TENANTS_SENTINEL = "*"
+
+
+def scope_setting_value(scope: TenantScope) -> str:
+    """How a scope is spelled for the database policy.
+
+    An all-tenants identity binds `*`. A restricted one binds its ids. An
+    **empty** restricted scope binds the empty string, which the policy treats
+    the same as never having bound at all: no rows. That is the same decision
+    `clause()` takes in SQL — an account misconfigured with no tenants must
+    match nothing rather than everything.
+    """
+    if scope.all_tenants:
+        return ALL_TENANTS_SENTINEL
+    return ",".join(sorted(scope.tenant_ids))
+
+
+#: Where a bound scope is remembered on a session, so it can be re-applied.
+_SCOPE_KEY = "tenant_scope_binding"
+
+
+def _apply(connection: Any, scope: TenantScope) -> None:
+    from sqlalchemy import text
+
+    connection.execute(
+        text("SELECT set_config(:name, :value, true)"),
+        {"name": SCOPE_SETTING, "value": scope_setting_value(scope)},
+    )
+
+
+def _register_rebinding() -> None:
+    """Re-apply a session's scope at the start of every transaction.
+
+    **Why this is not just a statement at each call site.** The binding uses
+    `SET LOCAL`, which dies with its transaction — deliberately, so a pooled
+    connection cannot carry one caller's scope into the next caller's request.
+    The cost is that a read *after a commit* is unbound, and
+    `integration_credential_service.configure` does exactly that: it commits,
+    then refreshes the row it wrote. The refresh found nothing, because the
+    policy had no scope to judge it by.
+
+    Re-binding by hand after each commit is the kind of rule that holds until
+    somebody adds a second commit. This re-applies on `after_begin`, so a
+    session that has been bound once stays bound for its whole life, across
+    any number of transactions, and still carries nothing into the pool.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session as _SyncSession
+
+    if getattr(_register_rebinding, "_done", False):
+        return
+
+    @event.listens_for(_SyncSession, "after_begin")
+    def _rebind(session, transaction, connection):  # noqa: ANN001
+        scope = session.info.get(_SCOPE_KEY)
+        if scope is not None:
+            _apply(connection, scope)
+
+    _register_rebinding._done = True
+
+
+async def bind(db: Any, scope: TenantScope) -> None:
+    """Bind an async session to this scope, for the row-level policy.
+
+    Call it before reading or writing `tenant_integrations`. The application
+    also filters with `apply()`; this is the backstop under that, and the one
+    that holds on a query nobody wrote yet.
+
+    `SET LOCAL` semantics — the third argument to `set_config` — so the
+    binding dies with the transaction instead of leaking into whatever the
+    pooled connection serves next. A connection still bound to the previous
+    caller's scope would be the cross-tenant read this exists to prevent,
+    arriving by way of the pool. The scope is also remembered on the session
+    so it is re-applied to each new transaction — see `_register_rebinding`.
+
+    The value goes in as a bound parameter: `SET LOCAL` takes none, so the
+    obvious version interpolates a tenant id into SQL on the one table where
+    that matters most.
+    """
+    from sqlalchemy import text
+
+    _register_rebinding()
+    # The event fires on the *sync* Session underneath an AsyncSession, so the
+    # scope is remembered there; `getattr(..., db)` keeps this working if a
+    # plain Session is ever passed.
+    getattr(db, "sync_session", db).info[_SCOPE_KEY] = scope
+    await db.execute(
+        text("SELECT set_config(:name, :value, true)"),
+        {"name": SCOPE_SETTING, "value": scope_setting_value(scope)},
+    )
+
+
+def bind_sync(db: Any, scope: TenantScope) -> None:
+    """`bind` for a synchronous session. Same semantics."""
+    from sqlalchemy import text
+
+    _register_rebinding()
+    db.info[_SCOPE_KEY] = scope
+    db.execute(
+        text("SELECT set_config(:name, :value, true)"),
+        {"name": SCOPE_SETTING, "value": scope_setting_value(scope)},
+    )
+
+
+def unbind(db: Any) -> None:
+    """Forget a session's scope.
+
+    For a session that is handed on to work for a different identity. Rare,
+    and explicit: the alternative is a session that keeps re-binding a scope
+    whoever reuses it never asked for.
+    """
+    target = getattr(db, "sync_session", db)
+    target.info.pop(_SCOPE_KEY, None)
+
+
 def assert_can_read(scope: TenantScope, tenant_id: str | None) -> None:
     """Guard a single-object read. Raises 404 rather than 403 — see module docstring."""
     if scope.may_read(tenant_id):

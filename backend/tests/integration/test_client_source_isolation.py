@@ -245,26 +245,60 @@ def test_an_unbound_session_reads_nothing_at_all(seeded):
         db.rollback()
 
 
-def test_the_binding_does_not_survive_the_transaction(seeded):
-    """`SET LOCAL`, not `SET`.
+def test_the_binding_is_reapplied_to_each_transaction_of_a_bound_session(seeded):
+    """`SET LOCAL` dies with its transaction, so a read after a commit would
+    be unbound — and `integration_credential_service.configure` commits and
+    then refreshes the row it wrote. That read found nothing, which is how
+    configuring an integration returned 500 on 2026-10-20.
 
-    These engines are NullPool, but the application's are not. A binding that
-    outlived its transaction would leave a pooled connection still bound to
-    the previous caller's tenant — the cross-tenant read arriving by way of
-    the pool, which no amount of query review would catch.
+    Re-binding by hand after each commit is a rule that holds until somebody
+    adds a second commit, so a session that has been bound once stays bound
+    across transactions.
     """
     with Session(seeded) as db:
         bind_tenant(db, TENANT_A)
-        assert db.execute(
-            text("SELECT current_setting(:n, true)"), {"n": TENANT_SETTING}
-        ).scalar() == TENANT_A
+        assert db.execute(text("SELECT current_setting(:n, true)"),
+                          {"n": TENANT_SETTING}).scalar() == TENANT_A
+        db.commit()
+
+        # A new transaction, with no second bind call.
+        assert db.execute(text("SELECT current_setting(:n, true)"),
+                          {"n": TENANT_SETTING}).scalar() == TENANT_A
+        assert db.execute(text(
+            "SELECT count(*) FROM tenant_integrations WHERE tenant_id = :t"
+        ), {"t": TENANT_A}).scalar() == 1
+        # And it is still a scope, not a skeleton key.
+        assert db.execute(text(
+            "SELECT count(*) FROM tenant_integrations WHERE tenant_id = :t"
+        ), {"t": TENANT_B}).scalar() == 0
         db.rollback()
-        # After the transaction ends the setting is gone, so the next reader on
-        # this connection starts unbound — and unbound reads nothing.
-        assert db.execute(
-            text("SELECT current_setting(:n, true)"), {"n": TENANT_SETTING}
-        ).scalar() in (None, "")
-        db.rollback()
+
+
+def test_the_binding_does_not_reach_another_session(seeded):
+    """The property `SET LOCAL` was chosen for, stated at the level that
+    matters: a *different* session must not inherit it.
+
+    These engines are NullPool, but the application's are not. A binding that
+    survived into the next checkout would hand one caller's scope to the next
+    caller's request — the cross-tenant read this exists to prevent, arriving
+    by way of the pool.
+    """
+    with Session(seeded) as bound:
+        bind_tenant(bound, TENANT_A)
+        assert bound.execute(text("SELECT current_setting(:n, true)"),
+                             {"n": TENANT_SETTING}).scalar() == TENANT_A
+
+        with Session(seeded) as fresh:
+            setting = fresh.execute(text("SELECT current_setting(:n, true)"),
+                                    {"n": TENANT_SETTING}).scalar()
+            assert setting in (None, ""), (
+                f"a new session inherited the scope {setting!r}"
+            )
+            assert fresh.execute(text(
+                "SELECT count(*) FROM tenant_integrations WHERE tenant_id IN (:a, :b)"
+            ), {"a": TENANT_A, "b": TENANT_B}).scalar() == 0
+            fresh.rollback()
+        bound.rollback()
 
 
 def test_the_owner_still_sees_everything_so_migrations_work(seeded):
@@ -283,3 +317,84 @@ def test_the_owner_still_sees_everything_so_migrations_work(seeded):
             assert count == 2
     finally:
         owner.dispose()
+
+
+# ── the regression that took integrations down on 2026-10-19 ─────────────
+
+
+def test_an_integration_can_be_configured_and_read_back(seeded):
+    """**The outage, pinned.**
+
+    Migration 072 put a policy on this table and nothing bound a scope, so for
+    a day every integration read as unconfigured — silently — and configuring
+    one returned 500 with `new row violates row-level security policy`. A
+    Falcon credential that was already stored became invisible to the API.
+
+    This asserts the whole shape of the write path the endpoint uses: insert,
+    commit, then read the row back on the same session. The read-after-commit
+    is the part that broke a second time, after the first fix, because
+    `SET LOCAL` does not survive the commit.
+    """
+    tenant = f"{TENANT_A}-cfg"
+    with Session(seeded) as db:
+        bind_tenant(db, tenant)
+        db.execute(text(
+            "INSERT INTO tenant_integrations "
+            "(id, tenant_id, tool, config, created_at, updated_at) "
+            "VALUES (gen_random_uuid(), :t, 'falcon', CAST(:c AS jsonb), now(), now())"
+        ), {"t": tenant, "c": '{"base_url": "https://api.crowdstrike.com"}'})
+        db.commit()
+
+        # The read the endpoint does next, in a new transaction, with no
+        # second bind call.
+        back = db.execute(text(
+            "SELECT config->>'base_url' FROM tenant_integrations "
+            "WHERE tenant_id = :t AND tool = 'falcon'"
+        ), {"t": tenant}).scalar()
+        assert back == "https://api.crowdstrike.com", (
+            "the row written a moment ago could not be read back; this is the "
+            "outage, not a new one"
+        )
+        db.commit()
+
+    with Session(_owner_engine()) as owner_db:
+        owner_db.execute(text("DELETE FROM tenant_integrations WHERE tenant_id = :t"),
+                         {"t": tenant})
+        owner_db.commit()
+
+
+def test_a_write_for_another_tenant_is_refused(seeded):
+    """`WITH CHECK`, spelled out in migration 073.
+
+    072 had `USING` and no `WITH CHECK`, so new rows were judged by the read
+    predicate — which refused every write once nothing bound the setting, and
+    would have *allowed* writing another tenant's row had the binding been
+    wide. A policy without WITH CHECK on a table the application writes is
+    half a policy.
+    """
+    import sqlalchemy.exc
+
+    with Session(seeded) as db:
+        bind_tenant(db, TENANT_A)
+        with pytest.raises(sqlalchemy.exc.ProgrammingError) as exc:
+            db.execute(text(
+                "INSERT INTO tenant_integrations "
+                "(id, tenant_id, tool, config, created_at, updated_at) "
+                "VALUES (gen_random_uuid(), :t, 'zz-bogus', '{}'::jsonb, now(), now())"
+            ), {"t": TENANT_B})
+            db.commit()
+        assert "row-level security" in str(exc.value)
+        db.rollback()
+
+    # The control: the same insert for the bound tenant succeeds, so the
+    # refusal above is about the tenant and not about the statement.
+    with Session(seeded) as db:
+        bind_tenant(db, TENANT_A)
+        db.execute(text(
+            "INSERT INTO tenant_integrations "
+            "(id, tenant_id, tool, config, created_at, updated_at) "
+            "VALUES (gen_random_uuid(), :t, 'zz-control', '{}'::jsonb, now(), now())"
+        ), {"t": TENANT_A})
+        db.commit()
+        db.execute(text("DELETE FROM tenant_integrations WHERE tool = 'zz-control'"))
+        db.commit()

@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from app.services import tenant_scope as tenant_scope_module
 from app.services.tenant_scope import TenantForbidden, TenantScope
 
 #: Where the authoring surface lives.
@@ -86,11 +87,11 @@ def default_map_path() -> Path:
             return candidate
     return _MAP_CANDIDATES[0]
 
-#: The session variable the row-level security policy reads. Named once here
-#: because a typo in it does not fail — it reads as "no tenant bound", which
-#: the policy answers with zero rows. That is the safe direction, and it is
-#: also silent, so the name has exactly one definition.
-TENANT_SETTING = "app.tenant_id"
+#: The session variable the row-level policy reads. Re-exported from
+#: `tenant_scope`, which owns it, rather than spelled again here — the policy
+#: moved from a single tenant to a scope in migration 073 and two spellings
+#: would have meant one of them silently binding nothing.
+TENANT_SETTING = tenant_scope_module.SCOPE_SETTING
 
 
 # ── the platforms ────────────────────────────────────────────────────────
@@ -393,26 +394,21 @@ def platforms_for(tenant_id: str, *, scope: TenantScope,
 
 
 def bind_tenant(session: Any, tenant_id: str) -> None:
-    """Bind a database session to one tenant, for the row-level policy.
+    """Bind a synchronous session to one tenant, for the row-level policy.
 
-    `SET LOCAL`, so the binding dies with the transaction rather than leaking
-    into whatever the pooled connection does next — a connection that stayed
-    bound to the previous caller's tenant would be the cross-tenant read this
-    exists to prevent, arriving by way of the pool.
+    A thin wrapper over `tenant_scope.bind_sync` with a single-tenant scope,
+    kept because reading one client's sources is the common case and spelling
+    a `TenantScope` at every call site invites someone to spell a wider one.
 
-    The value goes in as a bound parameter through `set_config`, not formatted
-    into the statement: `SET LOCAL` does not take parameters, and a tenant id
-    interpolated into SQL is an injection point on the one table where that
-    matters most.
+    The policy reads a scope rather than a tenant since migration 073: it had
+    to, because `rotate_all` and the status listing legitimately cross
+    tenants, and a single-id policy made those return nothing.
     """
-    from sqlalchemy import text
-
     tenant = str(tenant_id or "").strip()
     if not tenant:
         raise TenantForbidden("refusing to bind a session to an empty tenant")
-    session.execute(
-        text("SELECT set_config(:name, :value, true)"),
-        {"name": TENANT_SETTING, "value": tenant},
+    tenant_scope_module.bind_sync(
+        session, TenantScope(tenant_ids=(tenant,), actor="client-sources")
     )
 
 

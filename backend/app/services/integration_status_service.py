@@ -796,6 +796,11 @@ async def _rows(db: AsyncSession, *, scope: tenant_scope.TenantScope,
     """
     from app.models.database import TenantIntegration
 
+    # The table carries a row-level policy; an unbound session reads zero rows
+    # and this function would report every integration as unconfigured. It did
+    # exactly that for a day after migration 072 — silently, which is why the
+    # binding is here and not only on the write path. See migration 073.
+    await tenant_scope.bind(db, scope)
     stmt = select(TenantIntegration)
     if tenant_id:
         stmt = stmt.where(TenantIntegration.tenant_id == tenant_id)

@@ -108,22 +108,34 @@ WHERE NOT EXISTS (
 );
 
 SELECT 'RLS POLICY MISSING ON tenant_integrations' AS violation,
-       'tenant_integrations_tenant_isolation' AS rolname, 'policy' AS holds
+       'tenant_integrations_scope_isolation' AS rolname, 'policy' AS holds
 WHERE NOT EXISTS (
     SELECT 1 FROM pg_policy
     WHERE polrelid = 'tenant_integrations'::regclass
-      AND polname = 'tenant_integrations_tenant_isolation'
+      AND polname = 'tenant_integrations_scope_isolation'
 );
 
 -- And that the policy still reads the setting it is supposed to. A policy
 -- rewritten to `USING (true)` is present, enabled, and useless.
-SELECT 'RLS POLICY NO LONGER BINDS A TENANT' AS violation,
-       'tenant_integrations_tenant_isolation' AS rolname,
+SELECT 'RLS POLICY NO LONGER BINDS A SCOPE' AS violation,
+       'tenant_integrations_scope_isolation' AS rolname,
        pg_get_expr(polqual, polrelid) AS holds
 FROM pg_policy
 WHERE polrelid = 'tenant_integrations'::regclass
-  AND polname = 'tenant_integrations_tenant_isolation'
-  AND pg_get_expr(polqual, polrelid) NOT LIKE '%app.tenant_id%';
+  AND polname = 'tenant_integrations_scope_isolation'
+  AND pg_get_expr(polqual, polrelid) NOT LIKE '%app.tenant_scope%';
+
+-- And that writes are covered. Migration 072 had USING and no WITH CHECK, so
+-- an INSERT was judged by the read predicate — which refused every write once
+-- nothing bound the setting, and would have allowed writing another tenant's
+-- row had the setting been wide. A policy without WITH CHECK on a table the
+-- application writes is half a policy.
+SELECT 'RLS POLICY DOES NOT COVER WRITES' AS violation,
+       'tenant_integrations_scope_isolation' AS rolname, 'with_check' AS holds
+FROM pg_policy
+WHERE polrelid = 'tenant_integrations'::regclass
+  AND polname = 'tenant_integrations_scope_isolation'
+  AND polwithcheck IS NULL;
 
 -- ─── positive controls ──────────────────────────────────────────────────
 --

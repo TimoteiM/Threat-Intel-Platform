@@ -124,6 +124,15 @@ async def _row(db: AsyncSession, tenant_id: str, tool: str, *,
                scope: tenant_scope.TenantScope) -> Any:
     from app.models.database import TenantIntegration
 
+    # Bind the session to this scope before touching the table.
+    #
+    # `tenant_integrations` carries a row-level policy, so an unbound session
+    # reads zero rows and a write is refused outright. That is the safe
+    # direction and it is also the one that caused an outage on 2026-10-19:
+    # nothing bound it, so every integration read as unconfigured for a day
+    # and configuring one returned 500. See migration 073.
+    await tenant_scope.bind(db, scope)
+
     stmt = select(TenantIntegration).where(
         TenantIntegration.tenant_id == tenant_id,
         TenantIntegration.tool == tool,
@@ -153,6 +162,7 @@ async def configure(
     from app.models.database import IntegrationAudit, TenantIntegration
 
     tenant_scope.assert_can_read(scope, tenant_id)
+    await tenant_scope.bind(db, scope)
     spec = _assert_known_tool(tool)
     cfg = _reject_secret_shaped_config(config)
 
@@ -252,6 +262,14 @@ def open_for_tenant_sync(tenant_id: str, tool: str) -> OpenedCredential:
     from app.models.database import TenantIntegration
 
     with Session(sync_engine) as db:
+        # A connector resolving its own tenant's credential. The scope is that
+        # one tenant: this path is reached from a run that already carries it,
+        # and binding anything wider would hand a connector the ability to
+        # read a credential it has no business with.
+        tenant_scope.bind_sync(
+            db, tenant_scope.TenantScope(tenant_ids=(str(tenant_id),),
+                                         actor=f"connector:{tool}")
+        )
         row = (
             db.execute(
                 select(TenantIntegration).where(
@@ -289,6 +307,12 @@ async def record_health(
     """
     from app.models.database import IntegrationAudit
 
+    # Bound for the same reason as everywhere else in this module:
+    # the table has a row-level policy, and an unbound session reads
+    # nothing and writes nothing. These two can be called on a session
+    # nobody else bound. See migration 073.
+    await tenant_scope.bind(db, scope)
+
     tenant_scope.assert_can_read(scope, tenant_id)
     row = await _row(db, tenant_id, tool, scope=scope)
     if row is None:
@@ -320,6 +344,12 @@ async def remove(
 ) -> bool:
     """Delete one tenant's configuration. The audit row survives it."""
     from app.models.database import IntegrationAudit
+
+    # Bound for the same reason as everywhere else in this module:
+    # the table has a row-level policy, and an unbound session reads
+    # nothing and writes nothing. These two can be called on a session
+    # nobody else bound. See migration 073.
+    await tenant_scope.bind(db, scope)
 
     tenant_scope.assert_can_read(scope, tenant_id)
     row = await _row(db, tenant_id, tool, scope=scope)
@@ -359,6 +389,7 @@ async def rotate_all(
                      "can be rotated.",
         }
 
+    await tenant_scope.bind(db, scope)
     stmt = select(TenantIntegration).where(
         TenantIntegration.secret_ciphertext.isnot(None)
     )

@@ -186,6 +186,46 @@ because step 2 was done correctly.
 
 ---
 
+## The outage this caused, and the contract it leaves
+
+**Migration 072 took integrations down for a day.** Found 2026-10-20 when
+configuring CrowdStrike returned 500. Two faults, and the quieter one was
+worse:
+
+| | |
+|---|---|
+| **Writes failed, loudly** | `new row violates row-level security policy`. A policy with `USING` and no `WITH CHECK` judges new rows by the read predicate, and with nothing bound that predicate was false. |
+| **Reads returned nothing, silently** | Every integration read as unconfigured for a day, including a Falcon credential that was already stored. The integrations page showed it as absent. |
+
+The write failure is what surfaced it. The read failure had been wrong since
+the migration and nothing noticed, which is the direction worth remembering: a
+policy that fails closed fails *quietly* on reads.
+
+**Migration 073 fixes both.** The policy now expresses a **scope** rather than
+a single tenant — `*` for all, a comma-separated list otherwise, nothing when
+unbound or empty — because `rotate_all`, the expiry report and an
+all-tenants listing legitimately cross tenants and a single-id policy made
+them return nothing. `WITH CHECK` is spelled out, so a caller cannot write
+another tenant's row.
+
+**The contract for anything that touches `tenant_integrations`:** call
+`tenant_scope.bind(db, scope)` (or `bind_sync`) before the first query. The
+five existing query sites do. Forgetting means reading nothing and writing
+nothing, which is safe and silent — so it is a contract worth knowing rather
+than one the database will remind you about helpfully.
+
+**The binding re-applies per transaction.** `SET LOCAL` dies with its
+transaction, which is what keeps a pooled connection from carrying one
+caller's scope into the next caller's request — and it also means *a read
+after a commit is unbound*. `configure()` commits and then refreshes the row
+it wrote, so the first fix broke on its own second transaction. A session that
+has been bound once now stays bound for its life, through an `after_begin`
+hook, and still carries nothing into the pool. Both halves are pinned:
+`test_the_binding_is_reapplied_to_each_transaction_of_a_bound_session` and
+`test_the_binding_does_not_reach_another_session`.
+
+`test_an_integration_can_be_configured_and_read_back` pins the outage itself.
+
 ## The host/container divergence, closed 2026-10-20
 
 Until today `.env` pointed `DATABASE_SYNC_URL` at `threatintel` — superuser

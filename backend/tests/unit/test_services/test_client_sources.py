@@ -311,6 +311,12 @@ def test_bind_tenant_passes_the_tenant_as_a_parameter_not_as_sql():
     seen = {}
 
     class _Session:
+        # `.info` because the binding is also remembered on the session, so it
+        # can be re-applied to each new transaction — a read after a commit
+        # would otherwise be unbound, which is how configuring an integration
+        # broke on 2026-10-20.
+        info: dict = {}
+
         def execute(self, statement, params=None):
             seen["sql"] = str(statement)
             seen["params"] = params
