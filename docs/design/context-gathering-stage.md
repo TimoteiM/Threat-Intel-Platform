@@ -1,8 +1,45 @@
 # A context-gathering stage for the alert pipeline
 
-**Status: design note. Nothing here is built.** Written 2026-10-19 after reading
-the pipeline rather than the description of it, and every claim below about
-what exists was measured in this repository or this database on that date.
+**Status, 2026-10-20: §4, §4b and §4c are built on branch `query-agent`;
+everything else is still a design note.** Written 2026-10-19 after reading the
+pipeline rather than the description of it, and every claim below about what
+existed was measured in this repository or this database on that date. The
+original status line said "Nothing here is built", which stopped being true
+the next day.
+
+---
+
+## What is behind the identifier boundary today — and what is not
+
+Stated here, at the top, because this note is where someone comes to find out,
+and because a reader skimming §4 and §4c could reasonably come away believing
+identifiers no longer reach the model. **They do.**
+
+| path | runs on | behind the boundary? |
+|---|---|---|
+| the query agent / gathering stage | nothing live yet — mock corpus only | **yes**, fully |
+| the SIEM log digest (`alert_log_prompt.build`) | only when an analyst pins events, or if `alert_log_ai_autosend` is turned on — **off on this deployment** | **yes**, since 2026-10-20 |
+| **the alert body and the findings digest** | **every alert, every run, today** | **no** — `assistant_sanitizer_service` only, with all six gaps in [token-boundary-gaps.md](token-boundary-gaps.md) row 11 |
+
+So the accurate sentence is: **identifiers do leave this environment on the
+path that runs.** What the boundary covers is a stage no customer traffic
+reaches and a block that is off by default. Measured at the wire on
+2026-10-20, all six gap classes and a seventh the register did not have reach
+the model in the clear from the alert text:
+[outgoing-payload-identifier-states.md](../measurements/outgoing-payload-identifier-states.md).
+
+What is true and worth claiming:
+
+* the boundary **reduces** model-facing identifiers on the paths it covers,
+  and refuses to resolve anything it did not issue — the return path is the
+  strong half, enforced by the token grammar;
+* the shipped path does tokenise the context-free classes on every alert —
+  multi-label hosts, IPv4, email, SID — as unscoped `[HOST_1]`;
+* nothing claims completeness, and the tests do not assert it. See
+  "What the boundary does and does not promise" in the register.
+
+Routing the alert body through the boundary is scoped in §4d. It is not
+built.
 
 ## 0. The brief against the code
 
@@ -428,6 +465,107 @@ warning, and the row is gone.
    variable later.
 
 ---
+
+## 4d. Scoping: route the alert body through the boundary
+
+**Not built.** Scoped 2026-10-20 against the measurement in
+[corpus-identifier-leak.md](../measurements/corpus-identifier-leak.md):
+4.41 identifiers per alert reach the model today, 1,320 distinct accounts and
+734 distinct hostnames named in the clear across the corpus.
+
+### The "twelve render sites" figure was wrong
+
+I said twelve in conversation before counting. Counted: **fourteen consumers
+of the stored `alert_body`**, and only three of them are render sites. The
+distinction matters more than the number, because restoring at render cannot
+help a consumer that is not rendering.
+
+| # | consumer | what it does with the body | restore-at-render fixes it? |
+|---|---|---|---|
+| 1 | `tasks/alert_body_task.py:81` | hands it to the analysis | n/a — this is the one that *wants* tokens |
+| 2 | `api/alert_investigations.py:1023` | `alert_body.ilike(pattern)` — the analyst's free-text search | **no.** The predicate runs in SQL against stored text. Searching for a hostname would return nothing |
+| 3 | `api/alert_investigations.py:1909` | `extract_alert_fields(run.alert_body)` when `result_json` carries none | **no.** Fields would be derived from tokens |
+| 4 | `api/alert_investigations.py:2513` | run detail payload | yes |
+| 5 | `api/alert_investigations.py:2561` | hydrated run payload — a second path to the same view | yes |
+| 6 | `services/alert_tuning_service.py:183` | reads bodies for tuning | **no** |
+| 7 | `services/alert_tuning_service.py:461` | selects bodies for tuning analysis | **no** |
+| 8 | `services/graph_materialisation_service.py:125` | builds the entity graph from bodies | **no.** The graph would hold tokens as entities |
+| 9 | `cli/graph_backfill.py:32` | backfills the graph over historical bodies | **no** |
+| 10 | `cli/case_graph.py:111` | case graph CLI | **no** |
+| 11 | `services/alert_report_export_service.py:112` | `/export` document carries `alert_body` | yes |
+| 12 | `alert_ingest_service.alert_body_hash` | dedup and 7-day prior reuse | **no.** Token indices vary per run, so the same alert would hash differently and dedup would stop working |
+| 13 | `frontend .../[id]/page.tsx:436,469` | renders the body on the run page | yes |
+| 14 | `frontend .../[id]/report/page.tsx:279` | renders the body on the report page | yes |
+
+Five render sites, nine consumers that are not rendering. **Seven of the nine
+cannot be repaired by restoring at render at all.**
+
+### And one blocker that settles it
+
+**The map expires and is purged.** The boundary purges on investigation
+completion and carries a 24-hour wall-clock ceiling, by design — decision B,
+and the reason `investigation_token_maps` is not an archive. If the stored
+body is tokenised, then after the purge **every historical alert is
+permanently unreadable**, by analysts and by us. That is not a migration
+problem to solve later; it is the storage design contradicting the boundary
+design.
+
+Keeping the map forever is the other branch, and it inverts the security
+model: the map becomes a permanent, complete, decryptable index of every
+identifier the platform has seen, sealed under one key that lives in one
+`.env`. That is a bigger exposure than the one being closed.
+
+### So the option splits in two, and only one of them is small
+
+**(b-1) store tokenised, restore at render** — what the phrase "on ingest"
+literally implies. Breaks search, the entity graph, the dedup hash, field
+re-derivation and tuning; needs a decision about the map living forever;
+needs a backfill over 17,562 historical bodies. **Not recommended**, and not
+because it is hard — because the map's lifetime makes it incoherent.
+
+**(b-2) store raw, tokenise in-flight for the model only, restore the
+answer** — the same model-facing property, one site. `_analyse` tokenises
+`entry_text` with the run's boundary before `add_entry`; `_restore_identifiers`,
+which already exists for the digest, restores the report. Nothing stored
+changes, no render site changes, search, graph, hash and tuning are untouched.
+**Recommended.**
+
+What (b-2) does **not** do: it does not stop identifiers being stored in our
+database. They already are, and they stay. It stops them reaching the
+provider. If "not at rest either" is the goal, that is (b-1) with a permanent
+map, and it is a separate project with its own threat model.
+
+### Is tokenise-then-restore the identity function? Measured: yes, once over
+
+Over every body under the 100,000-char bound — 17,550 of 17,562 runs:
+
+* **17,549 identical. 99.994%.**
+* mean 6.84 tokens minted per body, max 86; only **5 bodies minted nothing**,
+  so this is not identity achieved by doing nothing.
+* **one body differs**, by −5 characters.
+
+The one failure, diagnosed: five `` characters, stripped by
+**`sanitize_entries`** — the shipped sanitiser, which already runs on that
+alert today. Confirmed by counting the character at each stage: 5 in the
+body, 0 after `sanitize_entries`, 0 after the boundary, 0 after restore.
+Neither the boundary nor `restore` loses anything.
+
+**So the round trip introduces no change the current pipeline does not
+already make**, and the risk profile is the one hoped for: a round-trip bug,
+not a content change. That is the opposite of the detector-widening risk,
+which would change the text of every report by design.
+
+**One sharp exception.** Identity was measured with `tokenize()`, the prose
+path, which does **not** run the secret layer. `tokenize_records` runs
+secrets first and secret placeholders are **non-reversible by design**. So if
+(b-2) also redacts the alert body's secrets — and the measurement says 21.6%
+of alerts carry something the secret detectors fire on — then the round trip
+is deliberately **not** identity for those 3,792 runs. That is a content
+change, it is the right one, and it needs its own before/after rather than
+riding along inside a change advertised as text-preserving.
+
+The 12 bodies over 100,000 chars are excluded from the identity claim for the
+same superlinearity reason as the leak scan, and are measured separately.
 
 ## 5. Failure modes
 
