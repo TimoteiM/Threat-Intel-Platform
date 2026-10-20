@@ -2420,3 +2420,38 @@ verdict, not the score: per-URL old score, new score, old label, new label,
 and the count and examples of label changes in each direction. A mean shift
 across all URLs would hide a small number of benign→high flips, which is the
 only outcome that reaches an analyst.
+
+## 42 — `--token=VALUE` is not recognised as a secret, on either sanitisation path
+
+Found 2026-10-20 while measuring the log digest for backlog 41's successor,
+not by looking for it. `log_secret_sanitizer` redacts `password=`,
+`-Password `, `api_key=` and `Authorization: Bearer`, and passes
+`--token=SentinelPassw0rd` through untouched:
+
+    --token=SentinelPassw0rd                 -> --token=SentinelPassw0rd
+    password=SentinelPassw0rd                -> password=<SECRET:password:…>
+    -Password SentinelPassw0rd               -> -Password <SECRET:password_flag:…>
+    api_key=SentinelPassw0rd                 -> api_key=<SECRET:api_key:…>
+    Authorization: Bearer SentinelPassw0rd   -> Authorization: Bearer <SECRET:bearer:…>
+
+**It affects both model-facing paths equally.** The token boundary runs the
+same secret patterns — `tokenize_records` calls `log_secret_sanitizer` first
+and then its own identifier pass — so routing a path through the boundary
+does nothing for this. It is a pattern gap, not a path gap, and it is not
+narrowed by the 2026-10-20 log-digest change.
+
+**Why it is not just "add `--token`".** The long-form switch family is open:
+`--token`, `--api-token`, `--auth-token`, `--secret`, `--client-secret`,
+`--access-key`, and the `/token:` form on Windows. Adding one is the kind of
+fix that reads as closed and is not. The shape of the real fix is a pattern
+for *long-option credential switches* with the same value-shape constraints
+the existing flag patterns use, plus a corpus measurement for
+over-redaction — `-Password` was added with one, and the detector exclusions
+in register row 10 exist because a widening went wrong before (35
+stack-trace namespaces read as hostnames).
+
+**Before building it, measure whether it occurs.** Count `--token=` and its
+siblings in the alert corpus. A pattern that fires on nothing is cost
+without benefit, and this was found with a synthetic sentinel, not in real
+data. See `docs/design/token-boundary-gaps.md`, "Not an identifier, found
+while measuring".

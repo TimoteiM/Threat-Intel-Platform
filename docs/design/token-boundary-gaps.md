@@ -85,10 +85,18 @@ restored after.
 There are two model-facing sanitisation paths in this platform, and **every
 closure listed above is in one of them.**
 
+> **Narrowed 2026-10-20, for one path, and widened in the same measurement.**
+> The SIEM log digest — `alert_log_prompt.build`, the block analysts' pinned
+> events are sent in — now tokenises with the boundary before the layer below
+> sees it, so none of the six apply to it. But measuring that also found the
+> row had been **understating** the shipped path, because the row's table was
+> measured on raw log text and this digest is JSON. See
+> "The log digest" below. The row stands for everything else.
+
 | | the boundary | the shipped alert pipeline |
 |---|---|---|
 | module | `app/services/token_boundary.py` | `AssistantService` → `assistant_sanitizer_service` |
-| used by | the query agent (does not exist yet) | **every real alert analysed today** |
+| used by | the query agent, and the SIEM log digest since 2026-10-20 | **every real alert analysed today** |
 | single-label keyed host (`computer="FILESERVER"`) | tokenised | **left in the clear** |
 | bare `DOMAIN\user` in prose | tokenised | **left in the clear** |
 | UNC server name (`\\EXPFS01\…`) | tokenised | **left in the clear** |
@@ -99,10 +107,17 @@ closure listed above is in one of them.**
 | token scope (tenant + investigation) | in the token | none — `[HOST_1]` is unscoped |
 | unknown token on the way back | refusal | left standing |
 
-So the honest summary is: **the closures protect a consumer that does not
-exist yet, and the path analysing real customer alerts this afternoon still
-has all six gaps.** A reviewer should read the "Closed" table above with that
-in mind.
+So the honest summary is: **the closures protect the query agent, which no
+customer traffic reaches yet, and the SIEM log digest, which is off by
+default — while the alert body and the findings digest, which every real
+alert goes through this afternoon, still have all six gaps.** A reviewer
+should read the "Closed" table above with that in mind.
+
+(Until 2026-10-20 this paragraph said the closures protected "a consumer that
+does not exist yet" and that the shipped path "still has all six gaps", full
+stop. The first clause is now wrong for one block and the second needs the
+qualifier above. Corrected rather than appended to, because the sentence was
+quotable and would have been quoted.)
 
 Why it is deliberate rather than an oversight: widening detection in the
 shipped path changes the text of every report the platform has produced, and
@@ -122,6 +137,63 @@ measures is a divergence that widens silently. Two tests hold it still:
   is **additive**: everything the shipped path tokenises, the boundary
   tokenises too. A boundary that quietly stopped covering something would
   otherwise hide inside the difference.
+
+### The log digest: the row was measured on the wrong shape
+
+The table above is measured on **raw log text**. The SIEM log digest is
+**JSON lines** — one `json.dumps` per event — so `user="jdoe"` reaches the
+shipped detectors as `user=\"jdoe\"`, with a backslash between the key's
+separator and the value. The shipped account pattern does not expect it and
+does not match. Only the **context-free** classes — a dotted FQDN, an IPv4,
+an email, a SID — need no key beside them, so only those were ever caught in
+this block. The boundary's separator admits the escaped form.
+
+That makes the row's `keyed account | tokenised` cell **false for this path**,
+and it was never a cell about a shape. Measured against the text
+`sanitize_entries` actually produces, with one sentinel per class:
+
+| class | before 2026-10-20 | after |
+|---|---|---|
+| keyed single-label host (gap 1) | leaked | tokenised |
+| bare `DOMAIN\user` (gap 2) | leaked | tokenised |
+| UNC server name (gap 3) | leaked | tokenised |
+| IPv6 (gap 4) | leaked | tokenised |
+| account as a command-line switch (gap 5) | leaked | tokenised |
+| secret in a field off the old list (gap 6) | leaked | redacted |
+| **keyed account inside JSON** (not in the six) | **leaked** | tokenised |
+| keyed multi-label host, IPv4, email, SID | tokenised | tokenised |
+
+Gap 6 is reachable here only because an analyst can add any document field as
+a column and have it projected into `extra`; a credential in a field nobody
+projects never reaches the digest at all. `tokenize_records` walks every
+string, so the field list is gone rather than longer.
+
+Token scope narrows too: this path's tokens are `[HOST_<fingerprint>_1]`,
+scoped to a tenant and a run, where the shipped path mints an unscoped
+`[HOST_1]`. The inbound row does **not** narrow — the digest path restores
+with `restore()`, which leaves an unknown token standing on purpose.
+
+Held by `test_no_identifier_sentinel_reaches_the_outgoing_payload` and
+`test_the_boundary_and_not_the_layer_below_is_what_removes_them` in
+`tests/unit/test_services/test_alert_log_ai_context.py`. The second exists
+because the first would pass for the wrong reason if the boundary call were
+removed and the layer below happened to improve.
+
+**What this says about reading this register:** a row that names a detector
+is a claim about a pattern, and a pattern only acts on text in a particular
+shape. The first version of this investigation read `build`'s return value,
+found hostnames in it, and concluded that nothing sanitised identifiers on
+this path — wrong, because a layer below was doing part of the job. The
+second read the outgoing payload and got the answer. Measure where the data
+leaves, not at the nearest convenient surface.
+
+### Not an identifier, found while measuring: `--token=VALUE`
+
+`log_secret_sanitizer` recognises `password=`, `-Password`, `api_key=` and
+`Authorization: Bearer`, and does **not** recognise `--token=VALUE`. That is
+a pattern gap in the secret sanitiser rather than an identifier gap, it
+affects **both** paths equally, and nothing here changes it — the boundary
+runs the same secret patterns. Recorded so it is not re-found as new.
 
 ## Decisions, not gaps
 

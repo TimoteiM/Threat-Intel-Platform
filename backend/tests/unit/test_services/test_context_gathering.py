@@ -459,10 +459,19 @@ def test_the_analysis_stage_accepts_the_projection():
     from app.services.alert_body_investigation_service import _build_log_digest
     from app.services.context_gathering import projection
 
-    record = _gather(event_time=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc))
+    # The stage's OWN boundary is handed to the digest builder. Not a fresh
+    # one: a token carries the fingerprint of the map that minted it, so a
+    # second boundary could neither resolve these tokens nor restore the
+    # model's answer — and `restore` is forgiving, so the failure would be a
+    # stray `[HOST_…]` in an analyst's report rather than an error.
+    boundary = tb.in_memory(tenant_id="c00", investigation_id="run-1")
+    record = _gather(
+        event_time=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc),
+        boundary=boundary,
+    )
     digest, selection = _build_log_digest(
         projection.to_log_context(record), "alert body", {"event_id": "10"},
-        indicators=[],
+        indicators=[], boundary=boundary,
     )
     assert selection.get("status") != "no_alert_time"
     assert HOST not in (digest or ""), "a real hostname reached the model"
@@ -672,9 +681,22 @@ def test_no_raw_identifier_reaches_any_surface_the_stage_produces():
     svc.get_settings = lambda: _Autosend()
     try:
         digest, _ = _build_log_digest(context, "alert body", {"event_id": "10"},
-                                      indicators=[])
+                                      indicators=[], boundary=boundary)
     finally:
         svc.get_settings = original
+
+    # The digest is not the last surface. `alert_body_ai_service._analyse`
+    # joins it onto the alert text and `AssistantService.run_session` runs
+    # `sanitize_entries` over the join before the request is constructed, so
+    # **that** text is what leaves the building. Swept here because the first
+    # version of this investigation stopped at the digest, found identifiers
+    # in it, and concluded that nothing sanitised them — when a layer below
+    # was in fact doing part of the job. Measuring an intermediate answered a
+    # different question than the one asked.
+    from app.services.assistant_sanitizer_service import sanitize_entries
+
+    assembled = f"alert body\n\n{digest or ''}"
+    outgoing = sanitize_entries([assembled]).entries[0].sanitized_text
 
     surfaces = {
         "record.as_json()": record.as_json(),
@@ -682,6 +704,7 @@ def test_no_raw_identifier_reaches_any_surface_the_stage_produces():
         "projection.sources_block()": projection.sources_block(record),
         "report.compose()": report.compose(record=record),
         "analysis digest": digest or "",
+        "outgoing AI payload": outgoing,
     }
     for name, surface in surfaces.items():
         blob = repr(surface)

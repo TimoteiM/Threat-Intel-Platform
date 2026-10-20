@@ -758,8 +758,16 @@ def test_the_shipped_alert_pipeline_still_has_the_gaps_the_boundary_closed(text,
     """**This asserts the SHIPPED path is still worse than the boundary.**
 
     The closures on 2026-10-19 are in `token_boundary`. `AssistantService`'s
-    own path — which is what analyses every real alert today — calls
-    `assistant_sanitizer_service` directly and has none of them.
+    own path — the alert body and the findings digest, which every real alert
+    goes through today — calls `assistant_sanitizer_service` directly and has
+    none of them.
+
+    **Narrower than it was, as of 2026-10-20.** The SIEM log digest no longer
+    arrives here untokenised: `alert_log_prompt.build` runs the boundary over
+    the events before this layer sees them, so none of these classes apply to
+    that block. This test is about the detectors in the shipped sanitiser, not
+    about every input that reaches them — do not read a pass here as "the log
+    digest still leaks". See the log-digest section of the register.
 
     That divergence is deliberate: widening detection in the shipped path
     changes what every existing report says, which needs its own evidence. But

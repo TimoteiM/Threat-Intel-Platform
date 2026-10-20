@@ -336,8 +336,31 @@ def run_alert_body_investigation(
     # domain and hash pivots were never populated, so the only tie an event
     # could have to its alert was the device it ran on — which every retrieved
     # event shares.
+    # One boundary for this run, used in both directions: it tokenises the
+    # events that go out and restores the answer that comes back. It has to be
+    # the same object — a token carries the fingerprint of the map that minted
+    # it, so a second boundary cannot resolve the first one's tokens, and
+    # `restore` is deliberately forgiving and would leave them standing in the
+    # analyst's report rather than complain. Measured: a fresh map over
+    # already-tokenised records mints nothing at all.
+    #
+    # In memory, not persisted. The map's only consumer is the restore a few
+    # lines below, inside this same call, so there is nothing for a row to
+    # outlive — and the report stored at the end carries real names, exactly
+    # as it does today.
+    from app.services import token_boundary as _tb
+
+    log_boundary = _tb.in_memory(
+        tenant_id=str(tenant_id or "unassigned"),
+        # `run_id` is optional on this entry point. The scope only has to be
+        # stable for the length of this call — tokenise and restore both
+        # happen inside it — so a run without an id gets a literal rather
+        # than the string "None", which would read as an id that exists.
+        investigation_id=str(run_id) if run_id else "alert-body-no-run-id",
+    )
     log_digest, log_selection = _build_log_digest(
-        log_context, alert_body, alert_fields, indicators=indicators
+        log_context, alert_body, alert_fields, indicators=indicators,
+        boundary=log_boundary,
     )
 
     if run_ai:
@@ -358,6 +381,15 @@ def run_alert_body_investigation(
             if isinstance(ai_report, dict):
                 # What was sent, recorded next to what came back.
                 ai_report["log_selection"] = log_selection
+                # Detokenise once, here. The model reasoned over placeholders
+                # and will have cited them; the analyst reads names. This is
+                # the only place in this path where a token becomes a value,
+                # which is what makes "the model never saw it" checkable
+                # rather than a claim about intentions.
+                #
+                # Inert whenever nothing was tokenised: `restore` walks the
+                # map, and an empty map replaces nothing.
+                ai_report = _restore_identifiers(ai_report, log_boundary)
         except Exception as exc:  # run_alert_body_ai_analysis traps its own errors
             logger.exception("Alert-body AI analysis crashed: %s", exc)
             ai_report = {
@@ -1151,14 +1183,39 @@ def _verdict(
     }
 
 
+def _restore_identifiers(node: Any, boundary: Any) -> Any:
+    """Tokens back to real names, over every string in the model's answer.
+
+    Every string, not a named list of fields: the model decides where it
+    mentions a host, and a field list here would be the ninth hand-maintained
+    registry in this codebase. `restore` is a plain substitution of this map's
+    own tokens, so a string containing none comes back identical.
+    """
+    if isinstance(node, dict):
+        return {k: _restore_identifiers(v, boundary) for k, v in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [_restore_identifiers(v, boundary) for v in node]
+    if isinstance(node, str):
+        return boundary.restore(node)
+    return node
+
+
 def _build_log_digest(
     log_context: dict | None, alert_body: str, alert_fields: dict | None,
     indicators: list[dict] | None = None,
+    *,
+    boundary: Any,
 ) -> tuple[str, dict]:
     """Select and format the SIEM events the model will read.
 
     Never raises: log enrichment is additional evidence, and an alert must be
     analysed whether or not it could be gathered.
+
+    `boundary` is required and has no default, so a caller cannot reach the
+    model with untokenised events by omission. If it cannot be applied, the
+    digest is empty and the status says which — `boundary_unavailable`, not
+    `failed` and certainly not a clean `nothing_selected`. A skip that reads
+    as a result is the defect this platform has now fixed in three places.
     """
     if not isinstance(log_context, dict):
         return "", {"status": "absent"}
@@ -1170,10 +1227,14 @@ def _build_log_digest(
             "events_found": 0,
         }
 
+    # Imported before the `try`, so `BoundaryUnavailable` can be caught by
+    # name below. Inside it, the except clause would reference a module the
+    # failing statement may not have bound.
+    from app.services import alert_log_prompt
+
     try:
         from datetime import timezone
 
-        from app.services import alert_log_prompt
         from app.services.alert_log_selection import pivots_from_alert
 
         alert_time = log_context.get("alert_time")
@@ -1199,6 +1260,7 @@ def _build_log_digest(
 
         digest, selection, redactions = alert_log_prompt.build(
             records,
+            boundary=boundary,
             pivots=pivots,
             alert_time=alert_time,
             window_seconds=float(settings.alert_log_window_minutes) * 60.0,
@@ -1246,7 +1308,30 @@ def _build_log_digest(
             if f.get("field") and f.get("value")
         ]
         summary["digest_tokens"] = alert_log_prompt.measure(digest) if digest else 0
+        # What the boundary actually replaced, so an auditor can tell a block
+        # with no identifiers from a block nobody tokenised. The counts, never
+        # the values — the map is the one thing that must not travel with the
+        # thing it decodes.
+        summary["identifiers_tokenised"] = _token_counts(boundary)
         return digest, summary
+    except alert_log_prompt.BoundaryUnavailable as exc:
+        # Fail closed, and say so. Distinct from `failed`, because this is not
+        # an enrichment that went wrong — it is a payload we declined to send.
+        logger.warning("Log digest withheld, identifiers could not be tokenised: %s", exc)
+        return "", {
+            "status": "boundary_unavailable",
+            "reason": str(exc),
+            "events_found": len(records),
+        }
     except Exception as exc:  # noqa: BLE001
         logger.warning("Log context could not be prepared for the analyst: %s", exc)
         return "", {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _token_counts(boundary: Any) -> dict[str, int]:
+    """How many distinct entities were replaced, by class. Never the values."""
+    counts: dict[str, int] = {}
+    for token in getattr(boundary, "token_map", {}) or {}:
+        kind = token.strip("[]").split("_", 1)[0]
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
