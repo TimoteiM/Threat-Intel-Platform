@@ -2455,3 +2455,39 @@ siblings in the alert corpus. A pattern that fires on nothing is cost
 without benefit, and this was found with a synthetic sentinel, not in real
 data. See `docs/design/token-boundary-gaps.md`, "Not an identifier, found
 while measuring".
+
+## 43 — `sanitize_entries` is superlinear, and ten alert bodies are over 1M chars
+
+Found 2026-10-20 while measuring the corpus, not by looking for it. The
+shipped identifier sanitiser, on the path that runs:
+
+| input | time | per character |
+|---|---|---|
+| 544,145 chars over 120 small bodies | 0.58s | 0.94 M chars/s |
+| one 1,224,087-char body | **25.71s** | **0.05 M chars/s** |
+
+~19× worse per character. The boundary's own added regexes are all fast on
+the same body (0.02–0.19s), so the cost is inside `sanitize_entries`.
+
+**Why it matters operationally.** Ten stored alert bodies exceed 1,000,000
+characters and average 3,080,000. `MAX_ANALYSED_ALERT_BODY_CHARS` is
+10,000,000, so nothing truncates them to a smaller size before analysis, and
+`run_alert_body_investigation_task` has a 1,800s hard limit. A corpus scan
+that handled 12,500 small runs in 236s then spent over nine minutes without
+finishing the remaining 5,062 — which include those ten.
+
+**Do not extrapolate a curve from one data point.** The honest statement is
+that one 1.2M body costs 26 seconds and there are ten bodies between 2.5×
+and 9× that size. The next step is cheap and specific:
+
+1. time `sanitize_entries` on each of the ten, individually, with a ceiling;
+2. check the run records for whether any of those ten ever hit the task
+   timeout or a retry — the evidence may already exist unread;
+3. only then decide between a size cap before sanitisation, a cheaper
+   pre-filter, or leaving it alone because it has never actually bitten.
+
+A cap is tempting and is a silent truncation of evidence, so it needs the
+same "say what was dropped" treatment as any other bound.
+
+See `docs/measurements/corpus-identifier-leak.md`, "Superlinear
+sanitisation".
