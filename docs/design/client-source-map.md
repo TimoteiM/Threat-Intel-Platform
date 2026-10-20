@@ -94,7 +94,7 @@ config-field schema all see them with nothing to update.
 
 | platform | connection fields (in the YAML) | required | credential (API only) |
 |---|---|---|---|
-| **exabeam** | `base_url` | `base_url` | `username`, `token` |
+| **exabeam** | `base_url` (the API host, `https://api.<region>.exabeam.cloud`) | `base_url` | `client_id`, `client_secret` — the API Key and Secret from **Settings > API Keys** |
 | **sentinelone** | `console_url`, `site_ids`, `account_id` | `console_url` | `api_token` |
 | **cortex** | `api_url`, `tenant_name` | `api_url` | `api_key`, `api_key_id` |
 
@@ -275,6 +275,7 @@ the application one.
 | | |
 |---|---|
 | ~~Host-side tooling connects as the owner.~~ **Closed 2026-10-20** — see "The host/container divergence" above. |
-| **No connectors.** Nothing yet reads from Exabeam, SentinelOne or Cortex. The specs declare the shape; the query path that will use them does not exist. |
+| **SentinelOne and Cortex have no connector.** Their specs declare a shape and nothing reads it. Exabeam now has one — `app/integrations/exabeam_client.py`, built from the published API reference. |
+| **The Exabeam token cache is per process.** Exabeam issues 4-hour tokens and asks for ~6 token requests a day; the api and the worker hold one cache each, so two processes × 6 is at the edge of that guidance. A shared cache means putting a bearer token in Redis — a credential in a new place, and a decision for the deployment owner rather than a detail of the connector. |
 | **The credential columns are not separately restricted.** `tip_app` can read `tenant_integrations.secret_ciphertext` (it is encrypted, and `integration_credential_service` is the only decrypting module, write-only and scope-enforced). A column-level grant plus a dedicated role — the pattern used for the token map — would narrow it further. Not done: it needs the credential service to hold its own connection, which is a bigger change than this one. |
 | **`apply --apply` never deletes.** A row in the database the file does not declare is reported and left alone. Deleting would mean a YAML edit can disconnect a client's platform. |

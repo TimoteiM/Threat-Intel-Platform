@@ -146,8 +146,15 @@ PLATFORMS: dict[str, PlatformSpec] = {
     # values for fields I had invented, one of which ("the search base URL")
     # has no obvious answer because it was not a real setting.
     #
-    # This set comes from Exabeam's own API reference for
-    # `POST /search/v2/events`: OAuth2 with an `Authorization: Bearer` token,
+    # This set comes from Exabeam's own documentation. There is **no bearer
+    # token to copy out of the console**: an administrator creates an API Key
+    # and Secret under Settings > API Keys, and those are exchanged for a
+    # 4-hour token at `/auth/v1/token`. Confirmed at
+    # developers.exabeam.com/exabeam/docs/api-keys, after two earlier versions
+    # of this spec guessed — `username`+`token`, then a static bearer.
+    #
+    # The API reference for `POST /search/v2/events`: OAuth2 with an
+    # `Authorization: Bearer` token,
     # against `api.<region>.exabeam.cloud`. That supersedes the earlier
     # `username` + `token` pair, which was inferred from a sentence about a
     # TraceCat automation rather than read from the API contract — the host
@@ -168,9 +175,12 @@ PLATFORMS: dict[str, PlatformSpec] = {
             ),
         },
         secret_fields={
-            "token": (
-                "The OAuth2 bearer token, sent as `Authorization: Bearer`. "
-                "Never shared between clients."
+            "client_id": (
+                "The API Key from Settings > API Keys in the Exabeam console."
+            ),
+            "client_secret": (
+                "That key's Secret. Exabeam shows it in full only once, when "
+                "the key is created. Never shared between clients."
             ),
         },
         required=("base_url",),

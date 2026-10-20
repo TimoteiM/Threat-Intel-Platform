@@ -16,13 +16,20 @@ Verified from this deployment on 2026-10-20, before any credential existed:
 answers **403** to an unauthenticated POST — so egress works and the endpoint
 is live. The only thing between here and a working query is a credential.
 
-**What is still unconfirmed, and is marked as such rather than guessed.**
-Whether the stored `token` is a long-lived bearer that goes straight into the
-header, or a client id and secret to exchange at a token endpoint first. The
-API reference pane shows a Bearer token field, and the operator's existing
-TraceCat automation uses "a username and a token", so this sends the token
-directly. If an exchange is required, `verify()` will say so in words rather
-than fail obscurely — see `_UNAUTHORISED_HINT`.
+**The exchange is required, and that is confirmed rather than assumed.**
+Exabeam's documentation (developers.exabeam.com/exabeam/docs/api-keys and
+/reference/get-access-token) states it plainly: an administrator creates an
+API **Key** and **Secret** under Settings > API Keys, and those are exchanged
+for a bearer token at `POST {base_url}/auth/v1/token` with
+`grant_type=client_credentials`. **There is no bearer token to copy out of
+the console.** The earlier version of this module sent a stored token
+straight through, which was my inference from a sentence rather than a read
+of the contract; its 401 message named this exact possibility.
+
+**The token is cached because Exabeam asks for it to be.** A token is valid
+for 4 hours, they recommend no more than ~6 token requests per 24 hours, and
+"do not request a token on every API call". Fetching one per search would
+breach that within a working morning.
 
 Nothing here logs a credential, a query result or an event. `httpx` is given
 the token in a header built at call time and the response body is never
@@ -52,15 +59,86 @@ DEFAULT_LIMIT = 3000
 #: rather than a longer timeout.
 TIMEOUT_SECONDS = 30.0
 
+#: Where the Key and Secret are exchanged for a bearer token.
+TOKEN_PATH = "/auth/v1/token"
+
+#: Exabeam issues 4-hour tokens and asks for no more than ~6 token requests a
+#: day. Refreshed this far before expiry so a long search cannot start with a
+#: token that dies mid-flight, without turning every call into a fetch.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=15)
+
+#: Their documented default when the response omits one.
+TOKEN_DEFAULT_LIFETIME = timedelta(hours=4)
+
 _UNAUTHORISED_HINT = (
-    "Exabeam rejected the credential (HTTP {status}). Two things produce this "
-    "and they need different fixes: a token that is simply wrong or expired, "
-    "or a key/secret pair that has to be exchanged for a bearer token first — "
-    "this platform sends the stored token straight through as "
-    "`Authorization: Bearer`. If your credential is an API key id and secret "
-    "rather than a bearer token, that exchange is the missing step and the "
-    "spec needs a token endpoint adding."
+    "Exabeam rejected the API key (HTTP {status}) when exchanging it for a "
+    "token. The Key and Secret come from Settings > API Keys in the Exabeam "
+    "console, the Secret is shown in full only once when the key is created, "
+    "and the key needs a permission set that allows search."
 )
+
+
+#: Cached bearer tokens, keyed by (base_url, a hash of the key id).
+#:
+#: **In-process.** The api and the worker therefore hold one each, which is 2
+#: processes x 6 tokens a day at worst — at the edge of Exabeam's guidance.
+#: A shared cache would fix that and means putting a bearer token in Redis,
+#: which is a credential in a new place and a decision for the deployment
+#: owner rather than a detail of this module. Recorded rather than chosen.
+#:
+#: The key id is hashed so a cache dump, a debugger or a repr cannot show it.
+_TOKEN_CACHE: dict[tuple[str, str], tuple[str, datetime]] = {}
+
+
+def _cache_key(base_url: str, client_id: str) -> tuple[str, str]:
+    import hashlib
+
+    return (base_url, hashlib.sha256(client_id.encode("utf-8")).hexdigest()[:16])
+
+
+def clear_token_cache() -> None:
+    """Forget every cached token. For tests, and for a credential rotation."""
+    _TOKEN_CACHE.clear()
+
+
+def bearer_token(*, base_url: str, client_id: str, client_secret: str,
+                 timeout: float = TIMEOUT_SECONDS) -> str:
+    """A bearer token for this key, from cache when one is still good.
+
+    Raises `httpx.HTTPStatusError` if Exabeam refuses the key. The response
+    body is never attached to an exception: a token response contains a
+    token.
+    """
+    key = _cache_key(base_url, client_id)
+    cached = _TOKEN_CACHE.get(key)
+    now = datetime.now(timezone.utc)
+    if cached and cached[1] - TOKEN_REFRESH_MARGIN > now:
+        return cached[0]
+
+    response = httpx.post(
+        f"{base_url}{TOKEN_PATH}",
+        json={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+        },
+        headers={"accept": "application/json", "content-type": "application/json"},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    body = response.json() if response.content else {}
+    token = str((body or {}).get("access_token") or "").strip()
+    if not token:
+        # A 2xx with no token is not a success. Reported as a shape problem
+        # rather than letting an empty Bearer header produce a confusing 401
+        # from the search endpoint one call later.
+        raise ValueError("Exabeam returned no access_token in a successful response")
+    try:
+        lifetime = timedelta(seconds=int((body or {}).get("expires_in")))
+    except (TypeError, ValueError):
+        lifetime = TOKEN_DEFAULT_LIFETIME
+    _TOKEN_CACHE[key] = (token, now + lifetime)
+    return token
 
 
 def _base_url(config: dict[str, Any]) -> str:
@@ -139,7 +217,11 @@ def verify(*, client_id: str = "", client_secret: str = "",
     config = config or {}
     secrets = secrets or {}
     base_url = _base_url(config)
-    token = str(secrets.get("token") or client_secret or "").strip()
+    # `client_id`/`client_secret` are the API Key and API Key Secret from
+    # Settings > API Keys. The positional arguments are accepted so this still
+    # works through the generic call path, which fills them from the same blob.
+    key_id = str(secrets.get("client_id") or client_id or "").strip()
+    key_secret = str(secrets.get("client_secret") or client_secret or "").strip()
 
     if not base_url:
         return {
@@ -148,13 +230,48 @@ def verify(*, client_id: str = "", client_secret: str = "",
             "reason": "No base_url is configured for this tenant's Exabeam.",
             "failure_kind": "not_configured",
         }
-    if not token:
+    missing = [n for n, v in (("client_id", key_id), ("client_secret", key_secret)) if not v]
+    if missing:
         return {
             "state": status.VERIFIED_FAILING,
             "direction": status.INGEST,
-            "reason": "No token is stored for this tenant's Exabeam.",
+            "reason": (
+                f"No {' and '.join(missing)} stored for this tenant's Exabeam. "
+                f"Both come from Settings > API Keys in the Exabeam console."
+            ),
             "failure_kind": "not_configured",
         }
+
+    # The exchange, before the search. A failure here is about the key; a
+    # failure after it is about the query or the host, and the reasons below
+    # keep those apart.
+    try:
+        token = bearer_token(base_url=base_url, client_id=key_id,
+                             client_secret=key_secret)
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        return {
+            "state": status.VERIFIED_FAILING,
+            "direction": status.INGEST,
+            "reason": (_UNAUTHORISED_HINT.format(status=code)
+                       if code in (400, 401, 403)
+                       else f"Exabeam answered HTTP {code} to the token request. "
+                            f"The token endpoint is {base_url}{TOKEN_PATH}."),
+            "failure_kind": "unauthorised" if code in (400, 401, 403) else "token_error",
+        }
+    except httpx.RequestError as exc:
+        return {
+            "state": status.VERIFIED_FAILING,
+            "direction": status.INGEST,
+            "reason": (
+                f"Could not reach {base_url}{TOKEN_PATH} ({type(exc).__name__}). "
+                f"This is a network or DNS answer, not a credential one."
+            ),
+            "failure_kind": "unreachable",
+        }
+    except ValueError as exc:
+        return {"state": status.VERIFIED_FAILING, "direction": status.INGEST,
+                "reason": str(exc), "failure_kind": "token_error"}
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=1)
@@ -173,8 +290,14 @@ def verify(*, client_id: str = "", client_secret: str = "",
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         if code in (401, 403):
-            reason = _UNAUTHORISED_HINT.format(status=code)
-            kind = "unauthorised"
+            # The token was issued a moment ago, so this is about what the key
+            # is ALLOWED to do rather than whether it is valid.
+            reason = (
+                f"The token was issued but the search was refused (HTTP {code}). "
+                f"The API key authenticates but its permission set does not "
+                f"allow search — change it under Settings > API Keys."
+            )
+            kind = "forbidden"
         elif code == 404:
             reason = (
                 f"{base_url}{SEARCH_PATH} returned 404. The base URL is "

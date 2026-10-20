@@ -21,7 +21,55 @@ import pytest
 from app.integrations import exabeam_client as ex
 
 TOKEN = "tok-THIS-MUST-NEVER-APPEAR"
+KEY_ID = "key-id-SECRET-TOO"
+KEY_SECRET = "key-secret-MUST-NOT-LEAK"
 BASE = "https://api.eu.exabeam.cloud"
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_token():
+    """Every test starts with an empty token cache.
+
+    Without this the first test to exchange a token would satisfy the rest,
+    and the caching tests would pass by accident.
+    """
+    ex.clear_token_cache()
+    yield
+    ex.clear_token_cache()
+
+
+class _Exchange:
+    """Stands in for httpx.post across BOTH endpoints.
+
+    `verify()` now makes two calls — the token exchange, then the search — so
+    a stub that answers only one of them tests the wrong thing.
+    """
+
+    def __init__(self, token_status=200, search_status=200,
+                 token_body=None, search_body=None):
+        self.token_status = token_status
+        self.search_status = search_status
+        self.token_body = token_body if token_body is not None else {
+            "access_token": TOKEN, "expires_in": 14400}
+        self.search_body = search_body if search_body is not None else {"rows": []}
+        self.calls: list[tuple[str, dict, dict]] = []
+
+    def __call__(self, url, json=None, headers=None, timeout=None):
+        self.calls.append((url, json or {}, headers or {}))
+        request = httpx.Request("POST", url)
+        if url.endswith(ex.TOKEN_PATH):
+            return httpx.Response(self.token_status, json=self.token_body,
+                                  request=request)
+        return httpx.Response(self.search_status, json=self.search_body,
+                              request=request)
+
+    @property
+    def token_calls(self):
+        return [c for c in self.calls if c[0].endswith(ex.TOKEN_PATH)]
+
+    @property
+    def search_calls(self):
+        return [c for c in self.calls if c[0].endswith(ex.SEARCH_PATH)]
 
 
 class _Capture:
@@ -42,7 +90,8 @@ class _Capture:
 
 def _verify(monkeypatch, capture):
     monkeypatch.setattr(ex.httpx, "post", capture)
-    return ex.verify(config={"base_url": BASE}, secrets={"token": TOKEN})
+    return ex.verify(config={"base_url": BASE},
+                     secrets={"client_id": KEY_ID, "client_secret": KEY_SECRET})
 
 
 # ── the documented request ───────────────────────────────────────────────
@@ -102,18 +151,21 @@ def test_verification_asks_for_one_row_over_one_minute(monkeypatch):
     """A verification proves the credential works; it does not retrieve
     anything. A wide search over years of logs is slow and rude to the
     customer's cluster."""
-    cap = _Capture()
+    cap = _Exchange()
     _verify(monkeypatch, cap)
-    assert cap.payload["limit"] == 1
-    start = datetime.fromisoformat(cap.payload["startTime"])
-    end = datetime.fromisoformat(cap.payload["endTime"])
+    assert len(cap.token_calls) == 1, "one exchange, then one search"
+    assert len(cap.search_calls) == 1
+    payload = cap.search_calls[0][1]
+    assert payload["limit"] == 1
+    start = datetime.fromisoformat(payload["startTime"])
+    end = datetime.fromisoformat(payload["endTime"])
     assert timedelta(seconds=0) < (end - start) <= timedelta(minutes=2)
 
 
 def test_a_successful_verification_is_verified_ok(monkeypatch):
     from app.services import integration_status_service as status
 
-    out = _verify(monkeypatch, _Capture(200, {"rows": []}))
+    out = _verify(monkeypatch, _Exchange())
     assert out["state"] == status.VERIFIED_OK
     assert out["direction"] == status.INGEST
 
@@ -126,7 +178,7 @@ def test_no_failure_reason_contains_the_token(monkeypatch, status_code):
     """The reason is stored in `tenant_integrations.health`, rendered on the
     page and written to the audit row. A credential in it is a credential in
     three places that are read back."""
-    out = _verify(monkeypatch, _Capture(status_code))
+    out = _verify(monkeypatch, _Exchange(search_status=status_code))
     assert out["state"] != "verified_ok"
     # The token VALUE. The word "Bearer" appearing in an explanation of how
     # the header is built is not a leak — the first version of this test
@@ -139,7 +191,7 @@ def test_a_failure_does_not_echo_the_response_body(monkeypatch):
     """A search response carries customer log events. The HTTP code is the
     diagnosis; the body is somebody's data."""
     secret_event = "user=jdoe host=EXPDC001 process=mimikatz.exe"
-    out = _verify(monkeypatch, _Capture(500, {"events": [secret_event]}))
+    out = _verify(monkeypatch, _Exchange(search_status=500, search_body={"events": [secret_event]}))
     assert secret_event not in out["reason"]
     assert "jdoe" not in out["reason"]
     assert "500" in out["reason"]
@@ -148,7 +200,7 @@ def test_a_failure_does_not_echo_the_response_body(monkeypatch):
 def test_a_successful_verification_does_not_report_what_it_found(monkeypatch):
     """Not even a count. How many events a one-minute window happened to hold
     tells nobody anything and the rows are customer log data."""
-    out = _verify(monkeypatch, _Capture(200, {"rows": [
+    out = _verify(monkeypatch, _Exchange(search_body={"rows": [
         {"id": "1", "user": "jdoe"}, {"id": "2", "user": "asmith"}]}))
     assert "jdoe" not in out["reason"] and "asmith" not in out["reason"]
     assert "2" not in out["reason"].replace("v2", "").replace("/search/", "")
@@ -157,22 +209,93 @@ def test_a_successful_verification_does_not_report_what_it_found(monkeypatch):
 # ── failures an operator can act on ──────────────────────────────────────
 
 
-def test_an_unauthorised_answer_names_the_two_possible_causes(monkeypatch):
-    """401/403 has two fixes and they are different: a wrong or expired
-    token, or a key/secret that must be exchanged for a bearer first. This
-    platform sends the token straight through, so the second is a missing
-    step rather than a bad credential — and an operator cannot tell which
-    from 'unauthorised'."""
-    out = _verify(monkeypatch, _Capture(401))
+def test_a_rejected_key_points_at_where_the_key_comes_from(monkeypatch):
+    """A refusal at the EXCHANGE is about the API key itself, and an operator
+    needs to know where that key lives: Settings > API Keys, with the Secret
+    shown in full only once."""
+    out = _verify(monkeypatch, _Exchange(token_status=401))
     assert out["failure_kind"] == "unauthorised"
-    assert "exchange" in out["reason"]
+    assert "Settings > API Keys" in out["reason"]
+    assert KEY_SECRET not in out["reason"] and KEY_ID not in out["reason"]
+
+
+def test_a_refusal_after_a_successful_exchange_is_about_permissions(monkeypatch):
+    """The control for the test above, and the distinction that matters: the
+    token was issued a moment ago, so a 403 on the search is about what the
+    key is ALLOWED to do, not whether it is valid."""
+    out = _verify(monkeypatch, _Exchange(search_status=403))
+    assert out["failure_kind"] == "forbidden"
+    assert "permission set" in out["reason"]
+
+
+def test_a_token_is_reused_rather_than_fetched_per_call(monkeypatch):
+    """Exabeam issues 4-hour tokens and asks for no more than about six token
+    requests a day — "do not request a token on every API call". Fetching one
+    per search would breach that within a working morning."""
+    cap = _Exchange()
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    for _ in range(5):
+        ex.bearer_token(base_url=BASE, client_id=KEY_ID, client_secret=KEY_SECRET)
+    assert len(cap.token_calls) == 1, (
+        f"{len(cap.token_calls)} token requests for 5 calls; the cache is not "
+        f"holding and Exabeam's rate guidance would be breached"
+    )
+
+
+def test_an_expired_token_is_refetched(monkeypatch):
+    """The control for the caching test: a cache that never refreshes would
+    also make exactly one request, and would hand out a dead token after four
+    hours."""
+    cap = _Exchange(token_body={"access_token": TOKEN, "expires_in": 1})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    ex.bearer_token(base_url=BASE, client_id=KEY_ID, client_secret=KEY_SECRET)
+    ex.bearer_token(base_url=BASE, client_id=KEY_ID, client_secret=KEY_SECRET)
+    assert len(cap.token_calls) == 2, "a near-expired token was reused"
+
+
+def test_one_tenants_token_is_never_handed_to_another(monkeypatch):
+    """The cache is keyed by host and key, so two clients on the same Exabeam
+    region cannot share a token. A cache keyed by base_url alone would do
+    exactly that, and it is the one bug in a token cache that matters."""
+    cap = _Exchange()
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    ex.bearer_token(base_url=BASE, client_id="client-a", client_secret="s")
+    ex.bearer_token(base_url=BASE, client_id="client-b", client_secret="s")
+    assert len(cap.token_calls) == 2
+
+
+def test_the_cache_key_does_not_hold_the_key_id_in_clear():
+    """A cache dump, a debugger or a repr must not show it."""
+    key = ex._cache_key(BASE, KEY_ID)
+    assert KEY_ID not in "".join(str(part) for part in key)
+
+
+def test_a_success_with_no_token_is_not_treated_as_success(monkeypatch):
+    """A 2xx carrying no `access_token` would otherwise put an empty Bearer
+    header on the next call and produce a confusing 401 from the search
+    endpoint one step later."""
+    cap = _Exchange(token_body={"token_type": "Bearer"})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    with pytest.raises(ValueError, match="no access_token"):
+        ex.bearer_token(base_url=BASE, client_id=KEY_ID, client_secret=KEY_SECRET)
+
+
+def test_the_exchange_sends_what_the_documentation_states(monkeypatch):
+    cap = _Exchange()
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    ex.bearer_token(base_url=BASE, client_id=KEY_ID, client_secret=KEY_SECRET)
+    url, body, _ = cap.token_calls[0]
+    assert url == f"{BASE}{ex.TOKEN_PATH}"
+    assert body["grant_type"] == "client_credentials"
+    assert body["client_id"] == KEY_ID
+    assert body["client_secret"] == KEY_SECRET
 
 
 def test_a_404_says_the_host_is_probably_wrong(monkeypatch):
     """The mistake this will actually catch: the Advanced Analytics web
     address entered where the API host belongs. One operator did exactly
     that, because the field description used to say so."""
-    out = _verify(monkeypatch, _Capture(404))
+    out = _verify(monkeypatch, _Exchange(search_status=404))
     assert out["failure_kind"] == "wrong_host"
     assert "api.<region>.exabeam.cloud" in out["reason"]
 
@@ -182,14 +305,17 @@ def test_a_network_failure_is_not_reported_as_a_credential_failure(monkeypatch):
         raise httpx.ConnectError("no route")
 
     monkeypatch.setattr(ex.httpx, "post", _boom)
-    out = ex.verify(config={"base_url": BASE}, secrets={"token": TOKEN})
+    out = ex.verify(config={"base_url": BASE},
+                    secrets={"client_id": KEY_ID, "client_secret": KEY_SECRET})
     assert out["failure_kind"] == "unreachable"
     assert "not a credential one" in out["reason"]
 
 
 @pytest.mark.parametrize("config,secrets,missing", [
-    ({}, {"token": TOKEN}, "base_url"),
-    ({"base_url": BASE}, {}, "token"),
+    ({}, {"client_id": KEY_ID, "client_secret": KEY_SECRET}, "base_url"),
+    ({"base_url": BASE}, {"client_secret": KEY_SECRET}, "client_id"),
+    ({"base_url": BASE}, {"client_id": KEY_ID}, "client_secret"),
+    ({"base_url": BASE}, {}, "client_id"),
 ])
 def test_a_missing_field_is_named(monkeypatch, config, secrets, missing):
     def _never(*a, **k):  # pragma: no cover - must not be reached
