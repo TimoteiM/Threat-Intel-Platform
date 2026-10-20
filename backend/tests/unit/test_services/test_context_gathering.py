@@ -429,3 +429,184 @@ def test_a_purge_failure_does_not_fail_the_investigation():
 def test_without_a_database_there_is_nothing_to_purge():
     record = _gather()
     assert not any("purge" in n for n in record.notes)
+
+
+# ── the record into the analysis stage ───────────────────────────────────
+
+
+def test_the_record_projects_into_the_shape_the_pipeline_consumes():
+    """Not a path of its own. A second way into the analysis stage is a
+    second thing to keep in step, and this codebase has eight registries that
+    show how that ends."""
+    from app.services.context_gathering import projection
+
+    context = projection.to_log_context(_gather())
+    for key in ("status", "tenant_id", "reason", "log_count", "truncated",
+                "window", "selectors", "sources", "logs"):
+        assert key in context, key
+    # What the digest builder reads. Without these it answers `no_alert_time`
+    # and declines to use a context it has already accepted.
+    for key in ("alert_time", "entity_host", "entity_user"):
+        assert key in context, key
+
+
+def test_the_analysis_stage_accepts_the_projection():
+    """The real digest builder, not a stand-in — the claim is that the
+    existing pipeline reasons over this, so the existing pipeline has to be
+    the thing that reads it."""
+    from datetime import datetime, timezone
+
+    from app.services.alert_body_investigation_service import _build_log_digest
+    from app.services.context_gathering import projection
+
+    record = _gather(event_time=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc))
+    digest, selection = _build_log_digest(
+        projection.to_log_context(record), "alert body", {"event_id": "10"},
+        indicators=[],
+    )
+    assert selection.get("status") != "no_alert_time"
+    assert HOST not in (digest or ""), "a real hostname reached the model"
+
+
+@pytest.mark.parametrize("status,selectors,failing", [
+    # events and no failure
+    ("collected", {"host": HOST, "process": "p", "hash": SPREAD_HASH}, frozenset()),
+    # events AND a failure: usable, and incomplete in a known way
+    ("partial", {"host": HOST, "process": "p", "hash": SPREAD_HASH},
+     frozenset({"host_threat_state"})),
+    # read, held nothing — a real negative
+    ("empty", {"host": QUIET_HOST, "process": "p", "hash": "0" * 64}, frozenset()),
+    # nothing gathered AND something unreadable — NOT empty
+    ("unavailable", {"host": QUIET_HOST, "process": "p", "hash": "0" * 64},
+     frozenset({"host_threat_state"})),
+])
+def test_the_status_distinguishes_nothing_found_from_could_not_look(
+    status, selectors, failing
+):
+    """`empty` and `unavailable` are different answers. Merging them is what
+    had the DNS collector reporting an outage as "no DNS records" across
+    2,602 runs."""
+    from app.services.context_gathering import projection
+
+    registry = ms.default_registry()
+    registry[pb.EDR].failing_templates = failing
+    context = projection.to_log_context(_gather(selectors=selectors, registry=registry))
+    assert context["status"] == status
+
+
+def test_every_event_carries_where_it_came_from():
+    """"The alert said this" and "we went and found this" are different kinds
+    of claim, and a flat list of events erases the difference."""
+    from app.services.context_gathering.projection import (
+        PROVENANCE_FIELD, to_log_context,
+    )
+
+    context = to_log_context(_gather(
+        event_id="18 | ThreatHunting",
+        selectors={"host": HOST, "pipe": "\\\\.\\pipe\\atsvc"}))
+    origins = {e[PROVENANCE_FIELD]["origin"] for e in context["logs"]}
+    assert origins == {"playbook", "agent"}
+    for event in context["logs"]:
+        found = event[PROVENANCE_FIELD]
+        assert found["template"] in pb.TEMPLATES
+        assert found["source"] and found["purpose"]
+
+
+def test_an_unreadable_source_is_in_the_projection_by_name():
+    """A source that could not be read contributes no events and is therefore
+    invisible in a list of events. It has to be stated, or its absence reads
+    as a source with nothing to say."""
+    from app.services.context_gathering.projection import sources_block
+
+    registry = ms.default_registry()
+    registry[pb.EDR].failing_templates = frozenset({"host_threat_state"})
+    block = sources_block(_gather(registry=registry))
+    assert [u["source"] for u in block["unreadable"]] == ["mock-edr"]
+    assert block["unreadable"][0]["absence"]["kind"] == "check_failed"
+    assert block["unreadable"][0]["asked"]
+
+
+# ── the report: composed in tokens, detokenised once ─────────────────────
+
+
+def test_what_the_model_reads_contains_no_real_name():
+    from app.services.context_gathering import report
+
+    composed = report.compose(record=_gather())
+    assert HOST not in composed
+    assert "[HOST_" in composed
+
+
+def test_what_the_analyst_reads_contains_real_names():
+    from app.services.context_gathering import report
+
+    boundary = tb.in_memory(tenant_id="c00", investigation_id="render")
+    record = _gather(boundary=boundary)
+    rendered = report.render(record=record, boundary=boundary)
+    assert HOST in rendered
+    assert "[HOST_" not in rendered
+
+
+def test_the_alert_section_prints_tokens_not_the_alerts_own_values():
+    """The alert's own values are no less sensitive for having arrived with
+    the alert. The first version printed `alert_fields` straight through and
+    put a real hostname into the text the model reads — in the one section
+    whose job is to say what the alert carried."""
+    from app.services.context_gathering import report
+
+    composed = report.compose(record=_gather())
+    section = composed.split("WHAT THE ALERT CARRIED")[1].split("WHAT GATHERING")[0]
+    assert "[HOST_" in section
+    assert HOST not in section
+
+
+def test_the_report_separates_what_the_alert_carried_from_what_was_added():
+    from app.services.context_gathering import report
+
+    composed = report.compose(record=_gather())
+    assert "WHAT THE ALERT CARRIED" in composed
+    assert "WHAT GATHERING ADDED" in composed
+
+
+def test_the_report_names_an_unreadable_source_and_says_what_that_means():
+    """The case this matters most for: a reader must not read silence as a
+    clean result."""
+    from app.services.context_gathering import report
+
+    registry = ms.default_registry()
+    registry[pb.EDR].failing_templates = frozenset({"host_threat_state"})
+    composed = report.compose(record=_gather(registry=registry))
+    assert "mock-edr" in composed
+    assert "unknown, not absent" in composed
+    assert "this host's current threat state" in composed
+
+
+def test_a_report_with_no_events_says_why_not():
+    from app.services.context_gathering import report
+
+    registry = ms.default_registry()
+    registry[pb.EDR].failing_templates = frozenset({"host_threat_state"})
+    composed = report.compose(record=_gather(
+        selectors={"host": QUIET_HOST, "process": "p", "hash": "0" * 64},
+        registry=registry))
+    assert "No events" in composed
+    assert "could not be read" in composed
+
+
+def test_the_report_separates_playbook_queries_from_the_agents():
+    from app.services.context_gathering import report
+
+    composed = report.compose(record=_gather(
+        event_id="18 | ThreatHunting",
+        selectors={"host": HOST, "pipe": "\\\\.\\pipe\\atsvc"}))
+    assert "From the playbook" in composed
+    assert "Chosen by the agent" in composed
+    assert "chose it because:" in composed, "the agent's reason is not shown"
+
+
+def test_a_report_with_no_agent_query_says_so_rather_than_omitting_it():
+    """An absent section reads as a section nobody filled in."""
+    from app.services.context_gathering import report
+
+    composed = report.compose(record=_gather())
+    assert "Chosen by the agent: none" in composed

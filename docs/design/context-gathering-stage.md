@@ -362,6 +362,73 @@ detector can see, so those fields are digested rather than tokenised.
 
 ---
 
+## 4c. Wired into the analysis stage, 2026-10-20
+
+The record is **projected into the `log_context` shape the pipeline already
+consumes** — `projection.to_log_context` — rather than given a path of its
+own. `_build_log_digest` reads it unchanged and the model gets the same kind
+of digest it gets from an alert's own logs today, in tokens.
+
+**Detokenisation happens once.** `report.compose` builds the whole report in
+tokens and `report.render` calls `boundary.restore` on the finished text.
+There is exactly one line in the stage where real names come into existence,
+and two tests hold it: what `compose` returns contains no real name, what
+`render` returns contains no token.
+
+`restore` rather than `detokenize_query`, deliberately: a report with a stray
+`[HOST_9]` is a visible defect a reader can report, where a refused report is
+no report. A query has the opposite trade.
+
+**Three things the report states because a reader cannot infer them:**
+
+| | how |
+|---|---|
+| alert against gathered | every event carries `gathered_by` — origin, template, source, purpose — and the report has two sections |
+| sources read, and sources that could not be | an unreadable source appears **by name** with what it was asked and the line "this is unknown, not absent". A source that answered some queries and failed one reads `QUERY FAILED`, not `NOT READ` |
+| playbook against agent | separate sections, and the agent's query carries the reason it was chosen |
+
+**Status distinguishes four states**, and the two that matter are `empty` —
+read, held nothing, a real negative — and `unavailable` — nothing gathered
+**and** something could not be read. Merging those is the defect that had the
+DNS collector reporting an outage as "no DNS records" for 2,602 runs.
+
+### The lifecycle, end to end on the mock
+
+Against a real database for the token map, so the purge claim is a fact about
+a row:
+
+```
+token map rows before completion : 1
+log_context status               : unavailable
+real host in what the model sees : False
+real host in the digest          : False
+real host in the RENDERED report : True
+purge reason                     : completed
+purge warned (ceiling fired?)    : False
+token map rows after completion  : 0
+```
+
+**The completion purge fired, not the ceiling** — `reason=completed`, no
+warning, and the row is gone.
+
+### Three defects this wiring exposed
+
+1. **The report printed the alert's own fields in the clear.** The section
+   whose job is to say what the alert carried put a real hostname in front of
+   the model. The alert's values are no less sensitive for having arrived
+   with the alert; it now prints the record's tokenised selectors.
+2. **The projection omitted `alert_time`**, so the digest builder accepted
+   the context and then declined to use it — `no_alert_time`. A context the
+   analysis stage takes and silently does nothing with is worse than one it
+   rejects.
+3. **`DATABASE_SANITIZER_URL` was never added to `.env`.** The other three
+   connections were pointed at their roles on 2026-10-20 and this one was
+   missed, so host-side code fell back to a default password and could not
+   open the token map at all — the same host/container divergence, one
+   variable later.
+
+---
+
 ## 5. Failure modes
 
 ### Runaway query loops

@@ -159,6 +159,16 @@ class GatheringRecord:
     tenant_id: str
     investigation_id: str
     event_class: str
+    #: The alert's join keys **as tokens**. The report's "what the alert
+    #: carried" section is built from these rather than from the raw alert
+    #: fields: printing the alert's own values would put a real hostname in
+    #: front of the model, which is the one thing this arrangement exists to
+    #: prevent, and it did on the first run.
+    selectors: dict[str, str] = field(default_factory=dict)
+    #: When the alert fired. The analysis stage's digest builder refuses
+    #: without it — `no_alert_time` — because it selects events by their
+    #: distance from the alert.
+    alert_time: Any = None
     outcomes: list[QueryOutcome] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, str]] = field(default_factory=list)
@@ -177,6 +187,7 @@ class GatheringRecord:
             "tenant_id": self.tenant_id,
             "investigation_id": self.investigation_id,
             "event_class": self.event_class or None,
+            "selectors": dict(self.selectors),
             "queries": [o.as_json() for o in self.outcomes],
             "skipped": list(self.skipped),
             "notes": list(self.notes),
@@ -316,6 +327,7 @@ def gather(
     alert_fields: Mapping[str, Any],
     selectors: Mapping[str, str],
     registry: Mapping[str, Any],
+    event_time: Any = None,
     boundary: tb.TokenBoundary | None = None,
     budget: Budget | None = None,
     agent: Callable[..., Sequence[Any]] | None = None,
@@ -343,9 +355,11 @@ def gather(
     record = GatheringRecord(
         tenant_id=tenant_id, investigation_id=investigation_id,
         event_class=event_class, budget=budget,
+        alert_time=event_time or alert_fields.get("event_time"),
     )
 
     token_selectors = _tokenise_selectors(boundary, selectors)
+    record.selectors = dict(token_selectors)
 
     try:
         templates, skipped = pb.templates_for(event_class, token_selectors)
