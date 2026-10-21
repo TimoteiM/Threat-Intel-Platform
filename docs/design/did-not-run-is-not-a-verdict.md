@@ -1,5 +1,13 @@
 # Terminal statuses and verdicts: can each one say "did not run"?
 
+> **Population: Expertware's own estate.** Confirmed 2026-10-21 by asking
+> CrowdStrike directly: one CID (`eed7e41845d04c26b4198f4c85f6216e`) across
+> **176 of 176** devices, every `machine_domain` an `expertware.net` domain
+> (`int` 141, `ext` 24, `dev` 10, one blank), every OU path ending in
+> `ExpertWare`. **`c00` is not a customer.** The figures below are correctly
+> measured; the label was wrong. See
+> [POPULATION.md](../measurements/POPULATION.md) and backlog 45.
+
 Audited 2026-10-21. Six instances in six weeks of a skip reading as a result
 is a property of the codebase, not a run of bad luck, so this enumerates
 every writer of a terminal status or verdict and asks one question of each:

@@ -1,5 +1,11 @@
 # Slice 3 — the escalation rule on the on-demand indicator lookup
 
+> **Population corrected 2026-10-21.** This document referred to the
+> Falcon tenant as a customer's. It is **Expertware's own estate** —
+> CrowdStrike reports one CID across 176 of 176 devices, every domain an
+> `expertware.net` domain. The measurements stand; the word "customer"
+> did not. See `docs/measurements/POPULATION.md`.
+
 **Status: specification. Nothing here is built.** Two defects in the code it
 would be built on were found by the positive control in §5 and must be fixed
 first; they are backlog 31 and 32.
@@ -480,7 +486,7 @@ if the estate's triage pattern changes.
 
 A second fact from the same source, which belongs in whatever this feature
 eventually becomes: the four analysts who produced 1,447 of those closures
-work in the customer's Falcon console, and **one of them has never logged into
+work in **our own** Falcon console, and **one of them has never logged into
 this platform.** Every judgement in this document about what should escalate
 and what an analyst wants first is a guess they could settle in half an hour.
 

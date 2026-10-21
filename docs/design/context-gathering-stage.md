@@ -1,5 +1,13 @@
 # A context-gathering stage for the alert pipeline
 
+> **Population: Expertware's own estate.** Confirmed 2026-10-21 by asking
+> CrowdStrike directly: one CID (`eed7e41845d04c26b4198f4c85f6216e`) across
+> **176 of 176** devices, every `machine_domain` an `expertware.net` domain
+> (`int` 141, `ext` 24, `dev` 10, one blank), every OU path ending in
+> `ExpertWare`. **`c00` is not a customer.** The figures below are correctly
+> measured; the label was wrong. See
+> [POPULATION.md](../measurements/POPULATION.md) and backlog 45.
+
 **Status, 2026-10-20: §4, §4b and §4c are built on branch `query-agent`;
 everything else is still a design note.** Written 2026-10-19 after reading the
 pipeline rather than the description of it, and every claim below about what

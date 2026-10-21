@@ -1,7 +1,18 @@
 # CrowdStrike Falcon coverage gap — 19 hosts
 
+> **Population: Expertware's own estate.** Confirmed 2026-10-21 by asking
+> CrowdStrike directly: one CID (`eed7e41845d04c26b4198f4c85f6216e`) across
+> **176 of 176** devices, every `machine_domain` an `expertware.net` domain
+> (`int` 141, `ext` 24, `dev` 10, one blank), every OU path ending in
+> `ExpertWare`. **`c00` is not a customer.** The figures below are correctly
+> measured; the label was wrong. See
+> [POPULATION.md](../measurements/POPULATION.md) and backlog 45.
+
 **For:** whoever owns the Falcon rollout and licence count.
-**Measured:** 2026-10-15, customer `c00`. Read-only; nothing was changed.
+**Measured:** 2026-10-15 on **Expertware's own Falcon tenant** (`c00`, CID
+`eed7e41845d04c26b4198f4c85f6216e`). Read-only; nothing was changed.
+**Corrected 2026-10-21:** this line previously read "customer `c00`". It is
+our own estate, so the coverage gap below is ours to close, not a client's.
 
 ## Summary
 

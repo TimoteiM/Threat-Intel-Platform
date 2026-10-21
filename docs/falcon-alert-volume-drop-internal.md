@@ -1,5 +1,11 @@
 # Falcon alert volume: an unexplained seven-day gap in OUR OWN estate
 
+> **Population corrected 2026-10-21.** This document referred to the
+> Falcon tenant as a customer's. It is **Expertware's own estate** —
+> CrowdStrike reports one CID across 176 of 176 devices, every domain an
+> `expertware.net` domain. The measurements stand; the word "customer"
+> did not. See `docs/measurements/POPULATION.md`.
+
 > ## ⛔ THIS HAS NO CUSTOMER AUDIENCE. 2026-10-16.
 >
 > **Every device in this Falcon tenant is Expertware's own.** Measured across
@@ -72,7 +78,7 @@
 >
 > `assigned_to_name` on the closed alerts resolves to **9 of 11 distinct names
 > matching rows in this platform's own `users` table**. The people triaging
-> this customer's Falcon console are **Expertware analysts** — our own SOC,
+> this Falcon console are **Expertware analysts** — our own SOC,
 > doing the work we are contracted to do. Which means:
 >
 > * The **319 untriaged alerts** are a finding about **the service we sell
@@ -537,7 +543,7 @@ is that **our own SOC works the `epp` queue within minutes and has never
 touched the `automated-lead*` queue in four months.** That is a question for
 us before it is a question for them, and it changes who this part of the
 document is addressed to. Worth noting separately: Ioana Dutuc has triaged 252
-alerts in the customer's Falcon console and has **never logged into this
+alerts in **our own** Falcon console and has **never logged into this
 platform** (`last_login_at` is null).
 
 ## 4. CORRECTION — "no corroborating resource" was not established
@@ -635,7 +641,7 @@ who do the work are not users of the thing being built for them.**
 | Alexandru Adochitei | 372 | last 2026-10-15 |
 | **Ioana Dutuc** | **252** | **never** |
 
-Ioana Dutuc has triaged 252 alerts in the customer's Falcon console and has
+Ioana Dutuc has triaged 252 alerts in **our own** Falcon console and has
 never once logged into this platform.
 
 Two consequences, and the second is the useful one.

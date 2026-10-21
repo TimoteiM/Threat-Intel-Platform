@@ -1,5 +1,11 @@
 # CrowdStrike Falcon — where it stands, end of 2026-10-15
 
+> **Population corrected 2026-10-21.** This document referred to the
+> Falcon tenant as a customer's. It is **Expertware's own estate** —
+> CrowdStrike reports one CID across 176 of 176 devices, every domain an
+> `expertware.net` domain. The measurements stand; the word "customer"
+> did not. See `docs/measurements/POPULATION.md`.
+
 **Written for:** whoever picks this up next, including me tomorrow.
 
 At 09:00 Falcon had a verified credential and a successful ping, and nothing a
@@ -292,7 +298,7 @@ The outbound document is restated as that sequence, with each last-alert
 timestamp given explicitly. It is also **frozen and marked not-to-be-sent**
 pending the one check that can invalidate it: whether Falcon's own console
 shows detections after 8 October that this API does not return. If it does,
-the finding is about our collection rather than the customer's estate, and the
+the finding is about our collection rather than the estate itself, and the
 document needs rewriting rather than amending.
 
 Recorded as a method note in `pooling-across-a-regime-change`, now covering

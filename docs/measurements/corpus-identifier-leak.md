@@ -1,5 +1,13 @@
 # How many identifiers reach the model today, per alert
 
+> **Population: Expertware's own estate.** Confirmed 2026-10-21 by asking
+> CrowdStrike directly: one CID (`eed7e41845d04c26b4198f4c85f6216e`) across
+> **176 of 176** devices, every `machine_domain` an `expertware.net` domain
+> (`int` 141, `ext` 24, `dev` 10, one blank), every OU path ending in
+> `ExpertWare`. **`c00` is not a customer.** The figures below are correctly
+> measured; the label was wrong. See
+> [POPULATION.md](POPULATION.md) and backlog 45.
+
 Measured 2026-10-20 over every alert-body run in the database. Re-run with
 `scripts/measure_corpus_identifier_leak.py`.
 
