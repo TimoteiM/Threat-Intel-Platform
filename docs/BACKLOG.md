@@ -2456,7 +2456,138 @@ without benefit, and this was found with a synthetic sentinel, not in real
 data. See `docs/design/token-boundary-gaps.md`, "Not an identifier, found
 while measuring".
 
-## 43 — `sanitize_entries` is superlinear, and ten alert bodies are over 1M chars
+## 43 — AVAILABILITY: quadratic sanitisation on the analysis path, reachable from client log content
+
+**Category changed 2026-10-21 from performance to availability.** It is on
+the path that runs, the input is influenceable from inside a client estate,
+and it has already cost one alert its analysis.
+
+### It is not catastrophic backtracking
+
+That was the hypothesis and it is wrong. Every regex in
+`assistant_sanitizer_service` completes in **under 0.4s** on both the 86s
+body and the 7.5s body of the same size — 13 patterns, ~2s in total.
+Bisected by pattern before anything else, because "11x variance at the same
+size" has one famous cause and it was not this one.
+
+### It is one line, and it is a whole-input scan per match
+
+`cProfile` on the slow body: **44,002 calls to `repl`, 78.9s**, for **6
+minted tokens**. The cost is in `assistant_sanitizer_service.py`:
+
+```python
+if entry_summary.get(label_key, 0) == 0 or token not in text:
+```
+
+`text` is the **entire input**, closed over, and `token not in text` runs
+**once per match**. 44,002 matches x 2.24M characters is ~10^11 character
+comparisons. So the cost is **O(matches x length)**, and for repetitive
+content where matches scale with length, **O(length^2)**.
+
+Measured growth, text = N repetitions of `src_ip=10.0.0.1 host="WS01" `:
+
+| chars | seconds | ratio |
+|---|---|---|
+| 448,000 | 7.87 | — |
+| 896,000 | 30.30 | 3.85x |
+| 1,792,000 | 118.02 | 3.89x |
+| 3,584,000 | **469.75** | **3.98x** |
+
+3.98x per doubling is quadratic to two decimal places. Fitted from the
+largest **measured** point: ~3,657s at 10,000,000 chars, crossing the
+1,800s task limit at about **7,015,724 chars**.
+
+### It has already happened
+
+The evidence was in the run records, unread. Run of 2026-08-31, body
+10,999,999 chars:
+
+* AI step `duration_ms` = **1,791,551** — 1,792 seconds of worker time;
+* AI step `status` = **failed**, `report_markdown` absent,
+  `overall_verdict` null — **the analyst got no model analysis for that
+  alert**;
+* the run row says **`completed`**, verdict `inconclusive`;
+* the eventual error was the provider's, not ours:
+  `prompt is too long: 5,284,191 tokens > 200,000 maximum`. So the 1,792s
+  was spent sanitising text that was then rejected unread.
+
+One correction to an earlier reading of this table: another run shows
+1,933s wall clock, but its AI step took 95s — that one is queue wait, not
+execution. Only the 11M body is a confirmed instance.
+
+Note also that **all 17,618 runs have status `completed`**. There is no
+failed state in that column, so a lost analysis is not visible there — it
+is visible only inside `result_json`. Related to the
+"recording a failure is not reading it" class.
+
+### Blast radius: the whole worker, not one slot
+
+The worker is a **thread** pool with `max-concurrency: 8`, so the naive
+reading is that one bad alert costs one of eight slots. Measured instead:
+`substring in big_string` **holds the GIL**. With one thread running 60
+scans of a 40MB string, a competing ticker thread ran at **4.9% of its
+baseline rate** (44.5/s against 915.0/s).
+
+So the quadratic work is CPU-bound C code that does not release the GIL:
+one crafted alert degrades **every** task in that worker process —
+other analyses, log follow-ups, beat-scheduled work — for as long as it
+runs, up to the 1,740s soft limit.
+
+### Could a crafted log line reach it? Yes, and nothing stands in the way
+
+* `_validated_alert_body` **deliberately does not reject on size**, with a
+  comment saying so: "No size rejection. A large alert is still an alert."
+  The reasoning is sound for a sender holding an event nobody will look at;
+  it is also the absence of the only cheap control here.
+* `MAX_ANALYSED_ALERT_BODY_CHARS` is 10,000,000, above the ~7M crossing
+  point.
+* The largest body already accepted is **10,999,999 chars**, so bodies past
+  the crossing point arrive without being crafted.
+* No exotic input is needed. The growth table above uses
+  `src_ip=... host="..."` repeated — ordinary log shape. Anyone who can
+  influence a process command line, a filename, a URL or a user-agent
+  inside a client estate can influence what lands in an alert body.
+* Cost to the attacker is one HTTP POST per ~29 minutes of worker time.
+
+**This is a denial of service against the SOC's analysis pipeline, not a
+slow report.**
+
+### The fix, and the care it needs
+
+The expensive test is asking "is this token already literally present in the
+input?", to avoid double-counting in `entry_summary`. The same answer is
+available from a set, at O(1):
+
+```python
+seen: set[str] = set()
+...
+if token not in seen:
+    seen.add(token)
+    entry_summary[label_key] += 1
+```
+
+That is a one-line hoist and it should take the slow body from 83s to
+roughly 2s — the regex time, which is all that is left.
+
+**It is not a pure refactor and must not be shipped as one.**
+`entry_summary` is a published count; the old expression also carried a
+first-match special case (`entry_summary.get(label_key, 0) == 0`), and the
+scan tested the *original* text, which can legitimately contain a
+`[HOST_1]`-shaped string. So it needs:
+
+1. a before/after of `entry_summary` over the corpus, per label, with the
+   count of runs where it differs and why;
+2. a decision about what the number is for — see
+   "ask what the value is for"; and
+3. a dangerous-direction test: a body that genuinely contains `[HOST_1]`
+   as literal text.
+
+**Independently of the fix**, two cheap controls worth considering on their
+own merits: a size at which sanitisation is refused rather than attempted
+(and the refusal recorded, not silent), and a match-count ceiling. The
+second needs the "say what was dropped" treatment of any bound.
+
+### Appendix: the original performance-framed measurements
 
 Found 2026-10-20 while measuring the corpus, not by looking for it. The
 shipped identifier sanitiser, on the path that runs:
