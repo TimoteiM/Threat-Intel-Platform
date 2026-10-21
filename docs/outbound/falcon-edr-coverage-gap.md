@@ -16,19 +16,57 @@ our own estate, so the coverage gap below is ours to close, not a client's.
 
 ## Summary
 
-Nineteen hosts are sending security events to the SIEM and have **no
-CrowdStrike sensor**. They include a domain controller, two SQL servers, a
-DNS server and a monitoring host. One of the nineteen is the SIEM's own
-collector and is expected; the other eighteen are a genuine gap.
+**Re-measured 2026-10-21.** Eighteen hosts are sending security events to the
+SIEM and have **no CrowdStrike sensor**. Three of them are the actionable
+ones and they are actionable independently of anything else:
 
-| | count |
+| host | alerts in 30 days | why it matters |
+|---|---|---|
+| **`dc`** | 17 | a domain controller with no EDR |
+| **`win11-mssql01`** | 7 | SQL server |
+| **`win10-mssql02`** | 8 | SQL server |
+
+The rest of the eighteen, for completeness — most are test or utility hosts
+rather than gaps worth chasing:
+
+| host | alerts (30d) |
 |---|---|
-| hosts sending alerts to the SIEM (last 7 days) | 179 |
-| Falcon device records | 182 |
-| distinct hostnames in Falcon | 175 |
-| **hosts matched to a Falcon sensor** | **160 (89.4%)** |
-| **hosts with no Falcon sensor** | **19** |
-| Falcon hosts not sending SIEM alerts in 7 days | 15 |
+| `windows-test-device` | 1,789 |
+| `server01` | 64 |
+| `expgrafana001.int.expertware.net` | 46 |
+| `asiem-victim` | 26 |
+| `exprevpxy002`, `exp-2r52x33` | 10 each |
+| `laboratorvm001` | 7 |
+| `expm365analytics401` | 5 |
+| `cpc-alexa-gtfxm`, `siembiot-package-teste-1`, `exp-3brrpb4` | 3 each |
+| `exp-ops-58255` | 2 |
+| `exp-044036414857`, `exp-bbtn473`, `exp-ops-46807` | 1 each |
+
+| | 2026-10-15 | **2026-10-21** |
+|---|---|---|
+| hosts sending alerts to the SIEM | 179 (7d) | **147 (30d)** |
+| Falcon device records | 182 | **176** |
+| distinct hostnames in Falcon | 175 | **171** |
+| hosts matched to a sensor | 160 (89.4%) | **129 (87.8%)** |
+| **hosts with no Falcon sensor** | **19** | **18** |
+
+Windows are different between the two measurements (7 days against 30), so
+the host totals are not comparable; the **no-sensor list** is, and it has
+moved by one.
+
+### Also: 13 sensors have stopped reporting
+
+Separate from hosts with no sensor, thirteen sensors that exist have not
+checked in for 7 days or more:
+
+    exp-6k7yz93 42d   exp-4jhpzy2 41d   exp-joi1yhpzy2w 37d
+    exp-6sxjaetcu9w 27d   exp-4bjigdlhd7u 25d   exp-3lj1p54 22d
+    exp-b14zxl3 21d   exp-ffbd8s3 14d   exp-20ht5y2 12d
+    exp-7q6f163 12d   exp-47vd864 11d   exp-26ml4y2 9d   (+1 at 7d)
+
+A laptop that is switched off looks identical to a sensor that has stopped,
+so this is a question rather than a finding. The 42-day and 41-day entries
+are the two worth asking about.
 
 ## How the two lists were matched
 

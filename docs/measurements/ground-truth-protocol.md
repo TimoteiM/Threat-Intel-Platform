@@ -39,6 +39,15 @@ the purpose). One-time, reversible, and it converts a host you can do
 anything to into a host the whole playbook can answer about. Every later
 exercise reuses it.
 
+> **Checked 2026-10-21 and it is not ready.** `laboratorvm001` reports
+> **`managed=False`** — no sensor is installed or reporting. So does
+> `asiem-victim` and so does `windows-test-device`. **Option A is blocked
+> until a sensor is installed on one of them**, which is the gate below
+> doing its job.
+>
+> Option B was confirmed the same day: all five candidate hosts report
+> `managed=True`, `status=normal`, last seen within the hour.
+
 Confirm before running anything:
 
 ```
@@ -186,6 +195,26 @@ comparison measures whether a file was parsed, not whether the loop gathers.
 ---
 
 ## 4. What the comparison must report
+
+The tool exists already: `backend/scripts/compare_ground_truth.py`, written
+**before** the exercise on purpose — a comparison written after the results
+exist is shaped by them.
+
+```
+docker compose exec -T -e PYTHONPATH=/app worker \
+  python /app/scripts/compare_ground_truth.py /path/to/protocol.json
+```
+
+It refuses to start if an item is missing any of the seven recorded fields,
+and it names `account` specifically, because running as SYSTEM makes the
+user-side templates unfirable and you would measure that instead.
+
+Exercised in both directions before the window: items with no alert in their
+window report `ALERTED: NO` and are called **detection coverage**; items with
+a real alert report the class match, the extracted selectors, the templates
+that would run and every skip with its reason. It prints **no aggregate**.
+
+
 
 Per item, five columns. The fifth is the one historical false positives
 cannot give us.
