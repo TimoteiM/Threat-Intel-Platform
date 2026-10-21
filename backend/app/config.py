@@ -538,6 +538,17 @@ class Settings(BaseSettings):
     # the starting point; measured against a real 297-event window the selection
     # saturates at about 3,400, so this has headroom for a busier host.
     alert_log_ai_budget_tokens: int = 6000
+
+    #: The analysis refuses to send a prompt estimated above this. Not a guess:
+    #: the provider's own limit is 200,000 tokens, and on 2026-08-31 an
+    #: 11M-character alert spent 1,792 seconds being sanitised and was then
+    #: rejected with "prompt is too long: 5,284,191 tokens > 200,000 maximum".
+    #: The work was unrecoverable and the analyst got no narrative. 180,000
+    #: leaves room for the system prompt and the report schema.
+    #:
+    #: Ingest still accepts any size — see `_validated_alert_body`. The limit
+    #: belongs where it costs something, which is here.
+    alert_ai_max_prompt_tokens: int = 180_000
     # Whether the ranked log events are sent to the model automatically.
     #
     # Off. The ranking still runs and its picks are marked "relevant" in the log

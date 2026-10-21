@@ -154,7 +154,22 @@ def run_alert_body_investigation_task(
             parsed_id,
             status="completed",
             indicator_count=int(summary.get("indicators_total") or 0),
-            overall_verdict=str(summary.get("overall_verdict") or "inconclusive"),
+            # **No default.** `or "inconclusive"` turned "the summary recorded
+            # no verdict" into a published verdict — the same shape as a
+            # Pydantic `= []` making "found nothing" and "nobody looked" the
+            # same bytes. `inconclusive` is a claim about the evidence; an
+            # absent verdict is a claim about us, and the column is nullable
+            # so it can say that.
+            #
+            # Measured before removing it: the default had **never fired** —
+            # 0 rows carry a row-level verdict where `result_json` recorded
+            # none, across 17,640 runs. So this changes no existing row and no
+            # existing report. It disarms a trap rather than fixing damage,
+            # which is why it is safe to do without a before/after.
+            overall_verdict=(
+                str(summary["overall_verdict"])
+                if summary.get("overall_verdict") else None
+            ),
             indicator_risk_score=int(summary.get("highest_risk_score") or 0),
             result_json=payload,
             completed_at=datetime.now(timezone.utc),

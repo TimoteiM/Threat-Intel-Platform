@@ -61,13 +61,9 @@ from app.services.alert_log_selection import (
 )
 
 
-class BoundaryUnavailable(RuntimeError):
-    """The identifier boundary could not be applied, so nothing was built.
-
-    Raised rather than returned, because every caller of `build` today treats
-    the empty string as "nothing worth sending" — a meaning that must not
-    silently come to include "we could not tokenise it".
-    """
+# Defined in `token_boundary` and re-exported here. Two exception classes
+# meaning the same thing is how a caller comes to catch only one of them.
+from app.services.token_boundary import BoundaryUnavailable  # noqa: F401
 
 
 #: `<SECRET:password:4f2a91>`, as `log_secret_sanitizer.placeholder` mints it.

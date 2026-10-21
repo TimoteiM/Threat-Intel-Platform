@@ -56,44 +56,19 @@ logger = logging.getLogger(__name__)
 AI_REPORT_TYPE = "ai_assistant"
 
 
-def _protect_outbound(text: str, *, boundary: Any) -> str:
-    """Secrets out, identifiers tokenised, in that fixed order.
+class PromptTooLarge(RuntimeError):
+    """The assembled prompt cannot fit the model's context, so it was not sent.
 
-    One call over the **whole** assembled text rather than per part, which is
-    safe because both layers are idempotent on text that has already been
-    through them: `_is_real_secret` refuses a value that already starts with
-    `<SECRET:`, and the boundary's detectors skip anything matching the token
-    grammar. Measured on the gathering stage's already-tokenised records: a
-    second pass mints nothing and changes nothing.
-
-    That idempotence is what lets the log digest — tokenised earlier, with
-    this same boundary — pass through here untouched instead of needing to be
-    carved out and rejoined.
-
-    Raises `BoundaryUnavailable`. There is no path through this function that
-    returns text the boundary did not process.
+    Distinct from a provider 400 for the same reason `withheld` is distinct
+    from `failed`: this is a decision we made, cheaply, before spending the
+    sanitisation. The 2026-08-31 instance spent 1,792 seconds first.
     """
-    from app.services import log_secret_sanitizer as secrets
-    from app.services.alert_log_prompt import BoundaryUnavailable
 
-    if boundary is None:
-        raise BoundaryUnavailable(
-            "no identifier boundary was supplied, so the alert text was not "
-            "tokenised and nothing was sent to the model"
-        )
-    try:
-        # Secrets first, and non-reversible by design: `restore` must never
-        # be able to put a credential back, so these are HMAC placeholders
-        # and not tokens. 6,023 occurrences across 18.1% of alerts in the
-        # corpus, `session` being 14.7% of it on its own.
-        redacted = secrets.sanitize_text(text).text
-        # Identifiers second, reversible, scoped to this run.
-        return boundary.tokenize(redacted)
-    except Exception as exc:  # noqa: BLE001
-        raise BoundaryUnavailable(
-            f"the identifier boundary could not be applied to the alert text "
-            f"({type(exc).__name__}: {exc}), so nothing was sent to the model"
-        ) from exc
+
+# The implementation lives in `token_boundary`, because three other
+# model-facing paths need it too — see `AssistantService.add_entry`. Kept as a
+# module-level name here so the existing tests and callers still reach it.
+from app.services.token_boundary import protect_outbound as _protect_outbound  # noqa: E402
 
 
 def run_alert_body_ai_analysis(
@@ -136,6 +111,15 @@ def run_alert_body_ai_analysis(
         )
         status = "completed"
         error = None
+    except PromptTooLarge as exc:
+        # Same shape as a withheld send: nothing left, and the reason says
+        # which. An analyst reading "failed" cannot tell a refusal from a
+        # crash, and this is a refusal.
+        logger.warning("Alert-body AI analysis withheld, prompt too large: %s", exc)
+        result = {}
+        status = "failed"
+        withheld = True
+        error = str(exc)
     except BoundaryUnavailable as exc:
         # Fail closed, and distinguishable from an analysis that ran and
         # broke. `status` stays "failed" because consumers already switch on
@@ -203,6 +187,22 @@ async def _analyse(
     # above the findings join already gives: one map over one string means a
     # host is the same token in the alert half and the gathered half. Two
     # calls over two strings with two maps was the defect to avoid.
+    # **Checked before the boundary runs, not after.** Sanitising text we are
+    # going to refuse is the 1,792 seconds that produced nothing on
+    # 2026-08-31. The estimate is the platform's own
+    # (`alert_log_selection.estimate_tokens`), so it is the same arithmetic
+    # the log-digest budget already uses.
+    from app.services.alert_log_selection import estimate_tokens
+
+    ceiling = int(getattr(get_settings(), "alert_ai_max_prompt_tokens", 180_000))
+    estimated = estimate_tokens(entry_text)
+    if estimated > ceiling:
+        raise PromptTooLarge(
+            f"the assembled prompt is about {estimated:,} tokens against a "
+            f"{ceiling:,} ceiling, so it was not sent; the provider's own "
+            f"limit would have rejected it after the work was done"
+        )
+
     entry_text = _protect_outbound(entry_text, boundary=boundary)
 
     # A dedicated, unpooled engine for this loop. Celery runs each task in a
@@ -212,7 +212,10 @@ async def _analyse(
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     try:
-        return await _run_assistant(session_factory, entry_text=entry_text, title=title, model=model)
+        return await _run_assistant(
+            session_factory, entry_text=entry_text, title=title,
+            model=model, boundary=boundary,
+        )
     finally:
         # Must be awaited on the loop that opened the connections.
         await engine.dispose()
@@ -224,6 +227,7 @@ async def _run_assistant(
     entry_text: str,
     title: str,
     model: str | None,
+    boundary: Any,
 ) -> dict[str, Any]:
     # One session per step, exactly like the assistant API endpoints do. Sessions
     # are created with expire_on_commit=False, so reusing a single session would
@@ -243,6 +247,13 @@ async def _run_assistant(
             text=entry_text,
             entry_label="alert-body",
             entry_index=0,
+            # The run's boundary, so `add_entry`'s own pass is a no-op over
+            # text this path already protected, and so the map that reaches
+            # `token_map_json` is the one that minted these tokens. A fresh
+            # boundary there would mint nothing (cross-map tokenisation is
+            # inert, measured) and would therefore persist an EMPTY map,
+            # leaving the restore with nothing to resolve.
+            boundary=boundary,
         )
 
     async with session_factory() as db:

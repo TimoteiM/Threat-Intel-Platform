@@ -2456,7 +2456,7 @@ without benefit, and this was found with a synthetic sentinel, not in real
 data. See `docs/design/token-boundary-gaps.md`, "Not an identifier, found
 while measuring".
 
-## 43 — AVAILABILITY: quadratic sanitisation on the analysis path, reachable from client log content
+## 43 — AVAILABILITY: quadratic sanitisation on the analysis path — **FIXED 2026-10-21**
 
 **Category changed 2026-10-21 from performance to availability.** It is on
 the path that runs, the input is influenceable from inside a client estate,
@@ -2552,7 +2552,43 @@ runs, up to the 1,740s soft limit.
 **This is a denial of service against the SOC's analysis pipeline, not a
 slow report.**
 
-### The fix, and the care it needs
+### FIXED 2026-10-21
+
+The predicate is **memoised, not redefined** — `token in text` is a property
+of (token, text) that cannot change within the call, so it is computed once
+per distinct token instead of once per match. Six scans instead of 44,002.
+
+**Before/after against the pre-change module loaded from git**, 3,000 corpus
+bodies: `sanitized_text`, `token_map` and the published `summary` identical
+in **every** case. The growth law is now linear:
+
+| chars | before | after |
+|---|---|---|
+| 448,000 | 7.87s | **0.54s** |
+| 896,000 | 30.30s | **1.05s** |
+| 1,792,000 | 118.02s | **2.21s** |
+| 3,584,000 | **469.75s** | **4.25s** |
+| ratio per doubling | 3.98x | **~2.0x** |
+
+The real 2,244,098-char body: **83.09s to 3.69s, 22.5x**, byte-identical
+output. Projected at 10,000,000 chars: ~12s against ~3,657s.
+
+Four tests pin the part measurement cannot reach — the adversarial input
+where the memoised predicate is actually true. The first version of those
+tests aimed at `_replace_keyed_host_pattern`, a function I had not changed,
+and passed against code it was not exercising; the behaviour was then
+confirmed against the git version before the expectations were written.
+
+**And the size limit, decided rather than left at "deliberately none".**
+Ingest still accepts any size — that reasoning holds, a sender given 413 is
+left holding an event nothing will look at. The limit moved to where it
+costs something: `alert_ai_max_prompt_tokens` (180,000, under the provider's
+200,000) makes the analysis **refuse** an oversized prompt up front and
+record `withheld`, instead of spending 1,792 seconds sanitising a body the
+provider then rejects. The ingest comment now says where the limits are
+rather than that there are none.
+
+### The original fix note, and the care it needed
 
 The expensive test is asking "is this token already literally present in the
 input?", to avoid double-counting in `entry_summary`. The same answer is
@@ -2651,7 +2687,7 @@ b-2 went live 2026-10-21 07:53 UTC. The first 16 analyses through it all
 completed, `withheld=False`, 4.4-8.6s, no errors — and watching what they
 actually sent found two things the unit tests could not.
 
-### 44a — `source_type='manual'` assistant sessions bypass the boundary
+### 44a — `source_type='manual'` assistant sessions bypass the boundary — **FIXED 2026-10-21**
 
 Of 14 live assistant entries, 12 were `source_type='alert_body'` and carried
 **scoped** tokens (`[HOST_<fingerprint>_n]`), confirming `_protect_outbound`
@@ -2666,11 +2702,27 @@ same as before.
 
 This is the same shape as the gap b-2 just closed, one path over, and it was
 invisible to the tests because they exercise `run_alert_body_ai_analysis`.
-The fix is presumably to move the boundary call into `add_entry` so every
-model input goes through it rather than every *caller* remembering to — the
-"put the rule in a signature" argument, applied one layer down. Needs its
-own measurement: the manual path has no run record, so the population has to
-be counted from `assistant_sessions` first.
+
+**Fixed by moving the boundary into `add_entry`**, where "every model input
+becomes an entry" already holds — a rule the method enforces rather than one
+each caller remembers. There were **four callers and three were
+unprotected**: the assistant API, `create_from_investigation`, and the
+correlated-case narrative task. All four are now covered by construction.
+
+Two details that were load-bearing:
+
+* `protect_outbound` moved into `token_boundary` as the single
+  implementation. A second copy in `assistant_service` would have been the
+  stale one within a month.
+* `run_session` now **merges** `token_map_json` instead of overwriting it.
+  `add_entry` persists the boundary's map there, and the restore reads that
+  column — overwriting it would have dropped the scoped tokens, and
+  `_restore_tokens` is forgiving, so the symptom would have been a stray
+  `[HOST_a3f9c1_1]` in an analyst's report rather than an error.
+
+The structural test that asserts `add_entry` applies the boundary **passed
+while the code raised `NameError`** — the import was missing. A source-grep
+test agrees with code that cannot run; the behavioural test caught it.
 
 ### 44b — 21 colon-keyed accounts survive `_protect_outbound`, unexplained
 

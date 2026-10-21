@@ -168,7 +168,7 @@ def wire_text(alert_body, digest, title):
     """
     captured = {}
 
-    async def _capture(session_factory, *, entry_text, title, model):
+    async def _capture(session_factory, *, entry_text, title, model, boundary=None):
         captured["entry_text"] = entry_text
         return {}
 

@@ -2492,11 +2492,21 @@ def _validated_alert_body(value: str) -> str:
     alert_body = str(value or "").strip()
     if not alert_body:
         raise HTTPException(status_code=400, detail="Alert body cannot be empty.")
-    # No size rejection. A large alert is still an alert, and a sender that gets
-    # 413 is left holding an event nothing will ever look at — the platform has
-    # no record of it and no way to say what it contained. Size is handled where
-    # it actually costs something: the analysis window below, which truncates
-    # and says so, and the list query, which no longer reads this column.
+    # **No size rejection, decided again on 2026-10-21 rather than inherited.**
+    # A large alert is still an alert, and a sender that gets 413 is left
+    # holding an event nothing will ever look at — the platform has no record
+    # of it and no way to say what it contained. That reasoning still holds.
+    #
+    # What changed is that "size is handled where it costs something" is now
+    # true of the expensive place as well. Three limits, each where it bites:
+    #   * the analysis window below, which truncates and says so;
+    #   * the list query, which no longer reads this column;
+    #   * `alert_ai_max_prompt_tokens` — the analysis refuses to send a prompt
+    #     over the model's context and records `withheld`, instead of spending
+    #     1,792 seconds sanitising a body the provider then rejects. That
+    #     happened once, on 2026-08-31.
+    # So the absence of a limit here is a choice about the ingest contract,
+    # not an absence of limits.
     return alert_body
 
 

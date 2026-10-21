@@ -58,7 +58,7 @@ def _sent(body: str, *, boundary, digest: str | None = None) -> str:
     """The text handed to `AssistantService`, from the real assembly."""
     captured = {}
 
-    async def _capture(session_factory, *, entry_text, title, model):
+    async def _capture(session_factory, *, entry_text, title, model, boundary):
         captured["text"] = entry_text
         return {}
 
@@ -264,7 +264,7 @@ def test_the_report_says_it_was_withheld_rather_than_merely_failed():
 
 def test_a_successful_run_is_not_marked_withheld():
     """The positive control for the flag above."""
-    async def _ok(session_factory, *, entry_text, title, model):
+    async def _ok(session_factory, *, entry_text, title, model, boundary):
         return {"report_markdown": "ok"}
 
     original = ai._run_assistant
@@ -285,3 +285,71 @@ def test_the_boundary_is_required_with_no_default():
 
     sig = inspect.signature(ai.run_alert_body_ai_analysis)
     assert sig.parameters["boundary"].default is inspect.Parameter.empty
+
+
+# ── 44a: every add_entry caller, not just the alert-body one ───────────────
+
+def test_add_entry_itself_applies_the_boundary():
+    """The manual assistant path, which leaked live on 2026-10-21.
+
+    Two `source_type='manual'` entries went to the provider with zero scoped
+    tokens and 24 gap-class identifiers, because the assistant API calls
+    `add_entry` directly and b-2 had put the boundary in a caller. There are
+    four callers and three were unprotected, so the boundary moved into
+    `add_entry` — where "every model input becomes an entry" already holds.
+
+    Exercised at the function that does the work, with the database stubbed,
+    because the claim is about `add_entry` and not about SQLAlchemy.
+    """
+    import asyncio
+    from app.services.assistant_service import AssistantService
+
+    class _Session:
+        id = "11111111-1111-1111-1111-111111111111"
+        entries: list = []
+
+    class _Db:
+        def add(self, _obj): pass
+        async def flush(self): pass
+        async def commit(self): pass
+
+    service = AssistantService(_Db())
+    service._get_session = lambda _sid: _done(_Session())
+
+    def _done(value):
+        fut = asyncio.Future()
+        fut.set_result(value)
+        return fut
+
+    entry = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        service.add_entry(_Session.id, text=_body(), entry_label="entry-1")
+    )
+    # Nothing in the clear...
+    for value in ALL_IDENTIFIERS:
+        assert value not in entry.raw_text, f"{value!r} survived add_entry"
+    assert SENT_SECRET not in entry.raw_text
+    # ...the control that it inspected real text...
+    assert NON_IDENTIFIER in entry.raw_text
+    # ...and the map travelled with the entry, or the restore cannot resolve
+    # what this call minted.
+    assert entry.token_map_json, "the boundary map was not persisted"
+    assert any(v == SENT_HOST_SINGLE for v in entry.token_map_json.values())
+
+
+def test_the_boundary_is_applied_at_add_entry_for_every_caller():
+    """A structural assertion, so a fifth caller is covered by default.
+
+    Derived from the source rather than from a list of callers, because a
+    list of callers is the ninth hand-maintained registry.
+    """
+    import inspect
+
+    from app.services import assistant_service
+
+    source = inspect.getsource(assistant_service.AssistantService.add_entry)
+    assert "protect_outbound" in source, (
+        "add_entry no longer applies the boundary; every caller is exposed"
+    )
+    assert "token_map_json=dict(boundary.token_map)" in source, (
+        "the boundary map is not persisted, so the restore cannot resolve it"
+    )

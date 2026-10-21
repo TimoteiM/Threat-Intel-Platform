@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import PureWindowsPath
+from typing import Any
 from uuid import UUID
 
 import anthropic
@@ -21,6 +22,7 @@ from app.services.assistant_prompt_service import (
     build_incident_correlation_prompt,
 )
 from app.services.assistant_sanitizer_service import sanitize_entries
+from app.services.token_boundary import protect_outbound
 from app.services.ai_cost_service import record_from_response
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,25 @@ class AssistantService:
         await self.session.commit()
         return assistant_session
 
+    @staticmethod
+    def _boundary_for(assistant_session: AssistantSession, boundary: Any) -> Any:
+        """The caller's boundary, or one scoped to this session.
+
+        A caller that already holds one **must** pass it — the alert-body path
+        does — so that one host is one token across the alert, the gathered
+        events and the model's answer. A caller that does not gets a boundary
+        scoped to the session, which is the right scope for a conversation:
+        tokens from one session cannot resolve under another's map.
+        """
+        if boundary is not None:
+            return boundary
+        from app.services import token_boundary as tb
+
+        return tb.in_memory(
+            tenant_id="assistant",
+            investigation_id=str(assistant_session.id),
+        )
+
     async def add_entry(
         self,
         session_id: UUID,
@@ -95,6 +116,7 @@ class AssistantService:
         text: str,
         entry_label: str | None = None,
         entry_index: int | None = None,
+        boundary: Any = None,
     ) -> AssistantEntry:
         assistant_session = await self._get_session(session_id)
         if assistant_session is None:
@@ -105,6 +127,22 @@ class AssistantService:
         # correlated-case narrative does — would otherwise hand the model a
         # table whose whole purpose is undoing the redaction.
         text = strip_resolved_identifiers(text)
+
+        # **And the same argument applies to the identifiers themselves.**
+        # b-2 put the alert-body path behind the boundary on 2026-10-21 by
+        # tokenising in its own caller. Watching live traffic the same morning
+        # showed why that was the wrong layer: two `source_type='manual'`
+        # entries went out with **zero scoped tokens and 24 gap-class
+        # identifiers**, because the assistant API calls this method directly
+        # and never went through that caller (backlog 44a).
+        #
+        # There are four callers of `add_entry` and three of them were
+        # unprotected. So the boundary moves here, where "every model input
+        # becomes an entry" already holds — a rule the method enforces rather
+        # than one each caller has to remember.
+        boundary = self._boundary_for(assistant_session, boundary)
+        text = protect_outbound(text, boundary=boundary)
+
         next_index = entry_index if entry_index is not None else len(assistant_session.entries)
         entry = AssistantEntry(
             session_id=assistant_session.id,
@@ -112,7 +150,13 @@ class AssistantService:
             entry_label=entry_label,
             raw_text=text,
             sanitized_text="",
-            token_map_json={},
+            # The boundary's map travels with the entry, because `run_session`
+            # restores from `token_map_json` and a token minted under a map
+            # that the restore cannot see is a `[HOST_…]` left standing in the
+            # analyst's report. `restore` is forgiving by design, so that
+            # failure is silent — which is exactly why it is wired here and
+            # not left to a later caller.
+            token_map_json=dict(boundary.token_map),
         )
         self.session.add(entry)
         await self.session.flush()
@@ -288,7 +332,16 @@ class AssistantService:
             sanitization = sanitize_entries([entry.raw_text for entry in assistant_session.entries])
             for entry, sanitized in zip(assistant_session.entries, sanitization.entries, strict=False):
                 entry.sanitized_text = sanitized.sanitized_text
-                entry.token_map_json = sanitized.token_map
+                # **Merge, do not overwrite.** `add_entry` has already put
+                # the boundary's scoped tokens here, and the restore below
+                # reads this column. Replacing it would drop them, and
+                # `_restore_tokens` is forgiving — so the symptom would be a
+                # stray `[HOST_a3f9c1_1]` in the analyst's report rather than
+                # an error.
+                entry.token_map_json = {
+                    **(entry.token_map_json or {}),
+                    **(sanitized.token_map or {}),
+                }
 
             assistant_session.sanitization_summary_json = sanitization.summary
 

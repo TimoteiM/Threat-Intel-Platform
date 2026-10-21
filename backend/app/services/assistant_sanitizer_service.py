@@ -235,6 +235,24 @@ def _replace_pattern(
 ) -> str:
     label_key = token_prefix.lower() + "s"
 
+    # `token not in text` below scans the WHOLE input, and `repl` runs once
+    # per match. Measured on one 2,244,098-char body: 44,002 calls, 78.9s, for
+    # 6 distinct tokens — O(matches x length), quadratic for repetitive
+    # content, 3.98x per doubling, and the realised cost was an alert that got
+    # no analysis after 1,792 seconds of worker time. Backlog 43.
+    #
+    # The predicate is **memoised, not redefined.** It asks whether this
+    # token's literal text already appears in the original input, which is a
+    # property of (token, text) and cannot change within this call — `text` is
+    # the closure's unmodified input, not the partially substituted result. So
+    # the answer is computed at most once per distinct token: 6 scans instead
+    # of 44,002, with byte-identical output and an identical `entry_summary`.
+    #
+    # Memoising rather than replacing matters because `entry_summary` is a
+    # published count. Substituting "distinct entities seen" — the obvious
+    # tidier rule — would have silently re-based a number the API serves.
+    appears_literally: dict[str, bool] = {}
+
     def repl(match: re.Match[str]) -> str:
         original = match.group(0)
         if token_prefix == "IP" and not is_ipv4_indicator_match(text, match):
@@ -248,7 +266,13 @@ def _replace_pattern(
             reverse_token_map[original] = token
             shared_token_map[token] = original
             batch_summary[label_key] += 1
-        if entry_summary.get(label_key, 0) == 0 or token not in text:
+        if token not in appears_literally:
+            appears_literally[token] = token in text
+        # The first-match special case is preserved exactly: the first match
+        # for a label always counts, even when the token appears literally in
+        # the input. Dropping it would change the count for any entry whose
+        # text contains a `[HOST_1]`-shaped string.
+        if entry_summary.get(label_key, 0) == 0 or not appears_literally[token]:
             entry_summary[label_key] += 1
         return token
 

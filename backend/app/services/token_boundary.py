@@ -789,6 +789,48 @@ class TokenBoundary:
         return out
 
 
+class BoundaryUnavailable(RuntimeError):
+    """The boundary could not be applied, so nothing was sent.
+
+    Lives here rather than in a caller because both model-facing paths raise
+    it: `alert_log_prompt.build` re-exports it for compatibility.
+    """
+
+
+def protect_outbound(text: str, *, boundary: "TokenBoundary | None") -> str:
+    """Secrets out, identifiers tokenised, in that fixed order.
+
+    **The one implementation.** It was written in `alert_body_ai_service`
+    for the alert-body path and then needed in `AssistantService.add_entry`
+    for the other three paths; a second copy would have been the stale one
+    inside a month, which this codebase has nine examples of.
+
+    Both layers are idempotent on text that has already been through them —
+    `_is_real_secret` refuses a value starting with `<SECRET:`, and the
+    detectors skip anything matching the token grammar — so calling this on
+    already-protected text mints nothing and changes nothing. Measured.
+
+    Raises `BoundaryUnavailable`. There is no path through this function
+    that returns text the boundary did not process.
+    """
+    if boundary is None:
+        raise BoundaryUnavailable(
+            "no identifier boundary was supplied, so the text was not "
+            "tokenised and nothing was sent to the model"
+        )
+    try:
+        # Secrets first, non-reversible: a placeholder that cannot be undone
+        # must be in place before anything reversible is, or a credential
+        # ends up in the restorable map.
+        redacted = secrets.sanitize_text(text).text
+        return boundary.tokenize(redacted)
+    except Exception as exc:  # noqa: BLE001
+        raise BoundaryUnavailable(
+            f"the identifier boundary could not be applied "
+            f"({type(exc).__name__}: {exc}), so nothing was sent to the model"
+        ) from exc
+
+
 # ── persistence ──────────────────────────────────────────────────────────
 
 
