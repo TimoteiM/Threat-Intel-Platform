@@ -120,6 +120,28 @@ TEMPLATES: dict[str, QueryTemplate] = {t.name: t for t in (
         source_kind=SIEM,
         declared_calls=1,
     ),
+    # **Added for the answer-key cases, 2026-10-21.** Two of the five
+    # analyst-closed cases on `c00` had NO playbook row at all: #1050 is
+    # entirely class 15 (Sysmon FileCreateStreamHash) and #1184 entirely
+    # class 1102 ("The audit log was cleared"). Depth on cases with a known
+    # answer before breadth on cases without, so this exists to cover those
+    # two rather than to raise corpus-wide coverage.
+    #
+    # Keyed on `host` alone, which is what those classes carry: measured,
+    # class 15 has a host on 202 of 202 runs and a user on only 39; class
+    # 1102 has a host on 20 of 20 and a **user on none**. A user-keyed
+    # template could never fire on 1102.
+    #
+    # Two declared calls — the id query and the hydrate, which is what
+    # `FalconSource._host_detections` really spends.
+    QueryTemplate(
+        name="host_detections_window",
+        purpose="what the EDR itself flagged on this host around the alert",
+        selectors=("host",),
+        source_kind=EDR,
+        declared_calls=2,
+        pivotable=False,
+    ),
     QueryTemplate(
         name="host_threat_state",
         purpose="this host's current threat state",
@@ -147,6 +169,26 @@ PLAYBOOK: dict[str, tuple[str, ...]] = {
     # Process create / file create — 2%.
     "1": ("hash_prevalence", "process_tree"),
     "29": ("hash_prevalence", "process_tree"),
+    # ── the classes the five analyst-closed cases involve that had no row,
+    # added 2026-10-21. Deliberately NOT the corpus-wide top ten: these five
+    # are the only cases on this platform with a human answer to check
+    # against, and two of them were uncovered entirely.
+    #
+    # 15   Sysmon FileCreateStreamHash — a file stream was written. The
+    #      question is what wrote it and whether the payload is known, so the
+    #      hash first and the host's own detections second. Case #1050.
+    "15": ("hash_prevalence", "host_detections_window"),
+    # 1102 "The audit log was cleared" — 20 of 20 runs carry no user, so
+    #      nothing user-keyed can run. What is answerable is whether the EDR
+    #      saw anything else on that host in the window. Case #1184.
+    "1102": ("host_detections_window",),
+    # 7    Sysmon image loaded. The corpus rules here are "debug/dump
+    #      library" and "credential-related library", so the loaded image's
+    #      hash is the question. Appears inside case #61.
+    "7": ("hash_prevalence", "host_detections_window"),
+    # 11   Sysmon FileCreate — "executable dropped", "LOLBin certutil wrote
+    #      exe". Same shape as 15. Appears inside case #61.
+    "11": ("hash_prevalence", "host_detections_window"),
 }
 
 #: Run for every class, when the key is present. The design note's "*any*"
