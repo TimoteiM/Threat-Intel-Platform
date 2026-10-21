@@ -17,6 +17,13 @@ so this prints a row per item and refuses to summarise them into a
 proportion. The fifth column is the one five historical false positives
 cannot provide: what the loop failed to gather that we know happened.
 
+**A known-null is not a failure.** Item 3 (`version.dll`) is run precisely
+to establish that it produces nothing, so that item 3b (`dbghelp.dll`)
+producing something means the rule is specific rather than absent. Read the
+two class-7 rows together with the `sysmon -c` event-7 state: nothing/nothing
+with event 7 **enabled** is a Wazuh rule finding, and nothing/nothing with
+event 7 **excluded** was settled before the exercise began.
+
 **Items that produced no alert are reported as detection coverage, not loop
 misses.** If nothing fired, nothing downstream means anything, and calling
 that a gathering failure would blame the loop for a detection gap. The
@@ -210,9 +217,11 @@ def main() -> None:
     print("=" * 76)
     print("WHAT TO REPLAY")
     print("=" * 76)
-    print(f"  items that alerted      : {[i['item'] for i in alerted]}")
-    print(f"  items that did NOT      : {[i['item'] for i in not_alerted]}")
-    print(f"  items UNTESTED          : {[i['item'] for i in untested]}")
+    # Item ids may be strings ("3b"), so they are printed as given rather
+    # than coerced — a renumbered item is a different item.
+    print(f"  items that alerted      : {[str(i['item']) for i in alerted]}")
+    print(f"  items that did NOT      : {[str(i['item']) for i in not_alerted]}")
+    print(f"  items UNTESTED          : {[str(i['item']) for i in untested]}")
     print()
     if not_alerted:
         print("  The non-firing items are DETECTION COVERAGE findings. Do not")
