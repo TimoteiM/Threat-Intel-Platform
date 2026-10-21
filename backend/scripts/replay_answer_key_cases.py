@@ -26,7 +26,12 @@ import pathlib
 import sys
 from collections import Counter
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "backend"))
+# `backend/`, not the repo root: this script runs INSIDE the api/worker
+# container, where /app is backend/ and the repo-root scripts/ directory is
+# not mounted at all. It lived there first, and the refusal message below
+# then told the operator to run a path that does not exist in the container —
+# verify the path the consumer calls.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import create_engine, text
 
@@ -38,6 +43,53 @@ from app.services.context_gathering.falcon_source import FalconSource
 from app.services.context_gathering.siem_source import SiemSource
 
 TENANT = "c00"
+
+
+def preflight() -> None:
+    """Refuse to run where the SIEM cannot be read, instead of reporting it.
+
+    **Why this is a refusal and not a status.** Run from the host venv, every
+    SIEM query returns `unavailable` because the OpenSearch CA lives at a
+    container mount path. The loop then records `check_failed` naming the
+    source — which is correct behaviour for the loop and completely
+    misleading as a harness result: case #1050 looked like a source failure
+    when it was my shell. An environment problem recorded as evidence is the
+    same shape as every absence-as-value defect in this codebase, so the
+    harness stops rather than producing a record nobody can trust.
+
+    The check is on the actual precondition — does the CA file exist — not
+    on "am I in a container". If the mount moves, the precondition is still
+    the right question.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    problems: list[str] = []
+
+    ca = str(getattr(settings, "opensearch_ca_bundle", "") or "")
+    if ca and not pathlib.Path(ca).exists():
+        problems.append(
+            f"the OpenSearch CA bundle {ca} does not exist here, so every SIEM "
+            f"query would return `unavailable` and be recorded as a source "
+            f"failure. This path is a container mount."
+        )
+    if not getattr(settings, "opensearch_enabled", False):
+        problems.append("opensearch_enabled is false, so the SIEM source "
+                        "cannot answer anything")
+
+    if problems:
+        print("REFUSING TO RUN — the environment cannot support this harness:\n",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"  * {problem}\n", file=sys.stderr)
+        print("  Run it where the mounts exist:\n\n"
+              "    docker compose exec -T -e PYTHONPATH=/app worker \\\n"
+              "      python /app/scripts/replay_answer_key_cases.py "
+              "--alerts-per-case 1\n\n"
+              "  Or pass --edr-only to replay the EDR templates alone and have\n"
+              "  the SIEM ones reported as NOT ATTEMPTED rather than failed.\n",
+              file=sys.stderr)
+        raise SystemExit(2)
 
 
 def answer_key(conn) -> list[dict]:
@@ -124,11 +176,20 @@ def main() -> None:
                     help="how many alerts of each case to replay")
     ap.add_argument("--dry-run", action="store_true",
                     help="plan only: no API calls, just what WOULD be asked")
+    ap.add_argument("--edr-only", action="store_true",
+                    help="skip the SIEM source entirely and SAY SO, rather "
+                         "than letting it fail for an environment reason")
     args = ap.parse_args()
+
+    if not args.dry_run and not args.edr_only:
+        preflight()
 
     engine = create_engine(get_settings().database_sync_url)
     with engine.connect() as conn:
         cases = answer_key(conn)
+        if args.edr_only:
+            print("  SIEM source NOT ATTEMPTED (--edr-only): the user-side\n"
+                  "  templates below are not failures, they were never asked.\n")
         print(f"answer key: {len(cases)} analyst-closed cases on {TENANT} "
               f"(Expertware's own estate)\n")
         resolutions = Counter(c["resolution"] for c in cases)
@@ -171,11 +232,10 @@ def main() -> None:
                 # Per alert, because `SiemSource` needs THIS alert's time:
                 # a window centred on the wrong moment answers confidently
                 # about the wrong hours.
-                registry = {
-                    pb.EDR: FalconSource(tenant_id=TENANT),
-                    pb.SIEM: SiemSource(tenant_id=TENANT,
-                                        alert_time=alert["event_time"]),
-                }
+                registry = {pb.EDR: FalconSource(tenant_id=TENANT)}
+                if not args.edr_only:
+                    registry[pb.SIEM] = SiemSource(
+                        tenant_id=TENANT, alert_time=alert["event_time"])
                 boundary = tb.in_memory(tenant_id=TENANT,
                                         investigation_id=f"replay-{alert['run_id']}")
                 record = gl.gather(

@@ -2858,3 +2858,70 @@ undetectable by any means currently available.
 Next step is a question for the operator, not code: who issued each of these
 two API keys, against which Exabeam instance, and can the console show the
 instance identity that the API does not expose.
+
+## 48 — 18 alert-sending hosts have no Falcon sensor, and 13 sensors are stale
+
+Measured 2026-10-21 against CrowdStrike's own inventory, read-only. This is
+a coverage report on **our own estate** (`c00`), not a client's.
+
+**Falcon side:** 176 device records resolving to **171 distinct hostnames**
+— 5 hostnames carry more than one record, consistent with the re-install /
+re-image behaviour `lookup_host` already documents. All 171 report status
+`normal`, so "unmanaged" does not apply to anything *inside* Falcon.
+
+**13 sensors have not reported in 7 days or more**, longest 42:
+
+    exp-6k7yz93 42d   exp-4jhpzy2 41d   exp-joi1yhpzy2w 37d
+    exp-6sxjaetcu9w 27d   exp-4bjigdlhd7u 25d   exp-3lj1p54 22d
+    exp-b14zxl3 21d   exp-ffbd8s3 14d   exp-20ht5y2 12d
+    exp-7q6f163 12d   exp-47vd864 11d   exp-26ml4y2 9d   (+1)
+
+A stale sensor is not a gap in the same way a missing one is — the host may
+simply be off — but a 42-day silence is worth one question to whoever owns
+the rollout.
+
+**The real gap is the other direction.** 147 hosts sent alerts in the last
+30 days; **18 of them have no Falcon sensor at all**:
+
+| host | alerts (30d) |
+|---|---|
+| `windows-test-device` | **1,789** |
+| `server01` | 64 |
+| `expgrafana001.int.expertware.net` | 46 |
+| `asiem-victim` | 26 |
+| `dc` | **17** |
+| `exprevpxy002`, `exp-2r52x33` | 10 each |
+| `win10-mssql02` | 8 |
+| `win11-mssql01`, `laboratorvm001` | 7 each |
+| `expm365analytics401` | 5 |
+| 7 more | 1-3 each |
+
+Consistent with the 19 measured on 2026-10-15 in
+`docs/outbound/falcon-edr-coverage-gap.md` — one fewer, six days later.
+
+**Why it matters beyond coverage:** `windows-test-device` is the host behind
+case **#61**, the only case on the answer key that scored 100, and its
+missing EDR corroboration is explained entirely by having no sensor. A
+`dc` and two SQL servers in that list are the entries worth acting on.
+
+See `docs/measurements/ground-truth-protocol.md` — the protocol has to pick
+a host that is in **both** systems, and only 112 of 147 are.
+
+## 49 — Cluster-level OpenSearch state cannot be read with the credential we have
+
+Asked on 2026-10-21 whether anything is under-replicated. **Cannot be
+answered:** `_cluster/health`, `_cat/nodes` and `_cat/health` all return
+**401** with the configured service user, which is scoped to index reads.
+That scoping is correct least privilege and it also means replication,
+shard allocation and node count are invisible to this platform.
+
+Related and **retracted**: I reported "one of three nodes unreachable by
+name" as a standing condition. It was one observation. `os-001` failed to
+resolve from the api container at ~10:20 and resolved from **both**
+containers at ~11:05, as did `os-002` and `os-003`. A transient DNS failure
+reported as a state — and no DNS history is kept here, so "how long" is not
+answerable either.
+
+Two options, neither taken: a read-only `cluster:monitor` grant for a
+separate credential, or ask whoever owns the cluster to read it. Until then
+"nothing is under-replicated" is not a claim this platform can make.
