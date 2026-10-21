@@ -31,28 +31,51 @@ must register in all six, and the secret probe must register. A corpus of
 zeros is otherwise indistinguishable from a broken detector, and a zero here
 would read as good news.
 
-**Stated bound.** `sanitize_entries` is superlinear — 0.94 M chars/s on
-bodies under 10k, 0.05 M chars/s on a 1.22M body, ~19× worse per character.
-Twelve bodies are ≥100k chars and carry **30% of the corpus's characters**;
-they are excluded from the table below and measured separately. See
-"Superlinear sanitisation" at the end — that behaviour is itself a finding,
-because those bodies go to the model in production too.
+**The bound is closed.** The first pass excluded twelve bodies ≥100k chars
+carrying 30% of the corpus's characters, because `sanitize_entries` is
+superlinear (0.94 M chars/s under 10k, 0.05 M chars/s on a 1.22M body).
+The full scan then ran: **17,562 of 17,562 runs, 104.0M characters, 2,379
+seconds.** Both the bounded and the full numbers are below, because the
+difference between them is the most useful thing in this file.
+
+### What closing it changed: occurrences are not the metric
+
+| | bounded (17,550 runs) | full (17,562 runs) |
+|---|---|---|
+| identifiers per alert, mean | 4.41 | **4.42** |
+| runs leaking at least one | 66.2% | **66.2%** |
+| gap 1 **occurrences** | 10,174 | **120,174** |
+| gap 1 **distinct entities** | 75 | **76** |
+| gap 2 distinct | 1,320 | 1,353 |
+
+Twelve bodies added **110,000 gap-1 occurrences and one distinct host.** One
+multi-megabyte alert repeats the same hostname tens of thousands of times.
+
+So **every per-alert and per-entity figure is stable to three significant
+figures, and the occurrence counts are not a measurement of anything** — they
+are a measurement of how often a handful of enormous bodies repeat
+themselves. Rank by *runs affected* and *distinct entities*; ignore the
+occurrence column except as a cost signal. The conclusions below were drawn
+from runs-affected and did not move.
+
+Figures in the tables are from the **full** scan unless marked.
 
 ## By class
 
-Over 17,550 runs, 72.9M characters:
+All 17,562 runs, 104.0M characters, ordered by **runs affected** — see above
+for why not by occurrences:
 
-| class | occurrences | runs | % runs | distinct entities |
-|---|---|---|---|---|
-| gap 3 UNC server name | 78,510 | 8,795 | 50.1% | **734** |
-| gap 2 bare `DOMAIN\user` | 34,956 | 10,530 | 60.0% | **1,320** |
-| colon-keyed account | 30,389 | 10,405 | 59.3% | **325** |
-| gap 1 keyed single-label host | 10,174 | 4,096 | 23.3% | **75** |
-| gap 4 IPv6 | 1,468 | 342 | 1.9% | 199 |
-| other keyed account | 312 | 146 | 0.8% | 29 |
-| gap 5 `-User` switch | 0 | 0 | 0.0% | 0 |
+| class | % runs | distinct entities | occurrences |
+|---|---|---|---|
+| gap 2 bare `DOMAIN\user` | **60.0%** | **1,353** | 37,055 |
+| colon-keyed account | **59.2%** | **325** | 30,389 |
+| gap 3 UNC server name | **50.1%** | **734** | 78,510 |
+| gap 1 keyed single-label host | **23.3%** | **76** | 120,174 |
+| gap 4 IPv6 | 1.9% | 199 | 1,468 |
+| other keyed account | 0.8% | 29 | 312 |
+| gap 5 `-User` switch | 0.0% | 0 | 0 |
 
-**1,320 distinct accounts and 734 distinct hostnames** have been named to the
+**1,353 distinct accounts and 734 distinct hostnames** have been named to the
 provider in the clear. That is the figure with a person attached to it.
 
 **The prediction was the wrong way round.** Gap 1 was expected to be more
@@ -74,33 +97,79 @@ Two scope notes on gap 1, both of which make 23.3% a **floor**:
 ## Secrets: nothing strips them from an alert body
 
 `log_secret_sanitizer` is applied to log *records* in the digest.
-`sanitize_entries` is identifier-only. So the alert body's secrets are not
-redacted at all.
+`sanitize_entries` is identifier-only. So the alert body's secrets were not
+redacted at all. (Closed by change 2 of b-2, 2026-10-21.)
 
-**13,443 occurrences across 3,792 runs — 21.6% of alerts.**
+### The quotable number is 6,023, not 23,293
 
-| label | occurrences |
+The raw detector total over the full corpus is 23,293 occurrences across
+21.6% of alerts. **Validated 2026-10-21, and 74% of that total is false
+positives from two shape-only patterns.** Re-run with
+`scripts/validate_secret_labels.py`.
+
+| label | occurrences | runs | % runs | detector kind |
+|---|---|---|---|---|
+| iban | 13,778 | 2,587 | 14.7% | **shape-only — 0 valid** |
+| session | 5,137 | 2,585 | 14.7% | key-anchored |
+| card | 4,515 | 1,209 | 6.9% | **shape-only — ~0 valid** |
+| cookie | 434 | 434 | 2.5% | key-anchored |
+| password_flag | 322 | 88 | 0.5% | key-anchored |
+| password | 126 | 89 | 0.5% | key-anchored |
+| bearer | 3 | 3 | 0.0% | key-anchored |
+| connection_string | 1 | 1 | 0.0% | key-anchored |
+
+**Credible: 6,023 occurrences across 3,179 runs — 18.1% of alerts**, every
+one from a pattern that requires a key beside the value.
+**Unvalidated: 18,293 occurrences across 20.1% of alerts**, from the two
+patterns that match on digit shape alone.
+
+#### IBAN: 0 of 13,778
+
+ISO 13616 gives IBAN a mod-97 checksum and a per-country length. **The
+detector pattern checks neither** — it is `[A-Z]{2}\d{2}` followed by
+alphanumeric groups, which is also a GUID fragment, a base32 token and any
+number of vendor identifiers. Against the real standard:
+
+| outcome | count |
 |---|---|
-| iban | 5,154 |
-| session | 5,137 |
-| card | 2,274 |
-| cookie | 434 |
-| password_flag | 314 |
-| password | 126 |
-| bearer | 3 |
-| connection_string | 1 |
+| country code does not issue IBANs at all | 13,417 |
+| wrong length for its country | 324 |
+| mod-97 fails | 37 |
+| **valid IBAN** | **0** |
 
-**Treat `iban` and `card` as unverified.** These are detector counts, not
-confirmed financial data, and a long alphanumeric identifier in a SOC alert
-is exactly the shape that trips an IBAN pattern. The `card` detector applies
-a Luhn check, which makes 2,274 harder to dismiss; `iban` at 5,154 in a SOC
-corpus is more likely enriched with false positives. **Validating these two
-labels against a sample is the first thing to do with this table** — not
-because the fix differs, but because "card numbers are going to the provider"
-is a sentence that must be true before anyone says it.
+Not "mostly false positives" — **all of them**, on 359 distinct candidate
+strings.
 
-`password`, `password_flag`, `bearer` and `connection_string` total 444
-occurrences and need no such caveat.
+#### Card: no evidence of payment data
+
+Every hit already passes Luhn, because `_is_real_secret` applies it. Luhn
+alone is weak: a random 16-digit string passes about 1 in 10. Adding the
+registered issuer prefix and the length that brand uses:
+
+| outcome | occurrences |
+|---|---|
+| no registered issuer prefix | 4,413 |
+| visa / mastercard / diners / discover prefix | 102 |
+
+Of those 102 (32 distinct strings), **86 contain a run of 6 or more
+identical digits**, leaving **16 occurrences with no obvious tell**. The
+context key immediately before the match is `(no key)` on 99, `hll_key` on 2
+— a HyperLogLog key — and `id` on 1. None is a payment-shaped field.
+
+So: **no evidence that payment card data reaches the provider.** Sixteen
+unexplained occurrences out of 23,293, under no payment-shaped key, is
+consistent with coincidence at this corpus size. The pattern is almost
+certainly matching 13-digit epoch-millisecond timestamps and similar
+identifiers.
+
+#### What to say, and what not to
+
+* **Say:** "6,023 credential occurrences reach the model across 18.1% of
+  alerts, and 5,137 of them are session identifiers."
+* **Do not say:** 23,293, or anything about IBANs or card numbers.
+
+`session` at 14.7% of alerts is the real finding in this section and it was
+buried under the false positives.
 
 ## By shipper, and by tenant
 

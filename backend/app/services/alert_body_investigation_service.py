@@ -366,6 +366,10 @@ def run_alert_body_investigation(
     if run_ai:
         try:
             ai_report = run_alert_body_ai_analysis(
+                # The SAME boundary the log digest used. One map across both
+                # halves, so a host named in the alert and the same host in a
+                # gathered event are one token and not two machines.
+                boundary=log_boundary,
                 alert_body=alert_body,
                 title=title or _fallback_title(alert_body),
                 context=context,

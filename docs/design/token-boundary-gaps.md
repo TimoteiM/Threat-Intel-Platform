@@ -107,11 +107,25 @@ closure listed above is in one of them.**
 | token scope (tenant + investigation) | in the token | none — `[HOST_1]` is unscoped |
 | unknown token on the way back | refusal | left standing |
 
-So the honest summary is: **the closures protect the query agent, which no
-customer traffic reaches yet, and the SIEM log digest, which is off by
-default — while the alert body and the findings digest, which every real
-alert goes through this afternoon, still have all six gaps.** A reviewer
-should read the "Closed" table above with that in mind.
+So the honest summary, as of **2026-10-21**: **every model-facing path on
+this platform now goes through the boundary** — the query agent, the SIEM log
+digest, and as of today the alert body and findings digest too, via
+`alert_body_ai_service._protect_outbound` (§4d of the context-gathering
+design note). The six gaps below describe the **shipped sanitiser's
+detectors**, which still have them; they no longer describe any input that
+reaches those detectors untokenised.
+
+Two caveats a reviewer must keep:
+
+* **it is not running yet.** The worker does not reload, so until api and
+  worker restart, the live behaviour is the one the table describes. The
+  deployment state is a fact about processes, not about this document.
+* the row-11 table is about detectors on raw text. What the alert body
+  actually leaked before today was measured: **4.42 identifiers per alert,
+  1,353 distinct accounts and 734 distinct hostnames** across 17,562 runs.
+  See [corpus-identifier-leak.md](../measurements/corpus-identifier-leak.md).
+  That measurement is kept rather than deleted, because a closure only means
+  something next to the size of what it closed.
 
 (Until 2026-10-20 this paragraph said the closures protected "a consumer that
 does not exist yet" and that the shipped path "still has all six gaps", full

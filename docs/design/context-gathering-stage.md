@@ -18,15 +18,23 @@ identifiers no longer reach the model. **They do.**
 | path | runs on | behind the boundary? |
 |---|---|---|
 | the query agent / gathering stage | nothing live yet — mock corpus only | **yes**, fully |
-| the SIEM log digest (`alert_log_prompt.build`) | only when an analyst pins events, or if `alert_log_ai_autosend` is turned on — **off on this deployment** | **yes**, since 2026-10-20 |
-| **the alert body and the findings digest** | **every alert, every run, today** | **no** — `assistant_sanitizer_service` only, with all six gaps in [token-boundary-gaps.md](token-boundary-gaps.md) row 11 |
+| the SIEM log digest (`alert_log_prompt.build`) | only when an analyst pins events, or if `alert_log_ai_autosend` is on — **off on this deployment** | **yes**, since 2026-10-20 |
+| the alert body and the findings digest | **every alert, every run** | **yes**, since 2026-10-21 — §4d (b-2), in `alert_body_ai_service._protect_outbound` |
 
-So the accurate sentence is: **identifiers do leave this environment on the
-path that runs.** What the boundary covers is a stage no customer traffic
-reaches and a block that is off by default. Measured at the wire on
-2026-10-20, all six gap classes and a seventh the register did not have reach
-the model in the clear from the alert text:
-[outgoing-payload-identifier-states.md](../measurements/outgoing-payload-identifier-states.md).
+**Not yet running.** The code is committed; the worker executes
+`analysis_task` and does not reload, so until api and worker are restarted
+the live behaviour is still the one below. Check `scripts/liveness.sh`
+before believing otherwise.
+
+Until 2026-10-21 the accurate sentence was: *identifiers do leave this
+environment on the path that runs*. Measured at the wire on 2026-10-20, all
+six gap classes and a seventh the register did not have reached the model in
+the clear from the alert text — **4.42 per alert, 1,353 distinct accounts and
+734 distinct hostnames across the corpus**:
+[outgoing-payload-identifier-states.md](../measurements/outgoing-payload-identifier-states.md)
+and [corpus-identifier-leak.md](../measurements/corpus-identifier-leak.md).
+That is what b-2 closes, and the measurements are kept because the fix is
+only meaningful next to the size of what it fixed.
 
 What is true and worth claiming:
 
@@ -466,9 +474,9 @@ warning, and the row is gone.
 
 ---
 
-## 4d. Scoping: route the alert body through the boundary
+## 4d. The alert body through the boundary — BUILT 2026-10-21 as (b-2)
 
-**Not built.** Scoped 2026-10-20 against the measurement in
+**Built.** Scoped 2026-10-20 against the measurement in
 [corpus-identifier-leak.md](../measurements/corpus-identifier-leak.md):
 4.41 identifiers per alert reach the model today, 1,320 distinct accounts and
 734 distinct hostnames named in the clear across the corpus.
@@ -524,11 +532,86 @@ needs a backfill over 17,562 historical bodies. **Not recommended**, and not
 because it is hard — because the map's lifetime makes it incoherent.
 
 **(b-2) store raw, tokenise in-flight for the model only, restore the
-answer** — the same model-facing property, one site. `_analyse` tokenises
-`entry_text` with the run's boundary before `add_entry`; `_restore_identifiers`,
-which already exists for the digest, restores the report. Nothing stored
-changes, no render site changes, search, graph, hash and tuning are untouched.
-**Recommended.**
+answer** — the same model-facing property, one site. **This is what was
+built.** `_analyse` calls `_protect_outbound(entry_text, boundary=...)` after
+the join and before `add_entry`; `_restore_identifiers`, which already
+existed for the digest, restores the report. Nothing stored changes, no
+render site changes; search, graph, hash and tuning are untouched.
+
+Three details that are load-bearing:
+
+* **after the join, not before.** One map over one string means a host is the
+  same token in the alert half and the gathered half. Two calls with two maps
+  would have the model reading one machine as two — a wrong answer, which is
+  worse than a disclosure. Pinned by
+  `test_one_host_is_one_token_across_the_alert_and_the_digest`.
+* **the same boundary the digest used**, passed down from
+  `investigate_alert_body` as `log_boundary`. `boundary` is a required
+  keyword with no default on both `run_alert_body_ai_analysis` and
+  `_protect_outbound`, so a caller cannot reach the provider untokenised by
+  omission.
+* **it fails closed**, and says which. No boundary or a boundary that raises
+  gives `status="failed"` with **`withheld=True`** and a reason — distinct
+  from an analysis that ran and broke, because an analyst reading "failed"
+  cannot otherwise tell.
+
+**One limitation, pinned rather than left to be discovered.**
+`_protect_outbound` receives a flat string and runs the **prose** pass, which
+keys on identifier-shaped words. It has no field-path knowledge, so a
+structured `{"agent":{"name":"EXPDC001"}}` is invisible to it — only
+`tokenize_records` knows `agent.name` is a host, from `DECLARED_FIELDS`. In
+production this never fires because `alert_log_prompt.build` has already
+tokenised the digest with the same boundary and both layers are idempotent.
+But it is a **dependency, not a guarantee**: a future caller passing a raw
+structured digest would not be saved by this layer.
+`test_this_layer_depends_on_the_digest_arriving_already_tokenised` says so
+out loud, and was written because a test asserting the opposite failed first.
+
+### The two changes, measured apart
+
+They ship together and have opposite properties, so one measurement over both
+would let the reversible change borrow the credibility of the irreversible
+one. Re-run with `scripts/measure_b2_two_changes.py`.
+
+**Change 1 — identifier tokenisation. Claim: the identity function.**
+
+| | |
+|---|---|
+| bodies tested | 17,580 (12 over 100k excluded, as elsewhere) |
+| round trip byte-identical | **17,579 — 99.994%** |
+| differing | **1**, and the loss is carriage returns only |
+| tokens minted, mean | 6.85 (max 86) |
+| bodies minting nothing | 5 — 0.03%, so this is not identity by inaction |
+
+**Change 2 — secret redaction. Claim: deliberately NOT the identity
+function.** What the model sees genuinely changes, for:
+
+| | |
+|---|---|
+| runs changing on a **credible** label | **3,178 — 18.1%** |
+| credible occurrences | **6,017** (`session` 5,137, `cookie` 434, `password_flag` 316, `password` 126, `bearer` 3, `connection_string` 1) |
+| runs changing only on an unvalidated label | 3,519 — 20.0% |
+| unvalidated occurrences | 8,449 (`iban`, `card` — see below) |
+
+Each value becomes `<SECRET:label:6hex>`, which **`restore` cannot undo** and
+must not. So for 18.1% of alerts the analyst's report may now carry a
+placeholder where the model quoted a credential. That is the intended
+outcome and it is a content change, stated as one.
+
+**The validation that had to happen before any of this was quoted.** The raw
+detector total is 23,293 occurrences, and 74% of it is false positives:
+`iban` is **0 valid out of 13,778** against ISO 13616 — 13,417 have a country
+code that does not issue IBANs — and `card`, which already passes Luhn, has
+no registered issuer prefix on 4,413 of 4,515, with 86 of the surviving 102
+containing a 6+ repeated digit run and none under a payment-shaped key. There
+is **no evidence of payment data**. Full working:
+[corpus-identifier-leak.md](../measurements/corpus-identifier-leak.md).
+
+**Cost:** +2.51% characters through `_protect_outbound` over 73.1M
+characters. A token is longer than most hostnames, a placeholder shorter than
+most credentials.
+
+**Recommended, and built.**
 
 What (b-2) does **not** do: it does not stop identifiers being stored in our
 database. They already are, and they stay. It stops them reaching the
@@ -544,7 +627,8 @@ Over every body under the 100,000-char bound — 17,550 of 17,562 runs:
   so this is not identity achieved by doing nothing.
 * **one body differs**, by −5 characters.
 
-The one failure, diagnosed: five `` characters, stripped by
+The one failure, diagnosed: five `
+` characters, stripped by
 **`sanitize_entries`** — the shipped sanitiser, which already runs on that
 alert today. Confirmed by counting the character at each stage: 5 in the
 body, 0 after `sanitize_entries`, 0 after the boundary, 0 after restore.
