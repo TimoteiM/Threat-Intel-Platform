@@ -187,22 +187,66 @@ def _client_error_detail(response: Any, token: str = "") -> str:
 
 @dataclass(frozen=True)
 class SearchResult:
-    """Rows, how many there were, and whether these are all of them.
+    """Rows, what was asked for, and whether these are all of them — or unknown.
 
-    The triple rather than a bare list, which is this codebase's standing rule
-    for a bounded read: `limit` without a total is a claim about what you did
-    not see. Exabeam answers with `totalRows`, so the honest form costs
-    nothing — and a caller that reports "50 events" when there were 4,000 is
-    the failure the rule exists for.
+    This codebase's standing rule for a bounded read is that `limit` without a
+    total is a claim about what you did not see. The first version of this
+    class implemented that rule on a false premise: it read `totalRows` as the
+    number of matching events and derived `complete = len(rows) >= total`.
+
+    **Measured against the live API on 2026-10-21, `totalRows` is the number
+    of rows in the response, not the number that matched:**
+
+        limit      1 -> rows      1, totalRows      1
+        limit      5 -> rows      5, totalRows      5
+        limit    100 -> rows    100, totalRows    100
+        limit   5000 -> rows   5000, totalRows   5000
+        limit 100000 -> rows 100000, totalRows 100000   (over ONE day)
+
+    It never once came back below the limit. So the old derivation made
+    `complete` **always True**, and the guard built to stop a bounded read
+    being mistaken for a complete one certified every truncated read as
+    complete. For an agent whose stop condition asks "did I see everything",
+    that is a page size read as the whole result.
+
+    `totalRows` therefore cannot be reinterpreted into a corpus total, so the
+    read is reported as **bounded** instead:
+
+    * `returned` — how many rows came back. A **floor** on what matched, never
+      a total. The absence convention calls this a `LOWER_BOUND`.
+    * `limit` — what was asked for, carried so a caller can see the bound that
+      produced the floor.
+    * `complete` — `True` only when `returned < limit`, which means the API ran
+      out of matching events before the bound. **`None` when
+      `returned == limit`**, because then it is genuinely unknown whether more
+      exist. Not `False`: false asserts there are more, and we do not know that
+      either.
+    * `reported_total` — exactly what the API said, uninterpreted, so nobody
+      has to guess what was in the envelope.
+
+    `None` is falsy, so an existing `if result.complete:` reads unknown as
+    not-complete, which is the safe direction.
     """
 
     rows: list[dict[str, Any]]
-    total: int
-    complete: bool
+    returned: int
+    limit: int
+    complete: bool | None
+    reported_total: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __len__(self) -> int:
         return len(self.rows)
+
+    @property
+    def at_least(self) -> int:
+        """A floor on the number of matching events. Never a total."""
+        return self.returned
+
+    @property
+    def bounded(self) -> bool:
+        """True when the read may have been truncated by `limit`."""
+        return self.complete is not True
 
 
 def _base_url(config: dict[str, Any]) -> str:
@@ -226,8 +270,10 @@ def search(
 ) -> dict[str, Any]:
     """One search, as the API documents it.
 
-    Returns a `SearchResult` — rows, the total Exabeam reports, and whether
-    these are all of them. Raises `httpx.HTTPStatusError` on a non-2xx, with
+    Returns a `SearchResult` — rows, the bound that produced them, and
+    whether these are all of them **or unknown**. Exabeam reports no corpus
+    total; see that class's docstring. Raises `httpx.HTTPStatusError` on a
+    non-2xx, with
     the response body deliberately **not** attached to the message: a search
     response carries customer log events.
     """
@@ -266,15 +312,17 @@ def search(
     rows = body.get("rows")
     rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
     try:
-        total = int(body.get("totalRows"))
+        reported = int(body.get("totalRows"))
     except (TypeError, ValueError):
-        # No total means we cannot say whether these are all of them, and the
-        # safe answer to that is "no" rather than len(rows).
-        total = len(rows)
-        complete = False
-    else:
-        complete = len(rows) >= total
-    return SearchResult(rows=rows, total=total, complete=complete, raw=body)
+        reported = None
+    returned = len(rows)
+    # The ONLY sound inference available: fewer rows than we asked for means
+    # the API ran out of matches. Equal to the limit means unknown — see the
+    # measurement in SearchResult's docstring for why `totalRows` cannot
+    # answer it.
+    complete: bool | None = True if returned < int(limit) else None
+    return SearchResult(rows=rows, returned=returned, limit=int(limit),
+                        complete=complete, reported_total=reported, raw=body)
 
 
 def verify(*, client_id: str = "", client_secret: str = "",

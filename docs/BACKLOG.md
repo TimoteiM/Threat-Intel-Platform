@@ -2772,7 +2772,7 @@ Nothing is wrong with the data. The work is:
 
 See `docs/measurements/tenant-ownership-verification.md`.
 
-## 46 — Exabeam's `total` is the page size, so `complete` is always True
+## 46 — Exabeam's `total` is the page size — **FIXED 2026-10-21**
 
 `SearchResult(rows, total, complete)` exists so that a bounded read cannot
 be mistaken for a complete one — rule 21 put in a signature. Measured
@@ -2790,10 +2790,35 @@ is wrong, so the guard built to prevent this failure currently certifies
 every truncated read as complete. Any volume or coverage claim from Exabeam
 is unbounded above.
 
-Next step: find whether the API reports a true total anywhere (a count
-endpoint, a `groupBy` aggregate, or a header), and if it does not, make
-`complete` report `unknown` rather than `True` — an absence, not a value.
-Until then no Exabeam result should be described as complete.
+**Resolved: the API reports no corpus total, so the read is reported as
+bounded.** `totalRows` exists in the envelope but is the number of rows in
+the response — measured at limits of 1, 5, 25, 100, 5000 and **100,000 over
+one day**, it equalled the rows returned every time and never came back
+below the limit. It cannot be reinterpreted.
+
+`SearchResult` now carries `returned`, `limit`, `complete: bool | None`,
+`reported_total` and the properties `at_least` (a floor, never a total) and
+`bounded`. `complete` is `True` only when `returned < limit` — the one sound
+inference, meaning the API ran out of matches before the bound — and
+**`None` when `returned == limit`**, because then it is genuinely unknown.
+Not `False`: that would assert more exist, which is equally unknown. `None`
+is falsy, so an existing `if result.complete:` reads unknown as
+not-complete, the safe direction.
+
+`total` is **removed rather than renamed**, so any caller still reading a
+page size as a total fails loudly.
+
+Verified live: 7d/limit 25, 7d/limit 5000 and 1d/limit 100000 all now report
+`complete=None, bounded=True`. And a further measurement worth recording —
+a **one-minute** window at limit 5000 also returns 5000, so `pov` runs at
+≥5,000 events per minute and **no realistic query on that tenant will ever
+be complete.** Every Exabeam read there is a floor, permanently.
+
+**The unit tests were part of the defect.** They mocked `totalRows: 4000`
+beside 2 rows and asserted `total == 4000, complete is False` — a vendor
+that does not exist. They passed while the connector was wrong, which is why
+the live measurement had to come first. Rewritten to the real semantics, with
+a test asserting `total` is gone.
 
 Also: `pov`'s stored config still carries `data_lake_url` and `site_id`,
 invented fields from the first wrong version of the Exabeam spec. Inert, but

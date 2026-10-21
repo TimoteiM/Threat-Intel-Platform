@@ -330,43 +330,92 @@ def test_a_missing_field_is_named(monkeypatch, config, secrets, missing):
 # ── a bounded read is a sample unless it carries its total ───────────────
 
 
-def test_a_search_reports_its_total_and_whether_it_is_complete(monkeypatch):
-    """`limit` without a total is a claim about what you did not see.
+def test_a_full_page_is_reported_as_unknown_not_complete(monkeypatch):
+    """The defect these tests used to encode.
 
-    Exabeam answers with `totalRows`, so the honest form costs nothing. A
-    caller reporting "50 events" when there were 4,000 is the failure this
-    exists for.
+    The old versions mocked `totalRows: 4000` beside 2 rows and asserted
+    `total == 4000`, `complete is False`. **The live API never behaves that
+    way.** Measured 2026-10-21 at limits of 1, 5, 25, 100, 5000 and 100000,
+    `totalRows` always equalled the rows returned — so the real code path was
+    `complete = len(rows) >= total` -> always True, and every truncated read
+    certified as complete.
+
+    The tests modelled a vendor that does not exist, which is why they passed
+    while the connector was wrong. These model the one that does.
     """
     cap = _Exchange(search_body={
-        "rows": [{"time": "t1"}, {"time": "t2"}], "totalRows": 4000})
+        "rows": [{"time": "t1"}, {"time": "t2"}], "totalRows": 2})
     monkeypatch.setattr(ex.httpx, "post", cap)
     out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
                     fields=["time"], start_time=datetime.now(timezone.utc),
                     end_time=datetime.now(timezone.utc), limit=2)
-    assert len(out.rows) == 2
-    assert out.total == 4000
-    assert out.complete is False
+    assert out.returned == 2
+    assert out.limit == 2
+    # Unknown, not complete and not incomplete.
+    assert out.complete is None
+    assert out.bounded is True
+    assert out.at_least == 2
+    # And what the vendor actually said is kept, uninterpreted.
+    assert out.reported_total == 2
 
 
-def test_a_search_that_returned_everything_says_so(monkeypatch):
+def test_fewer_rows_than_asked_for_is_the_one_sound_completeness_claim(monkeypatch):
+    """The API ran out of matches before the bound, so these are all of them.
+
+    This is the only inference available, and it is the positive control: a
+    rule that answered "unknown" to everything would pass the test above and
+    tell a caller nothing.
+    """
     cap = _Exchange(search_body={"rows": [{"time": "t1"}], "totalRows": 1})
     monkeypatch.setattr(ex.httpx, "post", cap)
     out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
                     fields=["time"], start_time=datetime.now(timezone.utc),
-                    end_time=datetime.now(timezone.utc))
-    assert out.complete is True and out.total == 1
+                    end_time=datetime.now(timezone.utc), limit=50)
+    assert out.complete is True
+    assert out.bounded is False
+    assert out.returned == 1
 
 
-def test_a_missing_total_is_not_read_as_completeness(monkeypatch):
-    """No total means we cannot say whether these are all of them, and the
-    safe answer to that is "no" — not `len(rows)`, which would quietly assert
-    completeness from the sample itself."""
+def test_an_empty_result_under_the_bound_is_a_real_negative(monkeypatch):
+    """Nothing matched, and we know it — distinct from "we may have truncated"."""
+    cap = _Exchange(search_body={"rows": [], "totalRows": 0})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                    fields=["time"], start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc), limit=10)
+    assert out.complete is True and out.returned == 0
+
+
+def test_a_missing_total_does_not_change_the_completeness_rule(monkeypatch):
+    """`totalRows` is not used to decide completeness any more.
+
+    It is kept as `reported_total` so a reader can see the envelope, but the
+    decision rests on rows-against-limit, which is the thing we can verify.
+    """
     cap = _Exchange(search_body={"rows": [{"time": "t1"}]})
     monkeypatch.setattr(ex.httpx, "post", cap)
     out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
                     fields=["time"], start_time=datetime.now(timezone.utc),
-                    end_time=datetime.now(timezone.utc))
-    assert out.complete is False
+                    end_time=datetime.now(timezone.utc), limit=10)
+    assert out.reported_total is None
+    assert out.complete is True          # 1 row < limit 10
+    cap2 = _Exchange(search_body={"rows": [{"time": "t1"}]})
+    monkeypatch.setattr(ex.httpx, "post", cap2)
+    out2 = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                     fields=["time"], start_time=datetime.now(timezone.utc),
+                     end_time=datetime.now(timezone.utc), limit=1)
+    assert out2.complete is None         # a full page, so unknown
+
+
+def test_total_is_gone_so_a_caller_cannot_read_a_page_size_as_a_total(monkeypatch):
+    """The attribute that carried the false meaning is removed, not renamed in
+    place, so any code still reading it fails loudly rather than quietly."""
+    cap = _Exchange(search_body={"rows": [{"time": "t1"}], "totalRows": 1})
+    monkeypatch.setattr(ex.httpx, "post", cap)
+    out = ex.search(token=TOKEN, base_url=BASE, filter_expression="",
+                    fields=["time"], start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc), limit=10)
+    assert not hasattr(out, "total")
 
 
 def test_the_verify_query_uses_values_exabeam_documents(monkeypatch):
