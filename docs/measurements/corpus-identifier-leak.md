@@ -65,18 +65,26 @@ Figures in the tables are from the **full** scan unless marked.
 All 17,562 runs, 104.0M characters, ordered by **runs affected** — see above
 for why not by occurrences:
 
+Ordered by **runs affected**, with the corrected built-in guard:
+
 | class | % runs | distinct entities | occurrences |
 |---|---|---|---|
-| gap 2 bare `DOMAIN\user` | **60.0%** | **1,353** | 37,055 |
-| colon-keyed account | **59.2%** | **325** | 30,389 |
-| gap 3 UNC server name | **50.1%** | **734** | 78,510 |
-| gap 1 keyed single-label host | **23.3%** | **76** | 120,174 |
-| gap 4 IPv6 | 1.9% | 199 | 1,468 |
-| other keyed account | 0.8% | 29 | 312 |
+| **colon-keyed account** | **59.4%** | **332** | 30,535 |
+| gap 3 UNC server name | **50.1%** | **744** | 79,027 |
+| gap 2 bare `DOMAIN\user` | **44.6%** | **1,326** | 25,716 |
+| gap 1 keyed single-label host | **23.3%** | **75** | 10,190 |
+| gap 4 IPv6 | 2.0% | 203 | 1,478 |
+| other keyed account | 0.8% | 29 | 322 |
 | gap 5 `-User` switch | 0.0% | 0 | 0 |
 
-**1,353 distinct accounts and 734 distinct hostnames** have been named to the
+**1,326 distinct accounts and 744 distinct hostnames** have been named to the
 provider in the clear. That is the figure with a person attached to it.
+
+The built-in correction moved gap 2 from 60.0% of runs to 44.6% while barely
+touching its distinct count (1,320 to 1,326) — `AUTHORITY\SYSTEM` appeared
+in thousands of runs and contributed one value. **The colon gap is now the
+most common class**, which strengthens rather than weakens the conclusion
+below.
 
 **The prediction was the wrong way round.** Gap 1 was expected to be more
 common than the colon gap. Measured, the colon gap affects 59.3% of runs

@@ -2643,3 +2643,52 @@ same "say what was dropped" treatment as any other bound.
 
 See `docs/measurements/corpus-identifier-leak.md`, "Superlinear
 sanitisation".
+
+
+## 44 — Two paths b-2 does not cover, found by watching live traffic after the restart
+
+b-2 went live 2026-10-21 07:53 UTC. The first 16 analyses through it all
+completed, `withheld=False`, 4.4-8.6s, no errors — and watching what they
+actually sent found two things the unit tests could not.
+
+### 44a — `source_type='manual'` assistant sessions bypass the boundary
+
+Of 14 live assistant entries, 12 were `source_type='alert_body'` and carried
+**scoped** tokens (`[HOST_<fingerprint>_n]`), confirming `_protect_outbound`
+ran. Two were `source_type='manual'`, label `entry-1`, with **zero scoped
+tokens and 24 gap-class identifiers** between them.
+
+Those are sessions created directly through the AI Assistant workspace —
+`AssistantService.add_entry` called from the assistant API, not from
+`_analyse`. **b-2 covers the alert-body path only.** A human pasting text
+into the assistant gets `assistant_sanitizer_service` and its six gaps, the
+same as before.
+
+This is the same shape as the gap b-2 just closed, one path over, and it was
+invisible to the tests because they exercise `run_alert_body_ai_analysis`.
+The fix is presumably to move the boundary call into `add_entry` so every
+model input goes through it rather than every *caller* remembering to — the
+"put the rule in a signature" argument, applied one layer down. Needs its
+own measurement: the manual path has no run record, so the population has to
+be counted from `assistant_sessions` first.
+
+### 44b — 21 colon-keyed accounts survive `_protect_outbound`, unexplained
+
+On the `alert_body` entries that b-2 *did* process, a residual remains. After
+removing the 11 instrument false positives (`AUTHORITY\SYSTEM`, see the
+correction in `docs/measurements/corpus-identifier-leak.md`), **21
+occurrences of `colon_keyed_account` survive**, and they are present in
+`raw_text` — the output of `_protect_outbound` itself — so nothing
+downstream reintroduced them.
+
+**I have not explained this yet and am not going to guess.** The unit tests
+show `_protect_outbound` tokenising `sourceProcessInfo.user: value`, so the
+live shape differs from the test shape in some way that matters. The next
+step is one diagnostic: take a surviving match from a live entry, run the
+boundary's `_extra_pass` over its minimal context, and find which guard
+returns early — `is_builtin_principal`, the token check, or the regex not
+matching the real key shape at all.
+
+Until that is answered, **b-2's coverage claim is "measured at 21 occurrences
+short on live traffic", not "complete"**. The unit tests pass and the live
+measurement disagrees with them; the live measurement wins.

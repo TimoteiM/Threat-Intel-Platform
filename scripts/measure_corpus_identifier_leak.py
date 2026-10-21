@@ -42,6 +42,8 @@ from app.services import log_secret_sanitizer as secrets
 from app.services.assistant_sanitizer_service import sanitize_entries
 from app.services.token_boundary import (
     BARE_DOMAIN_ACCOUNT_RE,
+    BUILTIN_HOSTS,
+    BUILTIN_PRINCIPALS,
     IPV6_CANDIDATE_RE,
     KEYED_ACCOUNT_LAX_RE,
     KEYED_HOST_LAX_RE,
@@ -57,9 +59,30 @@ TOKEN_RE = re.compile(r"\[(?:HOST|ACCOUNT|IP|EMAIL|SID)_[0-9a-f_]*\d+\]")
 MAX_BODY_CHARS = 100_000
 
 
+#: Built-in names, for the partial-match guard below.
+_BUILTIN_WORDS = {w.casefold() for w in (BUILTIN_HOSTS | BUILTIN_PRINCIPALS)}
+
+
 def _usable(value: str) -> bool:
-    """The boundary's own guards. A built-in is a decision, not a leak."""
-    return bool(value) and not is_builtin_principal(value) and not TOKEN_RE.fullmatch(value)
+    """The boundary's own guards. A built-in is a decision, not a leak.
+
+    `is_builtin_principal` alone is not enough here, and getting that wrong
+    inflated a published number. `_protect_builtins` hides the WHOLE span
+    `NT AUTHORITY\\SYSTEM` before any detector runs, and restores it after —
+    so the span is deliberately untouched in the output. My detector then
+    matched its tail, `AUTHORITY\\SYSTEM`, for which `is_builtin_principal`
+    is False because "authority" is not itself a listed authority. Eleven of
+    32 live "survivors" were that, and the corpus gap-2 figure carried the
+    same inflation.
+
+    So any part of the value being a built-in name disqualifies it.
+    """
+    if not value or TOKEN_RE.fullmatch(value):
+        return False
+    if is_builtin_principal(value):
+        return False
+    parts = [p for p in re.split(r"[\\\s]+", value) if p]
+    return not any(p.casefold() in _BUILTIN_WORDS for p in parts)
 
 
 def classes_in(text_in: str) -> dict[str, list[str]]:
