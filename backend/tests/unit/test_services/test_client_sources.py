@@ -62,8 +62,16 @@ def test_a_missing_file_is_a_refusal_not_an_empty_map(tmp_path):
 # ── the platforms ────────────────────────────────────────────────────────
 
 
-def test_the_three_platforms_are_declared_with_their_fields():
-    assert set(PLATFORMS) == {"exabeam", "sentinelone", "cortex"}
+def test_every_declared_platform_has_its_fields():
+    """Renamed from `..._three_platforms...` when falcon was added.
+
+    A test named after a count has to be edited every time the count
+    changes, which is the moment someone edits the number instead of
+    reading the assertion. The set is still asserted — adding a platform
+    should be a deliberate edit here — but the name no longer carries a
+    figure that goes stale.
+    """
+    assert set(PLATFORMS) == {"exabeam", "sentinelone", "cortex", "falcon"}
     for name, spec in PLATFORMS.items():
         assert spec.config_fields, name
         assert spec.secret_fields, f"{name} has no credential; every platform needs one"

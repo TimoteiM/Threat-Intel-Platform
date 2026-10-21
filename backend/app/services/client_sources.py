@@ -185,6 +185,72 @@ PLATFORMS: dict[str, PlatformSpec] = {
         },
         required=("base_url",),
     ),
+    # **CrowdStrike Falcon. Every field below was proven by a call that
+    # worked, on 2026-10-21, not read off a documentation page.**
+    #
+    # `scripts/verify_tenant_ownership.py` authenticated with the stored
+    # `c00` credential against `https://api.eu-1.crowdstrike.com`, exchanged
+    # it at `/oauth2/token` for a bearer, and read 20 device records from
+    # `/devices/queries/devices/v1` + `/devices/entities/devices/v2`. So
+    # `base_url`, `client_id` and `client_secret` are the real contract, and
+    # the earlier Exabeam lesson — a field nobody can fill is worse than a
+    # field that is missing — is satisfied by evidence rather than by
+    # restraint.
+    #
+    # `cloud` is in the live config and is **not** required: the region is
+    # already carried by `base_url` (`api.eu-1.`), and `base_url_for()` in
+    # `falcon_client` resolves an explicit URL before it looks at any region
+    # hint. Declared so an operator who has it can record it, optional
+    # because the connector does not need it.
+    #
+    # NOT declared: `member_cid`. Falcon's parent/child API supports acting
+    # on a member CID from an MSSP parent tenant, which is exactly what this
+    # platform will eventually need — but nothing here has ever made that
+    # call, and the Exabeam spec was wrong twice by declaring fields ahead of
+    # a working request. It goes in when a call needs it.
+    # Keyed by the **tool name**, like every other entry, because
+    # `integration_status_service.catalogue()` is keyed by tool and the
+    # tests assert `name in catalogue()`. Keying it "crowdstrike" with
+    # `tool="falcon"` made the entry invisible to the catalogue — the
+    # silent-registry failure this map is supposed to avoid, caught by the
+    # test rather than by me.
+    #
+    # `falcon` was ALREADY in that catalogue as `credential_store`-managed
+    # with exactly these four fields, so this declaration agrees with the
+    # one that already existed rather than competing with it.
+    "falcon": PlatformSpec(
+        tool="falcon",
+        label="CrowdStrike Falcon",
+        category="edr",
+        config_fields={
+            "base_url": (
+                "The Falcon API host for this tenant's cloud, e.g. "
+                "https://api.eu-1.crowdstrike.com. Region-specific: a "
+                "credential issued in eu-1 returns 401 against us-2."
+            ),
+            "cloud": (
+                "Optional. The cloud name (eu-1, us-1, us-2, us-gov-1) as the "
+                "console reports it. Only a label — base_url carries the region."
+            ),
+        },
+        secret_fields={
+            "client_id": (
+                "The API client ID from Support and resources > API clients "
+                "and keys in the Falcon console."
+            ),
+            "client_secret": (
+                "That client's secret. Falcon shows it once, at creation."
+            ),
+        },
+        required=("base_url",),
+        directions=(
+            "Needs the Hosts:read scope to answer which estate the credential "
+            "belongs to, and Alerts:read to retrieve detections. Verified by "
+            "asking Falcon for its own CID and device domain — see "
+            "docs/measurements/tenant-ownership-verification.md, which found "
+            "the c00 credential pointing at our own estate."
+        ),
+    ),
     # **Still a guess, and marked as one.** Unlike Exabeam above, nothing in
     # this deployment demonstrates SentinelOne's or Cortex's auth shape — no
     # automation, no connector, no documentation in this repo. The fields
