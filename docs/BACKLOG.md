@@ -2744,3 +2744,73 @@ matching the real key shape at all.
 Until that is answered, **b-2's coverage claim is "measured at 21 occurrences
 short on live traffic", not "complete"**. The unit tests pass and the live
 measurement disagrees with them; the live measurement wins.
+
+## 45 — `c00` is Expertware's own estate and is still labelled a tenant
+
+Confirmed 2026-10-21 against CrowdStrike's own identifiers, read-only:
+CID `eed7e41845d04c26b4198f4c85f6216e`, `machine_domain
+int.expertware.net`, OU `Hybrid Joined Devices,Computers,ExpertWare`,
+`site_name EXPERTWARE`, on 20 of 20 devices sampled. Suspected on
+2026-10-16; now the vendor says it four ways.
+
+`c00` carries **16,552 of 17,640 alert runs (93.8%)** and 2,118 of 2,526
+closed cases. So every corpus statistic this platform has published —
+verdict distributions, identifier leak rates, playbook coverage, case sizes
+— is a statement about **our own machines**, correctly measured and wrongly
+labelled.
+
+Nothing is wrong with the data. The work is:
+
+1. decide what `c00` should be called, and whether it is a tenant at all or
+   a permanent internal estate alongside the client tenants;
+2. re-read every published number that says "client" or "tenant" and say
+   which estate it describes — the measurements in `docs/measurements/` are
+   the ones at risk;
+3. keep it usable: it is the only corpus large enough to measure the
+   gathering loop, and a read-only replay against our own machines is the
+   safest possible first connector. The label is the problem, not the data.
+
+See `docs/measurements/tenant-ownership-verification.md`.
+
+## 46 — Exabeam's `total` is the page size, so `complete` is always True
+
+`SearchResult(rows, total, complete)` exists so that a bounded read cannot
+be mistaken for a complete one — rule 21 put in a signature. Measured
+against the live API on 2026-10-21:
+
+| requested limit | rows | `total` | `complete` |
+|---|---|---|---|
+| 1 | 1 | 1 | True |
+| 5 | 5 | 5 | True |
+| 25 | 25 | 25 | True |
+| 100 | 100 | 100 | True |
+
+`total` tracks `limit` exactly. The signature is right; the value feeding it
+is wrong, so the guard built to prevent this failure currently certifies
+every truncated read as complete. Any volume or coverage claim from Exabeam
+is unbounded above.
+
+Next step: find whether the API reports a true total anywhere (a count
+endpoint, a `groupBy` aggregate, or a header), and if it does not, make
+`complete` report `unknown` rather than `True` — an absence, not a value.
+Until then no Exabeam result should be described as complete.
+
+Also: `pov`'s stored config still carries `data_lake_url` and `site_id`,
+invented fields from the first wrong version of the Exabeam spec. Inert, but
+debris an operator filled in once and may trust.
+
+## 47 — Neither Exabeam credential can be attributed to anyone
+
+Verification is **not possible**, which is not the same as passed. Exabeam's
+token response is `{expires_in, token_type}` — no scope, tenant, instance or
+customer — and the data fallback is closed too: a 7-day read-only search
+returns 25 empty row objects for `lin` and `time`-only rows for `pov`, so
+there is no estate-revealing field to inspect.
+
+This is the control that would have caught `c00` and it cannot run here. The
+risk is live: a credential pointed at the wrong Exabeam instance would be
+undetectable by any means currently available.
+
+Next step is a question for the operator, not code: who issued each of these
+two API keys, against which Exabeam instance, and can the console show the
+instance identity that the API does not expose.
