@@ -2745,7 +2745,7 @@ Until that is answered, **b-2's coverage claim is "measured at 21 occurrences
 short on live traffic", not "complete"**. The unit tests pass and the live
 measurement disagrees with them; the live measurement wins.
 
-## 45 — `c00` is Expertware's own estate and is still labelled a tenant
+## 45 — `c00` is Expertware's own estate — **CLOSED 2026-10-21**
 
 Confirmed 2026-10-21 against CrowdStrike's own identifiers, read-only:
 CID `eed7e41845d04c26b4198f4c85f6216e`, `machine_domain
@@ -2759,10 +2759,29 @@ verdict distributions, identifier leak rates, playbook coverage, case sizes
 — is a statement about **our own machines**, correctly measured and wrongly
 labelled.
 
-Nothing is wrong with the data. The work is:
+**Closed: `c00` is a permanent internal estate with its own kind, enforced
+in the model.** Migration 074 adds `tenants.kind` with a database CHECK over
+a closed set — `customer`, `internal_estate`, `unknown` — and sets `c00` to
+`internal_estate`. `lin` and `pov` are `unknown`, not `customer`, because
+neither Exabeam credential can be attributed to anyone (backlog 47) and
+treating "we cannot tell" as "a customer" is the conflation this whole class
+is about. `customer` stays the default for a tenant born from an arriving
+alert: presuming someone else's data is the safer presumption.
 
-1. decide what `c00` should be called, and whether it is a tenant at all or
-   a permanent internal estate alongside the client tenants;
+`app/services/tenant_population.py` is the one sanctioned way to name a
+population. It **refuses** an unrecognised kind rather than falling back to
+a customer label, since falling back is how this went unnoticed for six
+weeks. `is_customer('unknown')` is False.
+
+The label function only binds callers that use it, so the enforcement has a
+second half: `test_no_document_calls_c00_a_customer_or_a_client` greps every
+markdown file under `docs/`. It found a **seventh** document on its first
+run that my manual sweep had missed — and then a false positive of its own,
+where `\s+` crossed a newline and matched a heading ending "...not a client"
+against the next line starting "C00 is a tenant". A grep control's false
+positives are its own defect, not a finding; the pattern is now line-local.
+
+The remaining work:
 2. re-read every published number that says "client" or "tenant" and say
    which estate it describes — the measurements in `docs/measurements/` are
    the ones at risk;

@@ -35,6 +35,7 @@ from app.services import token_boundary as tb
 from app.services.context_gathering import loop as gl
 from app.services.context_gathering import playbook as pb
 from app.services.context_gathering.falcon_source import FalconSource
+from app.services.context_gathering.siem_source import SiemSource
 
 TENANT = "c00"
 
@@ -138,13 +139,6 @@ def main() -> None:
               f"{resolutions.get('true_positive', 0)}  <-- the limit of what "
               f"this can measure\n")
 
-        registry = {
-            pb.EDR: FalconSource(tenant_id=TENANT),
-            # No SIEM source yet. The loop will record `check_failed` naming
-            # the absent kind rather than reporting an empty SIEM answer.
-            pb.SIEM: None,
-        }
-        registry = {k: v for k, v in registry.items() if v is not None}
 
         for case in cases:
             alerts = alerts_of(conn, case)
@@ -174,6 +168,14 @@ def main() -> None:
                       f"{[(s.get('template'), s.get('reason')) for s in skipped]}")
                 if args.dry_run:
                     continue
+                # Per alert, because `SiemSource` needs THIS alert's time:
+                # a window centred on the wrong moment answers confidently
+                # about the wrong hours.
+                registry = {
+                    pb.EDR: FalconSource(tenant_id=TENANT),
+                    pb.SIEM: SiemSource(tenant_id=TENANT,
+                                        alert_time=alert["event_time"]),
+                }
                 boundary = tb.in_memory(tenant_id=TENANT,
                                         investigation_id=f"replay-{alert['run_id']}")
                 record = gl.gather(

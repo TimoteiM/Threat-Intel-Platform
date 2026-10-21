@@ -528,6 +528,16 @@ class Tenant(Base):
     # What the sending integration puts in `tenant_id`.
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: `customer`, `internal_estate` or `unknown`. See migration 074 and
+    #: `app/services/tenant_population.py` — a caller describing a population
+    #: asks this rather than assuming, because `c00` is Expertware's own
+    #: estate and six documents had called it a customer's.
+    #:
+    #: `customer` is the default for a tenant created by an arriving alert:
+    #: presuming "someone else's data" is the safer presumption. `unknown`
+    #: is for a tenant whose owner genuinely cannot be established — both
+    #: Exabeam credentials are currently in that state.
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="customer")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
