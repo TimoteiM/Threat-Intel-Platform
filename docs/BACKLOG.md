@@ -2476,11 +2476,32 @@ characters and average 3,080,000. `MAX_ANALYSED_ALERT_BODY_CHARS` is
 that handled 12,500 small runs in 236s then spent over nine minutes without
 finishing the remaining 5,062 — which include those ten.
 
-**Do not extrapolate a curve from one data point.** The honest statement is
-that one 1.2M body costs 26 seconds and there are ten bodies between 2.5×
-and 9× that size. The next step is cheap and specific:
+**Measured further on 2026-10-21, and the cost is not a function of length.**
+Two bodies of nearly identical size differ by 11×:
 
-1. time `sanitize_entries` on each of the ten, individually, with a ceiling;
+| body | identity round trip (2x sanitize_entries + 2x sanitize_text) |
+|---|---|
+| 1,224,087 chars | 27.3s |
+| 2,244,098 chars | **86.1s** |
+| 2,329,280 chars | **7.5s** |
+| 2,347,147 – 2,374,360 chars (6 bodies) | 7.5 – 7.8s |
+| ~11,000,000 chars | **>1,500s and did not finish** |
+
+So it is content-dependent, not size-dependent — consistent with regex
+backtracking on particular input shapes rather than a clean complexity
+curve. The two 2.24M bodies minted 6 tokens each and took 86s; the 2.33M
+body minted 31 and took 7.5s, so it is not proportional to matches either.
+
+**The operational number.** The largest body did not complete a round trip
+in 1,500 seconds. That measurement does roughly twice the sanitisation
+production does, so call production's cost for that one alert **several
+hundred seconds at least**, against a 1,800s Celery hard limit. It is inside
+the limit on this evidence and it is the same order of magnitude as it,
+which is close enough to check rather than assume. The next step is cheap and specific:
+
+1. ~~time `sanitize_entries` on each of the ten, individually~~ — **done
+   2026-10-21**, table above; the next question is *which input shape*
+   triggers the 11× difference, since size does not explain it;
 2. check the run records for whether any of those ten ever hit the task
    timeout or a retry — the evidence may already exist unread;
 3. only then decide between a size cap before sanitisation, a cheaper

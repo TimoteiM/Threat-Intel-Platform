@@ -253,3 +253,9 @@ for this file.
 
 The individual regexes are all fast on the same body (0.02–0.19s), so the
 cost is inside `sanitize_entries`, not in the boundary's added patterns.
+
+**And it is content-dependent, not size-dependent** (measured 2026-10-21):
+one 2,244,098-char body costs 86.1s while a 2,329,280-char body costs 7.5s,
+an 11× difference at the same size. Not proportional to tokens minted
+either — 6 against 31. See backlog 43; the open question is which input
+shape triggers it.
