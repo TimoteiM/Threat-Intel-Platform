@@ -56,6 +56,12 @@ def load_protocol(path: pathlib.Path) -> list[dict]:
     required = ("item", "host", "account", "command",
                 "started_utc", "finished_utc", "expected_class")
     for entry in items:
+        # An item recorded as `untested` is a gap that was written down, and
+        # it needs none of the execution fields. Dropping such an item from
+        # the file instead would make a missing class look like a clean
+        # result — the 1102 row has no other coverage.
+        if str(entry.get("status") or "").lower() == "untested":
+            continue
         missing = [f for f in required if not entry.get(f)]
         if missing:
             raise SystemExit(
@@ -126,9 +132,20 @@ def main() -> None:
 
     alerted: list[dict] = []
     not_alerted: list[dict] = []
+    untested: list[dict] = []
 
     with engine.connect() as conn:
         for item in items:
+            if str(item.get("status") or "").lower() == "untested":
+                print("=" * 76)
+                print(f"ITEM {item.get('item')}  expected class "
+                      f"{item.get('expected_class')}  — UNTESTED")
+                print(f"  reason: {item.get('reason') or '(none recorded)'}")
+                print(f"\n  Not a result and not a miss. This class has no "
+                      f"coverage from this exercise,\n  which is a gap in the "
+                      f"exercise rather than a finding about the loop.\n")
+                untested.append(item)
+                continue
             runs = alerts_for(conn, item)
             print("=" * 76)
             print(f"ITEM {item['item']}  expected class {item['expected_class']}  "
@@ -195,6 +212,7 @@ def main() -> None:
     print("=" * 76)
     print(f"  items that alerted      : {[i['item'] for i in alerted]}")
     print(f"  items that did NOT      : {[i['item'] for i in not_alerted]}")
+    print(f"  items UNTESTED          : {[i['item'] for i in untested]}")
     print()
     if not_alerted:
         print("  The non-firing items are DETECTION COVERAGE findings. Do not")
