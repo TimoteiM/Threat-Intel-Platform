@@ -173,7 +173,34 @@ breath. A count would let one hide behind another.
 
 A carve-out added to silence a false positive is how a true one stays hidden,
 so each entry is a claim that can be checked rather than a name on a list.
-Today that list holds four, and `alert_callback_secret` is **not** on it — it
-is flagged as unexplained, which is correct: it is now in `.env` but not yet
-in any container, so the signature is not live until the services are
-recreated.
+That list holds four, and `alert_callback_secret` is deliberately **not** on
+it.
+
+### Resolved 2026-10-22: `env lint ok`
+
+The three Microsoft keys were deleted from `.env` and `api`, `worker` and
+`beat` were recreated. Verified by `scripts/verify_post_recreate.py`:
+
+* **The keys are gone, at all three layers** — no assignment in `.env`,
+  nothing resolved by `docker compose config` (the discriminator, since it
+  trims names), and no variable in any container. All three agreeing is what
+  separates *deleted* from *still in the file and dropped downstream*.
+* **The callback signature is live.** `sign_payload` called inside the running
+  worker returns a `sha256=<64 hex>` value rather than `None`, and the
+  fingerprint of the loaded secret matches the one generated
+  (`8bb4ba6540fdc641`) — so the worker holds the same secret, not merely some
+  secret. A mismatch there would mean the receiver rejects everything.
+
+`alert_callback_secret` is now backed by an env var, so it left the unbacked
+set on its own rather than by being exempted — which is the outcome the
+exemption list exists to stay out of the way of.
+
+**`liveness.sh` now exits 0:**
+
+```
+tree clean, pushed · api ea6c59b7 · worker ea6c59b7 · in sync ·
+fe 3fedb0d1 in sync · env ok · env lint ok · db privs ok · db connections ok
+```
+
+The process fingerprint moved from `85613f1a` to `ea6c59b7`, which is the
+recreate taking effect — the serving processes are on the committed code.
