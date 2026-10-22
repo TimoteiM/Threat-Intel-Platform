@@ -12,6 +12,14 @@ credentials actually reach. **Three things need a human answer, and we would
 rather have them than build around them.** Each ask below has its evidence
 attached; all of it is read-only and reproducible.
 
+**Ask 3 grew while we were checking.** It began as "a read-only registration
+for email". The coverage cross-check in ask 2 showed the estate runs two EDRs
+and this platform reads only one, leaving **seven machines with no endpoint
+source at all** in our investigations. Since a new registration is being
+requested regardless, ask 3 now covers endpoint alerts as well — as a
+**separately grantable group**, so email and endpoint can be approved
+independently.
+
 One of the three is a security finding we did not go looking for. It is
 **ask 1**, and it is the one we would like answered first.
 
@@ -155,40 +163,118 @@ That is exactly why we are asking rather than concluding.
 
 ---
 
-## Ask 3 — A separate, read-only app registration for the email integration
+## Ask 3 — One separate, read-only app registration, covering email **and** endpoint
 
 ### The ask
 
-A **new** app registration, with admin consent, holding exactly:
+A **new** app registration with admin consent, read-only throughout. The
+permissions are deliberately split into **three independently grantable
+groups**, so you can approve one without the others:
 
-| permission | why | type |
+#### Group A — email (the original request)
+
+| permission | resource | why |
 |---|---|---|
-| **`SecurityAnalyzedMessage.Read.All`** | `/security/collaboration/analyzedEmails` — the analysed-email records with verdicts, sender, recipients, URLs and attachments. This is the surface that answers "flagged emails, analysed like alerts". | application, read-only |
-| **`Organization.Read.All`** | answers ask 2, and confirms the licence below | application, read-only |
-| `SecurityAlert.Read.All` *(optional)* | the alerts *about* email, without message detail | application, read-only |
+| **`SecurityAnalyzedMessage.Read.All`** | Microsoft Graph | `/security/collaboration/analyzedEmails` — analysed-email records with verdicts, sender, recipients, URLs and attachments. The surface that answers "flagged emails, analysed like alerts". |
+
+#### Group B — endpoint (added after the coverage cross-check below)
+
+| permission | resource | why |
+|---|---|---|
+| **`SecurityAlert.Read.All`** | Microsoft Graph | `/security/alerts_v2` — the unified alert stream. One scope covers **both** Defender for Endpoint and Defender for Office 365 alerts, which is why it sits here rather than in group A. |
+| **`Machine.Read.All`** | WindowsDefenderATP | the device inventory. This is what produced the coverage finding below, and see the dependency note — we lose it when ask 1 is actioned. |
+| `SecurityIncident.Read.All` *(optional)* | Microsoft Graph | incident grouping, so related alerts arrive pre-correlated |
+
+#### Group C — tenant identity (needed for either of the above)
+
+| permission | resource | why |
+|---|---|---|
+| **`Organization.Read.All`** | Microsoft Graph | answers ask 2 — the verified-domain list — and confirms the licence question below |
+
+**If you grant only one group, grant C plus A or C plus B.** Group C is small,
+read-only, and without it we cannot label incoming data correctly for either
+product.
+
+### Why group B is worth adding to the same conversation
+
+This started as an email integration. The coverage cross-check we ran for
+ask 2 changed the picture:
+
+* **The estate runs two EDRs and the platform reads one.** We read CrowdStrike
+  Falcon. We do not read Defender for Endpoint at all.
+* **Seven machines have no EDR source in the platform today.**
+  `exp-044036414857`, `exp-3brrpb4`, `exp-ops-46807`, `exp-ops-58255`,
+  `exp-ops-81958`, `exp-ops-66927` and `cpc-alexa-gtfxm` are all Onboarded and
+  Active in Defender, and invisible to us. When the platform investigates an
+  alert on one of them it asks Falcon, gets nothing, and correctly reports
+  "no EDR data" — which is true of our sources and false of the machine.
+* **Our coverage reporting is systematically wrong in one direction.** Any
+  figure computed from Falcon alone overstates the gap by however many hosts
+  Defender covers. In the note we were about to send you, that was **7 of 19
+  hosts — 37%** — and we corrected it before sending rather than after.
+
+So group B is not scope creep onto a separate system; it closes a blind spot
+in the thing the platform already does, using a registration you are being
+asked to create anyway.
+
+### A dependency between ask 1 and ask 3, worth stating plainly
+
+**The coverage cross-check above was run with the credential we are asking you
+to revoke.** `Machine.Read.All` on the isolation app is what let us enumerate
+the 519 devices. Once that app is revoked we lose the ability to check EDR
+coverage at all — so `Machine.Read.All` in group B is not a new capability,
+it is the read-only half of what we already demonstrably use, moved onto a
+credential that cannot also isolate a machine.
+
+If asks 1 and 3 are actioned in that order with a gap between them, we simply
+have no coverage visibility in the gap. That is acceptable; it is worth
+knowing rather than discovering.
+
+### One thing we could not determine and would like to know
+
+**Is Defender antivirus in active or passive mode on those seven machines?**
+
+`Machine.Read.All` reports `onboardingStatus: Onboarded` and
+`healthStatus: Active`, which together mean the sensor is installed and
+reporting in. **Neither field says whether Defender is actually blocking.**
+A machine running Defender in passive mode alongside another product is
+onboarded, active, and not preventing anything — it observes and reports.
+
+That distinction decides whether those seven are genuinely protected or
+merely visible, and it changes the answer to the licence conversation in the
+coverage note. We cannot see it from the API with the permission we have;
+it is readable in the Defender portal per device, or via
+`AdvancedQuery.Read.All` (not requested here — see below).
 
 ### Please confirm one licensing fact
 
 `analyzedEmails` requires **Defender for Office 365 Plan 2**. We could not
 verify the tenant has it, because `subscribedSkus` is also 403 (see ask 2).
-If the tenant is P1 only, that surface does not exist and the integration
-needs a different design — worth knowing before the permission is granted.
+If the tenant is P1 only that surface does not exist and the email
+integration needs a different design — worth knowing before group A is
+granted.
 
 ### Why a new registration rather than adding scopes to the existing one
 
-Adding email-read permissions to `Windows Defender - Device Isolation` would
-put **reading company email** and **isolating machines** behind one secret in
-one configuration file. A separate read-only registration keeps the blast
-radius of that file away from response actions, and costs a few minutes in
-the console.
+Adding these permissions to `Windows Defender - Device Isolation` would put
+**reading company email** and **isolating machines** behind one secret in one
+configuration file. A separate read-only registration keeps the blast radius
+of that file away from response actions, and costs a few minutes in the
+console.
 
 ### What we are not asking for, deliberately
 
-**Quarantine access.** There is no Microsoft Graph API for quarantined
-messages — `Get-QuarantineMessage` is Exchange Online PowerShell and needs
-`Exchange.ManageAsApp` plus a directory role. That is a different
-authentication model and a larger grant, and it should be a separate decision
-rather than bundled into this one. We have left it out on purpose.
+* **Quarantine access.** There is no Microsoft Graph API for quarantined
+  messages — `Get-QuarantineMessage` is Exchange Online PowerShell and needs
+  `Exchange.ManageAsApp` plus a directory role. Different authentication
+  model, larger grant, separate decision.
+* **`AdvancedQuery.Read.All` / `ThreatHunting.Read.All`** (advanced hunting).
+  This would answer estate-wide prevalence questions and the AV-mode question
+  above, and we expect to want it later. We are **not** asking now, because
+  it is effectively arbitrary-query access over the whole estate and deserves
+  its own conversation rather than riding along with a read-only alert feed.
+* **Anything that writes.** No `ReadWrite`, no action or response scope, in
+  any group.
 
 ---
 
