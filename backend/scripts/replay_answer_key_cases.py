@@ -37,6 +37,7 @@ from sqlalchemy import create_engine, text
 
 from app.config import get_settings
 from app.services import token_boundary as tb
+from app.services.context_gathering import event_fields as ef
 from app.services.context_gathering import loop as gl
 from app.services.context_gathering import playbook as pb
 from app.services.context_gathering.falcon_source import FalconSource
@@ -119,17 +120,19 @@ def alerts_of(conn, case: dict) -> list[dict]:
         SELECT id::text AS run_id, event_time,
                result_json->'alert_fields' AS fields,
                result_json AS result_json,
-               entity_host, entity_user
+               alert_body, entity_host, entity_user
         FROM alert_body_investigation_runs
-        WHERE entity_host = :h AND event_time BETWEEN :a AND :b
+        WHERE tenant_id = :t AND entity_host = :h
+          AND event_time BETWEEN :a AND :b
         ORDER BY event_time"""),
-        {"h": case["entity_host"], "a": case["session_started_at"],
+        {"t": TENANT, "h": case["entity_host"],
+         "a": case["session_started_at"],
          "b": case["last_activity_at"]}).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 def selectors_from(result_json: dict, fields: dict, host: str,
-                  user: str | None) -> dict[str, str]:
+                  user: str | None, body: str = "") -> dict[str, str]:
     """Real selector values for this alert. Tokenised inside `gather`.
 
     **The hash does not live in `alert_fields`.** The first version of this
@@ -165,6 +168,27 @@ def selectors_from(result_json: dict, fields: dict, host: str,
             out["hash"] = value
         elif kind == "ip" and "ip" not in out:
             out["ip"] = value
+
+    # **`process` and `pipe`, read from the alert body.** Without these two,
+    # `process_tree` and `pipe_creator` skip with "no process on this alert"
+    # on every alert — the templates would be in the build and absent from
+    # the run, which reads as "asked and found nothing".
+    #
+    # Measured over the 800 most recent c00 bodies: a process path is named
+    # on 632 (79.0%) and a pipe name on 14 (1.8%), and the encoding is
+    # `image: C:\…` — colon-space, the form the shipped detectors miss. The
+    # indicator reports above do not carry either, which is why this reads
+    # the body directly.
+    if body:
+        # `source_image` second: all 113 class-10 bodies measured carry
+        # `sourceImage` and none carries `image`, and class 10 is the class
+        # whose playbook row is `process_tree`.
+        process = ef.from_text(body, "image") or ef.from_text(body, "source_image")
+        if process:
+            out["process"] = process
+        pipe = ef.from_text(body, "pipe_name")
+        if pipe:
+            out["pipe"] = pipe
     return out
 
 
@@ -220,7 +244,8 @@ def main() -> None:
                 event_class = pb.event_class_of(fields) or "(none)"
                 sel = selectors_from(alert["result_json"], fields,
                                      alert["entity_host"],
-                                     alert["entity_user"])
+                                     alert["entity_user"],
+                                     alert["alert_body"] or "")
                 chosen, skipped = pb.templates_for(event_class, sel)
                 print(f"\n    alert {alert['run_id'][:8]}  class={event_class:<6} "
                       f"selectors={sorted(sel)}")

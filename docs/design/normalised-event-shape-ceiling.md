@@ -123,17 +123,39 @@ missing source, not by normalisation:
 
 | template | fields it needs | in the shape? | blocked by |
 |---|---|---|---|
-| `process_tree` | image, parentImage, commandLine, GUIDs | **all present** | **no source implements it.** `FalconSource` declines it (the alerts API holds detections, not raw process events); `SiemSource` does not offer it, though it could — the parent/child fields are right there |
-| `pipe_creator` | pipeName | **present, 965 events** | same — **no source implements it** |
+| `process_tree` | image, parentImage, commandLine, GUIDs | **all present** | ~~no source implements it~~ — **built 2026-10-22 on `SiemSource`** (backlog 54) |
+| `pipe_creator` | pipeName | **present, 965 events** | ~~same~~ — **built 2026-10-22 on `SiemSource`** |
 | `source_address_logons` | a routable source address | present as `ipAddress`, **0% routable** | **the data**, not the shape and not the source |
 | `host_logons`, `user_sessions`, `user_risk_timeline` | — | — | nothing; `SiemSource` answers them |
 | `hash_prevalence`, `ip_seen_anywhere`, `file_name_prevalence` | — | — | nothing; Falcon answers them |
 | `host_threat_state`, `host_detections_window` | — | — | nothing |
 
-So `process_tree` and `pipe_creator` are the **cheapest two templates
-available**: everything they need is already stored, and what is missing is a
-`SiemSource` method that reads `fields` by name and links parent to child.
-That is a day's work with no vendor, no credential and no scope.
+So `process_tree` and `pipe_creator` were the **cheapest two templates
+available**: everything they need is already stored, and what was missing was
+a `SiemSource` method that reads `fields` by name and links parent to child.
+
+**Built 2026-10-22** as `context_gathering/event_fields.py` plus two methods.
+The estimate above — "no vendor, no credential, no scope" — held, but the
+sentence *"what is missing is a `SiemSource` method"* was wrong in a way
+worth recording: three further things had to change or the templates would
+have been present and inert.
+
+* Both were declared `source_kind=EDR`, and `loop._resolve` picks one source
+  per kind, so they would have kept going to Falcon. **Adding them to
+  `SiemSource.ANSWERS` alone was dead code.**
+* The replay harness supplied no `process` or `pipe` selector, so both would
+  have skipped "no process on this alert" on every alert.
+* **Class 10 carries `sourceImage` and never `image` (113 of 113)** — and
+  class 10 is the one class whose playbook row is `process_tree`.
+
+And one encoding boundary that made the first implementation wrong while
+looking right: stored event paths are doubled-backslash on **98.8%** of
+values, body-derived selectors single on **85.3%**, so exact-path matching
+hit **5.4%** of real alerts and the rest silently fell through to a basename
+comparison that conflates `C:\temp\cmd.exe` with
+`C:\Windows\System32\cmd.exe`. After normalising backslash runs, the exact
+rule hits **88.8%**. A template that "worked" on the wrong matching rule is
+the thing to watch for here, not a template that fails.
 
 ---
 

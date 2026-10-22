@@ -3081,7 +3081,45 @@ The eight aliases for `raw_text` and this sweep are the same question asked
 twice and answered twice; the general rule they support is in the register.
 
 
-## 54 — `process_tree` and `pipe_creator` are the cheapest templates available
+## 54 — `process_tree` and `pipe_creator` are the cheapest templates available — **DONE 2026-10-22**
+
+Built as `app/services/context_gathering/event_fields.py` (the helper) plus
+two methods on `SiemSource`. **Three things the row above did not predict,
+each of which would have left the templates in the build and absent from the
+run:**
+
+1. **Both templates were declared `source_kind=EDR`.** `loop._resolve` picks
+   one source per kind, so adding them to `SiemSource.ANSWERS` alone was dead
+   code — they would have kept going to `FalconSource` and recording
+   `check_failed`. Both are now `SIEM`: the kind names where the answer
+   lives, not which product the question sounds like.
+2. **The harness supplied no `process` or `pipe` selector.**
+   `selectors_from` yielded `host`, `user`, `hash`, `ip` only, so both
+   templates would have skipped with "no process on this alert" on every
+   alert — which reads as *asked and found nothing*. Measured: a process path
+   is named on **632 of 800** recent c00 bodies (79.0%) and a pipe name on
+   **14** (1.8%), in the `image: C:\…` colon-space encoding — the form the
+   shipped identifier detectors are known to miss, so a `key="value"` pattern
+   would have found none of it.
+3. **Class 10 carries `sourceImage` and never `image` — 113 of 113
+   measured.** Class 10 is the *one* event class whose playbook row is
+   `process_tree`, so seeding on `image` alone returned nothing on 100% of
+   the alerts the template exists to serve. Both the selector and the seed
+   now fall back to `source_image`, which stays a separate alias group
+   because on an event carrying both they are different processes.
+
+Verified at the consumer, not just in unit tests: `replay_answer_key_cases.py
+--dry-run` now selects `pipe_creator` on cases #61 and #892 and
+`process_tree` on #1087.
+
+Two things found in passing and fixed: the matcher's first version matched
+bidirectional substrings, so `C:\temp\notsvchost.exe` matched a selector
+naming `svchost.exe` (now exact path first, basename only as a documented
+fallback); and `alerts_of` reconstructed a case by host with **no tenant
+pin**, so a hostname shared across tenants would have pulled another
+tenant's alerts into a c00 case.
+
+Original entry:
 
 Established 2026-10-22 while asking whether the normalised event shape caps
 the template vocabulary. **It does not** — see
@@ -3136,3 +3174,58 @@ normalisation decision. Two consequences worth stating:
   tenant pin, a field name, a value and a window — but it needs the
   `(rows, total, complete)` discipline from the start, since a prevalence
   answer that is silently truncated is worse than none.
+
+### What it would take — probed read-only 2026-10-22, **not built**
+
+Asked while closing 54, so the estimate rests on calls that ran rather than
+on a model of the cluster. **It is smaller than it looked, with one real
+blocker.**
+
+**What already works.** `OpenSearchClient.search_all(indices, query, sort,
+…)` takes an **arbitrary query dict**, so an arbitrary-field search needs no
+new transport. Probed against 40 concrete indices with a value taken *out of
+the index* rather than guessed:
+
+| query | hits |
+|---|---|
+| `term` on `data.win.eventdata.image` | **10** (works) |
+| `term` on `…image.keyword` | 0 — no such subfield |
+| `match_phrase`, `match` | 10 |
+
+So those fields are mapped **`keyword` and are directly term-queryable** —
+the "a `term` query on an analysed field matches nothing" failure from the
+first `SiemSource` attempt does *not* apply here. My own first probe returned
+0 for `term` and I nearly recorded "the field is analysed"; it was backslash
+escaping in the probe, and the control — querying a value the index itself
+returned — is what caught it.
+
+**The blocker: `search_all` reports no total.** It returns hits and
+`r.total` is `None`, so every answer it gives is a **bounded read** — a
+floor, not a count. A prevalence answer is *a number*, and "at least 10"
+presented as "10 hosts" is the defect the `(rows, total, complete)` rule
+exists for. The honest fix is a **`terms` aggregation with
+`cardinality`**, which the wrapper cannot express: it exposes only
+`close / close_pit / concrete_indices / open_pit / ping / search_all /
+settings`. So the work is:
+
+1. **An aggregation path on the client** — `track_total_hits`, or better a
+   `terms`/`cardinality` agg, returning `(value, complete)`. This is the
+   whole of the real work and it is one method.
+2. **A tenant-pinned prevalence helper** taking `(field, value, window)` and
+   returning distinct-host count plus completeness. The pin is
+   `manager.name`; it must be mandatory in the signature, not a default —
+   one manager hides every isolation bug until customer two.
+3. **A field allow-list.** An arbitrary field name reaching a query from an
+   alert is an injection surface; the 323 names in `ALIASES`' measured set
+   are the candidates, and anything outside it should refuse rather than
+   interpolate.
+4. **Templates:** `service_prevalence` (207 events — a small real
+   population), `pipe_prevalence` (1,005), and the SIEM half of
+   `hash_prevalence`. **Not** `share_prevalence`: `shareName` is on 2 events.
+
+**What it does not need:** no vendor, no credential, no new scope, no
+re-normalisation. Distinct from the Falcon IOC scope gap (backlog 50), which
+*is* blocked on a human in the console.
+
+Deliberately **not started** — it is the ceiling and it is wanted, but after
+the ground-truth exercise, not before it.

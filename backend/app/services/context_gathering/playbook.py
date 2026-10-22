@@ -69,7 +69,14 @@ TEMPLATES: dict[str, QueryTemplate] = {t.name: t for t in (
         name="process_tree",
         purpose="the process tree around this process on this host",
         selectors=("host", "process"),
-        source_kind=EDR,
+        # **SIEM, not EDR, and this is the change that makes it run.**
+        # `_resolve` picks one source per kind, so while this said EDR the
+        # template went to `FalconSource`, which cannot answer it — the
+        # alerts API holds detections, not raw process events — and every
+        # call recorded `check_failed`. Wazuh has the data: `processGuid` on
+        # 46,422 stored events, `parentProcessGuid` on 699. The kind names
+        # where the answer lives, not which product the question sounds like.
+        source_kind=SIEM,
         declared_calls=2,
     ),
     QueryTemplate(
@@ -87,7 +94,10 @@ TEMPLATES: dict[str, QueryTemplate] = {t.name: t for t in (
         name="pipe_creator",
         purpose="the process that opened this named pipe, and its parent",
         selectors=("host", "pipe"),
-        source_kind=EDR,
+        # SIEM for the same reason as `process_tree`. `pipeName` is on 1,005
+        # stored events and on 1.8% of c00 alert bodies; Falcon has no pipe
+        # field at all.
+        source_kind=SIEM,
         declared_calls=2,
     ),
     QueryTemplate(
@@ -247,9 +257,12 @@ PLAYBOOK: dict[str, tuple[str, ...]] = {
     # 4768 Kerberos TGT requested — purely account-centric.
     "4768": ("user_sessions",),
     # 4688 process create. The image's hash and name are the question, and
-    # both are answerable estate-wide; `process_tree` is deliberately NOT
-    # here — it has no source (Falcon's alerts API holds detections, not raw
-    # process events) and `process` was absent on all 25 runs anyway.
+    # both are answerable estate-wide. `process_tree` is still deliberately
+    # NOT here, but **only one of the two original reasons survives**: it now
+    # has a source (`SiemSource`, backlog 54), so the live reason is that
+    # `process` was absent on all 25 of the `lin`/`pov` runs this row serves,
+    # and those tenants have no readable source yet regardless. Revisit when
+    # the Exabeam connector returns fields.
     "4688": ("hash_prevalence", "file_name_prevalence"),
     # 4697 service installed, 5140/5145 network share accessed.
     #

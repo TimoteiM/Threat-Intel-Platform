@@ -44,12 +44,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.context_gathering import event_fields as ef
 from app.services.context_gathering.mock_source import SourceUnavailable
 
 logger = logging.getLogger(__name__)
 
 #: Templates this source answers.
-ANSWERS = ("host_logons", "user_sessions", "user_risk_timeline")
+#:
+#: `process_tree` and `pipe_creator` were declared `EDR` and therefore went to
+#: `FalconSource`, which cannot answer either — so they recorded `check_failed`
+#: on every call while the data sat in this store. Everything they need is
+#: already normalised: `processGuid` on 46,422 events, `parentProcessGuid` on
+#: 699, `pipeName` on 1,005.
+ANSWERS = ("host_logons", "user_sessions", "user_risk_timeline",
+           "process_tree", "pipe_creator")
 
 #: Declined by name, with the measurement that justifies it.
 DECLINED = {
@@ -67,6 +75,12 @@ LOGON_EVENT_IDS = frozenset({"4624", "4625", "4648", "4672", "4634"})
 #: A bound, stated. The collector's own default is larger; this is the loop's
 #: budget talking, not a claim about how much exists.
 MAX_HITS = 200
+
+#: Which selector each template is queried on. Every name in `ANSWERS` must
+#: appear in exactly one of these two, and `query` raises if one appears in
+#: neither — see the comment at the call site.
+_BY_HOST = frozenset({"host_logons", "process_tree", "pipe_creator"})
+_BY_USER = frozenset({"user_sessions", "user_risk_timeline"})
 
 
 @dataclass
@@ -101,8 +115,21 @@ class SiemSource:
             raise SourceUnavailable(
                 f"{self.name} was asked {template} with no selector value")
 
-        host = arguments.get("host") if template == "host_logons" else None
-        user = arguments.get("user") if template != "host_logons" else None
+        # Which selector the store is actually queried on. Stated as a
+        # mapping rather than as `if template == "host_logons"`, because that
+        # expression silently sent every new host-keyed template to
+        # `entity_user=None, entity_host=None` — `collect_for_alert` then
+        # returns `skipped`, "the alert named neither a device nor an
+        # account", and the template looks unanswerable rather than
+        # misrouted. Adding a template to `ANSWERS` without adding it here
+        # now fails loudly below instead.
+        host = arguments.get("host") if template in _BY_HOST else None
+        user = arguments.get("user") if template in _BY_USER else None
+        if host is None and user is None:
+            raise SourceUnavailable(
+                f"{self.name} has no query key for {template}: it is in "
+                f"ANSWERS but in neither _BY_HOST nor _BY_USER"
+            )
         try:
             from app.services.alert_log_context_service import collect_for_alert
 
@@ -147,7 +174,50 @@ class SiemSource:
         if template == "host_logons":
             logs = [e for e in logs
                     if str((e or {}).get("event_id") or "") in LOGON_EVENT_IDS]
+        elif template == "process_tree":
+            logs = _process_tree(logs, str(arguments.get("process") or ""))
+        elif template == "pipe_creator":
+            logs = _pipe_creator(logs, str(arguments.get("pipe") or ""))
         return logs
+
+
+def _process_tree(logs: list[dict[str, Any]], process: str) -> list[dict[str, Any]]:
+    """The named process's events on this host, plus one hop of lineage.
+
+    Two steps, and the order matters: **seed, then link.** Seeding on the
+    process selector first keeps the tree about the process that was alerted
+    on; linking first and filtering after would return the host's whole
+    process population, which is what `MAX_HITS` events of a busy host is.
+    """
+    # **`source_image` as well as `image`, or class 10 never seeds.** Measured
+    # over 1,500 recent c00 bodies: all 113 class-10 alerts (Sysmon
+    # ProcessAccess) carry `sourceImage` and **none** carries `image` — and
+    # class 10 is the one event class whose playbook row *is* `process_tree`.
+    # Seeding on `image` alone returned nothing on 100% of the alerts this
+    # template exists to serve. `sourceImage` is the accessing process, which
+    # is the right subject of the tree; it stays a separate alias group
+    # because on an event that has both they are different processes.
+    seeds = (ef.having(logs, "image", process)
+             or ef.having(logs, "source_image", process))
+    if not seeds:
+        # Nothing matched the selector. Return empty rather than falling back
+        # to every event on the host: a tree about a different process,
+        # labelled as this one's, is worse than no tree.
+        return []
+    return ef.link_parents(logs, seeds)
+
+
+def _pipe_creator(logs: list[dict[str, Any]], pipe: str) -> list[dict[str, Any]]:
+    """The events naming this pipe, plus the creating process's lineage.
+
+    `exact=True` on the pipe name: pipe names collide by prefix — the
+    measured `SfxCA_259434296` family differs only in the trailing digits —
+    and a substring match would present one installer's pipe as another's.
+    """
+    seeds = ef.having(logs, "pipe_name", pipe, exact=True)
+    if not seeds:
+        return []
+    return ef.link_parents(logs, seeds)
 
 
 def _as_utc(value: datetime) -> datetime:

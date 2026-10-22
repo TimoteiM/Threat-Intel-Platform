@@ -163,10 +163,14 @@ def test_a_failed_source_is_check_failed_with_its_name():
     """Never "found nothing". The DNS collector reported an outage as "no DNS
     records" across 2,602 runs by merging those two answers."""
     registry = ms.default_registry()
-    registry[pb.EDR].failing_templates = frozenset({"process_tree"})
+    # `hash_prevalence`, not `process_tree`: backlog 54 moved `process_tree`
+    # to the SIEM kind, so failing the EDR mock for it stopped failing
+    # anything and this test passed on a `collected` outcome. The template
+    # named here has to be one the failed source actually owns.
+    registry[pb.EDR].failing_templates = frozenset({"hash_prevalence"})
     record = _gather(registry=registry)
 
-    failed = [o for o in record.outcomes if o.template == "process_tree"]
+    failed = [o for o in record.outcomes if o.template == "hash_prevalence"]
     assert failed and failed[0].status == "check_failed"
     assert failed[0].absence["kind"] == "check_failed"
     assert "mock-edr" in failed[0].reason
@@ -806,9 +810,294 @@ def test_every_declared_template_has_a_source_or_is_declined():
 
     covered = set(EDR_ANSWERS) | set(SIEM_ANSWERS) | set(DECLINED) | set(NO_FIELD)
     orphans = sorted(set(pb.TEMPLATES) - covered)
-    # `process_tree` and `pipe_creator` are known orphans: Falcon's alerts API
-    # holds detections, not raw process or pipe events, and no SIEM template
-    # exists for them. Named so the set cannot grow silently.
-    assert orphans == ["pipe_creator", "process_tree"], (
+    # **No orphans left.** This asserted `["pipe_creator", "process_tree"]`
+    # until backlog 54: both are now answered by `SiemSource`, which holds
+    # the fields they need. Left as an exact-equality assertion so a new
+    # template still has to be routed or declined deliberately.
+    assert orphans == [], (
         f"a template has no source and no decline: {orphans}"
     )
+
+
+# ---------------------------------------------------------------------------
+# backlog 54: the field-reading helper, and the two templates on it
+# ---------------------------------------------------------------------------
+
+def _event(key, **named):
+    """A normalised event carrying `fields` the way the store really does.
+
+    Fully-qualified names and a LIST of dicts, because that is the shape
+    `normalise_hit` writes — JSONB does not preserve key order, so a dict
+    would be a fixture that agrees with a mistake rather than with the data.
+    """
+    return {
+        "key": key,
+        "fields": [{"name": f"data.win.eventdata.{n}", "value": v}
+                   for n, v in named.items()],
+    }
+
+
+def test_field_reading_spans_the_casing_split_in_the_real_data():
+    """`sourceProcessGUID` 10,806 vs `sourceProcessGuid` 14 — same field.
+
+    The measured 99.9/0.1 split is the whole reason the match is
+    case-insensitive. A case-sensitive lookup on the common spelling drops
+    the other 14 and the loss shows up as a shorter list, never an error.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    common = _event("i:1", sourceProcessGUID="{abc}")
+    rare = _event("i:2", sourceProcessGuid="{def}")
+    assert ef.field(common, "source_process_guid") == "{abc}"
+    assert ef.field(rare, "source_process_guid") == "{def}"
+
+
+def test_field_reading_spans_the_alias_group():
+    """Sysmon says `image`, Security 4688 says `newProcessName`."""
+    from app.services.context_gathering import event_fields as ef
+
+    sysmon = _event("i:1", image="C:\\Windows\\System32\\cmd.exe")
+    security = _event("i:2", newProcessName="C:\\Windows\\System32\\cmd.exe")
+    assert ef.field(sysmon, "image") == ef.field(security, "image")
+
+
+def test_an_undeclared_logical_field_raises_rather_than_reading_absent():
+    """The dangerous direction: a typo must not look like a missing value.
+
+    `field(e, "immage")` returning None would be indistinguishable from an
+    event that genuinely lacks the field, which is the absence-as-value
+    defect this codebase keeps re-finding.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    with pytest.raises(KeyError):
+        ef.field(_event("i:1", image="x"), "immage")
+
+
+def test_the_helper_still_returns_none_for_a_genuinely_absent_field():
+    """The complement of the refusal above: it must still ACCEPT and report
+    absence for a declared field the event does not carry."""
+    from app.services.context_gathering import event_fields as ef
+
+    assert ef.field(_event("i:1", image="x"), "pipe_name") is None
+
+
+def test_from_text_reads_the_colon_space_encoding_the_bodies_actually_use():
+    """Measured: `image: C:\\…` on 632 of 800 c00 bodies, and no other form.
+
+    A `key="value"` pattern matches none of them. This is the encoding half
+    of a detector claim.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    body = "rule: 92213\nimage: C:\\Windows\\System32\\cmd.exe\nuser: svc"
+    assert ef.from_text(body, "image") == "C:\\Windows\\System32\\cmd.exe"
+    # and the other encodings still work — one shipper's format is not a
+    # contract
+    assert ef.from_text('{"image": "C:\\\\x.exe"}', "image") == "C:\\\\x.exe"
+    assert ef.from_text('image=C:\\y.exe', "image") == "C:\\y.exe"
+
+
+def test_from_text_and_field_share_one_spelling_list():
+    """Two readers, one `ALIASES`. A second list would drift unread."""
+    from app.services.context_gathering import event_fields as ef
+
+    for logical, spellings in ef.ALIASES.items():
+        for spelling in spellings:
+            assert ef.from_text(f"{spelling}: value-here", logical) == "value-here", (
+                f"{logical}/{spelling} readable from events but not from text"
+            )
+
+
+def test_process_tree_links_parent_to_child_by_guid_not_by_pid():
+    """A pid is reused within minutes; a GUID is not.
+
+    Linking on pid would attach a stranger's process to the tree and present
+    it as lineage, so the fixture gives the unrelated event the SAME pid as
+    the parent and a different GUID. A pid-linked implementation passes a
+    GUID-shaped test unless the fixture separates them.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    parent = _event("i:1", image="C:\\Windows\\explorer.exe",
+                    processGuid="{P}", processId="1000")
+    child = _event("i:2", image="C:\\Windows\\System32\\cmd.exe",
+                   processGuid="{C}", parentProcessGuid="{P}",
+                   processId="2000")
+    stranger = _event("i:3", image="C:\\Windows\\notepad.exe",
+                      processGuid="{X}", parentProcessGuid="{OTHER}",
+                      processId="1000")
+
+    tree = ss._process_tree([parent, child, stranger], "cmd.exe")
+    keys = {e["key"] for e in tree}
+    assert keys == {"i:1", "i:2"}, (
+        "the tree must hold the seed and its parent, and not a process that "
+        f"merely shares a recycled pid: got {sorted(keys)}"
+    )
+
+
+def test_process_tree_returns_empty_rather_than_the_whole_host():
+    """Dangerous direction: no match must not fall back to every event.
+
+    A tree about a different process, labelled as this one's, is worse than
+    no tree.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    logs = [_event("i:1", image="C:\\Windows\\explorer.exe", processGuid="{P}")]
+    assert ss._process_tree(logs, "C:\\nothing\\here.exe") == []
+
+
+def test_pipe_creator_matches_the_pipe_exactly():
+    """`SfxCA_259434296` and `SfxCA_259474234` are different pipes.
+
+    Measured in the corpus: the family differs only in trailing digits, so a
+    substring match would present one installer's pipe as another's.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    wanted = _event("i:1", pipeName="SfxCA_259434296",
+                    image="C:\\inst.exe", processGuid="{A}")
+    other = _event("i:2", pipeName="SfxCA_259474234",
+                   image="C:\\other.exe", processGuid="{B}")
+
+    got = ss._pipe_creator([wanted, other], "SfxCA_259434296")
+    assert {e["key"] for e in got} == {"i:1"}
+
+
+def test_every_answered_template_has_a_query_key():
+    """A template in ANSWERS but in neither _BY_HOST nor _BY_USER is
+    misrouted, not unanswerable.
+
+    While `process_tree` was keyed by the old `template == "host_logons"`
+    expression it would have reached `collect_for_alert` with both entities
+    None, which returns `skipped` — "the alert named neither a device nor an
+    account". The template would have looked unanswerable.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    unkeyed = sorted(set(ss.ANSWERS) - ss._BY_HOST - ss._BY_USER)
+    assert unkeyed == [], f"in ANSWERS with no query key: {unkeyed}"
+    both = sorted(ss._BY_HOST & ss._BY_USER)
+    assert both == [], f"keyed on both host and user: {both}"
+
+
+def test_the_two_new_templates_route_to_the_siem_source():
+    """The routing seam: `_resolve` picks one source per kind.
+
+    While these said `source_kind=EDR` they went to `FalconSource` and
+    recorded `check_failed` on every call, with the data sitting in Wazuh.
+    Adding them to `SiemSource.ANSWERS` alone would have been dead code.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    for name in ("process_tree", "pipe_creator"):
+        assert pb.TEMPLATES[name].source_kind == pb.SIEM
+        assert name in ss.ANSWERS
+
+
+def test_the_matcher_does_not_substring_one_binary_into_another():
+    """`notsvchost.exe` must not match a selector naming `svchost.exe`.
+
+    The first version of `having` matched bidirectionally on substrings and
+    did exactly this. It is the delimiter-boundary family again: a match that
+    ignores where the name starts.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    impostor = _event("i:1", image="C:\\temp\\notsvchost.exe")
+    assert ef.having([impostor], "image", "C:\\Windows\\System32\\svchost.exe") == []
+
+
+def test_the_matcher_prefers_the_exact_path_over_the_basename():
+    """Two binaries, one basename. When one matches exactly, only it is
+    returned — the masquerade is not folded in silently."""
+    from app.services.context_gathering import event_fields as ef
+
+    real = _event("i:1", image="C:\\Windows\\System32\\cmd.exe")
+    masquerade = _event("i:2", image="C:\\temp\\cmd.exe")
+    got = ef.having([real, masquerade], "image",
+                    "C:\\Windows\\System32\\cmd.exe")
+    assert {e["key"] for e in got} == {"i:1"}
+
+
+def test_the_matcher_falls_back_to_the_basename_when_nothing_matches_exactly():
+    """The complement: a bare `processName` must still reach a
+    fully-qualified selector, or the fallback is untested."""
+    from app.services.context_gathering import event_fields as ef
+
+    bare = _event("i:1", processName="cmd.exe")
+    got = ef.having([bare], "image", "C:\\Windows\\System32\\cmd.exe")
+    assert {e["key"] for e in got} == {"i:1"}
+
+
+def test_process_tree_seeds_on_source_image_for_cross_process_events():
+    """Class 10 carries `sourceImage` and no `image` — 113 of 113 measured.
+
+    Class 10 is the one event class whose playbook row is `process_tree`, so
+    seeding on `image` alone returned nothing on 100% of the alerts this
+    template exists to serve. The template would have reported "the source
+    answered with no matching events" on every one.
+    """
+    from app.services.context_gathering import siem_source as ss
+
+    accessor = _event("i:1", sourceImage="C:\\tools\\procexp.exe",
+                      sourceProcessGUID="{A}", processGuid="{A}",
+                      targetImage="C:\\Windows\\System32\\lsass.exe")
+    tree = ss._process_tree([accessor], "C:\\tools\\procexp.exe")
+    assert {e["key"] for e in tree} == {"i:1"}
+
+
+def test_image_and_source_image_stay_separate_alias_groups():
+    """On an event carrying both, they are different processes.
+
+    The fallback in `_process_tree` is ordered, not a merge — folding
+    `sourceImage` into the `image` group would make the accessing and
+    accessed process one field.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    both = _event("i:1", image="C:\\a.exe", sourceImage="C:\\b.exe")
+    assert ef.field(both, "image") == "C:\\a.exe"
+    assert ef.field(both, "source_image") == "C:\\b.exe"
+
+
+def test_the_matcher_spans_the_backslash_encoding_asymmetry():
+    r"""Stored events are 98.8% doubled-backslash; body selectors 85.3% single.
+
+    Measured 2026-10-22 over 1,929 stored image values and 293 body-derived
+    selectors. Without collapsing the runs, the exact-path comparison fails
+    on the dominant case and every seed falls through to the basename rule —
+    which conflates `C:\temp\cmd.exe` with `C:\Windows\System32\cmd.exe`. The
+    template would have looked like it worked.
+
+    The assertion is that the DOUBLED event is reached by the SINGLE selector
+    and that it is reached by the *exact* rule, not the fallback — so the
+    fixture also carries a same-basename impostor that the fallback would
+    have pulled in.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    stored = _event("i:1", image="C:\\\\Windows\\\\System32\\\\cmd.exe")
+    impostor = _event("i:2", image="C:\\\\temp\\\\cmd.exe")
+    got = ef.having([stored, impostor], "image",
+                    "C:\\Windows\\System32\\cmd.exe")
+    assert {e["key"] for e in got} == {"i:1"}, (
+        "a single-backslash selector must reach a doubled-backslash event by "
+        "the exact rule, without dragging in a same-basename impostor"
+    )
+
+
+def test_an_exact_field_still_compares_literally_after_normalisation():
+    """The complement: `exact=True` must not be loosened by `_norm_path`.
+
+    A pipe name has no backslash runs to collapse, so this is the control
+    that the normalisation changed nothing for identity fields.
+    """
+    from app.services.context_gathering import event_fields as ef
+
+    a = _event("i:1", pipeName="SfxCA_259434296")
+    b = _event("i:2", pipeName="SfxCA_259474234")
+    assert {e["key"] for e in ef.having([a, b], "pipe_name",
+                                        "SfxCA_259434296", exact=True)} == {"i:1"}
+    assert ef.having([a, b], "pipe_name", "SfxCA_2594", exact=True) == []
