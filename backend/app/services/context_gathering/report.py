@@ -80,6 +80,25 @@ def compose(*, record: Any, analysis: dict[str, Any] | None = None) -> str:
     # real hostname into the text the model reads — in the one section whose
     # job is to say what the alert carried. The alert's own values are no
     # less sensitive for having arrived with the alert.
+    # **Provenance first, before any of the alert's own values.** 69 bodies
+    # are a sender-declared reconstruction rather than a log line, and a
+    # reader comparing gathered events against "what the alert carried" has
+    # to know which of the two they are reading. The sender said so; we used
+    # to drop it here.
+    provenance = (record.as_json().get("body_provenance") or {}
+                  if hasattr(record, "as_json") else {})
+    if provenance.get("derived"):
+        lines.append(
+            f"  !! THE ALERT BODY IS NOT A VERBATIM LOG LINE. The sender "
+            f"declared: \"{provenance.get('declaration')}\""
+        )
+        lines.append(
+            "     The keys below are its reconstruction from event metadata, "
+            "so treat them as the sender's reading rather than as observed "
+            "values."
+        )
+        lines.append("")
+
     carried = dict(context.get("selectors") or {})
     if carried:
         for key in sorted(carried):

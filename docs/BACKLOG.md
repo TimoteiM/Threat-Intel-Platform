@@ -2974,7 +2974,7 @@ from…]`.
 See `docs/measurements/indicator-led-and-the-host-panel.md` §3 for the
 ordering and the dependency.
 
-## 52 — The sender declares a synthetic alert body; we discard the declaration
+## 52 — The sender declares a synthetic alert body — **FIXED 2026-10-22**
 
 **Asked: are the "Exabeam raw log unavailable" alerts ours or theirs?
 Answer: theirs, and they did the right thing.**
@@ -3009,7 +3009,34 @@ is presented with the same standing as a verbatim log. One level up from the
 usual version of this fault: the absence was recorded correctly and then
 dropped by the consumer.
 
-### The fix, not built
+### FIXED, and the population is 69 not 6
+
+`app/services/body_provenance.py`. The marker is recorded on every alert as
+`alert_fields.body_provenance` — a **value** either way, `verbatim_as_received`
+when nothing was declared, so "the sender said nothing" and "nobody looked"
+are different bytes. It reaches the three places that consume the body: the
+extractor records it, `_analyse` puts a `PROVENANCE:` line **in front of the
+evidence** for the model, and the gathering report states it above "what the
+alert carried".
+
+**69 bodies, not 6** — 64 on the unassigned tenant and 5 on `lin`. My earlier
+count read only the `title` column.
+
+**The detector is narrow on purpose**, and the control is the first test. A
+bracketed prefix **at the very start** whose contents name a substitution.
+Measured reasons for each half of that rule:
+
+* keying on a word would be catastrophic — `confidence` appears in **24.5%**
+  of all 17,748 bodies and `sample` in **15.2%**, almost entirely as prose or
+  as HTTP trace headers (`x-b3-sampled`, `sentry-sample_rate`);
+* keying on "starts with a bracket" would flag the **6 bodies beginning
+  `[ALERT]`**, which is a sender's subject prefix and says nothing about
+  content. It is in the parametrised control list.
+
+It generalises forward at no cost: `[TRUNCATED …]` and `[PARTIAL FETCH …]`
+are caught, though no sender currently emits either.
+
+### The old fix note
 
 Detect the marker at ingest, record it as a field (`body_is_synthetic: true`
 with the declared reason), and surface it in the report next to the evidence
@@ -3019,3 +3046,36 @@ a marker test that matches everything would label the whole corpus derived.
 
 Worth doing before the model reads another one, which on current volume is
 about every other day.
+
+
+## 53 — The sweep: what else a sender declares and we drop
+
+Asked after backlog 52: one sender declaring a substitution and us
+discarding it suggests the consumer reads one field and ignores the rest. So
+all 17,748 bodies were swept for sender-supplied statements **about the
+body** rather than about the event.
+
+**The answer is reassuring and worth having in writing.**
+
+| candidate | occurrences | verdict |
+|---|---|---|
+| `[SYNTHETIC - …]` prefix | **69 bodies** | the real one — fixed, backlog 52 |
+| `confidence` | 4,350 bodies (24.5%) | **prose**, not a field. As a key only `confidence_level`, 29 bodies |
+| `sample` | 2,688 bodies (15.2%) | **HTTP trace headers** — `x-b3-sampled`, `sentry-sample_rate`, `sentry-sample_rand`. Not security data |
+| `truncat*` | prose only | **no truncation marker exists as a field anywhere** |
+| `partial` | prose only | **no partial-fetch indicator exists as a field** |
+| `[ALERT]` prefix | 6 bodies | a subject prefix, not a declaration. Deliberately not flagged |
+| `unavailable` | 111 | mostly the 69 above plus log text |
+
+So there is **no hidden family** of dropped declarations. The one genuine
+dropped sender field is:
+
+**`confidence_level`** — 29 bodies, all on the unassigned tenant, values `1`
+(28) and `3` (1), **not captured in `alert_fields`**. Left unread
+deliberately: a number on a scale nobody has documented, from a sender we
+cannot currently identify, on 0.16% of the corpus. Recorded here so it is not
+re-found as new. If those runs are ever attributed to a tenant, ask that
+sender what the scale is before reading it.
+
+The eight aliases for `raw_text` and this sweep are the same question asked
+twice and answered twice; the general rule they support is in the register.

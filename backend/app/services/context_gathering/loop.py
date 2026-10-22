@@ -165,6 +165,11 @@ class GatheringRecord:
     #: front of the model, which is the one thing this arrangement exists to
     #: prevent, and it did on the first run.
     selectors: dict[str, str] = field(default_factory=dict)
+    #: The sender's own declaration that the alert body is a substitute, or
+    #: `verbatim_as_received`. Carried so the report can say it **beside the
+    #: evidence** — a reader comparing gathered events against the alert needs
+    #: to know whether the alert itself was a reconstruction. 69 bodies are.
+    body_provenance: dict[str, Any] = field(default_factory=dict)
     #: When the alert fired. The analysis stage's digest builder refuses
     #: without it — `no_alert_time` — because it selects events by their
     #: distance from the alert.
@@ -187,6 +192,7 @@ class GatheringRecord:
             "tenant_id": self.tenant_id,
             "investigation_id": self.investigation_id,
             "event_class": self.event_class or None,
+            "body_provenance": dict(self.body_provenance or {}),
             "selectors": dict(self.selectors),
             "queries": [o.as_json() for o in self.outcomes],
             "skipped": list(self.skipped),
@@ -355,6 +361,9 @@ def gather(
     record = GatheringRecord(
         tenant_id=tenant_id, investigation_id=investigation_id,
         event_class=event_class, budget=budget,
+        # Read from the alert's own fields: the extractor records it, so the
+        # loop does not re-derive it and the two cannot disagree.
+        body_provenance=dict((alert_fields or {}).get("body_provenance") or {}),
         alert_time=event_time or alert_fields.get("event_time"),
     )
 

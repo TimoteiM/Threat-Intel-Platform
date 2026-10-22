@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+
+from app.services import body_provenance
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -226,6 +228,12 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         # extraction already works — verified over the c00 corpus, 0 changes.
         "event_id": _field("Event ID", ["event_id", "eventid"], text,
                            xml_elements=["EventID"]),
+        # The sender's own declaration that this body is a substitute, kept
+        # rather than discarded. 69 bodies carry one; we parsed their derived
+        # metadata as log text and told nobody. Always present as a value —
+        # `verbatim_as_received` when nothing was declared — so "the sender
+        # said nothing" and "nobody looked" are different bytes.
+        body_provenance.FIELD: body_provenance.provenance_of(text),
         "event_name": _field(None, ["eventName", "event_name", "name"], text),
         "event_priority": _field(None, ["eventPriority", "event_priority", "priority"], text),
         "event_severity": _field(None, ["eventSeverity", "event_severity", "severity"], text),

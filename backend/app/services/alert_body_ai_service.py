@@ -162,7 +162,15 @@ async def _analyse(
     log_context_digest: str | None = None,
     boundary: Any = None,
 ) -> dict[str, Any]:
-    entry_text = alert_body
+    # **The sender's provenance declaration goes in front of the evidence.**
+    # 69 bodies are declared substitutes; without this the model reads a
+    # reconstruction from event metadata as an observed log line, and the
+    # report gives a reader no way to tell. The sender was honest and we were
+    # dropping it at this boundary.
+    from app.services import body_provenance
+
+    provenance_note = body_provenance.note_for_model(alert_body)
+    entry_text = f"{provenance_note}\n\n{alert_body}" if provenance_note else alert_body
     if (context or "").strip():
         entry_text = f"{alert_body}\n\nANALYST CONTEXT:\n{context.strip()}"
     # The collectors have already run by the time we get here, so the model reads
