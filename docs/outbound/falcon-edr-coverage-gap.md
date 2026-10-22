@@ -1,4 +1,48 @@
-# CrowdStrike Falcon coverage gap — 19 hosts
+# CrowdStrike Falcon coverage gap — 19 hosts, of which 12 are real
+
+> ## ⚠ CORRECTED 2026-10-22, BEFORE SENDING — read this first
+>
+> **Seven of the nineteen hosts below are not uncovered. They are protected
+> by Microsoft Defender for Endpoint**, which this platform does not read, so
+> our coverage picture was computed from Falcon alone and overstated the gap.
+>
+> Verified read-only against the Defender for Endpoint device inventory
+> (`api.securitycenter.microsoft.com/api/machines`, 519 devices, complete
+> read) on 2026-10-22. All seven report **`onboardingStatus: Onboarded`** and
+> **`healthStatus: Active`**, last seen within 24 hours:
+>
+> | host | Defender last seen |
+> |---|---|
+> | `exp-044036414857` | 2026-10-22T02:00:45 |
+> | `exp-3brrpb4` | 2026-10-22T07:59:40 |
+> | `exp-ops-46807` | 2026-10-22T03:42:27 |
+> | `exp-ops-58255` | 2026-10-22T03:22:07 |
+> | `exp-ops-81958` | 2026-10-21T12:40:22 |
+> | `exp-ops-66927` | 2026-10-22T05:26:01 |
+> | `cpc-alexa-gtfxm` | 2026-10-22T10:51:50 |
+>
+> That is **exactly** the group this note called "probably missed enrolments",
+> plus the Cloud PC. **They should not be enrolled in Falcon** — that would be
+> two EDRs on seven machines.
+>
+> **The three "act now" hosts are unaffected and the case for them is now
+> stronger:** `dc`, `win11-mssql01` and `win10-mssql02` are in **neither**
+> product. Controlled for naming — a substring search of all 387 distinct
+> Defender device names returns **0** for `mssql`, `sql`, `dns`, `grafana`,
+> `m365`, `analytics`, `test-device`, `victim`, `laborator`, `standalone`,
+> `server01` and `siembiot`, against positive controls of 10 for `exp-ops` and
+> 180 for `int.expertware.net`. The three `dc` substring hits are workstations
+> (`exp-dc-inspiron`, `expertware-dc-pc`), not the domain controller.
+>
+> **One limitation, stated:** `Onboarded` + `Active` means the Defender sensor
+> is reporting in. It does not tell us whether Defender antivirus is in active
+> or passive mode, which is what decides whether it *blocks* rather than only
+> observes. Worth confirming for the seven before closing them out.
+>
+> **The structural finding, which outlives this note:** the estate runs **two
+> EDRs** and the platform reads one. Any coverage figure we produce from
+> Falcon alone will overstate gaps by however many hosts Defender covers —
+> here, 7 of 19, or 37%.
 
 > **Population: Expertware's own estate.** Confirmed 2026-10-21 by asking
 > CrowdStrike directly: one CID (`eed7e41845d04c26b4198f4c85f6216e`) across
@@ -115,17 +159,27 @@ is happening on the host — not for risk.
 
 ### Grouped for a decision
 
+**Revised 2026-10-22 after the Defender cross-check in the banner above.**
+
 - **Act now (3):** `DC`, `WIN11-MSSQL01`, `WIN10-MSSQL02` — a domain
-  controller and two database servers.
+  controller and two database servers, in **neither Falcon nor Defender**.
+  This is the group to act on, and the cross-check strengthens it: these are
+  not covered by something we weren't reading.
 - **Infrastructure, next (3):** `dns1.expertware.net`,
-  `expgrafana001.int.expertware.net`, `EXPM365Analytics401`.
-- **Probably missed enrolments (6):** the `EXP-*` and `CPC-alexa-GTFXM`
-  workstations, which look like the covered fleet and should simply be
-  enrolled.
+  `expgrafana001.int.expertware.net`, `EXPM365Analytics401` — also in
+  neither product.
+- ~~**Probably missed enrolments (6)**~~ → **ALREADY COVERED BY DEFENDER (7).**
+  The six `EXP-*` workstations and `CPC-alexa-GTFXM` are Onboarded and Active
+  in Defender for Endpoint. **No Falcon enrolment.** The only open question is
+  whether Defender AV is in active or passive mode on them.
 - **Confirm intent (4):** `Windows-Test-Device`, `ASIEM-VICTIM`,
-  `LABORATORVM001`, `STANDALONE02`.
+  `LABORATORVM001`, `STANDALONE02` — in neither product, so the question
+  remains whether that is deliberate.
 - **No action (1):** `wm-c00.siembiot.int`.
-- **Name it first (1):** `SERVER01`.
+- **Name it first (1):** `SERVER01` — in neither product.
+
+So the real gap is **12 hosts, not 19**, and the licence conversation is
+correspondingly smaller.
 
 ## Two things that are not coverage gaps
 
