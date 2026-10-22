@@ -147,6 +147,61 @@ need it cannot alert and that is established before you run them** — a
 config finding, recorded as such, not a null result to be puzzled over
 afterwards.
 
+### If event 7 is EXCLUDED — stop at three items, do not run 3 or 3b
+
+Record both as untested with the config reason and move on. Do **not** run
+them: a null that was decided by the config before you started is not worth
+the ten minutes, and running it anyway invites someone later to read it as a
+rule finding.
+
+```json
+{"item": 3,  "host": "expvdi012", "expected_class": "7",
+ "status": "untested",
+ "reason": "sysmon -c shows event 7 (ImageLoad) excluded on this host"},
+{"item": "3b", "host": "expvdi012", "expected_class": "7",
+ "status": "untested",
+ "reason": "sysmon -c shows event 7 (ImageLoad) excluded on this host"}
+```
+
+Then the order becomes **1, 2, 4** and class 7 has no coverage from this
+round.
+
+**And there is a better host if that happens.** Class 7 is enabled
+*somewhere* — the corpus holds **128 class-7 runs across 16 hosts** — so a
+host that has actually produced one is strictly better evidence than a
+config dump. Measured 2026-10-22, the quiet ones that have:
+
+| host | alerts 30d | class-7 runs | sensor last seen | managed |
+|---|---|---|---|---|
+| **`exp-dfw2p34`** | 2 | 1 | **2026-10-22 05:25** | yes |
+| **`exp-6chwtg3`** | 2 | 1 | **2026-10-22 05:38** | yes |
+| `exp-3lwk334` | 2 | 2 | 2026-10-21 14:46 | yes |
+| `exp-9j7yz93` | 2 | 1 | 2026-10-21 14:59 | yes |
+| `exp-jz6dy24` | 4 | 1 | 2026-10-21 14:42 | yes |
+
+All five are managed with a fresh sensor, as quiet as `expvdi012`, and each
+has produced a class-7 alert — so event 7 is enabled and a rule does fire
+there. **`exp-dfw2p34`** or **`exp-6chwtg3`** on recency.
+
+Two caveats, both worth weighing before switching:
+
+* **They are end-user laptops by chassis, not admin VMs.** That was the thing
+  you wanted to avoid, and it brings item 4 back into question — clearing the
+  Security log on someone's laptop is a different proposition from clearing
+  it on an `ExpAdmin` VM.
+* **Our data cannot tell you whose laptop.** `entity_user` is null on every
+  alert these five have ever produced, so "whose daily driver" is unknown
+  from here and needs someone who can look it up. Do not assume unassigned.
+
+Excluded deliberately: `exp-4lwk334` (70 class-7 runs but **2,253 alerts in
+30 days** — attribution would be guesswork), `windows-test-device` and
+`asiem-victim` (no Falcon sensor), `exp-7q6f163` (2 class-7 runs but zero
+alerts in 30 days and a 12-day-stale sensor).
+
+For contrast, the other two Sysmon items are far better attested across the
+estate: **class 15 on 37 hosts (202 runs)** and **class 11 on 26 hosts (104
+runs)**, against class 7's 16 hosts. Items 1 and 2 are the safe ones.
+
 If `sysmon -c` is not on the path, the binary is usually
 `C:\Windows\Sysmon64.exe -c` or `C:\Windows\Sysmon.exe -c`.
 
@@ -379,6 +434,31 @@ attribution you have.
    `win11-mssql01` and `win10-mssql02` have no sensor.
 
 ---
+
+## If this round works: a second round for the sparse case
+
+This exercise produces **one rich case** — four or five distinct rules on one
+host inside an hour, which on this estate is the **1% tail**. Measured over
+the 400 most recent closed `c00` cases: 4 (1.0%) scored ≥90, 32 (8.0%)
+carried four or more distinct rules, and **282 (70.5%) carried a single
+distinct rule.**
+
+So the common case is the sparse one, and this round says nothing about it. A
+loop that gathers well on five linked detections may gather nothing useful on
+one isolated alert, and these five items cannot tell the difference.
+
+The second round, if this one works:
+
+* **one item per case**, which means gaps **wider than six hours** —
+  `SESSION_GAP_HOURS = 6` — so spread across days rather than an afternoon;
+* prefer items 1 and 2 (classes 15 and 11), which are attested on 37 and 26
+  hosts respectively, so they can be run on several different quiet hosts
+  rather than repeatedly on one;
+* the comparison then has single-rule cases to read, which is the population
+  70.5% of real closed cases live in.
+
+The comparison tool prints this caveat with its results, so the figure cannot
+be quoted without it.
 
 ## Afterwards
 

@@ -24,6 +24,24 @@ two class-7 rows together with the `sysmon -c` event-7 state: nothing/nothing
 with event 7 **enabled** is a Wazuh rule finding, and nothing/nothing with
 event 7 **excluded** was settled before the exercise began.
 
+**What this exercise is NOT evidence about.** It is designed to fire four or
+five distinct rules on one host inside an hour, which on this estate puts the
+resulting case in the **1% tail**: measured over the 400 most recent closed
+`c00` cases, only 4 (1.0%) scored ≥90 and only 32 (8.0%) carried four or more
+distinct rules. **282 of 400 — 70.5% — carried a single distinct rule.**
+
+So one rich case is the first positive ground truth this platform has, and it
+is worth having. It says nothing about the **sparse** case, which is the
+common one: a single rule, one alert, no corroboration to find. A loop that
+gathers well on five linked detections may gather nothing useful on one
+isolated alert, and this exercise cannot tell the difference. A second round
+spread over days — gaps wider than the six-hour session boundary, one item
+per case — is what would measure the sparse case, and it is a separate
+exercise rather than a bigger version of this one.
+
+That paragraph is printed with the results, because the result is the thing
+that gets quoted.
+
 **Items that produced no alert are reported as detection coverage, not loop
 misses.** If nothing fired, nothing downstream means anything, and calling
 that a gathering failure would blame the loop for a detection gap. The
@@ -228,9 +246,28 @@ def main() -> None:
         print("  replay them and do not count them as loop misses: the loop was")
         print("  never handed an alert for them.")
     print()
-    print("  **No aggregate is printed, deliberately.** Four exercises is not a")
-    print("  rate, and a '3 of 4' line would be a proportion of a sample of")
-    print("  four. Read the rows.")
+    print("  **No aggregate is printed, deliberately.** Five exercises is not a")
+    print("  rate, and a '4 of 5' line would be a proportion of a sample of")
+    print("  five. Read the rows.")
+    print()
+    print("=" * 76)
+    print("WHAT THIS IS NOT EVIDENCE ABOUT")
+    print("=" * 76)
+    print("  This exercise fires 4-5 distinct rules on one host inside an hour.")
+    print("  On this estate that is the 1% tail: of the 400 most recent closed")
+    print("  c00 cases, 4 (1.0%) scored >=90 and 32 (8.0%) carried four or more")
+    print("  distinct rules. **282 of 400 - 70.5% - carried a SINGLE distinct")
+    print("  rule.**")
+    print()
+    print("  So this is the first positive ground truth we have, and it is")
+    print("  evidence about the RICH case only. The sparse case - one rule, one")
+    print("  alert, nothing to corroborate - is the common one and is NOT")
+    print("  measured here. A loop that gathers well on five linked detections")
+    print("  may gather nothing useful on one isolated alert.")
+    print()
+    print("  Measuring that needs a second round spread over DAYS, with gaps")
+    print("  wider than the six-hour session boundary so each item becomes its")
+    print("  own single-rule case. Separate exercise, not a bigger one.")
 
 
 if __name__ == "__main__":
