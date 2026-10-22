@@ -57,6 +57,24 @@ _JSON = r'"{key}"\s*:\s*"?(?P<value>[^",}}{{\[\]\n]{{1,200}})"?'
 # the parent process's account is not the account that ran the command.
 _DOTTED = r"(?:^|\n)[ \t]*[\w.]*\.{key}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
 
+# Windows EVTX rendered as XML: `<EventID>4688</EventID>`, sometimes
+# `<EventID Qualifiers="16384">4688</EventID>`. The Exabeam-forwarded bodies
+# carry this form and none of the four above, which is why `lin` and `pov`
+# matched no playbook row: measured 2026-10-22, **25 of 52 runs had an id in
+# the body and none in `alert_fields`** — 20 of 24 `lin` bodies contain the
+# element, 9 of 28 for `pov`.
+#
+# **`<EventRecordID>` is the trap and it is in every one of these bodies.**
+# It is a per-channel sequence number in the hundreds of thousands, not an
+# event id, and a looser pattern reads it as one. `<EventID` cannot prefix
+# `<EventRecordID` — the fifth character differs — so anchoring the opening
+# tag exactly is what separates them. Asserted in the dangerous direction by
+# `test_event_record_id_is_not_read_as_an_event_id`.
+#
+# Digits only, 1-5 of them: a Windows event id is at most 5 digits, and the
+# bound stops a sequence number sneaking in if the element name ever changes.
+_XML_ELEMENT = r"<{key}\b[^>]*>[ \t]*(?P<value>\d{{1,5}})[ \t]*</{key}>"
+
 
 def _first(patterns: list[str], text: str) -> str | None:
     for pattern in patterns:
@@ -74,6 +92,7 @@ def _first(patterns: list[str], text: str) -> str | None:
 
 def _field(
     label: str | None, keys: list[str], text: str, *, dotted: bool = False,
+    xml_elements: list[str] | None = None,
 ) -> str | None:
     """The first form of this field the body actually uses.
 
@@ -97,6 +116,11 @@ def _field(
         patterns.append(_JSON.format(key=re.escape(key)))
         if dotted:
             patterns.append(_DOTTED.format(key=re.escape(key)))
+    # Last, deliberately. A body that already yields this field through any
+    # form above keeps the value it had; this only reaches bodies where every
+    # other form found nothing.
+    for element in xml_elements or []:
+        patterns.append(_XML_ELEMENT.format(key=re.escape(element)))
     return _first(patterns, text)
 
 
@@ -196,7 +220,12 @@ def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
         "manager": _field("Manager", ["manager"], text),
         # An incident names its own subject; trust that over a parsed header.
         "entity_id": _field("entity_id", ["entity_id"], text),
-        "event_id": _field("Event ID", ["event_id", "eventid"], text),
+        # `xml_elements` is appended LAST inside `_field`, so it fires only
+        # where the header, key=value, JSON and dotted forms all found
+        # nothing. That placement is why adding it cannot change a body whose
+        # extraction already works — verified over the c00 corpus, 0 changes.
+        "event_id": _field("Event ID", ["event_id", "eventid"], text,
+                           xml_elements=["EventID"]),
         "event_name": _field(None, ["eventName", "event_name", "name"], text),
         "event_priority": _field(None, ["eventPriority", "event_priority", "priority"], text),
         "event_severity": _field(None, ["eventSeverity", "event_severity", "severity"], text),

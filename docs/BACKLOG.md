@@ -2973,3 +2973,49 @@ from…]`.
 
 See `docs/measurements/indicator-led-and-the-host-panel.md` §3 for the
 ordering and the dependency.
+
+## 52 — The sender declares a synthetic alert body; we discard the declaration
+
+**Asked: are the "Exabeam raw log unavailable" alerts ours or theirs?
+Answer: theirs, and they did the right thing.**
+
+The string appears **nowhere in this codebase** — only in my own notes. In the
+rows it is the **first thing in the alert body as received**:
+
+    [SYNTHETIC - Exabeam raw log unavailable; derived from event metadata,
+     not a verbatim log line] host=… user=… src_ip=… event_type=…
+
+`external_ref` on those runs is `SOC-15641`, `SOC-15645`, `SOC-15653`,
+`SOC-15657`, `SOC-15658`, `SOC-15659` — a SOC workflow that tried to fetch
+the raw log, could not, and **labelled the substitute in band**. That is
+absence declared as absence, which is the opposite of the pattern we keep
+finding. Nothing to fix on their side.
+
+**Six runs, not three.** My earlier count read only the `title` column; two
+of the six carry the marker in the body with a different title.
+
+### What IS ours
+
+**We ignore the label completely.** Nothing reads the marker, so:
+
+* `extract_alert_fields` parses the derived `key=value` metadata as if it
+  were a log line — and these are the bodies where `event_id=69903197010@s3`
+  came from, which is why `lin` appeared to have cloud-shaped event classes;
+* the body goes to the model as evidence with no indication it is derived;
+* the report gives a reader no way to tell.
+
+So the sender's honesty is discarded at our boundary, and a derived summary
+is presented with the same standing as a verbatim log. One level up from the
+usual version of this fault: the absence was recorded correctly and then
+dropped by the consumer.
+
+### The fix, not built
+
+Detect the marker at ingest, record it as a field (`body_is_synthetic: true`
+with the declared reason), and surface it in the report next to the evidence
+— "this alert's body is derived metadata, not a verbatim log line, per the
+sender". Small. It needs a test that a normal body is **not** flagged, since
+a marker test that matches everything would label the whole corpus derived.
+
+Worth doing before the model reads another one, which on current volume is
+about every other day.

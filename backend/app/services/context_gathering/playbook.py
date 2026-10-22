@@ -226,6 +226,47 @@ PLAYBOOK: dict[str, tuple[str, ...]] = {
     # 11   Sysmon FileCreate — "executable dropped", "LOLBin certutil wrote
     #      exe". Same shape as 15. Appears inside case #61.
     "11": ("hash_prevalence", "host_detections_window"),
+    # ── the seven classes the Exabeam shippers actually carry, added
+    # 2026-10-22 once `event_id` extraction was fixed. Before that these
+    # alerts had no class at all and matched no row: 25 of 52 lin/pov runs
+    # carried `<EventID>N</EventID>` in the body and nothing in
+    # `alert_fields`.
+    #
+    # **Rows written to what can actually fire, not to what the class means.**
+    # Measured across those 25 runs, `host` and `user` are sparse — 0 to 3
+    # occurrences per class — while an IP is present on every class and a
+    # hash on 3 of the 4 class-4688 runs. So the indicator-led templates,
+    # which run first regardless, are what will answer most of these, and the
+    # host/user templates below will often skip with the selector named.
+    # Writing rows that read well and never fire would be worse than writing
+    # none.
+    #
+    # 4624 logon, 4625 failed logon — account and origin.
+    "4624": ("host_logons", "user_sessions"),
+    "4625": ("host_logons", "user_sessions"),
+    # 4768 Kerberos TGT requested — purely account-centric.
+    "4768": ("user_sessions",),
+    # 4688 process create. The image's hash and name are the question, and
+    # both are answerable estate-wide; `process_tree` is deliberately NOT
+    # here — it has no source (Falcon's alerts API holds detections, not raw
+    # process events) and `process` was absent on all 25 runs anyway.
+    "4688": ("hash_prevalence", "file_name_prevalence"),
+    # 4697 service installed, 5140/5145 network share accessed.
+    #
+    # **These three are the ones that need something new, and I have not
+    # added it.** The class-specific question — which service binary, which
+    # share, and has either been seen elsewhere — would need a
+    # `service_name_prevalence` / `share_name_prevalence` template, and
+    # **no configured source can answer either**: Falcon's alerts API has no
+    # service or share field, and the Exabeam search returns rows with no
+    # fields at all. A template with no source produces `check_failed` on
+    # every alert, which is what the absent `domain` template already taught.
+    #
+    # So these rows carry what IS answerable and the gap is recorded rather
+    # than papered over with a template that cannot run.
+    "4697": ("user_sessions", "file_name_prevalence"),
+    "5140": ("host_logons", "user_sessions"),
+    "5145": ("host_logons", "user_sessions"),
 }
 
 #: Run for every class, when the key is present. The design note's "*any*"
