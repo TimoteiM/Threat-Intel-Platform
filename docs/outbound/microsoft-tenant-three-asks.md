@@ -70,12 +70,19 @@ We checked rather than assumed, and the news is mostly good:
 So the platform has **never used this credential**, and it has not leaked
 through our source control.
 
-**One caveat, and it is an uncomfortable one.** The reason the credentials
-never reached the running services is an accident: the three keys in the
-configuration file carry **trailing whitespace in their names**, which makes
-them invalid environment-variable names, so the container runtime silently
-dropped them. Had they been written correctly they would have been present in
-three containers. We are not relying on that as a control.
+**But it is one routine command away from being live, and that is the
+uncomfortable part.** The reason the credentials are not in the running
+services is simply that those containers were created on 2026-10-20, before
+the keys were added, and container environments are fixed at creation. We
+verified by starting a throwaway container against the current configuration:
+it receives all three keys, with clean values.
+
+So **any `docker compose up -d --force-recreate` loads this
+isolation-capable credential into three of our services** — and that is
+precisely the command our own liveness tooling currently prints as the
+remediation for the configuration drift it is reporting. Following our own
+tooling's advice would do it. That is why we are asking for revocation rather
+than treating "we don't use it" as sufficient.
 
 **And the credential is live.** We obtained valid tokens with it during this
 check — the secret works and has not expired. Deleting our copy does not

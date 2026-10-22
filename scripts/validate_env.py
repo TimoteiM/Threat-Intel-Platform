@@ -1,5 +1,30 @@
 """Validate every key in .env, in BOTH directions.
 
+**What this adds over the env-drift limb that already exists.** Measured
+2026-10-22: `liveness.sh`'s env limb already compares the names
+`docker compose config` resolves against the names each container has, names
+them individually, and exits 1. It was never blind to the Microsoft keys — it
+prints them by name and has done since they were added. So this script does
+**not** re-check drift. It covers the three things that limb cannot see,
+because it starts from compose's already-normalised view rather than from the
+bytes a human typed:
+
+1. **Structural faults in the file.** Duplicate keys (the last silently
+   wins), values carrying an inline `#` comment, tabs, CRLF. None of these
+   produce a name mismatch, so drift comparison cannot detect any of them.
+2. **The backward direction.** A `Settings` field with no env var behind it
+   anywhere is not "missing" from compose's view — it was never declared, so
+   there is nothing for a drift check to find. This is how
+   `alert_callback_secret` sat empty and every outbound callback went
+   unsigned.
+3. **Declared but empty.** Intent recorded, value absent.
+
+Prints KEY NAMES AND VERDICTS ONLY. No value, no fragment of a value, and no
+value length is ever printed.
+
+`--strict` exits non-zero so this can gate, and prints a one-line summary for
+`liveness.sh`.
+
 Prints KEY NAMES AND VERDICTS ONLY. No value, no fragment of a value, and no
 value length is ever printed.
 
@@ -23,9 +48,34 @@ import re
 import subprocess
 import sys
 
-ENV = pathlib.Path("/home/expert/apps/Threat-Intel-Platform/.env")
+ENV = pathlib.Path(__file__).resolve().parent.parent / ".env"
 VALID_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 SERVICES = ("api", "worker", "beat")
+
+#: Settings fields that are unset **on purpose**, each with the reason.
+#:
+#: A baseline by NAME, not a count: a new name is the signal, and a count
+#: would let one appear as another is fixed. Each entry is a claim that can be
+#: checked, which is the condition for a carve-out existing at all — a
+#: carve-out added for a false positive is how a true one stays hidden.
+DELIBERATELY_UNSET = {
+    "bootstrap_admin_username": "no bootstrap admin should exist; unset is the "
+                                "desired state and setting it would create one",
+    "bootstrap_admin_password": "as above",
+    "correlation_webhook_url": "no correlation webhook receiver exists yet; "
+                               "case_event_task returns early, which is correct",
+    "anyrun_api_key_fallback": "a fallback for the primary key, which IS set",
+}
+
+#: Names whose absence silently degrades something, as opposed to a tunable
+#: with a sensible default. Narrower than "contains the word secret": the
+#: first version matched `*_base_url` and reported five correct defaults as
+#: unset credentials, which would have been a wrong headline from a right
+#: query.
+DEGRADES_SILENTLY = re.compile(
+    r"(^|_)(secret|password|passwd|api_key|auth_token|credential)(_|$)"
+    r"|_secret$|_password$|_api_key$|_token$|_webhook_url$"
+)
 
 
 def parse_env_raw() -> list[tuple[int, str, str, str]]:
@@ -78,6 +128,17 @@ def settings_fields() -> set[str]:
 
 
 def main() -> int:
+    strict = "--strict" in sys.argv
+    # An optional path, so the dangerous-direction control can run against a
+    # fixture instead of mutating the live .env to prove the check works.
+    # A test that has to edit the real credentials file to verify itself is a
+    # test nobody will run twice.
+    global ENV
+    paths = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if paths:
+        ENV = pathlib.Path(paths[0]).resolve()
+        print(f"(reading {ENV})")
+    unexplained: list[str] = []
     raw = ENV.read_bytes()
     rows = parse_env_raw()
     print(f"assignment lines in .env: {len(rows)}")
@@ -87,51 +148,64 @@ def main() -> int:
     print()
 
     # ---- structural lint -------------------------------------------------
-    problems: dict[str, list[str]] = collections.defaultdict(list)
+    # Severity is set by MEASUREMENT, not by how alarming the fault looks.
+    # Surrounding whitespace was initially filed as "silently dropped by the
+    # container runtime". That was wrong: `docker compose config` trims the
+    # name, and a container created from today's .env receives the variable
+    # with a CLEAN value. Verified by running a throwaway container. So it is
+    # advisory, and the real reason those keys are absent from the running
+    # services is that the containers predate them — which the existing
+    # env-drift limb already reports.
+    hard: dict[str, list[str]] = collections.defaultdict(list)
+    advisory: dict[str, list[str]] = collections.defaultdict(list)
     seen: dict[str, list[int]] = collections.defaultdict(list)
     for lineno, k, v, line in rows:
         key = k.strip()
         seen[key].append(lineno)
-        if k != k.strip():
-            problems["key has surrounding whitespace -> INVALID env name, "
-                     "silently dropped by the container runtime"].append(
-                f"L{lineno} {key}")
         if not VALID_NAME.match(key):
-            problems["key is not a valid env var name "
-                     "([A-Za-z_][A-Za-z0-9_]*)"].append(f"L{lineno} {key}")
-        if v != v.strip():
-            problems["value has leading/trailing whitespace "
-                     "(reaches the app verbatim; a space in a secret or URL "
-                     "is a 401 that reads as a wrong credential)"].append(
-                f"L{lineno} {key}")
-        if v.strip()[:1] in ("'", '"') and v.strip()[-1:] == v.strip()[:1] and len(v.strip()) > 1:
-            problems["value is quoted (compose env_file keeps the quotes as "
-                     "part of the value; python-dotenv strips them — the two "
-                     "layers disagree)"].append(f"L{lineno} {key}")
-        if "$" in v:
-            problems["value contains '$' (interpolation risk; compose may "
-                     "substitute or warn)"].append(f"L{lineno} {key}")
+            hard["key is not a valid env var name even after trimming "
+                 "([A-Za-z_][A-Za-z0-9_]*)"].append(f"L{lineno} {key}")
         if re.search(r"\s#", v):
-            problems["value contains ' #' (env_file does NOT strip inline "
-                     "comments — the comment becomes part of the value)"].append(
+            hard["value contains ' #' — env_file does NOT strip inline "
+                 "comments, so the comment becomes part of the value"].append(
                 f"L{lineno} {key}")
         if "\t" in line:
-            problems["line contains a TAB"].append(f"L{lineno} {key}")
+            hard["line contains a TAB"].append(f"L{lineno} {key}")
+        if k != k.strip():
+            advisory["key name has surrounding whitespace (compose trims it; "
+                     "cosmetic, but it hid the real cause once)"].append(
+                f"L{lineno} {key}")
+        if v != v.strip():
+            advisory["value has surrounding whitespace (compose trims it; "
+                     "measured clean inside a fresh container)"].append(
+                f"L{lineno} {key}")
+        sv = v.strip()
+        if len(sv) > 1 and sv[0] in ("'", '"') and sv[-1] == sv[0]:
+            advisory["value is quoted (compose strips matched quotes; "
+                     "python-dotenv also does, but they can disagree on "
+                     "nesting)"].append(f"L{lineno} {key}")
+        if "$" in v:
+            advisory["value contains '$' (compose may interpolate)"].append(
+                f"L{lineno} {key}")
     for key, lines in sorted(seen.items()):
         if len(lines) > 1:
-            problems["DUPLICATE key — the last occurrence silently wins"].append(
+            hard["DUPLICATE key — the last occurrence silently wins"].append(
                 f"{key} at lines {lines}")
+    if b"\r\n" in raw:
+        hard["file has CRLF line endings — the CR becomes part of every "
+             "value"].append("(whole file)")
 
-    if problems:
-        print("STRUCTURAL PROBLEMS")
+    for title, bucket in (("HARD FAULTS (these gate)", hard),
+                          ("ADVISORY (measured not to break anything)", advisory)):
+        print(title)
         print("=" * 72)
-        for kind, items in problems.items():
+        if not bucket:
+            print("  none")
+        for kind, items in bucket.items():
             print(f"\n[{len(items)}] {kind}")
             for it in items:
                 print(f"      {it}")
-    else:
-        print("STRUCTURAL PROBLEMS: none")
-    print()
+        print()
 
     # ---- forward direction: does each key REACH the services? -----------
     declared = {k.strip() for _, k, _, _ in rows if VALID_NAME.match(k.strip())}
@@ -176,14 +250,13 @@ def main() -> int:
             # The actionable subset: a credential-shaped field with no env var
             # behind it means that integration cannot authenticate, and the
             # default is almost certainly an empty string.
-            cred = re.compile(r"(key|secret|token|password|passwd|credential"
-                              r"|client_id|tenant_id|dsn|_url|username|user)$"
-                              r"|(^|_)(api_key|auth)(_|$)")
-            flagged = [f for f in unbacked if cred.search(f)]
-            print(f"\n  CREDENTIAL-SHAPED and unset ({len(flagged)}) — each means "
-                  f"that integration cannot authenticate:")
+            flagged = sorted(f for f in unbacked if DEGRADES_SILENTLY.search(f))
+            print(f"\n  SILENTLY DEGRADING and unset ({len(flagged)}):")
             for f in flagged:
-                print(f"      - {f}")
+                why = DELIBERATELY_UNSET.get(f)
+                print(f"      - {f}"
+                      + (f"   [expected: {why}]" if why else "   *** UNEXPLAINED ***"))
+            unexplained.extend(f for f in flagged if f not in DELIBERATELY_UNSET)
 
     # ---- declared-but-empty: intent recorded, value absent ---------------
     print()
@@ -194,6 +267,19 @@ def main() -> int:
         print("  none")
     for lineno, key in empties:
         print(f"      L{lineno} {key}")
+
+    # ---- the one-line summary liveness.sh prints -------------------------
+    n_hard = sum(len(v) for v in hard.values())
+    bits = []
+    if n_hard:
+        bits.append(f"{n_hard} HARD FAULT(S)")
+    if unexplained:
+        bits.append(f"{len(unexplained)} unexplained silent default(s): "
+                    + " ".join(sorted(unexplained)))
+    print()
+    print("SUMMARY: " + (" · ".join(bits) if bits else "env lint ok"))
+    if strict and (n_hard or unexplained):
+        return 1
     return 0
 
 

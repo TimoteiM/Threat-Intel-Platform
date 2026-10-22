@@ -202,6 +202,37 @@ if [[ -n "$_compose_json" ]]; then
     done
 fi
 
+# ── env lint: the faults the drift limb above cannot see ──────────────────
+# The limb above starts from `docker compose config`, which hands back an
+# already-normalised view: trimmed names, stripped quotes, no duplicates. So
+# it is structurally unable to see a duplicate key (the last silently wins),
+# an inline `#` that became part of a value, CRLF, or a tab.
+#
+# And it cannot see the backward direction at all. A `Settings` field with no
+# env var behind it ANYWHERE is not "declared but absent" — it was never
+# declared, so there is nothing for a drift comparison to find. That is
+# exactly how `alert_callback_secret` sat empty while every outbound callback
+# went unsigned, for an unknown length of time, with no error, no log line
+# and no failed startup. Nothing in this script would have caught it.
+#
+# Deliberately NOT re-checking drift here: measured 2026-10-22, the limb above
+# already names the missing variables individually and already exits 1. The
+# Microsoft keys were never invisible to it. They were unread.
+#
+# Names only. The script it calls never prints a value.
+lint_bad=0
+lint_summary=""
+_lint_out=$(backend/.venv/bin/python scripts/validate_env.py --strict 2>/dev/null)
+_lint_rc=$?
+if [[ -z "$_lint_out" ]]; then
+    lint_bad=1
+    lint_summary="could not run validate_env.py — absence is not agreement"
+elif (( _lint_rc != 0 )); then
+    lint_bad=1
+    lint_summary=$(printf '%s' "$_lint_out" | sed -n 's/^SUMMARY: //p' | head -1)
+    [[ -n "$lint_summary" ]] || lint_summary="exit ${_lint_rc}, no summary line"
+fi
+
 
 # ── the frontend: a built image, so it does not reload ────────────────────
 # Third deployment-liveness gap this week, after the api process and env
@@ -323,6 +354,12 @@ if (( env_bad )); then
     line="$line · ENV DRIFT:${env_note} — docker compose up -d --force-recreate"
 else
     line="$line · env ok"
+fi
+
+if (( lint_bad )); then
+    line="$line · ENV LINT: ${lint_summary}"
+else
+    line="$line · env lint ok"
 fi
 
 # A commit that has not reached the running process is the case this exists
@@ -476,3 +513,6 @@ fi
 # a property of the working tree, so there is no dirty-tree exemption.
 (( role_bad == 0 )) || exit 1
 (( env_bad == 0 )) || exit 1
+# No dirty-tree exemption: .env is not under version control, so an edit to
+# the working tree cannot move this and there is nothing to excuse.
+(( lint_bad == 0 )) || exit 1
