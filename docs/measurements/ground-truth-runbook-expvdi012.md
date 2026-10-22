@@ -34,7 +34,12 @@ installed or not forwarded, items 1–3b cannot produce their classes at all —
 and the result would look like a detection gap when it is a telemetry gap. A
 third way to waste the window, after #61's missing sensor.
 
-**Step 0 resolves it on the VM.** If Sysmon is not there, stop and tell me:
+**There is a second, quieter version of the same risk:** Sysmon running and
+unfiltered, but the Wazuh agent not subscribed to its channel — perfect local
+telemetry that never reaches us. §2f is the gate for that one, and it is the
+only Step 0 check with no symptom until the items have already run.
+
+**Step 0 resolves both on the VM.** If Sysmon is not there, stop and tell me:
 `expvdi008` is the only other VDI-family host with a Sysmon alert in 90 days
 (3 × class 12), and switching is cheaper than guessing.
 
@@ -228,13 +233,72 @@ installed and forwarding and says **nothing** about 15, 11 or 7.
 
 ```powershell
 Get-Service -Name Wazuh*,"OssecSvc" -ErrorAction SilentlyContinue |
-  Format-Table Name,Status
+  Format-Table Name,Status,StartType
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 5 `
   -ErrorAction SilentlyContinue
 ```
 
 Expect a running service and no recent connection errors. The agent is proven
 to reach us (the 2026-10-20 alert), so this is confirmation, not discovery.
+
+### 2f. **Is the agent actually READING the Sysmon channel?** — the gate 2b–2d cannot see
+
+2b proves Sysmon runs. 2c proves the events are not filtered out. **Neither
+proves the forwarder is subscribed to that channel.** Sysmon can be running,
+logging locally, with recent events and an open config, and Wazuh simply not
+configured to collect `Microsoft-Windows-Sysmon/Operational` — in which case
+items 1–3b produce perfect local telemetry that never reaches the platform,
+and the result reads as a detection gap when it is a collection gap. The
+fourth way to waste the window, and the only one with no symptom until forty
+minutes in.
+
+```powershell
+# 1. The local config — the block that subscribes to the channel.
+Select-String -Path "C:\Program Files (x86)\ossec-agent\ossec.conf" `
+  -Pattern "Sysmon" -Context 3,3
+
+# 2. **Centrally pushed config, if the local file has nothing.** Wazuh
+#    commonly ships <localfile> blocks from the manager, so an absent block
+#    in ossec.conf is NOT yet an answer.
+Get-ChildItem "C:\Program Files (x86)\ossec-agent\shared" -ErrorAction SilentlyContinue |
+  Format-Table Name,LastWriteTime
+Select-String -Path "C:\Program Files (x86)\ossec-agent\shared\*.conf" `
+  -Pattern "Sysmon" -Context 3,3 -ErrorAction SilentlyContinue
+```
+
+Expect a `<localfile>` block of this shape in one of the two:
+
+```xml
+<localfile>
+  <location>Microsoft-Windows-Sysmon/Operational</location>
+  <log_format>eventchannel</log_format>
+</localfile>
+```
+
+**Then the positive control, which beats both config reads.** A config
+mentioning the channel is a declaration; this is the agent saying it did it:
+
+```powershell
+Select-String -Path "C:\Program Files (x86)\ossec-agent\ossec.log" `
+  -Pattern "Sysmon" | Select-Object -Last 10
+```
+
+At startup the agent logs a line naming each channel it begins monitoring —
+`Analyzing event log: 'Microsoft-Windows-Sysmon/Operational'` or similar. If
+that line is present from the current service start, the forwarder is looking
+and §2f is settled affirmatively rather than inferred from XML.
+
+| what you find | meaning | do |
+|---|---|---|
+| block present **and** the log line present | collecting | **proceed** |
+| block present, no log line | configured but possibly not reloaded since | restart the agent service, re-check for the line |
+| **no block in either file** | **the channel is not collected** | **STOP.** Items 1–3b cannot reach the platform. Tell me — this is a one-line config fix, or we switch to a host that has produced a Sysmon alert |
+| `shared` folder absent and no local block | same as above | STOP |
+
+Record as `sysmon_channel_collected: true` / `false`, and paste the
+`<localfile>` block or its absence. **If this is false, nothing in items 1–3b
+is worth running** — and unlike the event-7 case there is no partial fallback,
+because all four Sysmon items depend on it.
 
 ---
 
@@ -507,6 +571,7 @@ Append one object per item, in this exact shape:
  ],
  "baseline_24h": 1,
  "sysmon_present": true,
+ "sysmon_channel_collected": true,
  "sysmon_events": {"15": true, "11": true, "7": true},
  "sysmon_events_recorded_only": {"1": null, "10": null, "17": null, "18": null},
  "templates_not_exercised": {
@@ -594,6 +659,9 @@ be quoted without it.
 * `whoami` output, verbatim
 * the `sysmon -c` table for 15 / 11 / 7, and the record-only table for
   1 / 10 / 17 / 18
+* the **`<localfile>` block** for `Microsoft-Windows-Sysmon/Operational`, or
+  its absence from both `ossec.conf` and `shared\*.conf`, plus the
+  `Analyzing event log` line from `ossec.log` (§2f)
 * the **SHA256s** from items 2, 3 and 3b
 * the Step 0 service and agent results
 * anything that surprised you
