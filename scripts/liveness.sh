@@ -351,7 +351,16 @@ fi
 if (( env_bad )); then
     # Counts on the line, names underneath — the line stays scannable and
     # the actionable detail is still right there, not in another command.
-    line="$line · ENV DRIFT:${env_note} — docker compose up -d --force-recreate"
+    #
+    # **"review the names first" is not politeness.** A recreate loads EVERY
+    # declared-but-absent variable, not the one you were thinking of. On
+    # 2026-10-22 the absent set included a Defender for Endpoint credential
+    # holding `Machine.Isolate`, pending revocation, and this very line was
+    # telling the reader to run the command that would load it into three
+    # services. Remediation advice that is unsafe in a state the script
+    # itself reports is worse than no advice.
+    line="$line · ENV DRIFT:${env_note} — review the names below, then"
+    line="$line docker compose up -d --force-recreate (loads ALL of them)"
 else
     line="$line · env ok"
 fi
@@ -480,17 +489,45 @@ if (( env_bad )) && [[ -n "$_compose_json" ]]; then
     done
 fi
 
-# Exit non-zero on code skew, env drift, or a fingerprint we could not read,
-# so this can gate something later. A check that cannot fail is decoration,
-# and "could not read it" is not "it matches".
+# ── exit codes: THREE, not two ────────────────────────────────────────────
 #
+# **Why this changed on 2026-10-22.** This script exited 1 on every run for
+# days. Every red was true — but a check that is always red is a check nobody
+# reads, and that is not a theory here: the env-drift limb named
+# `MicrosoftClientId MicrosoftClientSecret MicrosoftTenantId` individually, on
+# every run, and exited 1, for two days, and the keys were found by auditing
+# something else entirely. The limb worked. Its output was weather.
+#
+# The fix is NOT an exemption. A "known-ahead branch is green" carve-out was
+# considered and rejected: it would have greened the ENV DRIFT line, which is
+# the exact signal that proved the problem, and "the branch is ahead" is not a
+# premise checkable independently of the check it exempts — see *Verify an
+# exemption's premise* in the README, which already names this script.
+#
+# The fix is to stop conflating two different things that both used to exit 1:
+#
+#   exit 0  everything agrees. The normal state.
+#   exit 2  the DEPLOYMENT is sound; you merely have local work in progress
+#           (dirty tree, or commits not pushed). Nothing is misconfigured and
+#           nothing is stale relative to what is deployed. Informational.
+#   exit 1  a real fault: process skew, stale serving code on a clean tree, a
+#           stale frontend, env drift, env lint, a wrong grant or role, or a
+#           fingerprint that could not be read at all.
+#
+# So `exit 1` now means "something is wrong", and `exit 2` means "you are
+# mid-flight". A caller that wants the old behaviour tests `-ne 0`.
+#
+# "Could not read it" is still a fault, not agreement.
+
+fault=0
+
 # Process-to-process skew fails regardless of the working tree, because an
 # edit moves neither process's fingerprint. The earlier dirty-tree exemption
 # existed only to mask the `exec python` misreading that is now fixed.
 if [[ -z "$api" || -z "$worker" ]]; then
-    exit 1
+    fault=1
 elif [[ "$api" != "$worker" ]]; then
-    exit 1
+    fault=1
 fi
 
 # The frontend exemption stays, and unlike the code one it is correctly
@@ -499,20 +536,30 @@ fi
 # cleared while anyone was working. On a clean tree a stale frontend is the
 # three-hour 404 and fails.
 if (( fe_bad )) && [[ "$tree" == "tree clean" ]]; then
-    exit 1
+    fault=1
 fi
 
 if (( serve_bad )) && [[ "$tree" == "tree clean" ]]; then
-    exit 1
+    fault=1
 fi
 
 # No dirty-tree exemption: a grant is a property of the database, not of the
 # working tree, so an edit cannot move it and there is nothing to excuse.
-(( priv_bad == 0 )) || exit 1
+(( priv_bad == 0 )) || fault=1
 # Same reasoning as the privileges limb: the role a process connects as is not
 # a property of the working tree, so there is no dirty-tree exemption.
-(( role_bad == 0 )) || exit 1
-(( env_bad == 0 )) || exit 1
+(( role_bad == 0 )) || fault=1
+(( env_bad == 0 )) || fault=1
 # No dirty-tree exemption: .env is not under version control, so an edit to
 # the working tree cannot move this and there is nothing to excuse.
-(( lint_bad == 0 )) || exit 1
+(( lint_bad == 0 )) || fault=1
+
+# A fault outranks work-in-progress: if something is actually wrong, say so
+# even when the tree is also dirty.
+if (( fault )); then
+    exit 1
+fi
+if [[ "$push" != "pushed" || "$tree" != "tree clean" ]]; then
+    exit 2
+fi
+exit 0

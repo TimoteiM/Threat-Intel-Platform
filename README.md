@@ -1031,6 +1031,65 @@ table the app cannot reach as `APP MISSING A GRANT`.
 A table that should be **restricted** like the token map needs an explicit
 `REVOKE` in `db_roles.sql` and a line in `check_db_privileges.sql`.
 
+## What `liveness.sh` red means
+
+**Three exit codes, since 2026-10-22. Red is information, not weather.**
+
+| exit | meaning | what to do |
+|---|---|---|
+| **0** | everything agrees. **The normal state.** | nothing |
+| **2** | the deployment is sound; you have local work in progress — a dirty tree or unpushed commits. Nothing is misconfigured and nothing is stale relative to what is deployed. | nothing, or commit and push |
+| **1** | **a real fault.** Process skew, stale serving code on a clean tree, a stale frontend, env drift, env lint, a wrong grant or role, or a fingerprint that could not be read at all. | read the line; it names the limb and the remediation |
+
+### Why this was changed, because the reason is the point
+
+The script exited **1 on every run for days**, and every red was true. That is
+not a healthy check — it is a check nobody reads, and the cost was measured
+rather than imagined: the env-drift limb named
+`MicrosoftClientId MicrosoftClientSecret MicrosoftTenantId` individually, on
+every run, and exited 1, **for two days**. The credentials were found by
+auditing something unrelated. The limb worked perfectly. Its output had become
+background noise.
+
+**An exemption was considered and rejected.** The obvious fix — "this branch
+is known to be ahead, so go green" — would have greened the ENV DRIFT line,
+which is the exact signal that proved the problem. And "the branch is ahead"
+cannot be checked independently of the check it exempts, which is the test
+*Verify an exemption's premise* (above) sets. This script is already the worked
+example in that section; adding a second carve-out to it would have been the
+same mistake twice.
+
+So nothing was exempted. The two things that both used to exit 1 were
+separated: **"you are mid-flight"** from **"something is wrong"**. Every limb
+still reports, and `exit 1` now carries information because it is no longer
+the resting state.
+
+### The corollary: a red you intend to leave red needs a reason, written down
+
+If `exit 1` becomes normal again, the check is dead again. So a fault that
+will persist across sessions belongs in one of two places, never in
+tolerance:
+
+* a **named exemption with a checkable premise** — `DELIBERATELY_UNSET` in
+  `scripts/validate_env.py` is the pattern: keyed by name rather than count,
+  each entry carrying its reason, so a new unexplained default fails even if
+  an old one is fixed in the same breath;
+* or a **backlog row**, if it is work rather than a decision.
+
+"It is always red, that is just how it is" is how two days of a named
+credential drift went unread.
+
+### One hazard the drift limb now warns about
+
+The ENV DRIFT remediation used to read `docker compose up -d --force-recreate`
+with no qualification. **A recreate loads every declared-but-absent variable,
+not the one you were thinking of.** On 2026-10-22 the absent set included a
+Defender for Endpoint credential holding `Machine.Isolate`, pending
+revocation — and the script was advising the command that would load it into
+three services. The line now says *review the names below, then …
+(loads ALL of them)*. Remediation advice that is unsafe in a state the script
+itself reports is worse than no advice.
+
 ## Quick Start
 
 ### Prerequisites
