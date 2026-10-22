@@ -1,13 +1,22 @@
-# Outbound callbacks are now signed — what the receiver must do
+# Our callbacks are signed now. They are still unauthenticated until you reject unsigned ones.
+
+> **If your workflow verifies the signature only when the header is present,
+> you have no integrity check at all.** We omit `X-Alert-Signature` entirely
+> when our secret is unset, so "verify if present" is a branch an attacker
+> simply takes by not sending the header. The receiver must **require** the
+> header and **reject** when it is absent.
+>
+> That is the whole of this document. Everything below is supporting detail.
 
 **From:** Threat Intel Platform engineering
 **Date:** 2026-10-22
 **Needs an answer from:** whoever owns the Tracecat workflows that receive our
 callbacks.
 
-We found that every callback this platform delivers was going out **unsigned**,
-and we have fixed our half. **Your half is not done, and until it is, the
-signature changes nothing.** That is the whole point of this note.
+Please do not read "we added signatures" as "the problem is solved". We fixed
+our half — every callback now carries an HMAC. The problem is **not** solved
+until something on your side refuses a request that arrives without one, and
+we cannot do that part from here.
 
 ---
 
@@ -71,9 +80,11 @@ it has whitespace around it.
 
 ---
 
-## The part that matters: verify, do not merely check
+## The requirement, restated with the logic
 
-**Requirement: reject the request when the header is absent.**
+This is the point from the top of the document, with the reasoning attached.
+
+**Reject the request when the header is absent.**
 
 We omit `X-Alert-Signature` entirely when our secret is unset. A workflow
 written as *"if the signature header is present, verify it"* is **still
