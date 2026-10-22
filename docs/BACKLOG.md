@@ -3079,3 +3079,60 @@ sender what the scale is before reading it.
 
 The eight aliases for `raw_text` and this sweep are the same question asked
 twice and answered twice; the general rule they support is in the register.
+
+
+## 54 — `process_tree` and `pipe_creator` are the cheapest templates available
+
+Established 2026-10-22 while asking whether the normalised event shape caps
+the template vocabulary. **It does not** — see
+`docs/design/normalised-event-shape-ceiling.md`.
+
+Both templates are blocked by **no source implementing them**, not by
+normalisation, and everything they need is already stored:
+
+| field | events (of 107,668) |
+|---|---|
+| `data.win.eventdata.image` | 46,097 |
+| `data.win.eventdata.processGuid` | 46,097 |
+| `data.win.eventdata.parentImage` | 711 |
+| `data.win.eventdata.parentCommandLine` | 711 |
+| `data.win.eventdata.parentProcessGuid` | 711 |
+| `data.win.eventdata.commandLine` | 1,351 |
+| `data.win.eventdata.pipeName` | **965** |
+
+`FalconSource` declines both correctly — the alerts API holds detections, not
+raw process or pipe events. `SiemSource` could answer both and does not: it
+exposes three host/user-keyed questions and nothing that reads `fields` by
+name.
+
+So the work is a `SiemSource` method that reads a named field out of the
+`fields` list and links parent to child by `parentProcessGuid` →
+`processGuid`. No vendor, no credential, no scope, no new index query — the
+events are already in `alert_log_context`.
+
+Worth doing before any further template design, because it also builds the
+field-reading helper every future Windows template needs.
+
+## 55 — The real template ceiling is a prevalence query, not the shape
+
+"Where else has this value appeared?" cannot be answered by reading a
+retrieved event, however complete it is. `SiemSource` delegates to
+`collect_for_alert`, whose only inputs are `entity_host` and `entity_user`:
+it answers *what happened around this alert* and can never answer *where else
+does this value occur*.
+
+An arbitrary-field search against `wazuh-alerts-4.x-*` is a different call
+and does not exist. Every estate-wide question needs it — service prevalence,
+pipe prevalence, share prevalence, and the SIEM half of hash prevalence. On
+Falcon those questions work only because the alerts API happens to accept a
+filter on `sha256`, `source_ips` and `filename`.
+
+So the cap on the template vocabulary is the **query interface**, not the
+normalisation decision. Two consequences worth stating:
+
+* a prevalence template must name which source can answer it, because the
+  same question is answerable on Falcon and not on Wazuh today;
+* building the search is a bounded piece of work — one client method with the
+  tenant pin, a field name, a value and a window — but it needs the
+  `(rows, total, complete)` discipline from the start, since a prevalence
+  answer that is silently truncated is worse than none.
