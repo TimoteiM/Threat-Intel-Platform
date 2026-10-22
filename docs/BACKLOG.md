@@ -2925,3 +2925,51 @@ answerable either.
 Two options, neither taken: a read-only `cluster:monitor` grant for a
 separate credential, or ask whoever owns the cluster to read it. Until then
 "nothing is under-replicated" is not a claim this platform can make.
+
+## 50 — Falcon API client lacks the IOC scope, so file prevalence is unanswerable
+
+`/indicators/queries/devices/v1` and `/indicators/aggregates/devices-count/v1`
+both return **HTTP 403 "access denied, scope not permitted"** with the
+configured `c00` credential, measured 2026-10-22.
+
+That is the endpoint that answers **"how many machines carry this file"** —
+the best estate-wide prevalence question available, and the one that still
+works when the alerting host has no sensor (16.0% of closed cases).
+
+It is a **credential scope gap, not an API gap**: the fix is adding the IOC
+read scope to the API client in the Falcon console. Small, and a human
+action. Worth asking for alongside the EDR coverage note.
+
+Until then `file_name_prevalence` (`filename:'…'`, control total 9) and
+`hash_prevalence` (`sha256:'…'`, control total 1) are the available
+substitutes — they answer "has this been seen" but not "on how many
+machines".
+
+## 51 — `event_id` is not extracted for the Exabeam shippers
+
+Measured 2026-10-22: **25 of 52 `lin` and `pov` runs carry
+`<EventID>N</EventID>` in the alert body and have no `event_id` in
+`alert_fields`** — `lin` 16 of 20 bodies that contain one, `pov` 9 of 9.
+
+The recoverable ids are ordinary Windows Security events: 4688 (process
+create, 6), 4697 (service installed, 5), 5140/5145 (share access, 7),
+4625 (failed logon, 6), 4624 (logon, 2), 4768 (Kerberos TGT, 1).
+`event_name = Microsoft-Windows-Security-Auditing` on 20 of 24 `lin` runs
+confirms the shape.
+
+**This is why those tenants match no playbook row**, and it was my first
+wrong reading to call it a different event universe. It is an extraction
+gap, and it is **step one** of the Exabeam work because no playbook can key
+on a field that is not extracted — and unlike the connector it needs no
+credential, no vendor and no scope.
+
+None of the seven recoverable ids has a playbook row yet; several map onto
+templates that already exist (`host_logons`, `user_sessions`,
+`user_risk_timeline`).
+
+Separately and worth a look: `rule_name` is **None on all 52 runs**, and 3
+`lin` alerts are titled `[SYNTHETIC - Exabeam raw log unavailable; derived
+from…]`.
+
+See `docs/measurements/indicator-led-and-the-host-panel.md` §3 for the
+ordering and the dependency.

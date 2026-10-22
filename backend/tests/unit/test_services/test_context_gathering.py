@@ -756,3 +756,59 @@ def test_the_sweep_covers_every_public_producer_of_the_stage():
         f"a producer is neither swept nor declared as the detokenising one: "
         f"{producers - (swept | detokenising)}"
     )
+
+
+# ── indicator-led first, host panel demoted ─────────────────────────────────
+
+def test_the_host_panel_is_not_run_on_every_alert():
+    """`host_threat_state` is corroboration, not a headline.
+
+    Measured across the last 400 closed c00 cases: the host carries a
+    non-closed Falcon detection on **15.5%**, carries none on ~68.5%, and
+    **has no sensor at all on 16.0%** — where a "0 open detections" headline
+    is not a low number, it is false.
+
+    Changing `ALWAYS` from two templates to one broke no test, which is why
+    this exists: which templates run on *every* alert is exactly the thing
+    that should fail loudly when someone edits it.
+    """
+    assert "host_threat_state" not in pb.ALWAYS
+    assert pb.CORROBORATING == ("host_threat_state",)
+
+
+def test_indicator_led_templates_run_before_the_class_row():
+    """Estate-wide questions first, because they answer when the host cannot.
+
+    16.0% of closed cases are on a host with no sensor, and on those every
+    host-keyed template is useless while a hash or an address is still
+    answerable estate-wide.
+    """
+    chosen, _ = pb.templates_for("10", {"host": "H", "hash": "X", "ip": "1.2.3.4"})
+    names = [t.name for t in chosen]
+    assert names[0] in pb.INDICATOR_LED, f"indicator-led template not first: {names}"
+    # ...and the host panel last of all.
+    assert names[-1] == "host_threat_state", names
+
+
+def test_every_declared_template_has_a_source_or_is_declined():
+    """A template nobody can answer produces check_failed on every alert.
+
+    Derived rather than listed: the union of what the two connectors answer
+    and what they explicitly decline must cover every template, or a reader
+    gets a source failure for a question that was never askable.
+    """
+    from app.services.context_gathering.falcon_source import (
+        ANSWERS as EDR_ANSWERS, NO_FIELD,
+    )
+    from app.services.context_gathering.siem_source import (
+        ANSWERS as SIEM_ANSWERS, DECLINED,
+    )
+
+    covered = set(EDR_ANSWERS) | set(SIEM_ANSWERS) | set(DECLINED) | set(NO_FIELD)
+    orphans = sorted(set(pb.TEMPLATES) - covered)
+    # `process_tree` and `pipe_creator` are known orphans: Falcon's alerts API
+    # holds detections, not raw process or pipe events, and no SIEM template
+    # exists for them. Named so the set cannot grow silently.
+    assert orphans == ["pipe_creator", "process_tree"], (
+        f"a template has no source and no decline: {orphans}"
+    )

@@ -40,12 +40,26 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.services import absence
 from app.services.context_gathering.mock_source import SourceUnavailable
 
 logger = logging.getLogger(__name__)
 
 #: Templates this source answers. Anything else is declined by name.
-ANSWERS = ("host_threat_state", "host_detections_window", "hash_prevalence")
+ANSWERS = ("host_threat_state", "host_detections_window", "hash_prevalence",
+           "ip_seen_anywhere", "file_name_prevalence")
+
+#: Templates whose field this API does not carry at all. Declined by name
+#: with the measurement, rather than attempted and returned empty — an empty
+#: answer would be a real negative about a field that is absent on 200 of 200
+#: hydrated alerts.
+NO_FIELD = {
+    "domain_seen_anywhere": (
+        "Falcon's alerts API carries no domain field — absent on 200 of 200 "
+        "hydrated alerts measured 2026-10-22, which is why no template for it "
+        "exists"
+    ),
+}
 
 #: How far either side of the alert `host_detections_window` looks. The alert
 #: pipeline's own log window is 10 minutes; detections are rarer than log
@@ -85,7 +99,10 @@ class FalconSource:
         Arguments arrive detokenised: this is past the boundary, and the only
         side of it where a real hostname exists.
         """
-        primary = str(arguments.get("host") or arguments.get("hash") or "")
+        primary = str(
+            arguments.get("host") or arguments.get("hash")
+            or arguments.get("ip") or arguments.get("filename") or ""
+        )
         self.asked.append((template, primary))
 
         if template not in ANSWERS:
@@ -102,7 +119,11 @@ class FalconSource:
                 return self._host_state(primary)
             if template == "host_detections_window":
                 return self._host_detections(primary, arguments)
-            return self._hash_detections(primary)
+            if template == "ip_seen_anywhere":
+                return self._by_filter(f"source_ips:'{_fql(primary)}'", primary)
+            if template == "file_name_prevalence":
+                return self._by_filter(f"filename:'{_fql(primary)}'", primary)
+            return self._by_filter(f"sha256:'{_fql(primary)}'", primary)
         except SourceUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -149,20 +170,40 @@ class FalconSource:
         return resp.json() or {}
 
     def _host_state(self, host: str) -> list[dict[str, Any]]:
-        """The device record. One event describing the sensor, not a detection."""
+        """The device record — and **three states, never one number**.
+
+        Measured across the last 400 closed `c00` cases:
+
+        | state | share | what a "0 open detections" headline would be |
+        |---|---|---|
+        | host carries a non-closed detection | **15.5%** | informative |
+        | host managed, none open | ~68.5% | a real negative, worth saying |
+        | **host has no sensor** | **16.0%** | **false** |
+
+        So this is no longer in `ALWAYS` — it runs last, as corroboration —
+        and the unmanaged case returns an event that says *no sensor* rather
+        than a count. One case in six was being told a number for a machine
+        the EDR has never seen, and a zero that means "not watched" reads
+        identically to a zero that means "watched and clean".
+        """
         from app.integrations import falcon_client as fc
 
         ids = (self._get(fc.DEVICES_PATH,
                          {"filter": f"hostname:'{_fql(host)}'", "limit": 10})
                .get("resources") or [])
         if not ids:
-            # A real negative, and a meaningful one: this host has no Falcon
-            # sensor. `absent` rather than an exception, because "not managed"
-            # is an answer and "could not ask" is not.
+            # `absent`, not a count and not an exception. "Not managed" is an
+            # answer; "could not ask" is not; and "0" is neither.
             return [_event(host, "falcon-unmanaged", {
-                "rule": {"description": "no Falcon sensor for this hostname",
+                "rule": {"description": "NO FALCON SENSOR on this hostname — "
+                                        "the EDR has never seen this machine, "
+                                        "so it reports no detections because "
+                                        "it is not watching, not because it is "
+                                        "clean",
                          "level": 3},
-                "falcon": {"managed": False},
+                "falcon": {"managed": False,
+                           "open_detections": absence.CHECK_FAILED,
+                           "why": "no sensor; a count here would be false"},
             })]
         recs = (self._get("/devices/entities/devices/v2", {"ids": ids[:10]})
                 .get("resources") or [])
@@ -199,12 +240,21 @@ class FalconSource:
                .get("resources") or [])
         return self._hydrate(ids, host)
 
-    def _hash_detections(self, sha256: str) -> list[dict[str, Any]]:
+    def _by_filter(self, flt: str, value: str) -> list[dict[str, Any]]:
+        """One estate-wide indicator query. Not scoped to a host.
+
+        This is the half of the connector that still works when the alerting
+        host has no sensor. Each filter used here was confirmed by a positive
+        control against a value actually present in the estate:
+        `sha256` total 1, `source_ips` total 2, `filename` total 9. A filter
+        that accepts a synthetic value and returns 0 was not accepted as
+        working — `source_ips` looked fine on a made-up address and told us
+        nothing.
+        """
         from app.integrations import falcon_client as fc
 
         ids = (self._get(fc.ALERTS_PATH,
-                         {"filter": f"sha256:'{_fql(sha256)}'",
-                          "limit": MAX_DETECTIONS})
+                         {"filter": flt, "limit": MAX_DETECTIONS})
                .get("resources") or [])
         return self._hydrate(ids, "")
 

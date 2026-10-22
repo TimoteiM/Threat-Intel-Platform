@@ -134,6 +134,43 @@ TEMPLATES: dict[str, QueryTemplate] = {t.name: t for t in (
     #
     # Two declared calls — the id query and the hydrate, which is what
     # `FalconSource._host_detections` really spends.
+    # ── indicator-led, added 2026-10-22. **Estate-wide and still answerable
+    # when the alerting host has no sensor**, which is 16.0% of the last 400
+    # closed c00 cases — the cases where every host-led template is useless.
+    #
+    # Each one is here because a positive control returned non-zero against a
+    # value that is actually in the estate. A filter that accepts a synthetic
+    # value and returns 0 proves nothing, and two of the three originally
+    # asked for failed exactly that way:
+    #
+    #   sha256:'<real>'      -> total 1   USABLE  (hash_prevalence, existing)
+    #   source_ips:'<real>'  -> total 2   USABLE  (ip_seen_anywhere)
+    #   filename:'<real>'    -> total 9   USABLE  (file_name_prevalence)
+    #   md5:'<real>'         -> total 8   USABLE
+    #   domain               -> field absent on 200/200 alerts, 0% fill
+    #   indicators/queries/devices/v1 -> HTTP 403 scope not permitted
+    #
+    # So "has any host contacted this domain" has **no template**, because the
+    # field does not exist — the falcon-panel note already called that
+    # `no_field_map` and the probe confirms it. And "how many machines carry
+    # this file" is a **credential scope gap**, not an API gap: it needs the
+    # IOC scope added in the Falcon console, which is a human action.
+    QueryTemplate(
+        name="ip_seen_anywhere",
+        purpose="whether any host in the estate has an alert naming this address",
+        selectors=("ip",),
+        source_kind=EDR,
+        declared_calls=2,
+        pivotable=True,
+    ),
+    QueryTemplate(
+        name="file_name_prevalence",
+        purpose="whether this filename appears on other hosts in the estate",
+        selectors=("filename",),
+        source_kind=EDR,
+        declared_calls=2,
+        pivotable=True,
+    ),
     QueryTemplate(
         name="host_detections_window",
         purpose="what the EDR itself flagged on this host around the alert",
@@ -194,7 +231,30 @@ PLAYBOOK: dict[str, tuple[str, ...]] = {
 #: Run for every class, when the key is present. The design note's "*any*"
 #: row: a host's threat state and a user's risk score are cheap and always
 #: worth having.
-ALWAYS: tuple[str, ...] = ("host_threat_state", "user_risk_timeline")
+#: **`host_threat_state` is no longer in here.** Measured across the last 400
+#: closed c00 cases: the host carries a non-closed Falcon detection on
+#: **15.5%**, carries none on ~68.5%, and **has no sensor at all on 16.0%** —
+#: where a "0 open detections" headline is not a low number, it is false.
+#: Running it unconditionally on every alert made a non-discriminating panel
+#: the first thing a reader saw. It is still run where it can corroborate (see
+#: `CORROBORATING`), and `FalconSource` now refuses to report a count for an
+#: unmanaged host without saying so in the same breath.
+#: **Run FIRST, before the class row.** Estate-wide questions keyed on an
+#: indicator rather than on the alerting host, so they still answer when that
+#: host has no sensor — 16.0% of the last 400 closed c00 cases. Each is
+#: evidenced by a positive control against a value actually in the estate;
+#: see the template comments for the probe results and for the two questions
+#: that have no template (domain: field absent; device-count-per-hash: HTTP
+#: 403, credential scope).
+INDICATOR_LED: tuple[str, ...] = (
+    "hash_prevalence", "ip_seen_anywhere", "file_name_prevalence",
+)
+
+ALWAYS: tuple[str, ...] = ("user_risk_timeline",)
+
+#: Run after the indicator-led templates, and only then: a host's threat state
+#: is worth having as corroboration of a real negative, not as a headline.
+CORROBORATING: tuple[str, ...] = ("host_threat_state",)
 
 
 class NoPlaybookRow(LookupError):
@@ -242,7 +302,11 @@ def templates_for(
     chosen: list[QueryTemplate] = []
     skipped: list[dict[str, str]] = []
     seen: set[str] = set()
-    for name in (*row, *ALWAYS):
+    # Order is load-bearing: the playbook row first, then the always-run
+    # user template, then the corroborating host panel LAST. The record and
+    # the report are read top-down, so a non-discriminating panel placed
+    # first is the thing a reader sees first.
+    for name in (*INDICATOR_LED, *row, *ALWAYS, *CORROBORATING):
         if name in seen:
             continue
         seen.add(name)
