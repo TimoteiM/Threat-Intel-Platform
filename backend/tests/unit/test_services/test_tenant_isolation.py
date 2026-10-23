@@ -773,3 +773,127 @@ def test_the_cases_cache_is_not_shared_between_clients(monkeypatch):
     assert len(calls) == 2
     assert calls[0].all_tenants is True
     assert calls[1].all_tenants is False
+
+
+# --- the Reports client list (2026-10-23) -----------------------------------
+#
+# Reported from the UI: the Reports dropdown showed `pov (15)` while the
+# Alerts page showed `pov (41)` for the same client, and `boc` was absent
+# altogether. One cause: the list was derived from `AlertCaseSpine` alone, so
+# the number was a CASE count in the same `name (N)` shape the Alerts page
+# uses for a RUN count, and a tenant with alerts but no cases was not an
+# option at all. Measured: boc had 1 alert and 0 cases.
+#
+# The fix derives the list from alerts AS WELL AS cases. That widens what is
+# counted, and the danger is that it also widens what a caller may READ — so
+# the isolation direction is tested first and hardest.
+
+def test_the_alert_derived_client_list_is_still_scoped():
+    """The new alert count must be scoped exactly like the case count.
+
+    A client user who can read `c00` must not learn that `lin` exists by way
+    of a count appearing in a dropdown. This is the half of the Reports fix
+    that could leak, so it is asserted on the SQL rather than on a result.
+    """
+    from app.models.database import AlertBodyInvestigationRun
+
+    scope = ts.scope_of(CLIENT_A)
+    sql = str(
+        ts.apply(
+            select(AlertBodyInvestigationRun.tenant_id),
+            AlertBodyInvestigationRun.tenant_id,
+            scope,
+        ).compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "where" in sql, "the alert count query must carry a tenant filter"
+    assert "'c00'" in sql
+    assert "'lin'" not in sql, "another client's tenant reached the scoped query"
+
+
+def test_an_account_with_no_tenants_counts_nothing_rather_than_everything():
+    """The complement, and the classic failure: an empty IN () list drops the
+    filter and the count query silently becomes estate-wide."""
+    from app.models.database import AlertBodyInvestigationRun
+
+    sql = str(
+        ts.apply(
+            select(AlertBodyInvestigationRun.tenant_id),
+            AlertBodyInvestigationRun.tenant_id,
+            ts.scope_of(BROKEN),
+        ).compile(compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "false" in sql
+
+
+def test_internal_staff_still_see_an_unfiltered_alert_count():
+    """And the dangerous-direction complement: the scoping must still ACCEPT.
+
+    A filter that refuses everything would make every count zero and look
+    like a data problem rather than a permissions one.
+    """
+    from app.models.database import AlertBodyInvestigationRun
+
+    sql = str(
+        ts.apply(
+            select(AlertBodyInvestigationRun.tenant_id),
+            AlertBodyInvestigationRun.tenant_id,
+            ts.scope_of(INTERNAL),
+        ).compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "WHERE" not in sql
+
+
+def test_a_tenant_with_alerts_and_no_cases_is_still_an_option():
+    """The reported defect, exactly. `boc`: 1 alert, 0 cases, absent entirely.
+
+    "No cases yet" was rendered as "no such client", so the one tenant whose
+    alerts had not correlated into anything could not be selected — which is
+    the state a reader most needs to be able to look at.
+    """
+    from app.api.detections import _merge_client_counts
+
+    clients = _merge_client_counts({"c00": 2260}, {"c00": 16978, "boc": 1})
+    by_id = {c["tenant_id"]: c for c in clients}
+    assert "boc" in by_id, "a tenant with alerts and no cases vanished"
+    assert by_id["boc"] == {
+        "tenant_id": "boc", "label": "boc", "cases": 0, "alerts": 1,
+    }
+
+
+def test_both_counts_are_carried_and_named():
+    """The other half: a bare number whose unit the reader had to infer."""
+    from app.api.detections import _merge_client_counts
+
+    for client in _merge_client_counts({"pov": 15}, {"pov": 41}):
+        assert client["cases"] == 15 and client["alerts"] == 41
+
+
+def test_a_tenant_with_cases_and_no_alerts_survives_too():
+    """The mirror of the fix, so the union is a union and not a swap.
+
+    Deriving from alerts INSTEAD of cases would pass the boc test and quietly
+    drop any tenant whose alerts have been pruned while its cases remain.
+    """
+    from app.api.detections import _merge_client_counts
+
+    ids = {c["tenant_id"] for c in _merge_client_counts({"old": 7}, {"new": 3})}
+    assert ids == {"old", "new"}
+
+
+def test_the_unassigned_bucket_keeps_its_sentinel_and_label():
+    from app.api.detections import _merge_client_counts
+
+    [client] = _merge_client_counts({None: 394}, {None: 1045})
+    assert client["tenant_id"] == "__unassigned__"
+    assert client["label"] == "Unassigned"
+
+
+def test_the_option_order_is_total_so_it_does_not_shuffle_between_requests():
+    """Two tenants with identical counts came back in set order, which is not
+    stable. A dropdown that reorders itself between loads is read as data
+    changing."""
+    from app.api.detections import _merge_client_counts
+
+    a = _merge_client_counts({"x": 5, "y": 5}, {"x": 9, "y": 9})
+    b = _merge_client_counts({"y": 5, "x": 5}, {"y": 9, "x": 9})
+    assert [c["tenant_id"] for c in a] == [c["tenant_id"] for c in b] == ["x", "y"]

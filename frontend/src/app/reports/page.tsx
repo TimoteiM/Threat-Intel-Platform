@@ -212,9 +212,14 @@ function ReportsPageInner() {
               <span style={caption}>Client</span>
               <select value={client} onChange={(e) => write({ client: e.target.value })} style={control}>
                 <option value="all">All clients</option>
+                {/* The unit is stated. A bare `(15)` here sat beside a bare
+                    `(41)` on the Alerts page for the same client — cases
+                    against runs — and read as the two pages disagreeing. */}
                 {(options?.clients || []).map((c) => (
                   <option key={c.tenant_id} value={c.tenant_id}>
-                    {c.label} ({c.cases.toLocaleString()})
+                    {c.label} ({c.cases.toLocaleString()} cases
+                    {" · "}
+                    {(c.alerts ?? 0).toLocaleString()} alerts)
                   </option>
                 ))}
               </select>

@@ -634,7 +634,11 @@ export function refreshAlertLogs(runId: string) {
 
 export interface CaseReportOptions {
   months: Array<{ month: string; cases: number }>;
-  clients: Array<{ tenant_id: string; label: string; cases: number }>;
+  /** `cases` and `alerts` are both carried because the option label has to
+   *  say which one it is showing. The Alerts page's own client filter puts a
+   *  RUN count in the same `name (N)` shape this page put a CASE count in,
+   *  and neither said so — which read as the two pages disagreeing. */
+  clients: Array<{ tenant_id: string; label: string; cases: number; alerts: number }>;
   scope: { all_tenants: boolean };
 }
 

@@ -852,6 +852,39 @@ def _serialize(row: AnalystFeedback) -> dict[str, Any]:
     }
 
 
+def _merge_client_counts(
+    case_counts: dict[str | None, int],
+    alert_counts: dict[str | None, int],
+) -> list[dict[str, Any]]:
+    """One option per tenant that has EITHER cases or alerts.
+
+    A separate function so the union is testable. The defect it fixes was
+    reported from the UI on 2026-10-23: the list came from cases alone, so
+    `boc` — 1 alert, 0 cases — was not an option, and "no cases yet" was
+    rendered as "no such client".
+
+    Both counts are carried and both are named, because the other half of the
+    same report was a bare `(15)` here sitting beside a bare `(41)` on the
+    Alerts page for the same client: a case count and a run count in the same
+    shape, neither saying which it was.
+    """
+    clients = [
+        {
+            "tenant_id": tenant_id or "__unassigned__",
+            "label": tenant_id or "Unassigned",
+            "cases": case_counts.get(tenant_id, 0),
+            "alerts": alert_counts.get(tenant_id, 0),
+        }
+        for tenant_id in set(case_counts) | set(alert_counts)
+    ]
+    # Cases first — this page is keyed on them — then alerts, so a tenant with
+    # alerts and no cases sorts below the working ones but is still present.
+    # `label` last so the order is total: two tenants with identical counts
+    # would otherwise come back in set order, which is not stable across runs.
+    clients.sort(key=lambda c: (-c["cases"], -c["alerts"], c["label"]))
+    return clients
+
+
 def _case_tenant_clause(scope: "tenant_scope.TenantScope") -> tuple[Any, ...]:
     """Restrict cases to the clients this caller may read.
 
@@ -970,28 +1003,60 @@ async def report_options(
         )
     ).all()
 
-    tenants = (
-        await db.execute(
-            select(
-                AlertCaseSpine.tenant_id,
-                func.count().label("cases"),
+    case_counts = {
+        t: int(c)
+        for t, c in (
+            await db.execute(
+                select(AlertCaseSpine.tenant_id, func.count().label("cases"))
+                .where(*_case_tenant_clause(scope))
+                .group_by(AlertCaseSpine.tenant_id)
             )
-            .where(*_case_tenant_clause(scope))
-            .group_by(AlertCaseSpine.tenant_id)
-            .order_by(sa_desc("cases"))
-        )
-    ).all()
+        ).all()
+    }
+
+    # **Alert counts too, and the client list derived from ALERTS as well as
+    # cases.** Reported 2026-10-23: the dropdown showed `pov (15)` beside an
+    # Alerts page showing `pov (41)`, and `boc` was missing from this page
+    # altogether. Both symptoms are one cause — this list was built from
+    # `AlertCaseSpine` alone, so:
+    #
+    #   * the number was a CASE count sitting in the same `name (N)` shape the
+    #     Alerts page uses for a RUN count, with no unit on either, and
+    #   * a tenant whose alerts have not correlated into any case did not
+    #     exist as an option. Measured: `boc` has 1 alert and 0 cases, so the
+    #     only client that could be selected for it was no client at all.
+    #
+    # The second is the absence-as-value shape — "no cases yet" rendered as
+    # "no such client" — and it is the one that loses data rather than merely
+    # confusing a reader. A report for a tenant with alerts and no cases is a
+    # meaningful thing to run; it says the alerts arrived and nothing
+    # correlated.
+    #
+    # Scope is applied to the alert query the same way it is to the case
+    # query, through `tenant_scope.apply`, so this widens what is COUNTED and
+    # never what a caller may read.
+    from app.models.database import AlertBodyInvestigationRun
+
+    alert_counts = {
+        t: int(n)
+        for t, n in (
+            await db.execute(
+                tenant_scope.apply(
+                    select(
+                        AlertBodyInvestigationRun.tenant_id, func.count()
+                    ).group_by(AlertBodyInvestigationRun.tenant_id),
+                    AlertBodyInvestigationRun.tenant_id,
+                    scope,
+                )
+            )
+        ).all()
+    }
+
+    clients = _merge_client_counts(case_counts, alert_counts)
 
     return {
         "months": [{"month": m, "cases": int(c)} for m, c in months if m],
-        "clients": [
-            {
-                "tenant_id": t or "__unassigned__",
-                "label": t or "Unassigned",
-                "cases": int(c),
-            }
-            for t, c in tenants
-        ],
+        "clients": clients,
         "scope": {"all_tenants": bool(getattr(scope, "all_tenants", False))},
     }
 
