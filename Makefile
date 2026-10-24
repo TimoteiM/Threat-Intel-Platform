@@ -36,6 +36,10 @@ test:
 investigate:
 	cd backend && python -m scripts.run_single_investigation $(domain)
 
+# Print a stored investigation as JSON (requires Postgres)
+get-investigation:
+	cd backend && python -m scripts.get_investigation $(id)
+
 # Seed test data
 seed:
 	cd backend && python -m scripts.seed_test_data

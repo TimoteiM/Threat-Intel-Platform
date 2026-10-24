@@ -38,6 +38,26 @@ class TestDNSCollector:
             assert evidence.a == []
             assert evidence.ns == []
 
+    def test_partial_failure_still_completes(self):
+        """Some lookups erroring while others answer is not a collector failure."""
+        import dns.resolver
+
+        def resolve(name, rtype):
+            if rtype == "A":
+                raise Exception("DNS timeout")
+            raise dns.resolver.NoAnswer()
+
+        with patch("app.collectors.dns_collector.dns.resolver.Resolver") as mock_resolver:
+            mock_instance = MagicMock()
+            mock_resolver.return_value = mock_instance
+            mock_instance.resolve.side_effect = resolve
+
+            collector = DNSCollector("example.com", "test-001")
+            evidence, meta, artifacts = collector.run()
+
+            assert meta.status.value == "completed"
+            assert meta.error is None
+
 
 class TestDNSCollectorParsing:
 
