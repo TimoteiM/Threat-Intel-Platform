@@ -38,6 +38,7 @@ class DNSCollector(BaseCollector):
         }
 
         all_records: list[DNSRecord] = []
+        lookup_errors: list[Exception] = []
 
         for rtype, field_name in record_map.items():
             try:
@@ -61,6 +62,12 @@ class DNSCollector(BaseCollector):
                 pass
             except Exception as e:
                 logger.debug(f"DNS {rtype} lookup failed for {self.domain}: {e}")
+                lookup_errors.append(e)
+
+        # Every lookup errored (timeout, no network) — report a failed collector
+        # instead of empty-but-completed evidence
+        if len(lookup_errors) == len(record_map):
+            raise lookup_errors[-1]
 
         # ── DMARC (TXT record at _dmarc.{domain}) ──
         try:
