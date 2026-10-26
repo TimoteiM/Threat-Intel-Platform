@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, HTTPException, Path as FastAPIPath, Query, 
 from starlette.concurrency import run_in_threadpool
 
 from app.services import absence
+from app.services import tenant_feed
 from app.services import tenant_scope
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -653,6 +654,24 @@ def _validated_tenant_id(declared: Any) -> str:
     return value
 
 
+async def _feed_kind_of(db: DBSession, tenant_id: str) -> str | None:
+    """This tenant's declared feed kind, or None when there is no row yet.
+
+    `None` rather than the default string, so the caller can tell "no tenant
+    row" from "a tenant that declares alerts" — `tenant_feed.normalise` maps
+    both to `alerts`, but only one of them is a thing somebody decided.
+
+    A tenant provisioned by an arriving alert has no declaration yet and
+    therefore gets `alerts`, which is the safe direction: it goes through
+    correlation rather than minting a case per row.
+    """
+    return (
+        await db.execute(
+            select(Tenant.feed_kind).where(Tenant.tenant_id == tenant_id)
+        )
+    ).scalars().first()
+
+
 async def _provision_tenant(db: DBSession, tenant_id: str) -> None:
     """Create a tenant the first time alerts arrive for it.
 
@@ -762,6 +781,9 @@ async def _create_alert_run(
     entity_host, entity_user = entity_of(alert_fields)
     alert_source = source_of(alert_fields, declared=(request.source or "").strip() or None)
     alert_client = client_of(alert_fields, declared=(request.client or "").strip() or None)
+    # Provisional: what the PAYLOAD says. The tenant's own declaration is
+    # applied after `resolve_for_ingest` below, because the tenant is not known
+    # until then — see the comment there.
     alert_kind = "incident" if is_pre_correlated(alert_fields) else "alert"
     # Falls back to now(): the run's own created_at is not assigned until the
     # row is flushed, and "when we received it" is the same instant.
@@ -837,6 +859,25 @@ async def _create_alert_run(
             "Provisioned tenant %r from an incoming alert (assignment=%s)",
             assignment.tenant_id, assignment.assignment,
         )
+
+    # **The tenant's own declaration, applied here because the tenant is not
+    # known until `resolve_for_ingest` above has run.**
+    #
+    # `is_pre_correlated` asks whether the payload LOOKS pre-correlated, and
+    # for these senders it cannot: measured across all 111 lin/pov/boc runs,
+    # neither `entity_type` nor `event_count` is present on a single one. The
+    # feed is an incident feed and the payload does not say so, so the fact is
+    # read from `tenants.feed_kind` where whoever configured the feed put it.
+    #
+    # Only ever an upgrade. A payload that declared itself pre-correlated is
+    # not demoted because its tenant is an `alerts` feed — the sender knows
+    # something about that specific payload that the feed-level setting does
+    # not.
+    if alert_kind != "incident" and assignment.tenant_id:
+        if tenant_feed.emits_incidents(
+            await _feed_kind_of(db, assignment.tenant_id)
+        ):
+            alert_kind = "incident"
 
     run = AlertBodyInvestigationRun(
         title=_run_title(request.title, alert_body),

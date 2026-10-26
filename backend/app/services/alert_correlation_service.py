@@ -808,7 +808,27 @@ async def correlate_alerts(
     scoped = (
         tenant_scope.apply(
             select(*_RUN_COLUMNS, _EVT.label("evt"), entity_latest.label("entity_latest"))
-            .where(AlertBodyInvestigationRun.entity_host.isnot(None)),
+            # **A host is required to GROUP, and an incident is not grouped.**
+            #
+            # The non-incident key is (source, client, entity_host), so a null
+            # host there would pool every hostless alert in the estate into one
+            # bucket — which is what this filter has always been protecting
+            # against, and it still does.
+            #
+            # An incident is keyed on its own row id and forms a case of one,
+            # so it needs no host at all. The incident branch below says so
+            # explicitly, with `entity_host or 'unknown'` — and that expression
+            # was unreachable, because this line removed every hostless row
+            # before the branch could see one. The tolerance was declared and
+            # prevented in the same function.
+            #
+            # Measured 2026-10-26: with the filter unconditional, 111
+            # incident-kind runs across lin/pov/boc produced 31 cases — exactly
+            # their 31 HOSTED runs. The other 80 were silently absent.
+            .where(
+                AlertBodyInvestigationRun.entity_host.isnot(None)
+                | (AlertBodyInvestigationRun.alert_kind == "incident")
+            ),
             AlertBodyInvestigationRun.tenant_id,
             scope,
         )

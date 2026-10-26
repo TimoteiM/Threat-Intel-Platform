@@ -538,6 +538,16 @@ class Tenant(Base):
     #: is for a tenant whose owner genuinely cannot be established — both
     #: Exabeam credentials are currently in that state.
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="customer")
+    #: `alerts` or `incidents`. Whether this tenant's feed sends single alerts
+    #: to be correlated, or payloads that are already cases. See migration 075
+    #: and `app/services/tenant_feed.py`.
+    #:
+    #: Declared, not inferred: measured across all 111 `lin`/`pov`/`boc` runs,
+    #: neither field `is_pre_correlated` looks for is present on any of them,
+    #: so there is nothing in the payload to detect. `alerts` is the default
+    #: because minting a case per row for a feed nobody has classified is the
+    #: more expensive mistake.
+    feed_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="alerts")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

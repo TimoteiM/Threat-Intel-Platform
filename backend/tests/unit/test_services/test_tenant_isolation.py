@@ -897,3 +897,65 @@ def test_the_option_order_is_total_so_it_does_not_shuffle_between_requests():
     a = _merge_client_counts({"x": 5, "y": 5}, {"x": 9, "y": 9})
     b = _merge_client_counts({"y": 5, "x": 5}, {"y": 9, "x": 9})
     assert [c["tenant_id"] for c in a] == [c["tenant_id"] for c in b] == ["x", "y"]
+
+
+# --- feed kind: alerts or incidents (2026-10-26) -----------------------------
+
+def test_an_unrecognised_feed_kind_raises_rather_than_defaulting():
+    """The dangerous direction. The database CHECK refuses these, so one
+    arriving here means something wrote around the constraint — and reading it
+    as `alerts` would hide that."""
+    from app.services import tenant_feed
+
+    with pytest.raises(tenant_feed.UnknownFeedKind):
+        tenant_feed.normalise("incident")       # singular: not the stored value
+    with pytest.raises(tenant_feed.UnknownFeedKind):
+        tenant_feed.normalise("nonsense")
+
+
+def test_absent_is_not_wrong_and_still_resolves_to_alerts():
+    """The complement: a tenant row predating the column, or no row at all,
+    must still be readable. A validator that refuses everything is as useless
+    as one that refuses nothing."""
+    from app.services import tenant_feed
+
+    assert tenant_feed.normalise(None) == tenant_feed.ALERTS
+    assert tenant_feed.normalise("") == tenant_feed.ALERTS
+    assert tenant_feed.normalise("  ") == tenant_feed.ALERTS
+    assert tenant_feed.normalise("incidents") == tenant_feed.INCIDENTS
+    assert tenant_feed.emits_incidents("incidents") is True
+    assert tenant_feed.emits_incidents(None) is False
+
+
+def test_the_default_is_alerts_because_inventing_cases_is_the_worse_error():
+    """An unclassified feed goes through correlation, which produces nothing
+    new. Treating it as incidents would mint a case per row."""
+    from app.services import tenant_feed
+
+    assert tenant_feed.DEFAULT == tenant_feed.ALERTS
+    assert set(tenant_feed.FEED_KINDS) == {"alerts", "incidents"}
+
+
+def test_a_hostless_alert_is_still_excluded_from_correlation():
+    """**The protection that must survive the fix.**
+
+    The non-incident grouping key is (source, client, entity_host). A null
+    host there would pool every hostless alert in the estate into one bucket,
+    which is what the `entity_host IS NOT NULL` filter has always prevented.
+    Relaxing it for incidents must not relax it for alerts — there are 2,545
+    hostless c00 runs that would otherwise collapse into a single case.
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.models.database import AlertBodyInvestigationRun as R
+
+    clause = (
+        R.entity_host.isnot(None) | (R.alert_kind == "incident")
+    )
+    sql = str(
+        sa_select(R.id).where(clause).compile(
+            compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "entity_host is not null" in sql
+    assert "alert_kind = 'incident'" in sql
+    assert " or " in sql, "the two conditions must be an OR, not a replacement"
