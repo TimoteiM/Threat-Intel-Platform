@@ -50,7 +50,17 @@ _ARTEFACT_HOSTS = (
 # ── Link rewriters ───────────────────────────────────────────────────────────
 # Security gateways and mailers rewrite links. The wrapper tells you about the
 # gateway; the parameter inside tells you about the threat.
-_WRAPPER_PARAMS = ("url", "u", "q", "target", "redirect", "redirect_url", "dest", "destination")
+#: `a` is Barracuda linkprotect's destination parameter. Without it
+#: `linkprotect.cudasvc.com` was listed as a wrapper host and could never
+#: actually be unwrapped — the host matched, no parameter did, and the
+#: function returned the wrapper. Listed-but-inert, found 2026-10-26 when a
+#: nested ATP/linkprotect URL unwrapped one layer and stopped.
+#:
+#: A bare `a` is a generic name, but it is only ever read on a URL whose host
+#: already matched `_WRAPPER_HOSTS`, so the looseness is bounded to known
+#: rewriters.
+_WRAPPER_PARAMS = ("url", "u", "q", "a", "target", "redirect", "redirect_url",
+                   "dest", "destination")
 _WRAPPER_HOSTS = (
     "safelinks.protection.outlook.com",
     "urldefense.com",
@@ -59,6 +69,19 @@ _WRAPPER_HOSTS = (
     "protect-us.mimecast.com",
     "clicktime.symantec.com",
     "linkprotect.cudasvc.com",
+    # Hornetsecurity ATP scan. Added 2026-10-26 from a real submission that
+    # nested two rewriters: the ATP wrapper carried a `linkprotect.cudasvc.com`
+    # URL, which carried the actual destination double-percent-encoded. Without
+    # this entry the outer layer was not recognised, `unwrap_url` returned the
+    # URL unchanged, and the indicator investigated would have been
+    # Hornetsecurity's gateway — which is always benign and says nothing about
+    # the mail.
+    #
+    # Matched as a bare domain rather than `atpscan.global.` because the host
+    # is regionalised. Matching is substring over host+path, and the function
+    # only rewrites when a wrapper parameter actually holds an http(s) URL, so
+    # an ordinary hornetsecurity.com link is left alone.
+    "hornetsecurity.com",
     "www.google.com/url",
 )
 

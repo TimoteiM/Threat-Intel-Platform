@@ -32,6 +32,14 @@ from app.services.proxy_profiles import is_configured_network_country
 
 logger = logging.getLogger(__name__)
 
+#: The widest observable `investigations.domain` can hold, and therefore the
+#: widest this service accepts. Kept equal to the column (migration 076) and
+#: to `iocs.value` / `indicator_lookups.value`, which were already this wide.
+#:
+#: If the column ever changes, this must change with it — the two disagreeing
+#: is how an input error becomes a 500, which is exactly what happened at 512.
+MAX_OBSERVABLE_CHARS = 2048
+
 settings = get_settings()
 
 
@@ -153,6 +161,28 @@ class InvestigationService:
             domain = request.domain.strip()
             if not domain:
                 raise ValueError("Observable value cannot be empty")
+            # **Length is checked here, not left to the column.**
+            #
+            # Reported 2026-10-26: an 819-character Hornetsecurity ATP-scan URL
+            # returned an internal error. `investigations.domain` was
+            # varchar(512), so the insert raised StringDataRightTruncation,
+            # which SQLAlchemy surfaces as DataError — and `DataError` is not a
+            # `ValueError`, so the endpoint's `except ValueError` missed it and
+            # the analyst got a 500 for an input problem they could have fixed.
+            #
+            # Migration 076 widened the column to 2048 (the width `iocs.value`
+            # and `indicator_lookups.value` already use). This check is what
+            # keeps the *next* over-long value a 400 with a usable message
+            # rather than another 500: a limit enforced only by a column tells
+            # the caller nothing.
+            if len(domain) > MAX_OBSERVABLE_CHARS:
+                raise ValueError(
+                    f"This {observable_type} is {len(domain):,} characters, "
+                    f"over the {MAX_OBSERVABLE_CHARS:,} limit. Mail-security "
+                    f"rewrapping (ATP scan, linkprotect) can produce URLs this "
+                    f"long — submit the destination URL carried inside it "
+                    f"rather than the wrapper."
+                )
 
         # Validate client_domain if provided (always a domain)
         client_domain = None

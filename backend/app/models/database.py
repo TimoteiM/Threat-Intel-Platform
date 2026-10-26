@@ -70,7 +70,15 @@ class Investigation(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    domain: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    #: The observable, whatever its type — a domain, an IP, a hash, or a URL.
+    #:
+    #: 2048, matching `iocs.value` and `indicator_lookups.value`, and matching
+    #: `investigation_service.MAX_OBSERVABLE_CHARS`, which has a test asserting
+    #: the two are equal. At 512 an 819-character mail-rewrapped URL raised
+    #: StringDataRightTruncation at the insert, which is a DataError and not a
+    #: ValueError, so the endpoint returned 500 for an input error. See
+    #: migration 076.
+    domain: Mapped[str] = mapped_column(String(2048), nullable=False, index=True)
     observable_type: Mapped[str] = mapped_column(
         String(20), nullable=False, index=True, default="domain"
     )
@@ -416,10 +424,13 @@ class Exclusion(Base):
     # domain | ip | url | hash — what `value` is, so a hash and a domain that
     # happen to look alike never match each other.
     indicator_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # As the analyst typed it, kept for display.
-    value: Mapped[str] = mapped_column(String(512), nullable=False)
+    # As the analyst typed it, kept for display. 2048 to match
+    # `investigations.domain` — these hold the same observables, so a URL that
+    # can be investigated must also be excludable. Both were 512 until
+    # migration 076.
+    value: Mapped[str] = mapped_column(String(2048), nullable=False)
     # Lower-cased, defanged, IDNA-normalised — what matching actually compares.
-    normalized_value: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(2048), nullable=False)
     # Why this is safe to skip. Required: an unexplained whitelist entry is how
     # a real detection gets silenced for a year without anyone noticing.
     reason: Mapped[str] = mapped_column(Text, nullable=False)

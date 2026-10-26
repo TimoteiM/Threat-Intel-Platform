@@ -151,3 +151,65 @@ def test_a_bare_ip_and_a_punycode_host_are_always_prioritised():
     chosen = {entry.domain for entry in result["selected"]}
     assert "192.0.2.44" in chosen
     assert "xn--80ak6aa92e.test" in chosen
+
+
+# --- nested rewriters (2026-10-26) ------------------------------------------
+
+def test_a_hornetsecurity_atp_wrapper_is_unwrapped():
+    """Reported from a real submission. The ATP wrapper was not in
+    `_WRAPPER_HOSTS`, so `unwrap_url` returned it unchanged and the indicator
+    investigated would have been Hornetsecurity's gateway — always benign, and
+    silent about the mail it rewrote."""
+    from app.services.email_url_triage import unwrap_url
+
+    url = ("https://atpscan.global.hornetsecurity.com/?d=x&k=y"
+           "&u=https%3A%2F%2Fevil-probe.example%2Flogin")
+    destination, wrapper = unwrap_url(url)
+    assert wrapper == "atpscan.global.hornetsecurity.com"
+    assert destination == "https://evil-probe.example/login"
+
+
+def test_barracuda_linkprotect_was_listed_but_inert():
+    """`linkprotect.cudasvc.com` was in `_WRAPPER_HOSTS` and could never be
+    unwrapped: its destination parameter is `a`, which was not in
+    `_WRAPPER_PARAMS`. The host matched, no parameter did, and the function
+    returned the wrapper — listed support that did nothing.
+    """
+    from app.services.email_url_triage import unwrap_url
+
+    url = "https://linkprotect.cudasvc.com/url?a=https%3A%2F%2Fevil-probe.example%2Fx&c=E,1,abc"
+    destination, wrapper = unwrap_url(url)
+    assert wrapper == "linkprotect.cudasvc.com"
+    assert destination == "https://evil-probe.example/x"
+
+
+def test_two_rewriters_nested_resolve_to_the_real_destination():
+    """The reported URL's actual shape: an ATP wrapper carrying a linkprotect
+    URL carrying the destination, double-percent-encoded. Both layers must
+    come off, or the answer is about a gateway."""
+    from app.services.email_url_triage import unwrap_url
+
+    inner = "https%253a%252f%252fevil-probe.example"
+    url = ("https://atpscan.global.hornetsecurity.com/?d=x"
+           f"&u=https%3A%2F%2Flinkprotect.cudasvc.com%2Furl%3Fa%3D{inner}"
+           "%26amp%3Bc%3DE%2C1%2Cabc%26amp%3Btypo%3D1")
+    destination, wrapper = unwrap_url(url)
+    assert destination == "https://evil-probe.example", destination
+    assert wrapper == "atpscan.global.hornetsecurity.com"
+
+
+def test_unwrapping_does_not_touch_ordinary_urls():
+    """The complement, and the reason `a` is safe to accept: a parameter is
+    only read once the HOST has matched a known rewriter. A rule that rewrote
+    any `?a=` would be worse than not unwrapping at all."""
+    from app.services.email_url_triage import unwrap_url
+
+    for url in (
+        "https://www.hornetsecurity.com/en/services/atp/",   # a real page there
+        "https://example.com/?a=https://elsewhere.example",  # a= off a wrapper host
+        "https://example.com/search?q=hello",
+        "https://example.com/?u=not-a-url",
+    ):
+        destination, wrapper = unwrap_url(url)
+        assert destination == url, f"rewrote {url} -> {destination}"
+        assert wrapper is None
