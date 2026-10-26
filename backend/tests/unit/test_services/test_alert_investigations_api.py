@@ -64,11 +64,36 @@ def _export(run_id="11111111-2222-3333-4444-555555555555", **kwargs):
 
 
 class _IngestDB(_FakeDBBase := object):
-    """Enough AsyncSession for the create path: add / commit / refresh."""
+    """Enough AsyncSession for the create path: add / commit / refresh / execute.
+
+    `execute` was added 2026-10-26 when ingest began reading
+    `tenants.feed_kind` to decide whether a payload is an incident. It returns
+    an empty result, which is the honest answer for these tests: they ingest
+    for tenants that have no row, and a tenant with no declaration is an
+    `alerts` feed. A stub that raised instead would have made every ingest
+    test fail for a reason unrelated to what it asserts; a stub that returned
+    `"incidents"` would have quietly re-classified every alert in the suite.
+    """
+
+    #: What `scalars().first()` yields. Overridable per-test, so a test that
+    #: wants an incident feed can say so rather than monkeypatching the query.
+    feed_kind = None
 
     def __init__(self):
         self.added = []
         self.commits = 0
+
+    async def execute(self, _statement):
+        feed_kind = self.feed_kind
+
+        class _Result:
+            def scalars(self):
+                class _Scalars:
+                    def first(self_inner):
+                        return feed_kind
+                return _Scalars()
+
+        return _Result()
 
     def add(self, row):
         row.id = UUID("99999999-9999-9999-9999-999999999999")

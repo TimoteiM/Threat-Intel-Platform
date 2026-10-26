@@ -665,6 +665,11 @@ async def _feed_kind_of(db: DBSession, tenant_id: str) -> str | None:
     therefore gets `alerts`, which is the safe direction: it goes through
     correlation rather than minting a case per row.
     """
+    # Imported here, like every other `Tenant` use in this module. The first
+    # version relied on a module-level name that does not exist and raised
+    # NameError on the ingest path — caught by the suite, not by reading it.
+    from app.models.database import Tenant
+
     return (
         await db.execute(
             select(Tenant.feed_kind).where(Tenant.tenant_id == tenant_id)

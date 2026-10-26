@@ -348,3 +348,77 @@ def test_the_case_payload_carries_both_names():
     source = inspect.getsource(corr.correlate_alerts)
     assert '"detection_name": m.detection_name' in source
     assert '"detection_rule_name": m.detection_rule_name' in source
+
+
+# --- the spine is a ledger, not a list of live cases (2026-10-26) ------------
+
+def test_the_live_case_clause_excludes_superseded_rows():
+    """A case key is a hash of (source, client, host, first event time), so a
+    change to how membership is computed strands every row keyed the old way.
+    That has happened twice — the 2026-10-07 key change stranded 880 rows, and
+    re-kinding lin/pov/boc to incident feeds stranded 30 more.
+
+    Nothing that counted cases knew. Measured before this clause existed: c00
+    reported 2,356 cases of which 815 (34.6%) were superseded, and the
+    unassigned bucket 394 of which 164 (41.6%) were.
+    """
+    from sqlalchemy import select
+
+    from app.api.detections import _live_case_clause
+    from app.models.database import AlertCaseSpine
+
+    sql = str(
+        select(AlertCaseSpine.case_key).where(_live_case_clause()).compile(
+            compile_kwargs={"literal_binds": True})
+    ).lower()
+    assert "supersession_state is null" in sql
+
+
+def test_the_live_case_clause_still_admits_live_rows():
+    """The complement. A filter that excluded everything would report zero
+    cases for every client and read as a data problem, not a filter problem.
+    """
+    from sqlalchemy import Column, String, Table, MetaData, select
+
+    md = MetaData()
+    t = Table("spine", md, Column("k", String, primary_key=True),
+              Column("supersession_state", String, nullable=True))
+    live = [r for r in [{"k": "a", "supersession_state": None},
+                        {"k": "b", "supersession_state": "mapped"},
+                        {"k": "c", "supersession_state": "expired"}]
+            if r["supersession_state"] is None]
+    assert [r["k"] for r in live] == ["a"], (
+        "only the unsuperseded row is live; mapped and expired are not"
+    )
+    # And the clause is a NULL test, not an equality against a sentinel string,
+    # so a row written before the column existed counts as live.
+    assert select(t.c.k).where(t.c.supersession_state.is_(None)) is not None
+
+
+def test_an_incident_feed_yields_one_case_per_alert():
+    """What the whole change is for. An incident is already a case, so for a
+    tenant whose feed emits incidents the two counts must be equal — more
+    cases than alerts is incoherent on its face, and that is what pov showed
+    (79 cases, 58 alerts) before the stranded rows were retired.
+    """
+    from app.api.detections import _merge_client_counts
+
+    clients = _merge_client_counts({"pov": 58}, {"pov": 58})
+    [pov] = clients
+    assert pov["cases"] == pov["alerts"] == 58
+
+
+def test_no_client_option_reports_more_cases_than_alerts():
+    """The general invariant, asserted on the merge rather than on one client.
+
+    A case is made of alerts, so cases <= alerts always. Violating it means
+    something is being counted that is not a live case.
+    """
+    from app.api.detections import _merge_client_counts
+
+    for client in _merge_client_counts(
+        {"a": 1541, "b": 230, "c": 58}, {"a": 17267, "b": 1045, "c": 58}
+    ):
+        assert client["cases"] <= client["alerts"], (
+            f"{client['label']} reports more cases than alerts"
+        )

@@ -852,6 +852,31 @@ def _serialize(row: AnalystFeedback) -> dict[str, Any]:
     }
 
 
+def _live_case_clause() -> Any:
+    """Only cases that still derive.
+
+    **`alert_case_spine` is a ledger, not a list of live cases.** A case key is
+    a hash of (source, client, host, first event time), so any change to how
+    membership is computed strands every row keyed under the old formula — the
+    row stays, its alerts stay, and nothing re-derives it. That has happened
+    twice: the 2026-10-07 key change stranded 880 rows, and re-kinding
+    lin/pov/boc to incident feeds on 2026-10-26 stranded 30 more.
+    `case_supersession_service` exists to point the dead rows at the live ones.
+
+    Nothing that counted them knew that. Measured 2026-10-26, before this
+    clause existed: **c00 reported 2,356 cases of which 815 (34.6%) were
+    superseded**, and the unassigned bucket 394 of which 164 (41.6%) were. So
+    every case count on the reports page has been inflated by a third since
+    2026-10-07, and the inflation grew whenever the keying changed.
+
+    A superseded row is not deleted, deliberately — it carries an analysis
+    somebody may need to reach, and `where_this_key_went` leads them to the
+    live case. It simply must not be counted twice: once as itself and once as
+    the case that replaced it.
+    """
+    return AlertCaseSpine.supersession_state.is_(None)
+
+
 def _merge_client_counts(
     case_counts: dict[str | None, int],
     alert_counts: dict[str | None, int],
@@ -997,7 +1022,7 @@ async def report_options(
                 func.to_char(func.date_trunc("month", AlertCaseSpine.opened_at), "YYYY-MM").label("month"),
                 func.count().label("cases"),
             )
-            .where(*_case_tenant_clause(scope))
+            .where(*_case_tenant_clause(scope), _live_case_clause())
             .group_by("month")
             .order_by(sa_desc("month"))
         )
@@ -1008,7 +1033,7 @@ async def report_options(
         for t, c in (
             await db.execute(
                 select(AlertCaseSpine.tenant_id, func.count().label("cases"))
-                .where(*_case_tenant_clause(scope))
+                .where(*_case_tenant_clause(scope), _live_case_clause())
                 .group_by(AlertCaseSpine.tenant_id)
             )
         ).all()
@@ -1108,7 +1133,16 @@ async def case_report(
                 raise HTTPException(404, "No such client")
             clauses.append(AlertCaseSpine.tenant_id == chosen_tenant)
 
-    rows = (await db.execute(select(AlertCaseSpine).where(*clauses))).scalars().all()
+    # Live cases only — the same reason the option counts filter. A report
+    # that counted superseded rows would report a third more cases than the
+    # client has, and every rate derived from it (closure, MTTR, resolution
+    # mix) would be computed over rows whose alerts are also counted inside
+    # the live case that replaced them.
+    rows = (
+        await db.execute(
+            select(AlertCaseSpine).where(*clauses, _live_case_clause())
+        )
+    ).scalars().all()
 
     # How many alerts arrived, which is a different question from how many
     # ended up inside a closed case — most alerts never form a multi-alert
@@ -1346,9 +1380,14 @@ async def case_sla_summary(
     )
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
+    # Live cases only. A superseded row's alerts are also inside the case that
+    # replaced it, so counting both puts the same work in the MTTR twice — and
+    # 34.6% of c00's spine rows were superseded when this was measured, so it
+    # is not a rounding difference. See `_live_case_clause`.
     rows = (
         await db.execute(
-            select(AlertCaseSpine).where(AlertCaseSpine.opened_at >= since)
+            select(AlertCaseSpine)
+            .where(AlertCaseSpine.opened_at >= since, _live_case_clause())
         )
     ).scalars().all()
 
@@ -1396,6 +1435,20 @@ async def case_sla_summary(
     )
     # Every tenant's cases are in one estate view; the scope is recorded so a
     # number can never be read as being about one client when it is not.
+    #
+    # **UNRESOLVED, noticed 2026-10-26 and deliberately not changed here.**
+    # This query carries no tenant clause, so the numbers are estate-wide for
+    # every caller, and a caller who is not `all_tenants` is handed them under
+    # the word "scoped". The comment above reads as though that is intended.
+    # `_case_tenant_clause`'s docstring describes the identical behaviour on
+    # this same endpoint as the defect it was written to prevent — "a
+    # client-restricted account was shown the whole estate's MTTR under a word
+    # asserting it was theirs".
+    #
+    # Those two cannot both be right, and which one is depends on who may call
+    # this. Guessing either way is wrong: filtering would silently change
+    # every number an internal reader sees, and leaving it is a disclosure if
+    # client accounts can reach it. Raised rather than resolved.
     summary["scope"] = "all tenants" if getattr(scope, "all_tenants", False) else "scoped"
     return summary
 
