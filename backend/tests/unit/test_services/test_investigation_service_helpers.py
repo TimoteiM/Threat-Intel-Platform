@@ -245,3 +245,51 @@ def test_a_normal_url_is_still_accepted():
     from app.services.investigation_service import MAX_OBSERVABLE_CHARS
 
     assert len("https://example.com/login?id=994") <= MAX_OBSERVABLE_CHARS
+
+
+def test_a_long_observable_shortens_the_headline_instead_of_failing_the_story():
+    """The reported symptom: "the AI case story has not been completed".
+
+    `CaseStory.headline` is `Field(max_length=180)` and the headline was the
+    one field built without a slice while every neighbour has one. An
+    819-character mail-rewrapped URL produced "suspicious assessment for <the
+    whole URL>", Pydantic raised `string_too_long`, and the entire case story
+    was dropped with a WARNING while the rest of the investigation concluded
+    normally — a finished report with no story and nothing saying why.
+    """
+    from app.services.investigation_case_story_service import (
+        HEADLINE_MAX, CaseStory, _headline,
+    )
+
+    headline = _headline("suspicious", _ATP_WRAPPER)
+    assert len(headline) <= HEADLINE_MAX
+    assert headline.startswith("suspicious assessment for ")
+    # And it must actually satisfy the model, which is the thing that broke.
+    CaseStory.model_validate({
+        "headline": headline, "what_happened": "x", "why_it_matters": "y",
+        "score_explanation": "z", "campaign_assessment": "none",
+        "soc_handoff_markdown": "none",
+    } | {k: [] for k in (
+        "score_components", "strongest_evidence", "contradicting_evidence",
+        "timeline", "changes_since_last_run", "recommended_actions")})
+
+
+def test_the_headline_keeps_both_ends_of_a_long_url():
+    """Elided in the middle, not cut at the end. The tail of a URL is where
+    the interesting path usually is, and a headline ending mid-parameter reads
+    as corruption rather than as a deliberate shortening."""
+    from app.services.investigation_case_story_service import _headline
+
+    headline = _headline("suspicious", _ATP_WRAPPER)
+    assert "…" in headline
+    assert _ATP_WRAPPER[:30] in headline, "the start of the URL was lost"
+    assert headline.endswith(_ATP_WRAPPER[-12:]), "the end of the URL was lost"
+
+
+def test_a_short_observable_is_left_exactly_as_it_is():
+    """The complement: a rule that elided ordinary observables would make
+    every headline worse to fix a rare one."""
+    from app.services.investigation_case_story_service import _headline
+
+    assert _headline("benign", "example.com") == "benign assessment for example.com"
+    assert "…" not in _headline("benign", "example.com")

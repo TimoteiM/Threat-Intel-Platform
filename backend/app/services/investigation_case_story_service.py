@@ -55,8 +55,37 @@ class VisualAssessment(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+#: Mirrors `CaseStory.headline`'s own limit. The two must agree; `_headline`
+#: is what keeps a long observable from failing the model instead of being
+#: shortened by it.
+HEADLINE_MAX = 180
+
+
+def _headline(verdict: str, observable: object) -> str:
+    """`<verdict> assessment for <observable>`, always within the limit.
+
+    The observable is elided in the middle when it does not fit, so both the
+    host and the tail stay visible — a URL cut at the end reads as corruption,
+    and the end is usually where the interesting path is.
+    """
+    value = str(observable or "").strip() or "the observable"
+    prefix = f"{verdict} assessment for "
+    budget = HEADLINE_MAX - len(prefix)
+    if budget <= 0:
+        # A pathological verdict string. Still return something valid rather
+        # than raising inside a model that the caller only logs.
+        return prefix[:HEADLINE_MAX]
+    if len(value) <= budget:
+        return prefix + value
+    ellipsis = "…"
+    keep = budget - len(ellipsis)
+    head = keep - keep // 3
+    tail = keep - head
+    return prefix + value[:head] + ellipsis + (value[-tail:] if tail else "")
+
+
 class CaseStory(BaseModel):
-    headline: str = Field(max_length=180)
+    headline: str = Field(max_length=HEADLINE_MAX)
     what_happened: str = Field(max_length=1200)
     why_it_matters: str = Field(max_length=900)
     score_explanation: str = Field(max_length=1200)
@@ -480,8 +509,22 @@ def build_saved_case_story(*, context: dict[str, Any], model: str) -> CaseStory:
             "does not establish what the page does after submission. "
             f"The canonical investigation therefore remains {verdict} with risk score {score}."
         )
+    # **The headline is the one field here that was not bounded**, while every
+    # neighbour slices itself ([:800], [:1200], [:500]). `CaseStory.headline`
+    # is `Field(max_length=180)`, so a long observable did not shorten the
+    # headline — it failed the whole model.
+    #
+    # Measured 2026-10-26: an 819-character mail-rewrapped URL produced
+    # "suspicious assessment for <the entire URL>", Pydantic raised
+    # `string_too_long`, and the case story was dropped with a WARNING while
+    # the rest of the investigation concluded normally. The analyst saw a
+    # finished report and no story, with nothing on the page saying why.
+    #
+    # Elided in the middle rather than cut at the end: the tail of a URL is
+    # where the interesting path usually is, and a headline ending in a
+    # truncated query parameter reads as corruption.
     story = CaseStory(
-        headline=f"{verdict} assessment for {canonical.get('observable') or 'the observable'}",
+        headline=_headline(verdict, canonical.get("observable")),
         what_happened=summary, why_it_matters=why_it_matters,
         score_explanation=str(report.get("risk_rationale") or f"The score of {score} is the canonical decision-engine result, supported by the strongest findings below.")[:1200],
         score_components=score_components, strongest_evidence=claims, contradicting_evidence=contradictory, timeline=timeline,

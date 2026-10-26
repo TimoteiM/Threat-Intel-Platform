@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -415,10 +415,60 @@ def _store_report(client: cape.CapeClient, analysis_id: uuid.UUID, task_id: str,
         verdict = row.verdict
         score = row.malscore
 
-    _annotate_investigation(investigation_id, normalized)
+    # **Every investigation waiting on this analysis, not only the one that
+    # started it.**
+    #
+    # The CAPE collector attaches to an analysis that is already in flight for
+    # the same target rather than detonating it twice — correctly. But the
+    # result was written back to `row.investigation_id` alone, so a second
+    # investigation that attached kept a `pending` pointer to an analysis that
+    # had finished and belonged to someone else. Nothing ever cleared it:
+    # `resume_sandbox_analyses` only resumes NON-terminal rows, and this one is
+    # terminal the moment it reports.
+    #
+    # Measured 2026-10-26: run 81bff5a9 showed "Detonating now — CAPE task 76"
+    # indefinitely while task 76 had been `reported` since 09:04:02, because
+    # the analysis was owned by 7e61844f, an earlier run that was cancelled.
+    for target_id in _investigations_awaiting(analysis_id, owner=investigation_id):
+        _annotate_investigation(target_id, normalized)
     logger.info("CAPE analysis %s reported: verdict=%s malscore=%s", analysis_id, verdict, score)
     return {"analysis_id": str(analysis_id), "status": svc.STATUS_REPORTED,
             "verdict": verdict, "malscore": score, "task_id": int(task_id)}
+
+
+def _investigations_awaiting(
+    analysis_id: uuid.UUID, *, owner: uuid.UUID | None
+) -> list[uuid.UUID]:
+    """The owner, plus anyone whose evidence points at this analysis.
+
+    A referrer is identified from its own stored evidence — the collector
+    wrote `cape.pending_analysis_id` when it attached — rather than from a
+    join table, because that pointer is the only record that the attachment
+    happened at all.
+
+    The owner comes first and is always included, even when its evidence has
+    no pointer, so this never does less than the single-target call it
+    replaced.
+    """
+    targets: list[uuid.UUID] = [owner] if owner else []
+    try:
+        with Session(sync_engine) as db:
+            rows = db.execute(
+                sa_text(
+                    "SELECT investigation_id FROM evidence "
+                    " WHERE evidence_json->'cape'->>'pending_analysis_id' = :a"
+                ),
+                {"a": str(analysis_id)},
+            ).all()
+        for (referrer,) in rows:
+            if referrer is not None and referrer not in targets:
+                targets.append(referrer)
+    except Exception as exc:  # noqa: BLE001 — a fan-out failure must not lose the owner
+        logger.warning(
+            "Could not look up investigations awaiting CAPE analysis %s: %s",
+            analysis_id, exc,
+        )
+    return targets
 
 
 def _annotate_investigation(investigation_id: uuid.UUID | None, normalized) -> None:

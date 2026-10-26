@@ -28,6 +28,7 @@ from app.models.schemas import InvestigationCreate
 from app.tasks.investigation_task import run_investigation
 from app.utils.domain_utils import normalize_domain, validate_domain
 from app.collectors.registry import get_collectors_for_type
+from app.services.email_url_triage import unwrap_url
 from app.services.proxy_profiles import is_configured_network_country
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,37 @@ class InvestigationService:
                     f"rather than the wrapper."
                 )
 
+        # ── Mail-security rewrapping ─────────────────────────────────────────
+        # **A wrapper is not the observable.** Measured 2026-10-26: a submitted
+        # Hornetsecurity ATP URL produced a complete, confident investigation of
+        # Hornetsecurity — `hosting_asn_org: Hornetsecurity`, verdict "benign …
+        # avoid blocking the legitimate Hornetsecurity service". Every word of
+        # that was true about the gateway and nothing in it was about the
+        # phishing page the mail actually carried. A confident benign verdict on
+        # a phishing report is a worse outcome than the error it replaced.
+        #
+        # `unwrap_url` decodes the destination from the rewriter's own
+        # parameter. It is free, instant, and does not depend on the gateway
+        # being reachable. It only fires when the HOST matches a known rewriter
+        # and that rewriter's parameter holds an http(s) URL, so an ordinary
+        # link is never altered.
+        #
+        # The submitted value is NOT discarded. It goes into `external_context`
+        # so the report can say what was pasted and what was investigated —
+        # silently swapping one observable for another would be its own kind of
+        # wrong answer.
+        submitted_url: str | None = None
+        unwrapped_from: str | None = None
+        if observable_type == "url":
+            destination, wrapper = unwrap_url(domain)
+            if wrapper and destination and destination != domain:
+                submitted_url, unwrapped_from = domain, wrapper
+                domain = destination
+                logger.info(
+                    "Unwrapped a %s link at submission; investigating the "
+                    "destination rather than the gateway", wrapper,
+                )
+
         # Validate client_domain if provided (always a domain)
         client_domain = None
         if request.client_domain:
@@ -203,6 +235,12 @@ class InvestigationService:
         # by hand — which is what tells the sandbox gate to detonate regardless
         # of how settled the reputation looks.
         external_context["requested_manually"] = True
+        # What was pasted, when it differs from what is being investigated. The
+        # report reads this so an analyst can see both — the alternative is a
+        # verdict about a URL nobody typed.
+        if submitted_url:
+            external_context["submitted_url"] = submitted_url
+            external_context["unwrapped_from"] = unwrapped_from
         use_anyrun_residential_proxy = bool(
             request.network_profile and request.network_profile.use_residential_proxy
         )
