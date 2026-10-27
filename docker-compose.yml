@@ -70,7 +70,11 @@ services:
       # these addresses inherits an unauthenticated route to the ingest
       # endpoint — weaker than an API key, and only used because these
       # appliances cannot carry one.
-      INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32"
+      # 172.23.39.16 added 2026-10-27: the NiFi sending tenant c29. It had been
+      # posting since at least 2026-10-26 04:33 and every packet was dropped —
+      # 30 TIP8000DROP records — with nothing in the API log, which is exactly
+      # the failure this comment already described for 172.20.30.35.
+      INGEST_CIDRS: "172.23.10.16/32 172.20.30.35/32 172.23.39.16/32"
       EXTERNAL_IFACES: "enp6s18 virbr0"
     command:
       - sh
