@@ -959,3 +959,41 @@ def test_a_hostless_alert_is_still_excluded_from_correlation():
     assert "entity_host is not null" in sql
     assert "alert_kind = 'incident'" in sql
     assert " or " in sql, "the two conditions must be an OR, not a replacement"
+
+
+def test_a_stray_non_assignment_line_in_env_is_a_hard_fault():
+    """A line with no `=` was invisible to every check, and takes compose down.
+
+    Found 2026-10-27: two lines of console output were pasted into `.env`.
+    `docker compose` then refused to read the file at all — "key cannot
+    contain a space" — so every compose command failed, not just one
+    variable, and the validator reported the file clean because it skipped
+    any line without an `=`.
+    """
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[4] / "scripts" / "validate_env.py"
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "bad.env"
+        bad.write_text("FOO=1\nINGEST_TRUSTED_CIDRS currently: [1, 2]\nBAR=2\n")
+        good = Path(tmp) / "good.env"
+        good.write_text("FOO=1\nBAR=2\n")
+
+        failed = subprocess.run(
+            [sys.executable, str(script), "--strict", str(bad)],
+            capture_output=True, text=True, timeout=120)
+        passed = subprocess.run(
+            [sys.executable, str(script), "--strict", str(good)],
+            capture_output=True, text=True, timeout=120)
+
+    assert failed.returncode == 1, "a pasted line must fail the gate"
+    assert "neither blank, a comment, nor an assignment" in failed.stdout
+    # The complement: a gate that cannot pass is as useless as one that
+    # cannot fail.
+    assert passed.returncode == 0, "a clean file must still pass"
+    # And it must never echo what was on the line — it could be a secret
+    # someone meant to assign.
+    assert "INGEST_TRUSTED_CIDRS currently" not in failed.stdout

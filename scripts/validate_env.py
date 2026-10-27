@@ -88,6 +88,17 @@ def parse_env_raw() -> list[tuple[int, str, str, str]]:
         if not s or s.startswith("#"):
             continue
         if "=" not in line:
+            # **Not an assignment at all, and this used to be skipped.**
+            #
+            # A blind spot found 2026-10-27: a stray line with no `=` was
+            # invisible to every check here, while `docker compose` refuses to
+            # read the file at all over it — "key cannot contain a space" —
+            # which takes down every compose command, not just one variable.
+            # Pasted console output is the obvious way it gets there.
+            #
+            # Recorded with lineno and None for the value so the lint below
+            # can flag it without ever reading what is on the line.
+            rows.append((i, line.rstrip("\n"), None, line))
             continue
         k, _, v = line.partition("=")
         rows.append((i, k, v, line))
@@ -161,7 +172,22 @@ def main() -> int:
     seen: dict[str, list[int]] = collections.defaultdict(list)
     for lineno, k, v, line in rows:
         key = k.strip()
+        if v is None:
+            # No `=` on the line. Report the LINE NUMBER and the shape, never
+            # the content — a stray line could be anything, including a value
+            # someone meant to assign.
+            hard["line is neither blank, a comment, nor an assignment — "
+                 "`docker compose` refuses to read the whole file over this, "
+                 "so every compose command fails, not just one variable"].append(
+                f"L{lineno} ({len(key)} chars"
+                + (", contains a space" if " " in key else "")
+                + (", looks like pasted output" if key.endswith("]") else "")
+                + ")")
+            continue
         seen[key].append(lineno)
+        if " " in key:
+            hard["key contains an internal space — compose rejects the file"
+                 ].append(f"L{lineno} ({len(key)} chars)")
         if not VALID_NAME.match(key):
             hard["key is not a valid env var name even after trimming "
                  "([A-Za-z_][A-Za-z0-9_]*)"].append(f"L{lineno} {key}")
@@ -262,7 +288,10 @@ def main() -> int:
     print()
     print("DECLARED BUT EMPTY in .env — someone meant to configure these")
     print("=" * 72)
-    empties = [(lineno, k.strip()) for lineno, k, v, _ in rows if not v.strip()]
+    # `v is None` is a non-assignment line, already reported as a hard fault
+    # above. It is not "declared but empty" — nothing was declared.
+    empties = [(lineno, k.strip()) for lineno, k, v, _ in rows
+               if v is not None and not v.strip()]
     if not empties:
         print("  none")
     for lineno, key in empties:
