@@ -1,0 +1,98 @@
+# The per-client source map.
+#
+# One entry per client, declaring which log/telemetry platforms that client
+# runs and how to reach each one. **No credentials.** Secrets live in
+# `tenant_integrations.secret_ciphertext`, encrypted under
+# INTEGRATION_ENCRYPTION_KEY, one row per (tenant, platform), and are set
+# through the API — never through this file and never through a commit.
+#
+# This file is the authoring surface. The database is the enforcement surface:
+# `scripts/apply_client_sources.py` applies what is here into
+# `tenant_integrations`, and `app.services.client_sources.reconcile()` reports
+# any difference. The file is therefore a control over the database rather than
+# a second source of truth — the pattern this codebase has been bitten by eight
+# times when two places both claimed to know something.
+#
+# Why a file at all, when the rows are in Postgres: a client gaining or losing
+# a platform is a change worth reviewing, and a diff is how that gets reviewed.
+#
+# ─── validation ────────────────────────────────────────────────────────────
+#
+# `client_sources.load()` refuses the file rather than skipping a bad entry:
+#
+#   * `platform` must be in the catalogue (app.services.client_sources.PLATFORMS)
+#   * every key under `connection` must be declared in that platform's
+#     `config_fields` — a typo is a refusal, not a silently ignored setting
+#   * every `required` field for the platform must be present and non-empty
+#   * `tenant_id` must be unique across clients, and unique per platform within
+#     a client
+#   * `name` is REFUSED. A client's name is `tenants.name` in the database; a
+#     copy here can disagree with the row it duplicates, and committing it
+#     would put the customer list in this repository's history, which no
+#     rotation undoes. To read the map with names joined on, run
+#     `scripts/apply_client_sources.py --render`
+#   * a key that looks like a secret (token, key, password, secret) under
+#     `connection` is a refusal naming the field, because the one thing this
+#     file must never carry is the thing that grants access
+#
+# ─── what is NOT here ──────────────────────────────────────────────────────
+#
+# No clients. This is deliberate: the structure, the enforcement and the test
+# ship first, and the client list is populated from what the deployment owner
+# provides. See docs/design/client-source-map.md for exactly what is needed
+# per client and what onboarding looks like.
+#
+# There is also an open question about whether customer names belong in a git
+# repository at all — the alternative is this file carrying only `tenant_id`
+# (an opaque code) with names held in the `tenants` table. That question is in
+# the design note and is not mine to settle.
+
+version: 1
+
+# Every entry a loader will accept looks like the commented example below.
+# It is commented rather than live so that `load()` returns zero clients and
+# `reconcile()` reports an empty map, rather than the platform believing in a
+# client called "example".
+#
+# ─── the shape, with one worked example ────────────────────────────────────
+#
+# `zz-example` is a fake tenant running all three platforms, so the shape is
+# visible without any real client in the file. It is commented out: live, it
+# would be a client the platform believes in, and `--render` would report it as
+# having no row in `tenants`.
+#
+# Every value below is made up. The field names are not — they are the
+# platforms' declared `config_fields`, and anything else is refused.
+#
+# clients:
+#   - tenant_id: zz-example          # must match tenants.tenant_id exactly
+#     platforms:
+#
+#       - platform: exabeam
+#         connection:
+#           base_url: https://aa.zz-example.exabeam.com     # required, and the only one
+#         # credentials (username, token) are set through the API, never here.
+#         # This set comes from a TraceCat automation that already talks to an
+#         # Exabeam — a username and a token. The earlier version of this spec
+#         # invented `data_lake_url`, `site_id` and a single `api_key`, and an
+#         # operator was then asked to find values for fields that were not
+#         # real settings.
+#
+#       - platform: sentinelone
+#         connection:
+#           console_url: https://zz-example.sentinelone.net  # required
+#           site_ids: s-1111111111,s-2222222222              # optional
+#           account_id: a-3333333333                         # optional
+#         # credential (api_token) — scoped to THESE site ids only
+#
+#       - platform: cortex
+#         connection:
+#           api_url: https://api-zz-example.xdr.paloaltonetworks.com  # required
+#           tenant_name: zz-example                                   # optional
+#         # credentials (api_key, api_key_id)
+#
+# A client running only one platform has a one-entry `platforms:` list. A
+# client running none has `platforms: []`, which is a different and honest
+# state from not being in this file at all.
+
+clients: []

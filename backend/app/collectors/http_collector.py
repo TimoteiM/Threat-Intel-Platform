@@ -2,7 +2,8 @@
 HTTP Collector — probes the domain over HTTPS (fallback HTTP).
 
 Captures: reachability, redirect chain, response headers, page title,
-login form detection, security headers, server fingerprint.
+login form detection, security headers, server fingerprint,
+favicon hash, brand impersonation, phishing kit patterns, external resources.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from urllib.parse import urlparse
 
 import requests
 
@@ -29,6 +31,89 @@ SECURITY_HEADERS = [
     "Permissions-Policy",
 ]
 
+# Brand impersonation phrases (case-insensitive)
+BRAND_PHRASES = [
+    "verify your account",
+    "update your payment",
+    "confirm your identity",
+    "account suspended",
+    "unusual activity",
+    "log in to your account",
+    "your account has been",
+    "security alert",
+    "verify your email",
+    "action required",
+    "confirm your payment",
+    "unauthorized access",
+]
+
+# Well-known brands. A mention is contextual: many legitimate B2B/SaaS pages
+# reference Microsoft, Google, AWS, etc. Scoring decides whether context makes it suspicious.
+KNOWN_BRANDS = [
+    "microsoft", "outlook", "office 365", "onedrive", "sharepoint",
+    "google", "gmail", "google drive", "google docs",
+    "apple", "icloud", "apple id",
+    "paypal",
+    "amazon", "aws",
+    "facebook", "instagram", "whatsapp", "meta",
+    "linkedin",
+    "dropbox",
+    "netflix",
+    "bank of america", "chase", "wells fargo", "citibank", "barclays",
+    "dhl", "fedex", "ups", "usps",
+]
+
+# Input field names that may indicate account/payment collection.
+# Matched against name=, id=, and type= attributes of <input> tags.
+# Inputs are common on legitimate websites; they are not treated as phishing by themselves.
+CREDENTIAL_FIELD_RE = re.compile(
+    r'<input[^>]+(?:name|id)\s*=\s*["\']?'
+    r'(?:password|passwd|pass|pwd|cc|card(?:_?num(?:ber)?)?|cvv|cvc|'
+    r'card(?:_?expir(?:y|ation)?|_?exp)|ssn|social(?:_?security)?|'
+    r'pin|secret|credit|'
+    r'email|e-mail|mail|user(?:name)?|login|account)',
+    re.I,
+)
+
+# Separately detect type="email" inputs — single-field email harvesters
+EMAIL_INPUT_RE = re.compile(r'<input[^>]+type\s*=\s*["\']?email', re.I)
+
+# Suspicious path segments in the URL itself.
+SUSPICIOUS_PATH_KEYWORDS = {
+    "login", "signin", "sign-in", "logon", "log-in",
+    "verify", "verification", "validate", "validation",
+    "secure", "security", "auth", "authenticate",
+    "account", "accounts", "update", "confirm", "confirmation",
+    "banking", "payment", "checkout", "billing", "invoice",
+    "webmail", "roundcube", "owa", "autodiscover",
+    "recover", "recovery", "reset", "unlock",
+    "review", "reviews",  # common in fake review/survey phishing
+}
+
+# Phishing kit indicators (regex patterns)
+PHISHING_PATTERNS = [
+    (re.compile(r'\beval\s*\(', re.I), "eval() call — potential JS obfuscation"),
+    (re.compile(r'\batob\s*\(', re.I), "atob() call — Base64 decoding"),
+    (re.compile(r'String\.fromCharCode', re.I), "String.fromCharCode — character encoding"),
+    (re.compile(r'\bunescape\s*\(', re.I), "unescape() — URL decoding obfuscation"),
+    (re.compile(r'document\.write\s*\(', re.I), "document.write — dynamic content injection"),
+    (re.compile(r'api\.telegram\.org/bot', re.I), "Telegram Bot API — credential exfiltration"),
+    # JS-based form submission to external endpoints (fetch / XHR / axios)
+    (re.compile(r'''(?:fetch|axios\.post|axios\.put|jQuery\.ajax|\$\.ajax|\$\.post)\s*\(\s*['"]https?://''', re.I),
+     "JS HTTP call to hardcoded external URL — possible credential exfiltration"),
+    (re.compile(r'new\s+XMLHttpRequest', re.I), "XMLHttpRequest — JS-based form submission"),
+]
+
+CLICKFIX_VERIFICATION_RE = re.compile(
+    r"(?:verify\s+you\s+are\s+human|additional\s+verification|required\s+verification|cloudflare|captcha)",
+    re.I,
+)
+CLICKFIX_USER_ACTION_RE = re.compile(
+    r"(?:\bwin\s*\+\s*r\b|\bwindows\s*\+\s*r\b|\bterminal\b|\bctrl\s*\+\s*v\b|"
+    r"\bpaste\s+(?:the\s+)?(?:command|code)\b|\bpress\s+enter\b|\brun\s+(?:dialog|box|command)\b)",
+    re.I,
+)
+
 # Simple technology detection patterns
 TECH_PATTERNS = {
     "nginx": re.compile(r"nginx", re.I),
@@ -39,12 +124,87 @@ TECH_PATTERNS = {
 }
 
 
+def _detect_js_redirect(body: str) -> str | None:
+    """
+    Detect client-side redirects (meta-refresh and JavaScript) that the
+    requests library cannot follow.  Returns the target URL or None.
+    """
+    # Meta refresh: <meta http-equiv="refresh" content="0;url=https://...">
+    meta = re.search(
+        r'<meta[^>]+http-equiv\s*=\s*["\']?refresh["\']?[^>]+content\s*=\s*["\']?\d+\s*;\s*url\s*=\s*([^\s"\'>;]+)',
+        body, re.I,
+    )
+    if meta:
+        return meta.group(1).strip()
+
+    # JS redirects: window.location, location.href, location.replace(...)
+    js = re.search(
+        r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+)["\']',
+        body, re.I,
+    )
+    if js:
+        return js.group(1).strip()
+
+    js_replace = re.search(
+        r'(?:window\.)?location\.replace\s*\(\s*["\']([^"\']+)["\']\s*\)',
+        body, re.I,
+    )
+    if js_replace:
+        return js_replace.group(1).strip()
+
+    return None
+
+
+def _detect_clickfix_fake_verification(body: str) -> bool:
+    text = re.sub(r"<[^>]+>", " ", body or "")
+    text = re.sub(r"\s+", " ", text)
+    if not CLICKFIX_VERIFICATION_RE.search(text):
+        return False
+    return bool(CLICKFIX_USER_ACTION_RE.search(text))
+
+
+def _is_external_form_target(action_host: str, own_host: str) -> bool:
+    """Whether a form action really leaves the site it was served from.
+
+    The comparison used to be `action_domain != own_host`, so `otar.nl`
+    posting to `www.otar.nl` was reported as a form posting to an external
+    domain — and that signal is read downstream as high-confidence evidence of
+    credential theft. Measured across the stored investigations, five of the
+    fourteen distinct form targets were the site's own `www.` host or the
+    apex it redirects to: tarom.ro, otar.nl, decoder.name, linkedin.com and
+    meubels-van-steigerhout.nl, all of them posting to themselves.
+
+    Compared on the registrable name, so a subdomain counts as the same site
+    while `otar.nl.evil.test` does not. The public suffix list does the work,
+    which also means two tenants of a hosting platform are correctly different
+    sites.
+    """
+    from app.services import hosting_platform_service as platform
+
+    action = str(action_host or "").strip().lower().rstrip(".")
+    own = str(own_host or "").strip().lower().rstrip(".")
+    if not action or not own or action == own:
+        return False
+    action_site = platform.registrable(action)
+    own_site = platform.registrable(own)
+    if not action_site or not own_site:
+        return action != own
+    return action_site != own_site
+
+
 class HTTPCollector(BaseCollector):
     name = "http"
+    supported_types = frozenset({"domain", "url"})
 
     def _collect(self) -> HTTPEvidence:
         evidence = HTTPEvidence()
         session = requests.Session()
+        proxy_profile = self.proxy_profile
+        if proxy_profile:
+            session.proxies.update(proxy_profile.requests_proxies)
+            evidence.network_profile = proxy_profile.safe_summary
+        elif self.proxy_summary:
+            evidence.network_profile = self.proxy_summary
         session.max_redirects = 10
         session.headers.update({
             "User-Agent": "ThreatInvestigator/1.0 (Security Research)",
@@ -52,14 +212,20 @@ class HTTPCollector(BaseCollector):
         })
 
         # ── Try HTTPS first, fall back to HTTP ──
+        # For URL type, use the value directly; for domain, prepend scheme
         response = None
-        for scheme in ("https", "http"):
+        if self.observable_type == "url":
+            schemes_to_try = [("direct", self.domain)]
+        else:
+            schemes_to_try = [("https", f"https://{self.domain}"), ("http", f"http://{self.domain}")]
+
+        for scheme, target_url in schemes_to_try:
             try:
                 response = session.get(
-                    f"{scheme}://{self.domain}",
+                    target_url,
                     timeout=self.timeout,
                     allow_redirects=True,
-                    verify=(scheme == "https"),
+                    verify=(not target_url.startswith("http://")),
                 )
                 break
             except requests.exceptions.SSLError:
@@ -103,10 +269,23 @@ class HTTPCollector(BaseCollector):
         if title_match:
             evidence.title = title_match.group(1).strip()[:200]
 
-        # Login form detection
-        evidence.has_login_form = bool(re.search(
-            r'type\s*=\s*["\']?password', body, re.I
-        ))
+        # Detect JavaScript / meta-refresh redirects (invisible to requests library)
+        js_redirect_url = _detect_js_redirect(body)
+        if js_redirect_url:
+            evidence.redirect_chain.append(HTTPRedirect(
+                url=js_redirect_url,
+                status_code=0,  # 0 = client-side redirect (JS/meta)
+                headers={"X-Redirect-Type": "client-side (JavaScript/meta-refresh)"},
+            ))
+
+        # Login / account form detection — password fields OR email-only inputs.
+        has_password_field = bool(re.search(r'type\s*=\s*["\']?password', body, re.I))
+        has_email_field = bool(EMAIL_INPUT_RE.search(body))
+        evidence.has_login_form = has_password_field or has_email_field
+        if has_email_field and not has_password_field:
+            evidence.phishing_indicators.append(
+                "Email-only input form observed"
+            )
         evidence.has_input_fields = "<input" in body_lower
 
         # Security headers
@@ -120,6 +299,118 @@ class HTTPCollector(BaseCollector):
         for tech_name, pattern in TECH_PATTERNS.items():
             if pattern.search(server_str):
                 evidence.technologies_detected.append(tech_name)
+
+        # ── Content analysis: brand impersonation ──
+        for phrase in BRAND_PHRASES:
+            if phrase in body_lower:
+                evidence.brand_indicators.append(phrase)
+
+        # ── Content analysis: phishing kit patterns ──
+        for pattern, desc in PHISHING_PATTERNS:
+            if pattern.search(body):
+                evidence.phishing_indicators.append(desc)
+        if _detect_clickfix_fake_verification(body):
+            evidence.phishing_indicators.append(
+                "ClickFix fake CAPTCHA instructs user to paste/run a command"
+            )
+
+        # Check for form actions posting to external domains
+        own_host = self.target_domain
+        form_actions = re.findall(
+            r'<form[^>]+action\s*=\s*["\']?(https?://[^"\'\s>]+)',
+            body, re.I,
+        )
+        for action_url in form_actions:
+            try:
+                action_domain = urlparse(action_url).hostname
+                if action_domain and _is_external_form_target(action_domain, own_host):
+                    evidence.phishing_indicators.append(
+                        f"Form posts to external domain: {action_domain}"
+                    )
+            except Exception:
+                pass
+
+        # Credential/payment/account field detection (name/id attributes)
+        if CREDENTIAL_FIELD_RE.search(body):
+            evidence.phishing_indicators.append(
+                "Credential or account input fields observed (email/username/password/card)"
+            )
+
+        # Suspicious keywords in the URL path
+        try:
+            url_path = urlparse(evidence.final_url or "").path.lower()
+            hit_keywords = [kw for kw in SUSPICIOUS_PATH_KEYWORDS if kw in url_path]
+            if hit_keywords:
+                evidence.phishing_indicators.append(
+                    f"Suspicious path keywords in URL: {', '.join(hit_keywords)}"
+                )
+        except Exception:
+            pass
+
+        # Brand reference. OFF by default since 2026-10-14 — see
+        # `Settings.brand_reference_signal_enabled` for the measurements.
+        #
+        # The ownership test below, `brand_slug not in own_host_lower`, is a
+        # substring test of the brand word against the hostname, and it is
+        # **inverted in its use**: a hostname that contains the brand word is
+        # treated as belonging to the brand and skipped, when containing a
+        # brand word while not being that brand is the thing worth
+        # detecting. `paypal-secure-login-update-account.xyz` was exempted on
+        # exactly that reasoning, and `live.com` — Microsoft's own domain —
+        # was flagged because the string "microsoft" is not inside it.
+        #
+        # Two claims are also conflated in one field: "this page mentions a
+        # brand", which is true of most of the web and worth no score, and
+        # "this hostname imitates a brand", which is the lookalike shape and
+        # is currently the excluded case. A replacement separates them,
+        # matches rendered text or a form action rather than the raw body
+        # (which removes the `<script src>` hits that are two thirds of this
+        # signal and needs no list at all), and treats "no evidence of
+        # ownership" as **unknown** rather than not-owned — anything behind a
+        # CDN reads "Cloudflare" in `asn_org`.
+        #
+        # Kept rather than deleted so the switch is a decision with its
+        # measurements attached, and so re-enabling is one setting if the
+        # replacement is not ready.
+        from app.config import get_settings
+
+        if get_settings().brand_reference_signal_enabled:
+            own_host_lower = own_host.lower() if own_host else ""
+            for brand in KNOWN_BRANDS:
+                if brand in body_lower:
+                    brand_slug = brand.split()[0]
+                    if brand_slug not in own_host_lower:
+                        evidence.phishing_indicators.append(
+                            f"Third-party brand reference: '{brand}' on non-{brand_slug} domain"
+                        )
+                        break  # one brand match is enough to flag
+
+        # ── Content analysis: external resources ──
+        resource_domains: set[str] = set()
+        resource_patterns = [
+            re.compile(r'<script[^>]+src\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+            re.compile(r'<link[^>]+href\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+            re.compile(r'<img[^>]+src\s*=\s*["\']?(https?://[^"\'\s>]+)', re.I),
+        ]
+        for rp in resource_patterns:
+            for match in rp.findall(body):
+                try:
+                    rd = urlparse(match).hostname
+                    if rd and rd != own_host:
+                        resource_domains.add(rd)
+                except Exception:
+                    pass
+        evidence.external_resources = sorted(resource_domains)[:20]
+
+        # ── Favicon hash (Shodan-compatible) ──
+        try:
+            fav_url = f"{response.url.rstrip('/')}/favicon.ico"
+            fav_resp = session.get(fav_url, timeout=5, verify=False)
+            if fav_resp.status_code == 200 and len(fav_resp.content) > 0:
+                from app.utils.hashing import favicon_hash
+                evidence.favicon_hash = favicon_hash(fav_resp.content)
+        except Exception:
+            pass  # Favicon not available — not critical
 
         # ── Store artifacts ──
         self._store_artifact(

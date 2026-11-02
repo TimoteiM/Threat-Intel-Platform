@@ -1,0 +1,450 @@
+"""Mapping a CAPE report onto the platform's own shape.
+
+The fixtures are fabricated, reduced CAPE reports. The point of most of these
+is not that the happy path maps — it is that a *partial* report maps without
+inventing a verdict, because that is the failure that would quietly mark
+malware as clean.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.services.cape_normalizer import SCORE_MALICIOUS, normalize_report, verdict_for
+
+
+def report(**overrides) -> dict:
+    base = {
+        "info": {"id": 100, "started": "2026-09-22 10:00:00", "ended": "2026-09-22 10:03:00",
+                 "duration": 180, "machine": {"name": "cuckoo4"}, "route": "internet"},
+        "target": {"file": {"name": "invoice.exe", "sha256": "a" * 64, "sha1": "b" * 40,
+                            "md5": "c" * 32, "size": 51200, "type": "PE32 executable"}},
+        "malscore": 8.4,
+        "detections": ["Emotet"],
+        "signatures": [
+            {"name": "injection_runpe", "description": "Injects into a process",
+             "severity": 3, "ttp": ["T1055"]},
+            {"name": "antivm", "description": "Checks for a VM", "severity": 1},
+        ],
+        "network": {
+            "domains": [{"domain": "C2.Example.Test", "ip": "203.0.113.5"}],
+            "dns": [{"request": "c2.example.test", "type": "A"}],
+            "tcp": [{"dst": "203.0.113.5", "dport": 443}],
+            "http": [{"method": "POST", "host": "c2.example.test", "uri": "/gate.php", "status": 200}],
+            "tls": [{"sni": "C2.example.test"}],
+        },
+        "behavior": {
+            "processtree": [{"name": "invoice.exe", "pid": 1200,
+                             "children": [{"name": "powershell.exe", "pid": 1300}]}],
+            "processes": [{"pid": 1200}, {"pid": 1300}],
+            "summary": {"mutex": ["Global\\\\abc", "Global\\\\abc"],
+                        "write_files": ["C:\\\\Users\\\\x\\\\a.tmp"],
+                        "executed_commands": ["powershell -enc ..."]},
+        },
+        "dropped": [{"name": "a.tmp", "sha256": "d" * 64, "size": 900, "type": "data"}],
+        "CAPE": {"payloads": [{"name": "payload.bin", "sha256": "e" * 64, "cape_type": "Emotet Payload"}],
+                 "configs": [{"family": "Emotet", "c2": ["http://c2.example.test/gate.php"]}]},
+        "screenshots": [{"path": "1.png"}, {"path": "2.png"}],
+        "debug": {"errors": []},
+    }
+    base.update(overrides)
+    return base
+
+
+# ── The rule that matters most ───────────────────────────────────────────────
+
+
+def test_a_missing_malscore_is_unknown_not_benign():
+    """tasks/view routinely omits malscore. Defaulting it to zero would mark
+    every unfinished analysis clean."""
+    payload = report()
+    payload.pop("malscore")
+    result = normalize_report(payload, task_id=100)
+    assert result.malscore is None
+    assert result.verdict == "unknown"
+
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [(None, "unknown"), (0.0, "likely_benign"), (3.9, "likely_benign"),
+     (4.0, "suspicious"), (6.9, "suspicious"), (7.0, "malicious"), (10.0, "malicious")],
+)
+def test_the_verdict_follows_the_score(score, expected):
+    assert verdict_for(score) == expected
+
+
+def test_a_zero_score_is_not_the_same_as_no_score():
+    assert verdict_for(0.0) != verdict_for(None)
+
+
+# ── Mapping ──────────────────────────────────────────────────────────────────
+
+
+def test_the_headline_fields_map():
+    r = normalize_report(report(), task_id=100, report_format="json", report_size_bytes=4096)
+    assert r.task_id == 100
+    assert r.malscore == 8.4 and r.verdict == "malicious"
+    assert r.detections and "Emotet" in r.detections
+    assert r.sha256 == "a" * 64 and r.sha1 == "b" * 40 and r.md5 == "c" * 32
+    assert r.file_name == "invoice.exe" and r.file_size == 51200
+    assert r.machine == "cuckoo4" and r.route == "internet"
+    assert r.report_format == "json" and r.report_size_bytes == 4096
+
+
+def test_signatures_are_ordered_by_severity_and_carry_ttps():
+    r = normalize_report(report())
+    assert [s.name for s in r.signatures] == ["injection_runpe", "antivm"]
+    assert r.signatures[0].ttps == ["T1055"]
+
+
+def test_network_indicators_are_deduplicated_and_lowercased():
+    """Hostnames are case-insensitive, and the same host appears in several
+    sections of a CAPE report."""
+    r = normalize_report(report())
+    assert r.network.domains == ["c2.example.test"]
+    assert r.network.tls_sni == ["c2.example.test"]
+    assert r.network.destinations == ["203.0.113.5:443/tcp"]
+    assert r.network.hosts == ["203.0.113.5"]
+    assert r.network.http_requests[0]["uri"] == "/gate.php"
+
+
+def test_behaviour_is_summarised_and_deduplicated():
+    r = normalize_report(report())
+    assert r.behaviour.mutexes == ["Global\\\\abc"]
+    assert r.behaviour.process_count == 2
+    assert r.behaviour.process_tree[0]["name"] == "invoice.exe"
+    assert r.behaviour.process_tree[0]["children"][0]["name"] == "powershell.exe"
+
+
+def test_dropped_files_and_cape_payloads_are_both_captured():
+    r = normalize_report(report())
+    by_hash = {d.sha256: d for d in r.dropped_files}
+    assert by_hash["d" * 64].is_cape_payload is False
+    assert by_hash["e" * 64].is_cape_payload is True
+    assert by_hash["e" * 64].cape_type == "Emotet Payload"
+
+
+def test_extracted_configuration_is_preserved():
+    r = normalize_report(report())
+    assert r.extracted_configs and r.extracted_configs[0]["family"] == "Emotet"
+
+
+def test_screenshot_availability_is_reported():
+    r = normalize_report(report())
+    assert r.has_screenshots is True and r.screenshot_count == 2
+
+
+# ── Partial and hostile input ────────────────────────────────────────────────
+
+
+def test_an_empty_report_does_not_raise_and_says_what_is_missing():
+    r = normalize_report({"info": {"id": 5}}, task_id=5)
+    assert r.malscore is None and r.verdict == "unknown"
+    assert any("may not have executed" in note for note in r.limitations)
+
+
+def test_a_report_that_is_not_an_object_is_handled():
+    r = normalize_report(["not", "a", "report"], task_id=9)
+    assert r.status == "failed" and r.errors
+
+
+def test_odd_types_in_every_section_do_not_raise():
+    """A real CAPE report has surprised this parser before; none of it may throw."""
+    r = normalize_report({
+        "info": "not-a-dict", "target": 12, "signatures": "nope",
+        "network": {"domains": ["plain.test", 7, {"no_domain": 1}], "tcp": "nope", "tls": [None]},
+        "behavior": {"summary": {"mutex": [{"name": "m"}, 5]}, "processtree": "nope"},
+        "dropped": [None, {"name": "x"}], "CAPE": "nope", "malscore": "not-a-number",
+    })
+    assert r.malscore is None
+    assert r.network.domains == ["plain.test"]
+    assert r.behaviour.mutexes == ["m"]
+
+
+def test_a_lite_report_is_flagged_as_less_detailed():
+    r = normalize_report(report(), report_format="lite")
+    assert any("lite" in note for note in r.limitations)
+
+
+def test_cape_errors_are_surfaced_not_swallowed():
+    r = normalize_report(report(debug={"errors": ["Analysis failed: no route to guest"]}))
+    assert r.errors == ["Analysis failed: no route to guest"]
+
+
+def test_indicator_lists_are_capped():
+    payload = report(network={"domains": [{"domain": f"h{i}.test"} for i in range(1000)]})
+    assert len(normalize_report(payload).network.domains) <= 200
+
+
+def test_the_score_threshold_is_a_display_boundary_not_an_action():
+    """Documented explicitly: nothing in this platform acts on it by itself."""
+    assert SCORE_MALICIOUS == 7.0
+
+
+# ── CAPE's IOC summary ───────────────────────────────────────────────────────
+#
+# The fallback when a report will not fit — one PDF produced 139MB of JSON
+# against a 64MB ceiling, while the IOC summary for the same task was 116KB.
+# It uses different shapes for the same facts, and every one of them returned
+# empty on the first attempt.
+
+
+def ioc_payload() -> dict:
+    """Reduced from the real task-8 response."""
+    return {
+        "info": {"id": 8, "machine": "cuckoo1", "route": "internet", "duration": 287},
+        "target": {"file": {"name": "report.pdf", "type": "PDF document, version 1.7"}},
+        "malscore": 10.0,
+        "network": {"domains": [{"domain": "a.test"}], "hosts": ["1.2.3.4"]},
+        # A single root dict, children under spawned_processes — not a list.
+        "process_tree": {"pid": 792, "name": "svchost.exe",
+                         "spawned_processes": [{"pid": 3816, "name": "WmiPrvSE.exe",
+                                                "spawned_processes": [{"pid": 99, "name": "acro.exe"}]}]},
+        # Dicts of lists, not flat lists.
+        "registry": {"modified": ["HKCU\\A", "HKCU\\B"], "deleted": ["HKCU\\C"]},
+        "files": {"modified": ["C:\\a.json", "C:\\b.json"], "deleted": ["C:\\c.tmp"]},
+        "mutexes": ["Global\\One", "Global\\Two"],
+        "executed_commands": ["acrocef.exe --x"],
+        "dropped": [{"sha256": "d" * 64, "name": "x.bin"}],
+        "signatures": [],
+    }
+
+
+def test_the_ioc_summary_normalizes_like_a_report():
+    r = normalize_report(ioc_payload(), task_id=8, report_format="iocs")
+    assert r.malscore == 10.0 and r.verdict == "malicious"
+    assert r.file_name == "report.pdf"
+    assert r.machine == "cuckoo1" and r.route == "internet"
+    assert r.network.domains == ["a.test"]
+    assert len(r.dropped_files) == 1
+
+
+def test_a_single_root_process_tree_is_understood():
+    """A dict root with spawned_processes, counted through the whole tree —
+    the first pass reported 1 process for an analysis that ran four."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    assert r.behaviour.process_count == 3
+    assert r.behaviour.process_tree[0]["name"] == "svchost.exe"
+    assert r.behaviour.process_tree[0]["children"][0]["name"] == "WmiPrvSE.exe"
+
+
+def test_registry_and_file_activity_grouped_as_dicts_are_read():
+    """{modified, deleted} rather than a flat list. Both are writes; mapping
+    the whole dict onto files_read reported 497 modified paths as zero."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    assert sorted(r.behaviour.registry_keys) == ["HKCU\\A", "HKCU\\B", "HKCU\\C"]
+    assert sorted(r.behaviour.files_written) == ["C:\\a.json", "C:\\b.json", "C:\\c.tmp"]
+    assert r.behaviour.mutexes == ["Global\\One", "Global\\Two"]
+    assert r.behaviour.commands == ["acrocef.exe --x"]
+
+
+def test_the_reduced_source_is_declared():
+    """An analyst must not read "no signatures" as "nothing suspicious" when
+    signatures simply are not in this payload."""
+    r = normalize_report(ioc_payload(), report_format="iocs")
+    note = " ".join(r.limitations)
+    assert "IOC summary" in note
+    assert "signatures" in note.lower()
+
+
+# ── A sample that never ran is not a clean sample ────────────────────────────
+#
+# Task 7 on the live instance: a PDF named "..._True_Positive.pdf" reported
+# malscore 0.0 and "likely benign", because CAPE picked a machine with no
+# Acrobat installed and the package never started. The score was real; what it
+# measured was nothing at all.
+
+
+def unexecuted_payload(**overrides) -> dict:
+    base = {
+        "info": {"id": 7, "package": "pdf", "duration": 72, "route": "none",
+                 "machine": {"name": "cuckoo4"}},
+        "target": {"file": {"name": "Ghid_True_Positive.pdf", "type": "PDF document"}},
+        "malscore": 0.0,
+        "signatures": [],
+        "network": {},
+        "behavior": {"processes": []},
+        "debug": {
+            "errors": [],
+            "log": (
+                "2026-09-23 06:09:40,100 [root] INFO: Starting analyzer\n"
+                "Traceback (most recent call last):\n"
+                '  File "C:\\x\\analyzer.py", line 695, in run\n'
+                "lib.common.exceptions.CuckooError: The package "
+                '"modules.packages.pdf" start function raised an error: '
+                "Unable to find any Acrobat.exe executable\n"
+                "2026-09-23 06:09:40,609 [root] INFO: Analysis completed\n"
+            ),
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_the_verdict_is_withheld_when_nothing_executed():
+    """Not "likely benign". A zero from an analysis that never happened is the
+    absence of evidence, and a green pill on it misrepresents that."""
+    r = normalize_report(unexecuted_payload(), task_id=7)
+    assert r.malscore == 0.0          # the score is reported honestly
+    assert r.verdict == "unknown"     # but it is not read as benign
+    assert r.executed is False
+
+
+def test_capes_own_reason_is_surfaced_from_the_analyser_log():
+    """CAPE leaves debug.errors empty and puts the failure in debug.log, so the
+    one line explaining an empty analysis was being dropped."""
+    r = normalize_report(unexecuted_payload(), task_id=7)
+    assert any("Acrobat.exe" in e for e in r.errors)
+    assert any("did not execute" in note for note in r.limitations)
+    assert any("Acrobat.exe" in note for note in r.limitations)
+
+
+def test_routine_log_lines_are_not_mistaken_for_failures():
+    r = normalize_report(unexecuted_payload(debug={"errors": [], "log":
+        "INFO: Starting analyzer\nINFO: Analysis completed\nINFO: all good\n"}))
+    assert r.errors == []
+
+
+def test_a_sample_that_did_run_keeps_its_verdict():
+    payload = unexecuted_payload(
+        behavior={"processes": [{"pid": 1}, {"pid": 2}], "summary": {}},
+        malscore=8.0,
+        debug={"errors": [], "log": "INFO: fine"},
+    )
+    r = normalize_report(payload)
+    assert r.executed is True
+    assert r.verdict == "malicious"
+
+
+def test_a_genuinely_clean_run_is_still_likely_benign():
+    """The rule keys on execution, not on the score — a sample that ran and
+    scored low is still reported as likely benign."""
+    payload = unexecuted_payload(
+        behavior={"processes": [{"pid": 1}], "summary": {}},
+        malscore=0.0,
+        debug={"errors": [], "log": "INFO: fine"},
+    )
+    r = normalize_report(payload)
+    assert r.executed is True and r.verdict == "likely_benign"
+
+
+def test_the_analysis_package_is_reported():
+    """A PDF analysed with the wrong package, or on a machine without the
+    reader, is the difference between a result and an empty one."""
+    assert normalize_report(unexecuted_payload()).package == "pdf"
+
+
+def test_the_most_explanatory_failure_line_comes_first():
+    """A caller quoting errors[0] must get the reason, not a timestamped note
+    that the pdf package was selected — which is what happened first time."""
+    payload = unexecuted_payload(debug={"errors": [], "log": (
+        '2026-09-23 06:09:15,944 [root] INFO: analysis package specified: "pdf"\n'
+        '2026-09-23 06:09:15,944 [root] DEBUG: importing analysis package module\n'
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any Acrobat.exe executable\n'
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+    )})
+    r = normalize_report(payload)
+    assert r.errors, "a launch failure must be extracted"
+    assert "Unable to find any" in r.errors[0]
+    # Routine progress lines are not failures.
+    assert not any("analysis package specified" in e for e in r.errors)
+    assert not any("importing analysis package" in e for e in r.errors)
+    # And the limitation quotes the useful line.
+    assert any("Acrobat.exe" in note for note in r.limitations)
+
+
+def test_a_traceback_source_line_is_not_preferred_over_the_real_message():
+    """The log carries both the `raise ...(f"...{application}...")` source and
+    the resolved exception. The template names nothing; the message names
+    Acrobat, and that is the line an analyst needs."""
+    payload = unexecuted_payload(debug={"errors": [], "log": (
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any Acrobat.exe executable\n'
+    )})
+    r = normalize_report(payload)
+    assert "Acrobat.exe" in r.errors[0]
+    assert "{application}" not in r.errors[0]
+
+
+# ── What survives a failed detonation ────────────────────────────────────────
+#
+# CAPE hashes, YARA-scans and classifies a file even when the guest never opens
+# it. For a PDF that failed to launch that is the entire result, and all of it
+# was being dropped: the panel showed a generic signature name and nothing else.
+
+
+def static_payload() -> dict:
+    return {
+        "info": {"id": 3, "package": "pdf", "machine": {"name": "cuckoo3"}},
+        "malscore": 1.6,
+        "behavior": {"processes": []},
+        "network": {},
+        "debug": {"errors": [], "log": ""},
+        "target": {"file": {
+            "name": "ShieldOps_Ghid_Opera.pdf",
+            "type": "PDF document, version 1.7, 25 page(s)",
+            "size": 271672,
+            "md5": "a" * 32, "sha1": "b" * 40, "sha256": "c" * 64,
+            "ssdeep": "3072:UzK28oq/2mxNQZi1GQ5x",
+            "tlsh": "T114447131A49C8CCDE88ED839",
+            "crc32": "6BC0CAD7",
+            "clamav": "",
+            "yara": [{"name": "multiple_versions",
+                      "meta": {"author": "Glenn Edwards", "description": "Written very generically"}}],
+        }},
+        "signatures": [{
+            "name": "binary_yara",
+            "description": "Binary file triggered YARA rule",
+            "severity": 3, "confidence": 80,
+            "data": [{"Binary triggered YARA rule": "multiple_versions"}],
+        }],
+    }
+
+
+def test_a_signature_carries_what_it_matched():
+    """"binary_yara — Binary file triggered YARA rule" is a category. The rule
+    name is the finding, and it was being discarded."""
+    r = normalize_report(static_payload())
+    sig = r.signatures[0]
+    assert sig.name == "binary_yara"
+    assert sig.details == ["Binary triggered YARA rule: multiple_versions"]
+
+
+def test_yara_matches_are_reported_with_the_rule_author_s_description():
+    r = normalize_report(static_payload())
+    assert len(r.yara_matches) == 1
+    match = r.yara_matches[0]
+    assert match["name"] == "multiple_versions"
+    assert "generically" in match["description"]
+    assert match["author"] == "Glenn Edwards"
+
+
+def test_fuzzy_hashes_are_kept_for_pivoting():
+    """Not identity — these let a near-identical sample under another name be
+    recognised, which is most of what is left when nothing executed."""
+    r = normalize_report(static_payload())
+    assert r.ssdeep.startswith("3072:")
+    assert r.tlsh.startswith("T1")
+    assert r.crc32 == "6BC0CAD7"
+    assert r.file_type == "PDF document, version 1.7, 25 page(s)"
+
+
+def test_an_empty_clamav_verdict_is_not_reported_as_one():
+    assert normalize_report(static_payload()).clamav is None
+
+
+def test_a_traceback_source_echo_never_reaches_the_error_list():
+    """Ranked last was not enough — it was still displayed."""
+    payload = static_payload()
+    payload["debug"] = {"errors": [], "log": (
+        'raise CuckooPackageError(f"Unable to find any {application} executable")\n'
+        "raise CuckooError(f'The package \"{self.package_name}\" start function raised an error: {e}') from e\n"
+        'lib.common.exceptions.CuckooError: The package "modules.packages.pdf" '
+        'start function raised an error: Unable to find any AcroRd32.exe executable\n'
+    )}
+    r = normalize_report(payload)
+    assert all("{" not in e for e in r.errors), r.errors
+    assert all(not e.startswith("raise ") for e in r.errors), r.errors
+    assert any("AcroRd32.exe" in e for e in r.errors)

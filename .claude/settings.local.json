@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "cleanupPeriodDays": 365,
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(sudo *)",
+      "Bash(mkfs *)",
+      "Bash(dd *)",
+      "Bash(wget *|bash*)",
+      "Bash(wget *| bash*)",
+      "Bash(git push --force*)",
+      "Bash(git push *--force*)",
+      "Bash(git reset --hard*)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.zshrc)",
+      "Edit(~/.ssh/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.kube/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.npm/**)",
+      "Read(~/.pypirc)",
+      "Read(~/.gem/credentials)",
+      "Read(~/AppData/Roaming/Microsoft/SystemCertificates/**)",
+      "Read(~/AppData/Local/Google/Chrome/User Data/*/Local Extension Settings/nkbihfbeogaeaoehlefnkodbefgpgknn/**)",
+      "Read(~/AppData/Local/Microsoft/Edge/User Data/*/Local Extension Settings/nkbihfbeogaeaoehlefnkodbefgpgknn/**)",
+      "Read(~/AppData/Roaming/Mozilla/Firefox/Profiles/*/storage/default/moz-extension*/**)",
+      "Read(~/AppData/Local/Google/Chrome/User Data/*/Login Data)",
+      "Read(~/AppData/Local/Google/Chrome/User Data/*/Login Data-journal)",
+      "Read(~/AppData/Local/Microsoft/Edge/User Data/*/Login Data)",
+      "Read(~/AppData/Local/Microsoft/Edge/User Data/*/Login Data-journal)",
+      "Read(~/AppData/Local/BraveSoftware/Brave-Browser/User Data/*/Login Data)",
+      "Read(~/AppData/Local/Chromium/User Data/*/Login Data)",
+      "Read(~/AppData/Roaming/Mozilla/Firefox/Profiles/*/logins.json)",
+      "Read(~/AppData/Roaming/Mozilla/Firefox/Profiles/*/key4.db)",
+      "Read(~/AppData/Local/Microsoft/Credentials/**)",
+      "Read(~/AppData/Roaming/Microsoft/Credentials/**)",
+      "Read(~/AppData/Local/Microsoft/Vault/**)",
+      "Read(~/AppData/Roaming/Microsoft/Vault/**)",
+      "Read(**/*.kdbx)",
+      "Edit(**/*.kdbx)",
+ 
+      "Read(**/.env)",
+      "Grep(**/.env)",
+      "Edit(**/.env)",
+      "Write(**/.env)",
+      "Read(**/.env.local)",
+      "Grep(**/.env.local)",
+      "Edit(**/.env.local)",
+      "Write(**/.env.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Grep(**/.env.development)",
+      "Grep(**/.env.production)",
+      "Edit(**/.env.development)",
+      "Edit(**/.env.production)",
+      "Write(**/.env.development)",
+      "Write(**/.env.production)",
+ 
+      "Read(**/appsettings.json)",
+      "Grep(**/appsettings.json)",
+      "Read(**/appsettings.Development.json)",
+      "Grep(**/appsettings.Development.json)",
+      "Read(**/appsettings.Production.json)",
+      "Grep(**/appsettings.Production.json)",
+      "Read(**/appsettings.Staging.json)",
+      "Grep(**/appsettings.Staging.json)",
+      "Read(**/ModelUpdate.txt)",
+      "Grep(**/ModelUpdate.txt)",
+      "Read(**/DataProtectionKeys/**)",
+      "Grep(**/DataProtectionKeys/**)",
+      "Edit(**/DataProtectionKeys/**)",
+      "Write(**/DataProtectionKeys/**)",
+      "Read(**/key-*.xml)",
+      "Edit(**/key-*.xml)",
+      "Write(**/key-*.xml)",
+      "Read(~/AppData/Roaming/Microsoft/Protect/**)",
+      "Read(~/AppData/Local/Microsoft/Protect/**)",
+      "Edit(~/AppData/Roaming/Microsoft/Protect/**)",
+      "Write(~/AppData/Roaming/Microsoft/Protect/**)",
+      "Read(~/AppData/Roaming/Microsoft/Crypto/**)",
+      "Read(~/AppData/Local/Microsoft/Crypto/**)",
+      "Edit(~/AppData/Roaming/Microsoft/Crypto/**)",
+      "Write(~/AppData/Roaming/Microsoft/Crypto/**)",
+      "Read(C:/ProgramData/Microsoft/Protect/**)",
+      "Read(C:/ProgramData/Microsoft/Crypto/**)",
+      "Read(C:/Windows/System32/Microsoft/Protect/**)",
+      "Edit(C:/ProgramData/Microsoft/Protect/**)",
+      "Write(C:/ProgramData/Microsoft/Protect/**)"
+    ]
+  },
+  "enableAllProjectMcpServers": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CMD=$(jq -r '.tool_input.command'); if echo \"$CMD\" | grep -qiE '(^|;[[:space:]]*|&&[[:space:]]*|[|][|][[:space:]]*|[|][[:space:]]*)rm[[:space:]]' && echo \"$CMD\" | grep -qiE '(^|[[:space:]])-[a-zA-Z]*[rR]|--recursive' && echo \"$CMD\" | grep -qiE '(^|[[:space:]])-[a-zA-Z]*[fF]|--force'; then echo 'BLOCKED: Use trash instead of rm -rf' >&2; exit 2; fi"
+          },
+          {
+            "type": "command",
+            "command": "CMD=$(jq -r '.tool_input.command'); if echo \"$CMD\" | grep -qE 'git[[:space:]]+push.*(main|master)'; then echo 'BLOCKED: Use feature branches, not direct push to main' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "github@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true,
+    "security-audit@local": true,
+    "fullstack-dev-skills@fullstack-dev-skills": true
+  },
+  "extraKnownMarketplaces": {
+    "fullstack-dev-skills": {
+      "source": {
+        "source": "github",
+        "repo": "jeffallan/claude-skills"
+      }
+    }
+  },
+  "alwaysThinkingEnabled": true,
+  "autoUpdatesChannel": "latest",
+  "theme": "dark"
+}
+ 

@@ -1,0 +1,757 @@
+"""
+The fields of an alert, for suppression and for correlation.
+
+Two things need the same parse. An `alert` exclusion matches on what an alert
+*is* — its rule, the agent it came from, its severity — rather than on an
+indicator inside it. And correlation needs the entity, because a chain is
+built from (entity, time, tactics) and nothing groups by device without one.
+
+Deliberately format-tolerant rather than format-aware. This deployment receives
+Wazuh header blocks, CEF key/value lines and embedded JSON in the same stream,
+often all three in one body:
+
+    Agent: exprevpxy002 | 1445
+    Agent IP: 172.20.20.5
+    ... CEF:0|Fortinet|...|dvchost=fw01 suser=jdoe ...
+    ... {"eventSeverity": "Info", "eventPriority": "Low"}
+
+So each field is looked for in every shape it is known to take and the first
+hit wins. A field that is absent is absent — never guessed, because a
+suppression rule built on a guessed value silences alerts nobody chose to
+silence.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+
+from app.services import body_provenance
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Header form: "Agent: name | id" or "Agent IP: 1.2.3.4". The pipe is captured
+# rather than used as a terminator, because the id after it is what separates a
+# real endpoint from the manager forwarding someone else's log.
+_HEADER = r"^[ \t]*{label}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
+# CEF/key=value form: "dvchost=fw01" up to the next key or end. The leading
+# boundary allows a quote or backslash because this deployment forwards CEF
+# inside escaped JSON — \"destinationServiceName=Office 365 dproc=... — where
+# the key is preceded by \" and a whitespace-only boundary never matches.
+# `DOMAIN\user` is one name, so a lone backslash is inside the value; only
+# the `\"` that closes an escaped-JSON string ends it. Terminating on any
+# backslash truncated every Windows account to its domain half:
+# `suser=CORP\jdoe` yielded `CORP`, and the stored column still holds 6 rows
+# reading `CORP`, 5 reading `INT` and 6 reading a single backslash.
+_KV = r"(?:^|[\s|\"\\]){key}=(?P<value>[^=\n]{{1,200}}?)(?=[\s\\\"]+[A-Za-z_][\w.]*=|\\\"|\"|\s*$)"
+# JSON form, including bodies where JSON is embedded mid-line.
+_JSON = r'"{key}"\s*:\s*"?(?P<value>[^",}}{{\[\]\n]{{1,200}})"?'
+
+# Wazuh's flattened form: a dotted path, unquoted, colon-separated —
+# `data.win.eventdata.user: INT\echelarasu`. Neither _KV (which needs an `=`)
+# nor _JSON (which needs the key quoted) can see it, so every field a Sysmon
+# alert carries only this way was invisible to the extractor.
+#
+# The dot before the key is required, so `.user` cannot match `.parentUser`:
+# the parent process's account is not the account that ran the command.
+_DOTTED = r"(?:^|\n)[ \t]*[\w.]*\.{key}[ \t]*:[ \t]*(?P<value>[^\n]{{1,200}})"
+
+# Windows EVTX rendered as XML: `<EventID>4688</EventID>`, sometimes
+# `<EventID Qualifiers="16384">4688</EventID>`. The Exabeam-forwarded bodies
+# carry this form and none of the four above, which is why `lin` and `pov`
+# matched no playbook row: measured 2026-10-22, **25 of 52 runs had an id in
+# the body and none in `alert_fields`** — 20 of 24 `lin` bodies contain the
+# element, 9 of 28 for `pov`.
+#
+# **`<EventRecordID>` is the trap and it is in every one of these bodies.**
+# It is a per-channel sequence number in the hundreds of thousands, not an
+# event id, and a looser pattern reads it as one. `<EventID` cannot prefix
+# `<EventRecordID` — the fifth character differs — so anchoring the opening
+# tag exactly is what separates them. Asserted in the dangerous direction by
+# `test_event_record_id_is_not_read_as_an_event_id`.
+#
+# Digits only, 1-5 of them: a Windows event id is at most 5 digits, and the
+# bound stops a sequence number sneaking in if the element name ever changes.
+_XML_ELEMENT = r"<{key}\b[^>]*>[ \t]*(?P<value>\d{{1,5}})[ \t]*</{key}>"
+
+
+def _first(patterns: list[str], text: str) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if match:
+            value = (match.group("value") or "").strip().strip('"').strip()
+            # A structural character is not a value. "client":{"userAgent":...}
+            # is an Okta object, not an organisation called "{" — and a bogus
+            # client name is worse than none, because correlation partitions on
+            # it and would quietly file 87 alerts under a punctuation mark.
+            if value and value not in ("{", "[", "}", "]", "null", "None", "-"):
+                return value[:200]
+    return None
+
+
+def _field(
+    label: str | None, keys: list[str], text: str, *, dotted: bool = False,
+    xml_elements: list[str] | None = None,
+) -> str | None:
+    """The first form of this field the body actually uses.
+
+    `dotted` is opt-in per field, not on by default, because the flattened
+    path form is a different namespace from the other two and matches by
+    suffix. Switched on for every key at once it was measured over all 14,906
+    stored bodies: it gave 3,511 alerts the account that ran the command, and
+    it also gave 11,374 of them an `event_name` of "Account Manipulation,
+    Valid Accounts" — a MITRE technique list, read as an event name because
+    some dotted path happens to end in `.name`. `event_name` is offered as a
+    suppression criterion, so analysts would have built exclusions on it.
+
+    So each field earns the dotted form by being checked against real bodies,
+    rather than inheriting it.
+    """
+    patterns: list[str] = []
+    if label:
+        patterns.append(_HEADER.format(label=re.escape(label)))
+    for key in keys:
+        patterns.append(_KV.format(key=re.escape(key)))
+        patterns.append(_JSON.format(key=re.escape(key)))
+        if dotted:
+            patterns.append(_DOTTED.format(key=re.escape(key)))
+    # Last, deliberately. A body that already yields this field through any
+    # form above keeps the value it had; this only reaches bodies where every
+    # other form found nothing.
+    for element in xml_elements or []:
+        patterns.append(_XML_ELEMENT.format(key=re.escape(element)))
+    return _first(patterns, text)
+
+
+# Wazuh's own id for the manager. An alert attributed to it was forwarded,
+# not observed on a device.
+_MANAGER_AGENT_ID = "000"
+
+_ALERT_LINE = re.compile(r"^[ \t]*Alert[ \t]*:[ \t]*(.+)$", re.MULTILINE)
+
+
+def detection_name_of(alert_body: str) -> str | None:
+    """The detection the alert names, as opposed to the Wazuh rule that carried it.
+
+    These alerts arrive shaped like:
+
+        Alert: exprevpxy002 - Shell Execution Of Process Located In Tmp Directory | Unknown problem somewhere in the system.
+        Rule: 1002
+
+    Left of the pipe is the detection somebody wrote and tunes. Right of it is
+    the description of the Wazuh rule that matched, and for generic base rules
+    — 1002 is "unknown problem somewhere in the system", 81640 is "URL belongs
+    to an allowed category" — that description says nothing about the alert and
+    is shared by detections with nothing in common.
+
+    Both are kept. The rule id and its description stay the rule's identity,
+    because that is what a tuning change acts on. This is what the alert is
+    *about*, and it is what stops three unrelated detections on one host
+    counting as one rule and failing to form a case: measured on this data,
+    exprevpxy002 carries 2,686 alerts under rule 1002 alone, which is one
+    distinct rule, which is one short of a case.
+
+    Returns None when there is no Alert: line, which is most pasted bodies.
+    """
+    match = _ALERT_LINE.search(str(alert_body or ""))
+    if not match:
+        return None
+    left = match.group(1).split("|", 1)[0].strip()
+    # "<agent> - <detection>". The agent half repeats the Agent: field, and
+    # keeping it would make the same detection look different on every host.
+    if " - " in left:
+        left = left.split(" - ", 1)[1].strip()
+    return left[:512] or None
+
+
+def extract_alert_fields(alert_body: str, *, rule_id: str | None = None,
+                         rule_name: str | None = None) -> dict[str, Any]:
+    """
+    Every field this platform can match an alert on, plus its entity.
+
+    `rule_id` and `rule_name` are passed in rather than parsed: the ingest route
+    already resolved them into columns, and re-deriving them from the text is a
+    second answer to a settled question.
+    """
+    text = str(alert_body or "")[:200_000]
+
+    agent = _field("Agent", ["agent", "dvchost", "shost", "computer", "hostname"], text)
+    # "Agent: exprevpxy002 | 1445" — the id after the pipe is not the name, and
+    # it is worth keeping: agent 000 is the Wazuh manager itself, so an alert
+    # attributed to it was forwarded (a firewall log, say) rather than observed
+    # on a device. Correlating those by "host" would group every forwarded log
+    # in the estate under one machine that never saw any of it.
+    agent_id = None
+    if agent and "|" in agent:
+        agent, _, agent_id = (part.strip() for part in agent.partition("|"))
+
+    # A forwarded log names its own device inside the payload, and that device
+    # is the entity the alert is about.
+    #
+    # Refusing agent 000 is right — it is the manager, and correlating on it
+    # would group every forwarded log in the estate under one machine that saw
+    # none of it. But refusing it and stopping there left the alert with no
+    # host at all, and an alert with no host reaches no case: 3,195 of 11,376
+    # rows, of which 2,471 are one FortiGate detection whose body carries
+    # `devname="FortiGate-200F-FW01"` in plain sight.
+    #
+    # Only consulted for a forwarded alert. On a log a real agent observed,
+    # the agent is the device and a `devname` in the payload names something
+    # the device was talking about, not the device itself.
+    forwarded_device = None
+    if agent_id == _MANAGER_AGENT_ID:
+        forwarded_device = _field(
+            None, ["devname", "dvchost", "deviceExternalId", "hostname", "shost"], text,
+        )
+        if forwarded_device:
+            agent = forwarded_device
+
+    fields: dict[str, Any] = {
+        "rule_id": (str(rule_id).strip() if rule_id else None) or _field("Rule", ["rule_id", "ruleid"], text),
+        "rule_name": (str(rule_name).strip() if rule_name else None),
+        "detection_name": detection_name_of(text),
+        "agent": agent,
+        "agent_ip": _field("Agent IP", ["agent_ip", "dvc", "src"], text),
+        "agent_id": agent_id,
+        # Set when the host was taken from a forwarded log's own payload
+        # rather than from the Wazuh agent that relayed it.
+        "forwarded_device": forwarded_device,
+        "manager": _field("Manager", ["manager"], text),
+        # An incident names its own subject; trust that over a parsed header.
+        "entity_id": _field("entity_id", ["entity_id"], text),
+        # `xml_elements` is appended LAST inside `_field`, so it fires only
+        # where the header, key=value, JSON and dotted forms all found
+        # nothing. That placement is why adding it cannot change a body whose
+        # extraction already works — verified over the c00 corpus, 0 changes.
+        "event_id": _field("Event ID", ["event_id", "eventid"], text,
+                           xml_elements=["EventID"]),
+        # The sender's own declaration that this body is a substitute, kept
+        # rather than discarded. 69 bodies carry one; we parsed their derived
+        # metadata as log text and told nobody. Always present as a value —
+        # `verbatim_as_received` when nothing was declared — so "the sender
+        # said nothing" and "nobody looked" are different bytes.
+        body_provenance.FIELD: body_provenance.provenance_of(text),
+        "event_name": _field(None, ["eventName", "event_name", "name"], text),
+        "event_priority": _field(None, ["eventPriority", "event_priority", "priority"], text),
+        "event_severity": _field(None, ["eventSeverity", "event_severity", "severity"], text),
+        "event_log_level": _field(None, ["eventLogLevel", "event_log_level", "log_level", "level"], text),
+        # The header form is listed, which it was not.
+        #
+        # Every other identity field here passes a label — "Agent IP",
+        # "Manager", "Rule" — and this one passed None, so only `user=` and
+        # `"user":` were ever tried. A Sysmon process-creation alert writes
+        # neither: it says `User: INT\echelarasu` on its own line and
+        # `data.win.eventdata.user:` in the flattened block. Measured over
+        # 14,906 stored runs, 3,511 carry an account in the body that was
+        # never extracted, against 344 that have one — so the platform could
+        # not say who ran a command on 24% of its alerts while the alert said
+        # so twice.
+        #
+        # "User", not "ParentUser": the header is anchored at line start, so
+        # the process's own account wins and the parent's cannot be mistaken
+        # for it.
+        "user": _account_of(text),
+        # Both feeds carry alerts on behalf of other organisations. TraceCat
+        # incidents name theirs outright ("client: LIN"); Wazuh alerts name none
+        # at all, which is why the sender can declare it.
+        "client": _field("client", ["client", "customer", "tenant", "organisation"], text),
+        # A TraceCat incident is a whole user or asset session already — it
+        # arrives with its own event_count and entity_type. That is a different
+        # object from a single Wazuh alert, and correlating the two kinds
+        # together would be comparing a case to one of its own members.
+        "entity_type": _field("entity_type", ["entity_type"], text),
+        "event_count": _field("event_count", ["event_count"], text),
+        "service": _field(None, ["destinationServiceName", "service"], text),
+    }
+    return {key: value for key, value in fields.items() if value}
+
+
+# Fields worth offering as suppression criteria, most identifying first. A
+# suppression built from the top of this list is narrow; one built from the
+# bottom alone is a blunt instrument, which is why the UI orders them this way.
+SUPPRESSIBLE_FIELDS: tuple[str, ...] = (
+    # First, because it is what the alert actually is. A carrier rule can hold
+    # several unrelated detections, so suppressing by rule_id silences more
+    # than the analyst is looking at.
+    "detection_name",
+    "rule_id",
+    "rule_name",
+    "agent",
+    "agent_ip",
+    "event_id",
+    "event_name",
+    "service",
+    "manager",
+    "user",
+    "event_priority",
+    "event_severity",
+    "event_log_level",
+)
+
+# Severity is the sender's own opinion, and this deployment has alerts arriving
+# High that resolve benign — so it is wrong in at least one direction and
+# probably both. An exclusion keyed on severity alone would silence a real
+# detection that happened to be mislabelled Low.
+SEVERITY_ONLY_FIELDS = frozenset({"event_priority", "event_severity", "event_log_level"})
+
+
+
+# Device categories that arrive where a hostname belongs. This feed's CEF puts
+# "dvchost=Personal computer" and "dvchost=Smartphone" in the field the standard
+# reserves for a device hostname, so the value is a class of machine rather than
+# a machine. Correlation groups on the host, so accepting these would file every
+# phone in the estate under one entity called "Smartphone" — 52 alerts were
+# already grouped that way, which is precisely the fabricated chain the source
+# and client partitions exist to prevent.
+_DEVICE_CATEGORIES = frozenset({
+    "unknown", "unknown device", "personal computer", "computer", "desktop",
+    "laptop", "smartphone", "phone", "mobile", "mobile device", "tablet",
+    "workstation", "server", "device", "iphone", "ipad", "android", "windows",
+    "macintosh", "mac", "linux", "n/a", "none", "null",
+})
+
+
+def looks_like_host(value: Any) -> bool:
+    """
+    Whether this could be a machine's name rather than a description of one.
+
+    Two rules, both cheap and both decisive here. A hostname has no whitespace —
+    DNS and NetBIOS names cannot contain it, so "Personal computer" is a
+    sentence about a device, not its name. And a bare category word is a class,
+    however well it is spelled.
+    """
+    candidate = str(value or "").strip()
+    if not candidate or len(candidate) > 255:
+        return False
+    if any(character.isspace() for character in candidate):
+        return False
+    return candidate.casefold() not in _DEVICE_CATEGORIES
+
+
+# Wazuh's own id for the manager. An alert bearing it was forwarded, not
+# observed on an endpoint.
+MANAGER_AGENT_ID = "000"
+
+
+# When the sender says nothing about where an alert came from.
+UNKNOWN_SOURCE = "unknown"
+
+
+def source_of(fields: dict[str, Any], *, declared: str | None = None) -> str:
+    """
+    Which platform this alert came from.
+
+    Correlation must never join alerts across senders. Two platforms watching
+    the same estate name hosts their own way, and a "chain" assembled from a
+    Siembiot endpoint alert and an unrelated session alert about a similarly
+    named host is a fabrication — the most damaging kind, because it looks
+    exactly like the thing the feature exists to find.
+
+    The sender's own declaration wins; otherwise the manager that forwarded it
+    identifies the platform. Nothing is inferred beyond that: an unknown source
+    stays unknown and correlates only with other unknowns from the same feed.
+    """
+    if str(declared or "").strip():
+        return str(declared).strip()[:120]
+    manager = str(fields.get("manager") or "").strip()
+    return manager[:120] if manager else UNKNOWN_SOURCE
+
+
+# Alerts arriving without one. Correlation treats it as its own partition
+# rather than a wildcard: pooling every unlabelled client into one bucket is
+# exactly the cross-tenant mixing this is meant to prevent.
+UNKNOWN_CLIENT = "unknown"
+
+
+def client_of(fields: dict[str, Any], *, declared: str | None = None) -> str:
+    """
+    Which organisation this alert is about.
+
+    Both feeds carry other people's alerts, so two customers can each own a host
+    called DC01. Grouping those together would build a chain across companies —
+    wrong, and a confidentiality problem as well as a correctness one.
+    """
+    if str(declared or "").strip():
+        return str(declared).strip()[:120]
+    value = str(fields.get("client") or "").strip()
+    return value[:120] if value else UNKNOWN_CLIENT
+
+
+def is_pre_correlated(fields: dict[str, Any]) -> bool:
+    """
+    True when the payload is already a session rather than a single alert.
+
+    A TraceCat incident arrives carrying fifty events and their triggered rules.
+    It is a case, not a member of one.
+    """
+    return bool(fields.get("entity_type") and fields.get("event_count"))
+
+
+def _account_of(text: str) -> str | None:
+    """The account this alert is about, out of the several it may name.
+
+    A Sysmon alert names one — `User: INT\\echelarasu` — and that is the one
+    that ran the command. A Windows security event names two, and which of
+    them matters depends on the event:
+
+        Event ID: 4740  (a user account was locked out)
+          data.win.eventdata.subjectUserName: EXPDC402$   <- the domain
+                                                             controller, which
+                                                             performed the
+                                                             lockout
+          data.win.eventdata.targetUserName:  gmaciuc     <- the person who was
+                                                             locked out
+
+    Neither field was tried at all, so 513 stored alerts name an account and
+    carry none: the lockout above reported no user, on a case titled "User
+    account locked out".
+
+    Taking the target always would be wrong too. Across those 513, the target
+    is a machine account 204 times and the subject is one 300 times — so
+    neither field is reliably the person, and the rule is to prefer whichever
+    names one. A machine account is still recorded when it is all there is,
+    because "the domain controller did this" is worth knowing; it is only
+    barred from linking cases together.
+    """
+    # In preference order. The acting user first, where the alert states one
+    # outright; then the account acted upon, which is what a lockout, a logon
+    # or a password change is about; then the account that acted.
+    candidates = [
+        _field("User", ["suser", "duser", "user", "userName", "srcuser"], text, dotted=True),
+        _field(None, ["targetUserName", "target_user", "targetusername"], text, dotted=True),
+        _field(None, ["subjectUserName", "subject_user", "subjectusername"], text, dotted=True),
+    ]
+    cleaned = [value for value in (_clean_user(c) for c in candidates) if value]
+    if not cleaned:
+        return None
+    return next((value for value in cleaned if not is_machine_account(value)), cleaned[0])
+
+
+def entity_of(fields: dict[str, Any]) -> tuple[str | None, str | None]:
+    """
+    The (host, user) this alert is about — the key correlation groups on.
+
+    Returns no host for a manager-forwarded alert. Grouping those by "host"
+    would file every forwarded firewall log in the estate under one machine
+    that never saw any of them, and a chain built on that is fiction.
+    """
+    # In preference order, taking the first that names a machine rather than
+    # describing one. An address is a worse identifier than a name but a real
+    # one; a category is not an identifier at all.
+    host = next(
+        (
+            candidate
+            for candidate in (fields.get("entity_id"), fields.get("agent"), fields.get("agent_ip"))
+            if looks_like_host(candidate)
+        ),
+        None,
+    )
+    if str(fields.get("agent_id") or "").strip() == MANAGER_AGENT_ID:
+        host = fields.get("agent_ip") if looks_like_host(fields.get("agent_ip")) else None
+    user = _clean_user(fields.get("user"))
+    return (str(host)[:255] if host else None, str(user)[:255] if user else None)
+
+
+# Values that name no account. `-` and `null` are already dropped upstream;
+# these are what survives a parse: a bare domain with nothing after the
+# separator, a lone separator, and the machine pseudo-accounts that belong to
+# every host and so cannot distinguish one.
+_NOT_AN_ACCOUNT = frozenset({"", "\\", "-", "n/a", "unknown", "null", "none"})
+
+# Accounts that are not a person. Used here to choose between the several
+# accounts a Windows security event names, and by the linkage service to keep
+# them from tying unrelated alerts together — one definition, because two
+# would drift and the answer has to be the same in both places.
+MACHINE_ACCOUNTS = frozenset({
+    "system",
+    "local system",
+    "localsystem",
+    "local service",
+    "localservice",
+    "network service",
+    "networkservice",
+    "anonymous",
+    "anonymous logon",
+    "nt authority",
+    "iusr",
+    "iwam",
+})
+
+
+def is_machine_account(user: Any) -> bool:
+    """Whether this names a machine rather than a person.
+
+    A computer account is written `HOST$` by Windows, and the service
+    pseudo-accounts are named outright. Matched on the account half of
+    `DOMAIN\\user`, so `NT AUTHORITY\\SYSTEM` and a bare `system` are the
+    same answer.
+    """
+    text = str(user or "").strip().casefold()
+    if not text:
+        return True
+    account = text.rsplit("\\", 1)[-1].strip()
+    if account in MACHINE_ACCOUNTS or text in MACHINE_ACCOUNTS:
+        return True
+    # `HOST$`, and `HOST$@REALM` as Kerberos writes it.
+    return account.endswith("$") or "$@" in account
+
+
+def _clean_user(value: Any) -> str | None:
+    """One spelling per account.
+
+    The same person arrives spelled several ways in one estate. The header
+    form writes `INT\\echelarasu`; the flattened block, being JSON that was
+    printed rather than parsed, writes the separator doubled; and a CEF field
+    may carry a trailing comma from the line it sat on. Stored as-is, those
+    are three different accounts — and correlation links on this value, so a
+    case that should group one person's activity splits three ways instead.
+
+    The domain half is kept rather than stripped. It is part of the name, two
+    domains can hold the same username, and the linkage service already looks
+    at both halves when deciding whether two alerts share an account.
+    """
+    text = str(value or "").strip().strip('"').strip()
+    # The printed-JSON doubling, and any deeper escaping behind it.
+    while "\\\\" in text:
+        text = text.replace("\\\\", "\\")
+    text = text.strip().rstrip(",;:").strip()
+    if text.casefold() in _NOT_AN_ACCOUNT:
+        return None
+    # `CORP\` names a domain and no account; so does a lone separator. Either
+    # would group every alert on that domain under one subject.
+    if text.endswith("\\") or not text.replace("\\", "").strip():
+        return None
+    return text
+
+# ── Event time ────────────────────────────────────────────────────────────────
+#
+# When the thing happened on the host, as distinct from when this platform was
+# told about it. They are not close: this deployment receives alerts replayed
+# days after the fact, so ingest order is the order a sender chose to send in
+# and says nothing about the order events occurred. Any sequence reasoning built
+# on created_at measures the pipeline rather than the attack.
+#
+# Sources in descending order of authority. The first two are the host's own
+# clock; the rest are progressively further from it.
+_EVENT_TIME_PATTERNS: tuple[str, ...] = (
+    # Wazuh Windows eventlog, flattened or nested.
+    r"data\.win\.system\.systemTime\s*[:=]\s*\"?([0-9T:\-\.\+Z]{19,40})",
+    r'"systemTime"\s*:\s*"([^"]{19,40})"',
+    # Wazuh FIM.
+    r"syscheck\.mtime\s*[:=]\s*\"?([0-9T:\-\.\+Z ]{19,40})",
+    r'"mtime"\s*:\s*"([^"]{19,40})"',
+    # The alert's own header. Two stamps appear here separated by a pipe; both
+    # are collected and the earliest wins — see _parse_header_times.
+    r"(?:^|\n)[ \t]*Time:[ \t]*([^\n]{19,90})",
+    # Source-provided event time inside a JSON payload.
+    r'"eventTime"\s*:\s*"([^"]{19,40})"',
+    r'"timestamp"\s*:\s*"([^"]{19,40})"',
+)
+
+_TIMESTAMP_IN_TEXT = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+
+
+# ── Telemetry for the two heuristics above ────────────────────────────────────
+#
+# Both are defensible on today's data and neither is a law. These counters exist
+# so drift announces itself instead of being reconstructed from wrong answers
+# months later.
+#
+# Measured over 2,961 stored runs when this was written: the two header stamps
+# disagree on 89.6% of bodies, but by min 0.0s / p50 27.6s / p95 51.4s / max
+# 57.5s — one tight mode bounded under a minute, which is what systematic
+# manager-processing lag looks like. A flipped field order or a
+# corrected-earlier/observed-later pair would instead show a second cluster or
+# an unbounded tail, so the shape is the signal, not the rate.
+#
+# Naive stamps were 0% of chosen values: the offset-bearing header outranks the
+# naive eventTime on every body that carries both. The UTC assumption is
+# therefore inert today, and this counter is what will say when it stops being.
+STAMP_DISAGREEMENT_NOTABLE_SECONDS = 5.0
+STAMP_DISAGREEMENT_IMPLAUSIBLE_SECONDS = 600.0
+
+_STAMP_STATS: dict[str, float] = {
+    "headers_with_multiple_stamps": 0,
+    "disagreed_notably": 0,
+    "disagreed_implausibly": 0,
+    "max_delta_seconds": 0.0,
+    "naive_stamps_chosen": 0,
+    # A host whose clock is ahead of the manager that reported it.
+    "host_clock_ahead": 0,
+}
+
+
+def stamp_heuristic_stats() -> dict[str, float]:
+    """A snapshot of how the timestamp heuristics are behaving in this process."""
+    return dict(_STAMP_STATS)
+
+
+def reset_stamp_heuristic_stats() -> None:
+    for key in _STAMP_STATS:
+        _STAMP_STATS[key] = 0 if key != "max_delta_seconds" else 0.0
+
+
+_NAIVE_LITERAL = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
+
+
+def _parse_timestamp(raw: str) -> datetime | None:
+    """
+    One timestamp, or nothing. Never raises.
+
+    Normalises the two shapes Python will not take as they arrive: a trailing Z,
+    and the sub-microsecond precision Windows emits (systemTime carries seven
+    fractional digits, which is 100-nanosecond FILETIME resolution).
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+00:00").replace(" ", "T", 1) if text.endswith("Z") else text
+    text = text.replace(" UTC", "").strip()
+
+    fraction = re.search(r"\.(\d{7,9})", text)
+    if fraction:
+        text = text.replace(f".{fraction.group(1)}", f".{fraction.group(1)[:6]}")
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # A naive stamp is the source's local clock with no offset given. Treating
+    # it as UTC is a documented assumption, not a discovery — but it keeps every
+    # stored value on one scale, which ordering needs more than it needs to be
+    # right about a timezone nobody declared.
+    if parsed.tzinfo:
+        return parsed
+    # Counted, not just assumed. A naive stamp from a UTC+9 host read as UTC
+    # lands nine hours out, which ordering tolerates and tempo does not.
+    _STAMP_STATS["naive_stamps_chosen"] += 1
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_header_times(raw: str) -> datetime | None:
+    """
+    The earliest timestamp in one header line.
+
+    Wazuh's header carries two — "2026-08-16T07:29:13.311+0000 |
+    2026-08-16T07:28:30.948Z UTC" — without saying which is which. Taking the
+    earlier one is a rule rather than a guess about field order: an event on a
+    host cannot postdate the processing of that event, so whichever position
+    they occupy, the earlier value is the one nearer the host.
+    """
+    candidates = [
+        parsed
+        for match in _TIMESTAMP_IN_TEXT.findall(str(raw or ""))
+        if (parsed := _parse_timestamp(match)) is not None
+    ]
+    if not candidates:
+        return None
+
+    chosen = min(candidates)
+    if len(candidates) > 1:
+        delta = (max(candidates) - chosen).total_seconds()
+        _STAMP_STATS["headers_with_multiple_stamps"] += 1
+        _STAMP_STATS["max_delta_seconds"] = max(_STAMP_STATS["max_delta_seconds"], delta)
+        if delta > STAMP_DISAGREEMENT_NOTABLE_SECONDS:
+            _STAMP_STATS["disagreed_notably"] += 1
+        if delta > STAMP_DISAGREEMENT_IMPLAUSIBLE_SECONDS:
+            # Beyond processing lag. Either the field order flipped or these are
+            # not an event and its processing at all, and picking the earlier is
+            # then picking arbitrarily.
+            _STAMP_STATS["disagreed_implausibly"] += 1
+            logger.warning(
+                "Alert header stamps disagree by %.0fs, far beyond processing lag — "
+                "the earliest-wins rule may be choosing arbitrarily", delta
+            )
+    return chosen
+
+
+# How far a host's own stamp may sit after the alert that reports it before the
+# host is the one that is wrong. Propagation and rounding are seconds; this is
+# generous enough to never fire on them.
+HOST_CLOCK_TOLERANCE = timedelta(minutes=2)
+
+
+def _reported_at(text: str) -> datetime | None:
+    """When the manager produced this alert, as the alert itself states.
+
+    The ceiling on any event time in it. A host cannot observe something after
+    the alert about it was written.
+
+    Parsed without the telemetry `_parse_header_times` carries. That counter
+    measures how often the two stamps on a header disagree and by how much,
+    which is a property of the *choice* the extractor makes — reading the same
+    line a second time to establish a ceiling counted every alert twice and
+    made the statistic mean something else.
+
+    The rule is the same one: the earliest stamp on the line, because an event
+    cannot postdate its own processing whichever position the two occupy.
+    """
+    match = re.search(r"(?:^|\n)[ \t]*Time:[ \t]*([^\n]{19,90})", text, re.IGNORECASE)
+    if not match:
+        return None
+    found = [
+        parsed
+        for stamp in _TIMESTAMP_IN_TEXT.findall(match.group(1))
+        if (parsed := _parse_timestamp(stamp)) is not None
+    ]
+    return min(found) if found else None
+
+
+def event_time_of(alert_body: str, *, fallback: datetime | None = None) -> datetime | None:
+    """
+    When this happened on the host, falling back to when we were told.
+
+    Returns `fallback` (the run's created_at) only when the body carries nothing
+    parseable, so a caller can always order by the result. A value in the far
+    future is refused: a clock-skewed endpoint stamping 2031 would otherwise
+    sort itself to the end of every case it appears in, permanently.
+
+    **A host whose clock is merely ahead is refused too, by the alert's own
+    stamp rather than by the wall clock.** The far-future guard is two days,
+    so a host ten hours fast sailed through it — and the alert says plainly
+    that it did:
+
+        Time: 2026-10-08T09:15:26.531+0000
+        data.win.system.systemTime: 2026-10-08T13:07:39.294706900Z
+
+    Both explicitly UTC, so nothing is mis-parsed; the Windows host is simply
+    3h52m ahead of the Wazuh manager that reported it. Taken at face value
+    that put case #1127 in the future, where a window measured from it could
+    never elapse and the Cases table showed activity that had not happened.
+
+    Three hosts do this — two of them exactly ten hours out, which looks like
+    a lab VM — over eight alerts. Small, and the kind of thing that is only
+    small until a figure is computed from it.
+
+    The manager's stamp is used instead, and the substitution is counted so a
+    fleet-wide clock problem announces itself rather than being absorbed.
+    """
+    text = str(alert_body or "")[:200_000]
+    reported_at = _reported_at(text)
+
+    for pattern in _EVENT_TIME_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        found = _parse_header_times(match.group(1))
+        if found is None:
+            continue
+        if found > datetime.now(timezone.utc) + timedelta(days=2):
+            logger.debug("Ignoring implausible event time %s", found)
+            continue
+        if reported_at is not None and found > reported_at + HOST_CLOCK_TOLERANCE:
+            _STAMP_STATS["host_clock_ahead"] += 1
+            logger.warning(
+                "Host clock ahead of the manager by %.0fs; using the alert's own "
+                "stamp instead of %s",
+                (found - reported_at).total_seconds(), found.isoformat(),
+            )
+            return reported_at
+        return found
+
+    return reported_at or fallback

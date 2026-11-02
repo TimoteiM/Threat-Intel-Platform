@@ -1,0 +1,226 @@
+[
+  {
+    "investigation_id": "6f00b5b9-1530-4998-b329-8597f2faed5c",
+    "domain": "6e9172b1ac0b.o3n.io",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 35,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "9713e434-b20f-4eda-a7d7-323d03cc1d82",
+    "domain": "revantage.io",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 26,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "a3e4d87b-2ec0-4bd7-99ac-fea3ac61b7ba",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 37,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "1e4c54f1-44b6-491a-ae0d-1032bb7d8d53",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 52,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "2644a407-f312-41ff-9780-e7374a913ba0",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 37,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "e6201339-b722-4f63-b2d9-d4cbdba29a23",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 56,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "408671ec-1051-45a8-8947-9cca4f6e00ca",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 52,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "41f742b7-1bf1-4d1f-a667-8dc6ba0ff0ce",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 47,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "205d4e02-170b-48ed-855d-e2113da6b056",
+    "domain": "expertware.net",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 35,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "94f4c310-1924-46f1-84e1-c1c34d649a17",
+    "domain": "funnycandle.com",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 34,
+      "confidence": "low",
+      "recommended_action": "monitor"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "86cb79fc-2ec5-4be6-bc38-0277b0993ebf",
+    "domain": "revantage.io",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 41,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "4ee1fe92-73cf-4218-b002-44e8b25eaa65",
+    "domain": "revantage.io",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 41,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "63eec53e-f67f-466e-bb35-b27660863669",
+    "domain": "revantage.io",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 41,
+      "confidence": "medium",
+      "recommended_action": "investigate"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  },
+  {
+    "investigation_id": "a5411711-c920-40de-920d-94f8a66620f9",
+    "domain": "talkcoms.co.uk",
+    "before": {
+      "classification": "suspicious",
+      "risk_score": 37,
+      "confidence": "low",
+      "recommended_action": "monitor"
+    },
+    "after": {
+      "classification": "benign",
+      "risk_score": 15,
+      "confidence": "high",
+      "recommended_action": "monitor"
+    }
+  }
+]

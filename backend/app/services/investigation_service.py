@@ -6,9 +6,13 @@ API endpoints call this service. This service calls repositories.
 
 from __future__ import annotations
 
+import logging
 import uuid
-from typing import Optional, Sequence
+from datetime import datetime, timezone
+from typing import Iterable, Optional, Sequence
 
+import redis as redis_lib
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -18,13 +22,96 @@ from app.db.repository import (
     InvestigationRepository,
     ReportRepository,
 )
-from app.models.database import Investigation
+from app.models.database import Client, Investigation
 from app.models.enums import InvestigationState
 from app.models.schemas import InvestigationCreate
 from app.tasks.investigation_task import run_investigation
 from app.utils.domain_utils import normalize_domain, validate_domain
+from app.collectors.registry import get_collectors_for_type
+from app.services.email_url_triage import unwrap_url
+from app.services.proxy_profiles import is_configured_network_country
+
+logger = logging.getLogger(__name__)
+
+#: The widest observable `investigations.domain` can hold, and therefore the
+#: widest this service accepts. Kept equal to the column (migration 076) and
+#: to `iocs.value` / `indicator_lookups.value`, which were already this wide.
+#:
+#: If the column ever changes, this must change with it — the two disagreeing
+#: is how an input error becomes a 500, which is exactly what happened at 512.
+MAX_OBSERVABLE_CHARS = 2048
 
 settings = get_settings()
+
+
+def _store_investigation_task_id(investigation_id: str, task_id: str | None) -> None:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    try:
+        r = redis_lib.Redis.from_url(settings.redis_url)
+        r.setex(f"investigation-task:{investigation_id}", 7 * 24 * 3600, tid)
+    except Exception as exc:
+        logger.warning("Could not persist investigation task id for %s: %s", investigation_id, exc)
+
+
+def _ensure_baseline_collectors(
+    collectors: list[str],
+    *,
+    supported_for_type: set[str],
+    explicit_request: bool,
+) -> list[str]:
+    """
+    Ensure baseline intel collectors are present when caller did not explicitly
+    choose collectors (e.g., client profile/default flow).
+    """
+    if explicit_request:
+        return collectors
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for name in collectors:
+        if name not in seen:
+            normalized.append(name)
+            seen.add(name)
+
+    for baseline in ("threat_feeds", "brave_osint", "urlscan"):
+        if baseline in supported_for_type and baseline not in seen:
+            normalized.append(baseline)
+            seen.add(baseline)
+
+    return normalized
+
+
+def _dedupe_investigations(rows: Iterable[Investigation]) -> list[Investigation]:
+    """Keep the newest investigation per investigated value."""
+    sorted_rows = sorted(
+        rows,
+        key=lambda inv: (
+            inv.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            str(inv.id or ""),
+        ),
+        reverse=True,
+    )
+
+    deduped: list[Investigation] = []
+    seen: set[str] = set()
+    for inv in sorted_rows:
+        key = str(getattr(inv, "domain", "") or "").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(inv)
+    return deduped
+
+
+def _filter_investigations_by_classification(
+    rows: Iterable[Investigation],
+    classification: Optional[str] = None,
+) -> list[Investigation]:
+    if not classification:
+        return list(rows)
+    return [inv for inv in rows if getattr(inv, "classification", None) == classification]
 
 
 class InvestigationService:
@@ -35,44 +122,365 @@ class InvestigationService:
         self.evidence_repo = EvidenceRepository(session)
         self.report_repo = ReportRepository(session)
 
+    async def _find_matching_clients(self, domain: str) -> list[Client]:
+        """Return active clients whose primary domain or aliases match the given domain."""
+        result = await self.session.execute(
+            select(Client).where(Client.status == "active")
+        )
+        clients = result.scalars().all()
+        d = domain.lower().removeprefix("www.")
+        matched = []
+        for c in clients:
+            client_root = c.domain.lower().removeprefix("www.")
+            aliases = [a.lower().removeprefix("www.") for a in (c.aliases or [])]
+            kws = [k.lower() for k in (c.brand_keywords or [])]
+            if d == client_root or d in aliases or any(kw in d for kw in kws):
+                matched.append(c)
+        return matched
+
     async def create(self, request: InvestigationCreate) -> dict:
         """
         Create a new investigation and dispatch the task pipeline.
 
+        Applies per-client default collectors if the domain matches a registered client.
         Returns dict with investigation_id and initial state.
         """
-        # Normalize and validate
-        domain = normalize_domain(request.domain)
-        if not validate_domain(domain):
-            raise ValueError(f"Invalid domain: {request.domain}")
+        observable_type = request.observable_type or "domain"
+        allowed_types = {"domain", "ip", "url", "hash", "file"}
+        if observable_type not in allowed_types:
+            raise ValueError(
+                f"Unsupported observable_type '{observable_type}'. "
+                f"Allowed: {', '.join(sorted(allowed_types))}"
+            )
+
+        # ── Type-aware observable normalization ──────────────────────────────
+        if observable_type == "domain":
+            domain = normalize_domain(request.domain)
+            if not validate_domain(domain):
+                raise ValueError(f"Invalid domain: {request.domain}")
+        else:
+            domain = request.domain.strip()
+            if not domain:
+                raise ValueError("Observable value cannot be empty")
+            # **Length is checked here, not left to the column.**
+            #
+            # Reported 2026-10-26: an 819-character Hornetsecurity ATP-scan URL
+            # returned an internal error. `investigations.domain` was
+            # varchar(512), so the insert raised StringDataRightTruncation,
+            # which SQLAlchemy surfaces as DataError — and `DataError` is not a
+            # `ValueError`, so the endpoint's `except ValueError` missed it and
+            # the analyst got a 500 for an input problem they could have fixed.
+            #
+            # Migration 076 widened the column to 2048 (the width `iocs.value`
+            # and `indicator_lookups.value` already use). This check is what
+            # keeps the *next* over-long value a 400 with a usable message
+            # rather than another 500: a limit enforced only by a column tells
+            # the caller nothing.
+            if len(domain) > MAX_OBSERVABLE_CHARS:
+                raise ValueError(
+                    f"This {observable_type} is {len(domain):,} characters, "
+                    f"over the {MAX_OBSERVABLE_CHARS:,} limit. Mail-security "
+                    f"rewrapping (ATP scan, linkprotect) can produce URLs this "
+                    f"long — submit the destination URL carried inside it "
+                    f"rather than the wrapper."
+                )
+
+        # ── Mail-security rewrapping ─────────────────────────────────────────
+        # **A wrapper is not the observable.** Measured 2026-10-26: a submitted
+        # Hornetsecurity ATP URL produced a complete, confident investigation of
+        # Hornetsecurity — `hosting_asn_org: Hornetsecurity`, verdict "benign …
+        # avoid blocking the legitimate Hornetsecurity service". Every word of
+        # that was true about the gateway and nothing in it was about the
+        # phishing page the mail actually carried. A confident benign verdict on
+        # a phishing report is a worse outcome than the error it replaced.
+        #
+        # `unwrap_url` decodes the destination from the rewriter's own
+        # parameter. It is free, instant, and does not depend on the gateway
+        # being reachable. It only fires when the HOST matches a known rewriter
+        # and that rewriter's parameter holds an http(s) URL, so an ordinary
+        # link is never altered.
+        #
+        # The submitted value is NOT discarded. It goes into `external_context`
+        # so the report can say what was pasted and what was investigated —
+        # silently swapping one observable for another would be its own kind of
+        # wrong answer.
+        submitted_url: str | None = None
+        unwrapped_from: str | None = None
+        if observable_type == "url":
+            destination, wrapper = unwrap_url(domain)
+            if wrapper and destination and destination != domain:
+                submitted_url, unwrapped_from = domain, wrapper
+                domain = destination
+                logger.info(
+                    "Unwrapped a %s link at submission; investigating the "
+                    "destination rather than the gateway", wrapper,
+                )
+
+        # Validate client_domain if provided (always a domain)
+        client_domain = None
+        if request.client_domain:
+            client_domain = normalize_domain(request.client_domain)
+            if not validate_domain(client_domain):
+                raise ValueError(f"Invalid client domain: {request.client_domain}")
+
+        # ── Cortex-style: find matched clients for default collector selection ──
+        matched_clients = await self._find_matching_clients(domain)
+        external_context = (
+            request.external_context.model_dump()
+            if request.external_context else {}
+        )
+        # This path is only reached when a person asks for one investigation:
+        # batches build their rows in batch_task, and alert-spawned ones in the
+        # spawn service. So it is the honest place to say the request was made
+        # by hand — which is what tells the sandbox gate to detonate regardless
+        # of how settled the reputation looks.
+        external_context["requested_manually"] = True
+        # What was pasted, when it differs from what is being investigated. The
+        # report reads this so an analyst can see both — the alternative is a
+        # verdict about a URL nobody typed.
+        if submitted_url:
+            external_context["submitted_url"] = submitted_url
+            external_context["unwrapped_from"] = unwrapped_from
+        use_anyrun_residential_proxy = bool(
+            request.network_profile and request.network_profile.use_residential_proxy
+        )
+        anyrun_proxy_country: str | None = None
+        if request.network_profile and request.network_profile.proxy_country:
+            anyrun_proxy_country = request.network_profile.proxy_country.strip().upper()
+            if not is_configured_network_country(anyrun_proxy_country):
+                raise ValueError(
+                    f"Proxy country '{anyrun_proxy_country}' is not configured. "
+                    "Set ANYRUN_PROXY_COUNTRIES or PROXY_PROFILES in the backend environment."
+                )
+            use_anyrun_residential_proxy = True
+        if use_anyrun_residential_proxy:
+            external_context["network_profile"] = {
+                "use_residential_proxy": True,
+                **({"proxy_country": anyrun_proxy_country} if anyrun_proxy_country else {}),
+            }
+
+        # ── Determine effective collectors ────────────────────────────────────
+        # Priority: requested → client defaults → settings defaults
+        # Always intersect with collectors that support this observable_type.
+        supported_for_type = set(get_collectors_for_type(observable_type))
+
+        explicit_collectors_requested = bool(request.requested_collectors)
+        effective_collectors = request.requested_collectors
+        if not effective_collectors and matched_clients:
+            for client in matched_clients:
+                if client.default_collectors:
+                    effective_collectors = client.default_collectors
+                    logger.info(
+                        "Applying default collectors from client '%s': %s",
+                        client.name, effective_collectors,
+                    )
+                    break
+
+        if effective_collectors:
+            effective_collectors = [
+                c for c in effective_collectors if c in supported_for_type
+            ]
+        else:
+            effective_collectors = [
+                c for c in settings.default_collectors_list
+                if c in supported_for_type
+            ]
+
+        effective_collectors = _ensure_baseline_collectors(
+            list(effective_collectors),
+            supported_for_type=supported_for_type,
+            explicit_request=explicit_collectors_requested,
+        )
+        logger.info(
+            "Final collectors for %s (%s): %s",
+            domain,
+            observable_type,
+            effective_collectors,
+        )
 
         # Create DB record
         inv = await self.repo.create(
             domain=domain,
+            observable_type=observable_type,
             context=request.context,
+            client_domain=client_domain,
             max_iterations=settings.max_analyst_iterations,
+            anyrun_use_residential_proxy=use_anyrun_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
         )
         await self.session.flush()
 
         investigation_id = str(inv.id)
 
+        # Commit BEFORE dispatching the Celery task.
+        # FastAPI's get_db() commits after the response is sent (ASGI cleanup phase),
+        # which is too late — the Celery worker may pick up and process the task before
+        # the investigation row is visible in the DB, causing FK violations on persist.
+        await self.session.commit()
+
         # Dispatch async pipeline
-        run_investigation.delay(
-            investigation_id=investigation_id,
-            domain=domain,
-            context=request.context,
-            external_context=(
-                request.external_context.model_dump()
-                if request.external_context else None
-            ),
-            requested_collectors=request.requested_collectors,
-        )
+        try:
+            task = run_investigation.delay(
+                investigation_id=investigation_id,
+                domain=domain,
+                observable_type=observable_type,
+                context=request.context,
+                client_domain=client_domain,
+                investigated_url=request.investigated_url,
+                client_url=request.client_url,
+                external_context=external_context or None,
+                requested_collectors=effective_collectors,
+                ai_model=request.ai_model,
+            )
+            _store_investigation_task_id(investigation_id, getattr(task, "id", None))
+        except Exception as exc:
+            await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
+            await self.session.commit()
+            raise RuntimeError(f"Failed to queue investigation task: {exc}") from exc
 
         return {
             "investigation_id": investigation_id,
             "domain": domain,
+            "observable_type": observable_type,
             "state": InvestigationState.CREATED.value,
             "message": f"Investigation started for {domain}",
+        }
+
+    async def create_file(
+        self,
+        request: InvestigationCreate,
+        file_bytes: bytes,
+        sha256: str,
+        filename: str,
+    ) -> dict:
+        """
+        Create an investigation for an uploaded file sample.
+
+        Stores the uploaded file as an artifact on disk, then dispatches the
+        task pipeline. For speed, callers can set observable_type="hash" and
+        domain=<sha256> so VT performs direct hash lookup.
+        """
+        import asyncio
+        from pathlib import Path
+        from app.models.database import Artifact
+
+        # Create DB record first so we have the investigation_id for the storage path
+        observable_type = request.observable_type or "file"
+        if observable_type not in {"file", "hash"}:
+            raise ValueError(
+                f"create_file only supports observable_type 'file' or 'hash', got '{observable_type}'"
+            )
+
+        use_anyrun_residential_proxy = bool(
+            request.network_profile and request.network_profile.use_residential_proxy
+        )
+        anyrun_proxy_country: str | None = None
+        external_context = (
+            request.external_context.model_dump()
+            if request.external_context else {}
+        )
+        if request.network_profile and request.network_profile.proxy_country:
+            anyrun_proxy_country = request.network_profile.proxy_country.strip().upper()
+            if not is_configured_network_country(anyrun_proxy_country):
+                raise ValueError(
+                    f"Proxy country '{anyrun_proxy_country}' is not configured. "
+                    "Set ANYRUN_PROXY_COUNTRIES or PROXY_PROFILES in the backend environment."
+                )
+            use_anyrun_residential_proxy = True
+        if use_anyrun_residential_proxy:
+            external_context["network_profile"] = {
+                "use_residential_proxy": True,
+                **({"proxy_country": anyrun_proxy_country} if anyrun_proxy_country else {}),
+            }
+
+        inv = await self.repo.create(
+            domain=request.domain,
+            observable_type=observable_type,
+            context=request.context,
+            max_iterations=settings.max_analyst_iterations,
+            anyrun_use_residential_proxy=use_anyrun_residential_proxy,
+            anyrun_proxy_country=anyrun_proxy_country,
+        )
+        await self.session.flush()
+
+        investigation_id = str(inv.id)
+
+        # Write file bytes to local artifact storage.
+        # Always resolve relative paths against the backend directory (where config.py lives),
+        # not against the process CWD — FastAPI and Celery may run from different directories.
+        from app.config import _BACKEND_DIR
+        base = Path(settings.artifact_local_path)
+        if not base.is_absolute():
+            base = Path(_BACKEND_DIR) / base
+        dest = base / investigation_id / filename
+        await asyncio.to_thread(dest.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(dest.write_bytes, file_bytes)
+        storage_path = str(dest)
+
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+
+        # Persist file artifact with correct model field names
+        artifact = Artifact(
+            investigation_id=inv.id,
+            collector_name="upload",
+            artifact_name=filename,
+            sha256_hash=sha256,
+            content_type=ext,
+            size_bytes=len(file_bytes),
+            storage_path=storage_path,
+        )
+        self.session.add(artifact)
+        await self.session.flush()
+        file_artifact_id = str(artifact.id)
+
+        # Commit before dispatching (same race condition as create() — see comment above)
+        await self.session.commit()
+
+        # Dispatch pipeline with file_artifact_id
+        try:
+            supported_for_type = set(get_collectors_for_type(observable_type))
+            # `cape` included: an uploaded file is exactly what the sandbox is
+            # for, and without it here the collector never ran on the upload
+            # path however the platform defaults were configured.
+            default_file_collectors = [
+                c for c in ("vt", "hybrid_analysis", "cape") if c in supported_for_type
+            ]
+            effective_collectors = (
+                [c for c in (request.requested_collectors or []) if c in supported_for_type]
+                or default_file_collectors
+            )
+            task = run_investigation.delay(
+                investigation_id=investigation_id,
+                domain=request.domain,
+                observable_type=observable_type,
+                context=request.context,
+                external_context=external_context or None,
+                requested_collectors=effective_collectors,
+                file_artifact_id=file_artifact_id,
+            )
+            _store_investigation_task_id(investigation_id, getattr(task, "id", None))
+        except Exception as exc:
+            await self.repo.update_state(uuid.UUID(investigation_id), InvestigationState.FAILED.value)
+            await self.session.commit()
+            raise RuntimeError(f"Failed to queue file investigation task: {exc}") from exc
+
+        # Detonation is a separate, longer-running workflow than the collector
+        # pipeline, so it is queued alongside rather than inside it. Failing to
+        # queue it must not fail the upload: the investigation is still valid,
+        # and the panel still offers the button.
+        try:
+            from app.tasks.cape_task import detonate_uploaded_sample
+
+            detonate_uploaded_sample.delay(investigation_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not queue automatic detonation for %s: %s", investigation_id, exc)
+
+        return {
+            "investigation_id": investigation_id,
+            "domain": request.domain,
+            "observable_type": observable_type,
+            "state": "created",
+            "message": f"File investigation started for {filename} ({observable_type} mode)",
         }
 
     async def get(self, investigation_id: str) -> Optional[Investigation]:
@@ -84,9 +492,70 @@ class InvestigationService:
         limit: int = 50,
         offset: int = 0,
         state: Optional[str] = None,
+        search: Optional[str] = None,
+        observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
+        dedupe: bool = False,
     ) -> Sequence[Investigation]:
         """List investigations with optional filtering."""
-        return await self.repo.list_all(limit=limit, offset=offset, state=state)
+        if not dedupe:
+            return await self.repo.list_all(
+                limit=limit,
+                offset=offset,
+                state=state,
+                search=search,
+                observable_type=observable_type,
+                classification=classification,
+                has_video=has_video,
+            )
+
+        rows = await self.repo.list_all(
+            limit=None,
+            offset=0,
+            state=state,
+            search=search,
+            observable_type=observable_type,
+            classification=classification,
+            has_video=has_video,
+        )
+        deduped = _dedupe_investigations(
+            _filter_investigations_by_classification(rows, classification)
+        )
+        return deduped[offset: offset + limit]
+
+    async def count(
+        self,
+        state: Optional[str] = None,
+        search: Optional[str] = None,
+        observable_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        has_video: Optional[bool] = None,
+        dedupe: bool = False,
+    ) -> int:
+        """Count investigations matching filters."""
+        if not dedupe:
+            return await self.repo.count(
+                state=state,
+                search=search,
+                observable_type=observable_type,
+                classification=classification,
+                has_video=has_video,
+            )
+
+        rows = await self.repo.list_all(
+            limit=None,
+            offset=0,
+            state=state,
+            search=search,
+            observable_type=observable_type,
+            classification=classification,
+        )
+        return len(
+            _dedupe_investigations(
+                _filter_investigations_by_classification(rows, classification)
+            )
+        )
 
     async def get_evidence(self, investigation_id: str) -> Optional[dict]:
         """Get collected evidence for an investigation."""
@@ -94,6 +563,23 @@ class InvestigationService:
         return ev.evidence_json if ev else None
 
     async def get_report(self, investigation_id: str) -> Optional[dict]:
-        """Get the latest analyst report."""
-        report = await self.report_repo.get_latest(uuid.UUID(investigation_id))
-        return report.report_json if report else None
+        """The latest analyst report, with what it superseded beside it.
+
+        `superseded` is derived on read from this investigation's own report
+        rows — append-only, one per iteration, each carrying its verdict — so
+        it works for every historical investigation with no backfill and
+        cannot drift from the reports it describes. It is a field rather than
+        a notice someone writes once: every future supersession carries its
+        own history without anyone remembering to add one.
+        """
+        inv_id = uuid.UUID(investigation_id)
+        rows = await self.report_repo.all_for(inv_id)
+        if not rows:
+            return None
+        from app.services.provider_branding import normalize_anyrun_branding
+        from app.services.verdict_history_service import from_reports
+
+        latest = rows[-1]
+        payload = dict(normalize_anyrun_branding(latest.report_json) or {})
+        payload["superseded"] = from_reports(rows).as_json()
+        return payload

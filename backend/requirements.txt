@@ -1,33 +1,58 @@
-# ─── Core ───
+﻿# â”€â”€â”€ Core â”€â”€â”€
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
+aiofiles>=24.1.0
+python-multipart>=0.0.9
 
-# ─── Database ───
-sqlalchemy[asyncio]>=2.0.36
+# â”€â”€â”€ Database â”€â”€â”€
+# Held below 2.1 deliberately. 2.1 changed which driver a bare
+# `postgresql://` URL resolves to — psycopg v3 instead of psycopg2 — and
+# an unpinned rebuild therefore crashed the worker on startup with
+# ModuleNotFoundError: psycopg, on an image whose only change was an
+# apt package. The URL is explicit about its driver now too; this pin is
+# so that upgrading is a decision rather than a side effect of rebuilding.
+sqlalchemy[asyncio]>=2.0.36,<2.1
 asyncpg>=0.30.0
 psycopg2-binary>=2.9.9
 alembic>=1.14.0
 
-# ─── Task Queue ───
+# â”€â”€â”€ Task Queue â”€â”€â”€
 celery[redis]>=5.4.0
 redis>=5.2.0
 
-# ─── Collectors ───
+# â”€â”€â”€ Collectors â”€â”€â”€
 dnspython>=2.7.0
 requests>=2.32.0
+anyrun-sdk>=1.1.2
+aiohttp>=3.10.0
 cryptography>=44.0.0
 python-whois>=0.9.4
+tldextract>=5.1.0
+ioc-finder>=9.4.0
+lightgbm>=4.5.0
+numpy>=1.26.0
+scikit-learn>=1.5.0
+shap>=0.46.0
+joblib>=1.4.0
+transformers>=4.47.0
 
-# ─── Claude API ───
+# â”€â”€â”€ Visual Comparison â”€â”€â”€
+playwright>=1.40.0
+Pillow>=10.0.0
+
+# â”€â”€â”€ Claude API â”€â”€â”€
 anthropic>=0.42.0
-
-# ─── Export ───
+openai>=1.68.0
+# â”€â”€â”€ Export â”€â”€â”€
 weasyprint>=63.0
-
-# ─── Dev / Test ───
+jinja2>=3.1.0
+boto3>=1.35.0
+# â”€â”€â”€ Dev / Test â”€â”€â”€
 pytest>=8.3.0
 pytest-asyncio>=0.24.0
 httpx>=0.28.0
 python-dotenv>=1.0.0
+extract-msg>=0.52.0
+

@@ -1,0 +1,931 @@
+"""`not_configured` and "worked until Monday" must not be the same row.
+
+The defect this closes removed the state that would have been red. SIEM log
+enrichment stopped on 2026-10-12 because `OPENSEARCH_TENANT_VALUES` went
+empty, which makes the integration read as **not_configured** — and on a page
+listing unconfigured tools, that is invisible. `verified_failing` catches
+"configured but unusable"; it does not catch "configuration vanished", because
+a vanished configuration is indistinguishable from one never made.
+
+The distinguishing fact is already stored: `alert_log_context` rows up to
+2026-10-12 and none after. So the status carries `last_succeeded_at`, and a
+tool that is not working *and has a last success* is an incident rather than
+an absence.
+
+Fourth split of one state into two this week: checked from listed, failed from
+not_attempted, verified from consulted, and now never-configured from
+configured-and-stopped.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from app.services import absence
+from pathlib import Path
+
+from app.services import integration_status_service as iss
+from app.services import integration_status_service as st
+
+NOW = datetime(2026, 10, 14, 14, 0, tzinfo=timezone.utc)
+MONDAY = datetime(2026, 10, 12, 12, 26, 32, tzinfo=timezone.utc)
+
+
+# --- the dangerous direction ---------------------------------------------
+
+
+def test_a_tool_that_stopped_is_not_reported_as_never_configured():
+    """The exact shape of the two-day outage."""
+    verdict = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert verdict["stopped"] is True, (
+        "an integration with a last success is not an absence of "
+        "configuration; it is an incident"
+    )
+    assert verdict["state"] == st.STOPPED
+    assert verdict["silent_for_hours"] >= 48
+
+
+def test_a_tool_that_never_worked_stays_not_configured():
+    """The control. Without it, every unconfigured tool reads as an incident."""
+    verdict = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=None, now=NOW,
+    )
+    assert verdict["stopped"] is False
+    assert verdict["state"] == st.NOT_CONFIGURED
+
+
+def test_never_worked_is_an_absence_not_a_date():
+    """`last_succeeded_at` of None must not render as a zero date or 'never
+    observed' masquerading as a measurement."""
+    verdict = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=None, now=NOW,
+    )
+    assert absence.is_absent(verdict["last_success"])
+    assert verdict["last_success"]["kind"] == absence.NEVER_OBSERVED
+
+
+def test_a_working_tool_is_not_flagged_even_with_an_old_success():
+    verdict = st.continuity(
+        state=st.VERIFIED_OK, last_succeeded_at=MONDAY, now=NOW,
+    )
+    assert verdict["stopped"] is False
+    assert verdict["state"] == st.VERIFIED_OK
+
+
+def test_verified_failing_with_a_last_success_is_still_stopped():
+    """Failing-and-previously-working is the same incident, louder."""
+    verdict = st.continuity(
+        state=st.VERIFIED_FAILING, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert verdict["stopped"] is True
+    assert verdict["state"] == st.STOPPED
+
+
+def test_a_tool_no_connector_implements_is_never_an_incident():
+    verdict = st.continuity(
+        state=st.NOT_IMPLEMENTED, last_succeeded_at=None, now=NOW,
+    )
+    assert verdict["stopped"] is False
+    assert verdict["state"] == st.NOT_IMPLEMENTED
+
+
+def test_a_future_last_success_does_not_produce_negative_silence():
+    """Clock skew must not make a stopped tool look fine."""
+    verdict = st.continuity(
+        state=st.NOT_CONFIGURED,
+        last_succeeded_at=NOW + timedelta(hours=3), now=NOW,
+    )
+    assert verdict["silent_for_hours"] >= 0
+
+
+def test_stopped_is_the_worst_state_so_it_wins_the_overall_badge():
+    """The page takes the worst direction. `stopped` must outrank the rest or
+    a stopped tool hides behind a healthy second direction."""
+    assert st.STOPPED in st.STATES
+    assert st.STATES.index(st.STOPPED) == 0, (
+        "STATES is worst-first and the overall badge is min() by this index"
+    )
+
+
+# --- the log store, which was not on the page at all --------------------
+
+
+def test_the_log_store_is_a_listed_integration():
+    """It carries 154M documents and feeds every alert's context, and it was
+    absent from the catalogue because it is not a collector. A page that omits
+    the integration most likely to break cannot report it breaking."""
+    cat = st.catalogue()
+    assert "opensearch" in cat, (
+        f"the log store is not listed; catalogue has {sorted(cat)}"
+    )
+    spec = cat["opensearch"]
+    assert spec.category == "siem"
+    assert "enrichment" in spec.directions
+
+
+def test_the_non_collector_integrations_are_derived_not_hand_listed():
+    """This is a second source for the catalogue, so it is the exact position
+    the eighth silent registry occupied. Each entry must declare itself."""
+    for name, spec in st.catalogue().items():
+        assert spec.label, f"{name} has no label"
+        assert spec.directions, f"{name} declares no directions"
+        assert spec.category, f"{name} declares no category"
+
+
+# --- deployment-configured integrations verify differently ---------------
+#
+# "Test connection" on the log store returned HTTP 400 "opensearch is not
+# configured for tenant 'c00'" even though .env configures it correctly. The
+# verify path goes through the per-tenant CREDENTIAL STORE
+# (`tenant_integrations` rows), and the log store is configured from the
+# deployment instead — global `OPENSEARCH_*` read by `_legacy_c00`. It has no
+# row and never will, so the lookup is asking the wrong place.
+#
+# The per-tenant env scheme is `OPENSEARCH_TENANT_C00_NODES` etc.; the global
+# names are a separate, deliberate path. Renaming the globals to
+# `OPENSEARCH_NODE1_C00` would be read by nothing.
+
+
+def test_the_log_store_declares_that_the_deployment_configures_it():
+    """So the UI does not offer a credential form that cannot be saved."""
+    spec = st.catalogue()["opensearch"]
+    assert spec.managed == "deployment"
+
+
+def test_a_credential_managed_tool_still_says_so():
+    """The control: falcon's credentials really are stored per tenant."""
+    assert st.catalogue()["falcon"].managed == "credential_store"
+
+
+def test_every_tool_declares_how_it_is_managed():
+    for name, spec in st.catalogue().items():
+        assert spec.managed in ("deployment", "credential_store"), (
+            f"{name} does not say where its configuration lives, so the UI "
+            f"cannot know whether to offer a form"
+        )
+
+
+def test_a_deployment_managed_tool_exposes_no_secret_fields():
+    """A secret field implies a form that writes it; there is no such path."""
+    spec = st.catalogue()["opensearch"]
+    assert spec.secret_fields == {}
+
+
+def test_verifying_the_log_store_reports_which_processes_hold_the_config():
+    """The trap today's outage set.
+
+    Verify runs in the **api**. The api was recreated at 14:21 and has
+    OPENSEARCH_TENANT_VALUES; the worker and beat were not and do not — and
+    the worker is where alert log context is actually collected. A green
+    "Test connection" that says nothing about the worker is precisely the
+    false comfort this platform keeps being bitten by, so the result names
+    the process it ran in and does not generalise.
+    """
+    from app.services import opensearch_tenants as ost
+
+    assert hasattr(ost, "verify"), "the owning module provides no verifier"
+    import inspect
+    src = inspect.getsource(ost.verify)
+    for needed in ("api", "worker"):
+        assert needed in src, (
+            f"the verifier does not mention {needed!r}; a check that cannot "
+            f"distinguish the process it ran in from the one doing the work "
+            f"reports a green that is not true of the pipeline"
+        )
+
+
+# --- stopped must mean SILENT, not merely "not verified_ok" -------------
+#
+# The log-store card read STOPPED ("an outage") directly above "silent 0.2h".
+# Twelve minutes is not an outage. Both numbers were right and the model
+# behind them was wrong: `continuity()` upgraded any non-ok state to `stopped`
+# the moment a last success existed, so an integration that produced evidence
+# minutes ago was reported as down.
+#
+# That is the cry-wolf failure the source-coverage work already paid for once:
+# a badge that goes red while the thing works trains people to ignore it, and
+# then it cannot report the real outage either.
+
+HOUR = timedelta(hours=1)
+
+
+def test_a_tool_that_produced_evidence_minutes_ago_is_not_stopped():
+    """The exact card. 0.2h of silence is not an outage."""
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=12),
+        now=NOW,
+        expected_interval_hours=6,
+    )
+    assert v["stopped"] is False, (
+        "12 minutes of silence reported as an outage; this is the cry-wolf "
+        "shape that makes the badge unreadable"
+    )
+    # Written before promotion existed, when the right answer was "leave the
+    # base state alone". Collection evidence inside the expectation now
+    # promotes, so the state is verified_ok — carrying the warrant that says
+    # it rests on collector output rather than on a ping. The assertion this
+    # test was built for, that 12 minutes is not an outage, is unchanged.
+    assert v["state"] == st.VERIFIED_OK
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
+
+
+def test_a_tool_silent_well_past_its_expectation_is_stopped():
+    v = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert v["stopped"] is True
+    assert v["state"] == st.STOPPED
+    assert v["silent_for_hours"] >= 48
+
+
+def test_without_a_declared_expectation_stopped_is_not_claimed():
+    """No threshold, no claim. A guessed interval would invent outages."""
+    v = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=None,
+    )
+    assert v["stopped"] is False
+    assert absence.is_absent(v["silence_verdict"])
+    assert v["silence_verdict"]["kind"] == absence.TOO_LITTLE_HISTORY
+
+
+def test_the_boundary_is_stated_in_the_payload_not_hidden():
+    v = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert v["expected_interval_hours"] == 6
+    assert v["threshold_hours"] >= 6
+
+
+# --- deployment-managed tools are not judged by credential rules --------
+
+
+def test_a_deployment_managed_tool_never_claims_a_credential_is_stored():
+    """The card said NOT VERIFIED — "A credential is stored" — above a footer
+    saying "no credential stored".
+
+    My first version of this test banned the *state* `configured_unverified`,
+    which was the wrong target: that state is semantically right here. The
+    tool IS configured (from the deployment) and is NOT verified. What is
+    false by construction is the **claim about a credential**, which lives in
+    the reason text and in the UI's copy for that state.
+
+    So this asserts the claim, not the label.
+    """
+    spec = st.catalogue()["opensearch"]
+    out = st.status_of(spec, None, "opensearch")
+    assert out["overall"] == st.CONFIGURED_UNVERIFIED
+    assert out["configured"] is True, "it is configured, from the deployment"
+    for direction in out["directions"].values():
+        reason = (direction.get("reason") or "").lower()
+        assert "credential is stored" not in reason
+        assert "no credential is stored" not in reason
+        assert "deployment" in reason, (
+            "the reason must say where the configuration lives, or a reader "
+            "looks for a credential that does not exist"
+        )
+
+
+def test_a_deployment_managed_tool_does_not_claim_a_secret_is_set():
+    spec = st.catalogue()["opensearch"]
+    out = st.status_of(spec, None, "opensearch")
+    assert out.get("secret_set") in (None, False)
+    assert out.get("managed") == "deployment"
+
+
+def test_a_credential_managed_tool_still_uses_credential_rules():
+    """The control: falcon with no row is genuinely not configured."""
+    spec = st.catalogue()["falcon"]
+    out = st.status_of(spec, None, "falcon")
+    assert out["overall"] == st.NOT_CONFIGURED
+
+
+# --- a stray credential row must not change a deployment verdict --------
+#
+# The UI offered a Configure form for the log store before that was removed,
+# and a real operator filled it in: `tenant_integrations` gained an
+# `opensearch` row at 14:47:13 with
+# `{'nodes': '...', 'tenant_field': 'c00'}` — where `c00` is a tenant *id* in
+# the slot a *field name* belongs (`manager.name`). Nothing reads the row, so
+# it does nothing; but `status_of` branched on `row is None`, so its mere
+# existence flipped the log store back to credential-store rules and the
+# false "A credential is stored".
+#
+# Two separate failures: a verdict that depends on a row nobody reads, and an
+# endpoint that accepts a write with no effect.
+
+
+def test_a_stray_row_does_not_change_a_deployment_managed_verdict():
+    """The verdict must come from the deployment, row or no row."""
+    spec = st.catalogue()["opensearch"]
+
+    class _StrayRow:
+        tool = "opensearch"
+        tenant_id = "c00"
+        config = {"nodes": "https://x", "tenant_field": "c00"}
+        secret_ciphertext = None
+        secret_set_at = None
+        configured_by = "someone"
+        updated_at = None
+        health = {}
+
+    with_row = st.status_of(spec, _StrayRow(), "opensearch")
+    without = st.status_of(spec, None, "opensearch")
+    assert with_row["overall"] == without["overall"], (
+        "a row nobody reads changed the verdict"
+    )
+    for direction in with_row["directions"].values():
+        assert "credential is stored" not in (direction.get("reason") or "").lower()
+
+
+def test_a_stray_row_is_surfaced_not_silently_ignored():
+    """Ignoring it would leave an operator believing they configured something."""
+    spec = st.catalogue()["opensearch"]
+
+    class _StrayRow:
+        tool = "opensearch"
+        tenant_id = "c00"
+        config = {"tenant_field": "c00"}
+        secret_ciphertext = None
+        secret_set_at = None
+        configured_by = "timotei.moscaliuc"
+        updated_at = None
+        health = {}
+
+    out = st.status_of(spec, _StrayRow(), "opensearch")
+    stray = out.get("stray_credential_row")
+    assert stray, "the unread row is invisible, so nobody will delete it"
+    assert "timotei.moscaliuc" in str(stray.get("configured_by"))
+    assert "not read" in str(stray.get("note")).lower()
+
+
+def test_the_api_refuses_to_configure_a_deployment_managed_tool():
+    """The UI hiding the button is cosmetic; the endpoint is what writes."""
+    import inspect
+    from app.api import integrations as api_mod
+
+    src = inspect.getsource(api_mod.configure)
+    assert "deployment" in src, (
+        "the configure endpoint does not check `managed`, so a form that is "
+        "hidden in one client can still write through another"
+    )
+
+
+# --- a diagnostic must not refresh the field it diagnoses ---------------
+#
+# Pinned even though the current implementation is already clean, because the
+# failure it guards against is one this project has hit twice: a measurement
+# that moves the thing it measures. If "Test connection" ever came to write a
+# success record that the outage detector reads, then "last worked jumps to
+# today" would stop meaning "collection is flowing" and start meaning
+# "somebody clicked a button" — and the instrument would be gone with no
+# error anywhere.
+
+
+def test_verify_writes_nothing_the_stopped_classifier_reads():
+    """The verify path for a deployment-managed tool must not persist."""
+    import inspect
+    from app.api import integrations as api_mod
+
+    src = inspect.getsource(api_mod._verify_now)
+    head = src.split('if _spec.managed == "deployment"' if
+                     '_spec.managed == "deployment"' in src else
+                     'if spec.managed == "deployment":')[-1]
+    branch = head.split("try:")[0]
+    for writer in ("record_health", "db.add", "db.commit", "db.execute"):
+        assert writer not in branch, (
+            f"the deployment-verify branch calls {writer!r}; a ping that "
+            f"writes a success record contaminates the silence clock the "
+            f"SIEM card uses to claim an outage"
+        )
+
+
+def test_the_silence_clock_reads_collection_evidence_only():
+    """`last_success` for the log store comes from alert_log_context rows —
+    evidence the COLLECTION path produced — and from nothing a diagnostic
+    touches."""
+    import inspect
+    from app.services import opensearch_tenants as ost
+
+    src = inspect.getsource(ost.last_success)
+    assert "alert_log_context" in src
+    for not_evidence in ("tenant_integrations", "health", "ping"):
+        assert not_evidence not in src, (
+            f"the silence clock reads {not_evidence!r}, which a verify can "
+            f"move; it must read only what collection produced"
+        )
+
+
+# --- promotion on collection evidence, with its warrant -----------------
+#
+# The log-store card read `configured_unverified` beside `silent 0.5h` —
+# a collection had succeeded 30 minutes earlier and the state was a
+# hard-coded constant that no input could change. Three worlds under one
+# label: never tested and possibly dead, never pinged but producing right
+# now, and pinged successfully seconds ago.
+#
+# Promotion is granted by CURRENT evidence only, and it carries what the
+# evidence was — the same shape as a technique carrying RULE_CONFIRMED
+# against RULE_ONLY. Falcon's verified_ok continues to mean "an api ping
+# succeeded"; the log store's means "the collector produced output". Neither
+# is weakened into the other.
+#
+# Which threshold promotes: the DECLARED EXPECTATION (6h), not the flag
+# (18h). Inside the expectation, silence is normal and the last success is
+# current evidence. Past it, we no longer have current evidence and must not
+# claim green — a feed silent 17h showing verified_ok is the same collapse
+# one level in.
+
+
+def test_inside_the_expectation_collection_evidence_promotes():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=30),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.VERIFIED_OK
+    assert v["promoted"] is True
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
+    assert v["warrant"]["process"] == "worker"
+    assert "0.5" in str(v["warrant"]["age_hours"]) or v["warrant"]["age_hours"] == 0.5
+
+
+def test_the_middle_band_is_not_promoted_and_not_an_outage():
+    """17h: past the 6h expectation, short of the 18h flag."""
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=17),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.CONFIGURED_UNVERIFIED, (
+        "verified_ok swallowed the middle band; 17h of silence rendered green"
+    )
+    assert v["promoted"] is False
+    assert v["stopped"] is False
+    assert "overdue" in str(v["silence_verdict"]).lower()
+    # Both numbers present, so the reader can see where in the band it sits.
+    assert "6" in str(v["silence_verdict"]) and "18" in str(v["silence_verdict"])
+
+
+def test_the_boundaries_are_exact():
+    inside = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=6) + timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert inside["state"] == st.VERIFIED_OK
+
+    just_past = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=6) - timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_past["state"] == st.CONFIGURED_UNVERIFIED
+    assert just_past["stopped"] is False
+
+    past_flag = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=19),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert past_flag["state"] == st.STOPPED
+    assert past_flag["stopped"] is True
+
+
+def test_promotion_needs_a_declared_expectation():
+    """Without one there is no "current", so nothing is promoted."""
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=None,
+    )
+    assert v["promoted"] is False
+    assert v["state"] == st.CONFIGURED_UNVERIFIED
+
+
+def test_promotion_never_overrides_a_real_failure():
+    """A verified failure is evidence about NOW; collection output is about
+    the past, and the past does not clear a present failure."""
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["state"] == st.VERIFIED_FAILING
+    assert v["promoted"] is False
+
+
+def test_an_api_ping_warrant_is_a_different_claim_from_collector_output():
+    """Falcon's verified_ok and the log store's must not be conflated."""
+    assert st.WARRANT_API_PING != st.WARRANT_COLLECTOR_OUTPUT
+    ping = st.warrant_for(st.WARRANT_API_PING, at=NOW, now=NOW)
+    output = st.warrant_for(st.WARRANT_COLLECTOR_OUTPUT, at=NOW, now=NOW)
+    assert ping["process"] == "api"
+    assert output["process"] == "worker"
+    assert "ping" in ping["what"].lower()
+    assert "produced" in output["what"].lower()
+    # And the api warrant says what it does NOT establish, because on
+    # 2026-10-14 a green api ping sat beside a worker with no config.
+    assert "worker" in ping["what"].lower()
+
+
+def test_a_credential_managed_verified_ok_carries_the_ping_warrant():
+    """Falcon's verified_ok must say what it rests on too.
+
+    Promotion gave the log store a warrant and left Falcon's `verified_ok`
+    bare, which is the same collapse in the other direction: two cards
+    showing one label, and only one of them able to say what established it.
+    """
+    from datetime import datetime, timezone
+
+    spec = st.catalogue()["falcon"]
+
+    class _Row:
+        tool = "falcon"
+        tenant_id = "c00"
+        config = {"base_url": "https://api.eu-1.crowdstrike.com"}
+        secret_ciphertext = b"x"
+        secret_set_at = datetime(2026, 10, 14, 7, 40, tzinfo=timezone.utc)
+        configured_by = "e2e-admin"
+        updated_at = secret_set_at
+        health = {
+            "enrichment": {
+                "state": st.VERIFIED_OK,
+                "checked_at": "2026-10-15T09:00:00+00:00",
+                "reason": "ok",
+            }
+        }
+
+    out = st.status_of(spec, _Row(), "falcon")
+    direction = out["directions"]["enrichment"]
+    assert direction["state"] == st.VERIFIED_OK
+    warrant = direction.get("warrant")
+    assert warrant, "a verified_ok with no warrant cannot say what proved it"
+    assert warrant["kind"] == st.WARRANT_API_PING
+    assert warrant["process"] == "api"
+    assert "worker" in warrant["what"].lower(), (
+        "the api warrant must state what it does NOT establish"
+    )
+
+
+def test_a_failing_direction_gets_no_warrant():
+    """A warrant justifies a success. There is nothing to warrant in a
+    failure, and attaching one would read as partial credit."""
+    from datetime import datetime, timezone
+
+    spec = st.catalogue()["falcon"]
+
+    class _Row:
+        tool = "falcon"
+        tenant_id = "c00"
+        config = {}
+        secret_ciphertext = b"x"
+        secret_set_at = datetime(2026, 10, 14, 7, 40, tzinfo=timezone.utc)
+        configured_by = "e2e-admin"
+        updated_at = secret_set_at
+        health = {
+            "enrichment": {
+                "state": st.VERIFIED_FAILING,
+                "checked_at": "2026-10-15T09:00:00+00:00",
+                "reason": "HTTP 401",
+            }
+        }
+
+    out = st.status_of(spec, _Row(), "falcon")
+    assert out["directions"]["enrichment"].get("warrant") is None
+
+
+# --- the 18h boundary, pinned on both sides -----------------------------
+
+
+def test_the_outage_boundary_is_pinned_symmetrically():
+    """6h was pinned both sides and 18h only above, so a `>` where `>=`
+    belongs would have passed at 19h either way."""
+    just_inside = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=18) + timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_inside["stopped"] is False
+    assert just_inside["state"] == st.CONFIGURED_UNVERIFIED
+
+    just_past = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=18) - timedelta(minutes=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert just_past["stopped"] is True
+    assert just_past["state"] == st.STOPPED
+
+
+# --- the band must be legible WITHOUT the prose -------------------------
+#
+# The band keeps the base state, and that base state is the same value a
+# feed which has never produced anything carries. Anything reading `state`
+# without the rendered text — the all-customers matrix is the obvious one —
+# could not tell "collected 7h ago" from "never collected". If the
+# distinction lives only in the render layer the collapse has moved, not
+# closed. Stale collector output is still collector output, so the warrant
+# is attached in the band too and carries the age structurally.
+
+
+def test_the_band_attaches_a_warrant_even_though_it_does_not_promote():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=7),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["promoted"] is False
+    assert v["warrant"], (
+        "the band carries no warrant, so a programmatic reader cannot tell "
+        "stale output from no output"
+    )
+    assert v["warrant"]["kind"] == st.WARRANT_COLLECTOR_OUTPUT
+    assert v["warrant"]["age_hours"] == 7.0
+    assert v["warrant"]["current"] is False, (
+        "the warrant must say structurally that it is no longer current"
+    )
+
+
+def test_a_promoted_warrant_says_it_is_current():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=1),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["warrant"]["current"] is True
+
+
+def test_never_produced_and_stale_produced_differ_without_reading_prose():
+    """The distinction a matrix cell has to survive on."""
+    never = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED, last_succeeded_at=None,
+        now=NOW, expected_interval_hours=6,
+    )
+    stale = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(hours=7),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert never["state"] == stale["state"]          # same state, by design
+    assert never["warrant"] is None                  # and distinguishable
+    assert stale["warrant"] is not None
+    assert stale["warrant"]["age_hours"] == 7.0
+
+
+# --- a failing ping with a working collector is compound, not a contest -
+
+
+def test_a_failing_ping_and_working_collector_report_both():
+    """Precedence would make the two warrants commensurable again.
+
+    The whole argument for warrants is that an api ping and collector output
+    speak about different consumers and neither subsumes the other. A rule
+    that lets a 09:00 failure outrank output at 09:05, 09:10 and 09:15 puts
+    them back on one scale with api evidence winning — and hides a real
+    compound condition: the api cannot reach the cluster, log context still
+    flows, and the estate lookup breaks the day it is wired.
+    """
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    kinds = {w["kind"] for w in v["warrants"]}
+    assert st.WARRANT_COLLECTOR_OUTPUT in kinds, (
+        "the collector's recent output vanished because a ping failed"
+    )
+    assert v["compound"] is True
+    assert "collector" in str(v["compound_note"]).lower()
+    # The badge still shows the worse consumer condition — that is a product
+    # decision about consumers, not a claim that api evidence outranks
+    # worker evidence — and the compound is visible beside it.
+    assert v["state"] == st.VERIFIED_FAILING
+
+
+def test_no_compound_claimed_when_there_is_only_one_kind_of_evidence():
+    v = st.continuity(
+        state=st.CONFIGURED_UNVERIFIED,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["compound"] is False
+    assert len(v["warrants"]) == 1
+
+
+def test_a_compound_badge_names_the_failing_consumer():
+    """`FAILING` alone reads as "the log store is down".
+
+    With a live collector that is the misread to prevent: the badge must say
+    which consumer is failing, so a red badge beside flowing log context is
+    legible rather than alarming. This closes it without waiting for the two
+    direction states in backlog 18.
+    """
+    v = st.continuity(
+        state=st.VERIFIED_FAILING,
+        last_succeeded_at=NOW - timedelta(minutes=5),
+        now=NOW, expected_interval_hours=6,
+    )
+    assert v["compound"] is True
+    assert v["badge_qualifier"] == "api", (
+        "the badge cannot say which consumer is failing"
+    )
+
+
+def test_a_non_compound_badge_carries_no_qualifier():
+    """A qualifier on a simple state would imply a distinction that is not
+    being drawn."""
+    for state in (st.VERIFIED_OK, st.NOT_CONFIGURED, st.CONFIGURED_UNVERIFIED):
+        v = st.continuity(
+            state=state, last_succeeded_at=NOW - timedelta(minutes=5),
+            now=NOW, expected_interval_hours=6,
+        )
+        assert v["badge_qualifier"] is None
+
+    stopped = st.continuity(
+        state=st.NOT_CONFIGURED, last_succeeded_at=MONDAY, now=NOW,
+        expected_interval_hours=6,
+    )
+    assert stopped["state"] == st.STOPPED
+    assert stopped["badge_qualifier"] is None, (
+        "a stopped integration is not compound — nothing is working"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Two direction states for the log store.
+#
+# Required by backlog 18 the moment the estate lookup got an API route
+# (2026-10-15). Before it, the api's only contact with the cluster was
+# `ping()`, so collection evidence was a strict superset of what a ping
+# proved and one direction was honest. The route broke that: the worker can
+# be answering while an analyst's on-demand lookup fails.
+#
+# Every test below is written in the dangerous direction — the failure is a
+# green badge, not an error.
+
+
+def _log_store_spec():
+    cat = iss.catalogue()
+    assert "opensearch" in cat, "the log store left the derived catalogue"
+    return cat["opensearch"]
+
+
+def test_the_log_store_declares_both_consumers():
+    spec = _log_store_spec()
+    assert iss.ENRICHMENT in spec.directions
+    assert iss.ON_DEMAND in spec.directions
+
+
+def test_the_on_demand_direction_declares_no_interval():
+    """An analyst triggers it or nobody does.
+
+    A number here would manufacture an outage on every quiet day — the same
+    reason Falcon declares none. `None` must survive the lookup, which is why
+    `expectation_for` indexes through a declared default instead of using
+    `or`: `.get(d) or 6` would turn this refusal back into 6.
+    """
+    spec = _log_store_spec()
+    assert spec.expectation_for(iss.ON_DEMAND) is None
+    assert spec.expectation_for(iss.ENRICHMENT) == 6
+
+
+def test_a_direction_that_declares_nothing_inherits_the_tool_expectation():
+    """The control on the test above: the lookup is not simply returning
+    None for everything."""
+    spec = iss.ToolSpec(
+        tool="t", label="T", directions=(iss.ENRICHMENT,),
+        expected_interval_hours=12,
+    )
+    assert spec.expectation_for(iss.ENRICHMENT) == 12
+    assert spec.warrant_for_direction(iss.ENRICHMENT) == \
+        iss.WARRANT_COLLECTOR_OUTPUT
+
+
+def test_collector_output_is_not_admissible_for_the_on_demand_path():
+    spec = _log_store_spec()
+    assert spec.warrant_for_direction(iss.ENRICHMENT) == \
+        iss.WARRANT_COLLECTOR_OUTPUT
+    assert spec.warrant_for_direction(iss.ON_DEMAND) == iss.WARRANT_API_PING
+
+
+def test_the_worker_producing_output_does_not_promote_the_api_path():
+    """The defect this split exists to prevent.
+
+    Collection output 1h ago is real evidence that the worker can reach the
+    cluster. It is no evidence at all that an analyst's estate lookup can:
+    different process, different network position. Promoting `on_demand` on
+    it would claim a consumer was witnessed working when nothing ran it.
+    """
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
+    recent = now - timedelta(hours=1)
+    spec = _log_store_spec()
+    entry = {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}}
+
+    per = iss._continuity_per_direction(entry, spec, recent)
+
+    assert per[iss.ENRICHMENT]["state"] == iss.VERIFIED_OK
+    assert per[iss.ENRICHMENT]["promoted"] is True
+    assert per[iss.ON_DEMAND]["state"] == iss.CONFIGURED_UNVERIFIED
+    assert per[iss.ON_DEMAND]["promoted"] is False, (
+        "the api path was promoted on the worker's evidence"
+    )
+
+
+def test_the_on_demand_direction_reports_never_observed_not_an_outage():
+    """No api-side verification has ever run, so there is nothing it stopped
+    doing. That is an absence of configuration, not a silence to judge."""
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
+    spec = _log_store_spec()
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
+        spec, now - timedelta(hours=1))
+
+    last = per[iss.ON_DEMAND]["last_success"]
+    assert absence.is_absent(last)
+    assert last["kind"] == absence.NEVER_OBSERVED
+    assert per[iss.ON_DEMAND]["silence_verdict"] is None
+    assert per[iss.ON_DEMAND]["stopped"] is False
+
+
+def test_each_direction_verdict_names_its_consumer_and_its_warrant():
+    """A reader of one entry must be able to tell which consumer it is about.
+    Two verdicts with the same shape and no label is the collapse again, one
+    level down."""
+    # Relative to the real clock, not a hardcoded instant.
+    # `_continuity_per_direction` calls `continuity()` without a `now`, so it
+    # uses the real one — and a fixture pinned to 2026-10-15 12:00 made
+    # "1 hour ago" into 25 hours ago overnight, flipping `verified_ok` to
+    # `stopped`. The test passed only on the day it was written, which is
+    # rule 17 inside a test: code encoding a fixed instant runs later than it
+    # is written.
+    now = datetime.now(timezone.utc)
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED, "directions": {}},
+        _log_store_spec(), now - timedelta(hours=1))
+
+    assert per[iss.ENRICHMENT]["direction"] == iss.ENRICHMENT
+    assert per[iss.ENRICHMENT]["warrant_kind"] == iss.WARRANT_COLLECTOR_OUTPUT
+    assert per[iss.ON_DEMAND]["direction"] == iss.ON_DEMAND
+    assert per[iss.ON_DEMAND]["warrant_kind"] == iss.WARRANT_API_PING
+
+
+def test_a_tool_with_one_consumer_gets_no_per_direction_verdicts():
+    """Opt-in, so nothing changes for the other integrations."""
+    spec = iss.ToolSpec(tool="t", label="T", directions=(iss.ENRICHMENT,),
+                        expected_interval_hours=6)
+    assert iss._continuity_per_direction({"overall": "x"}, spec, None) == {}
+
+
+def test_a_stopped_collection_path_still_drives_the_overall_badge():
+    """The worst direction wins, as it does for the plain `overall`.
+
+    Otherwise a tool answering one consumer while failing another reads
+    green, which is what two directions are for.
+    """
+    import datetime as _dt
+    stale = _dt.datetime.now(timezone.utc) - timedelta(hours=60)
+    # `configured_unverified` is the real base state here: the log store is
+    # deployment-managed, so no credential verification has run. `verified_ok`
+    # is deliberately NOT in `_CAN_HAVE_STOPPED` — a recorded successful call
+    # is current evidence and stale output does not retract it.
+    per = iss._continuity_per_direction(
+        {"overall": iss.CONFIGURED_UNVERIFIED,
+         "directions": {iss.ENRICHMENT: {"state": iss.CONFIGURED_UNVERIFIED},
+                        iss.ON_DEMAND: {"state": iss.CONFIGURED_UNVERIFIED}}},
+        _log_store_spec(), stale)
+
+    assert per[iss.ENRICHMENT]["state"] == iss.STOPPED
+    worst = min((v["state"] for v in per.values()),
+                key=lambda s: iss.STATES.index(s))
+    assert worst == iss.STOPPED
+
+
+def test_on_demand_is_in_the_derived_direction_vocabulary():
+    """The filter in `catalogue()` was a literal `(ENRICHMENT, INGEST)`, so a
+    collector declaring this direction would have had it silently dropped —
+    the ninth hand-maintained list, inside the function whose job is to not
+    have one."""
+    assert iss.ON_DEMAND in iss.DIRECTIONS
+    source = (Path(iss.__file__).read_text())
+    assert "if d in (ENRICHMENT, INGEST)" not in source

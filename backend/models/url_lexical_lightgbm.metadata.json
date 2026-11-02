@@ -1,0 +1,144 @@
+{
+  "model": "lightgbm",
+  "labels": {
+    "0": "benign",
+    "1": "phishing"
+  },
+  "thresholds": {
+    "low_max": 0.3,
+    "medium_max": 0.65,
+    "high_min": 0.65
+  },
+  "feature_order": [
+    "url_length",
+    "hostname_length",
+    "path_length",
+    "query_length",
+    "dot_count",
+    "hyphen_count",
+    "digit_ratio",
+    "subdomain_depth",
+    "has_ip_host",
+    "has_at_symbol",
+    "has_punycode",
+    "has_sensitive_keyword",
+    "has_suspicious_tld",
+    "query_param_count",
+    "path_depth",
+    "entropy",
+    "is_shortener",
+    "uses_https",
+    "has_abnormal_port",
+    "brand_keyword_count"
+  ],
+  "training_sources": {
+    "phishing_files": [
+      "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\data\\ml\\phishing_urls.txt"
+    ],
+    "benign_files": [
+      "C:\\Users\\tmoscaliuc\\Downloads\\script\\threat-investigator\\threat-intel\\backend\\data\\ml\\benign_urls.txt"
+    ]
+  },
+  "samples": {
+    "total": 377157,
+    "phishing": 11429,
+    "benign": 365728
+  },
+  "sampling": {
+    "benign_limit": 300000,
+    "benign_ratio": 8.0,
+    "augment_benign_paths": true
+  },
+  "metrics": {
+    "train_size": 301725,
+    "valid_size": 75432,
+    "accuracy@0.5": 0.9692,
+    "best_iteration": 10,
+    "train_pos_count": 9109,
+    "train_neg_count": 292616,
+    "scale_pos_weight": 1.0,
+    "valid_pred_q10": 0.022438,
+    "valid_pred_q50": 0.022523,
+    "valid_pred_q90": 0.022904,
+    "valid_pred_q99": 0.310672,
+    "calibration_bins": 10
+  },
+  "calibration": {
+    "method": "quantile_bin_interpolation",
+    "bins": [
+      {
+        "lower": 0.022438,
+        "upper": 0.022438,
+        "count": 2256,
+        "pred_mean": 0.022438,
+        "actual_rate": 0.0
+      },
+      {
+        "lower": 0.022438,
+        "upper": 0.022444,
+        "count": 12126,
+        "pred_mean": 0.022438,
+        "actual_rate": 0.0
+      },
+      {
+        "lower": 0.022444,
+        "upper": 0.022465,
+        "count": 8105,
+        "pred_mean": 0.022444,
+        "actual_rate": 0.0
+      },
+      {
+        "lower": 0.022465,
+        "upper": 0.022519,
+        "count": 1991,
+        "pred_mean": 0.022498,
+        "actual_rate": 0.0
+      },
+      {
+        "lower": 0.022519,
+        "upper": 0.022523,
+        "count": 6279,
+        "pred_mean": 0.022519,
+        "actual_rate": 0.0
+      },
+      {
+        "lower": 0.022523,
+        "upper": 0.022593,
+        "count": 17952,
+        "pred_mean": 0.022525,
+        "actual_rate": 0.000223
+      },
+      {
+        "lower": 0.022593,
+        "upper": 0.022608,
+        "count": 14171,
+        "pred_mean": 0.022593,
+        "actual_rate": 0.000223
+      },
+      {
+        "lower": 0.022608,
+        "upper": 0.022904,
+        "count": 4920,
+        "pred_mean": 0.022721,
+        "actual_rate": 0.00061
+      },
+      {
+        "lower": 0.022904,
+        "upper": 0.024629,
+        "count": 3810,
+        "pred_mean": 0.023363,
+        "actual_rate": 0.003412
+      },
+      {
+        "lower": 0.024629,
+        "upper": 0.317438,
+        "count": 3822,
+        "pred_mean": 0.189303,
+        "actual_rate": 0.600994
+      }
+    ],
+    "enabled": true,
+    "raw_brier": 0.016013,
+    "calibrated_brier": 0.005735
+  }
+}

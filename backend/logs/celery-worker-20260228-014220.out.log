@@ -1,0 +1,142 @@
+[config] Loaded .env from: C:\Users\tmoscaliuc\Downloads\script\threat-investigator\threat-intel\backend\.env
+[config] Settings loaded — VT key: SET
+ 
+ -------------- celery-local-8000-20260228-014220@EXP-JFW2P34 v5.6.2 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-11-10.0.26200-SP0 2026-02-28 01:42:25
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         threat_intel:0x24adbda4e60
+- ** ---------- .> transport:   redis://127.0.0.1:6379/5
+- ** ---------- .> results:     redis://127.0.0.1:6379/6
+- *** --- * --- .> concurrency: 8 (thread)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> investigations   exchange=investigations(direct) key=investigations
+                
+
+[tasks]
+  . tasks.process_batch
+  . tasks.run_analysis
+  . tasks.run_collector
+  . tasks.run_investigation
+  . tasks.watchlist_check
+
+2026-02-28 01:45:03,762 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-02-28 01:45:03,764 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-02-28 01:45:03,765 INFO sqlalchemy.engine.Engine select current_schema()
+2026-02-28 01:45:03,767 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-02-28 01:45:03,768 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-02-28 01:45:03,768 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-02-28 01:45:03,771 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:03,808 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-02-28 01:45:03,811 INFO sqlalchemy.engine.Engine [generated in 0.00270s] {'pk_1': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:45:03,818 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:45:03,819 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:03,820 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-02-28 01:45:03,821 INFO sqlalchemy.engine.Engine [cached since 0.01249s ago] {'pk_1': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:45:03,824 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-02-28 01:45:03,826 INFO sqlalchemy.engine.Engine [generated in 0.00119s] {'state': 'gathering', 'updated_at': datetime.datetime(2026, 2, 27, 23, 45, 3, 823639, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:45:03,829 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:45:05,957 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:05,958 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-02-28 01:45:05,958 INFO sqlalchemy.engine.Engine [cached since 2.15s ago] {'pk_1': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:45:05,960 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=%(updated_at)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-02-28 01:45:05,961 INFO sqlalchemy.engine.Engine [cached since 2.136s ago] {'state': 'evaluating', 'updated_at': datetime.datetime(2026, 2, 27, 23, 45, 5, 960642, tzinfo=datetime.timezone.utc), 'investigations_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:45:05,962 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:45:12,337 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:12,339 INFO sqlalchemy.engine.Engine INSERT INTO artifacts (id, investigation_id, collector_name, artifact_name, sha256_hash, content_type, size_bytes, storage_path) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(artifact_name)s, %(sha256_hash)s, %(content_type)s, %(size_bytes)s, %(storage_path)s) RETURNING artifacts.created_at
+2026-02-28 01:45:12,340 INFO sqlalchemy.engine.Engine [generated in 0.00078s] {'id': UUID('d0757b1d-abf3-4a03-a408-619b3f4bd8c5'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'screenshot', 'artifact_name': 'screenshot_domain.png', 'sha256_hash': '6bf0023e25412daf84a1c3a397ce2c588eec25f56e5ecab14a8ad3111d73939c', 'content_type': 'image/png', 'size_bytes': 10403, 'storage_path': 'artifacts\\b1882c0d-483c-4077-b0cd-ba7d16592941\\screenshot_domain.png'}
+2026-02-28 01:45:12,343 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:45:14,295 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:14,300 INFO sqlalchemy.engine.Engine INSERT INTO artifacts (id, investigation_id, collector_name, artifact_name, sha256_hash, content_type, size_bytes, storage_path) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(artifact_name)s, %(sha256_hash)s, %(content_type)s, %(size_bytes)s, %(storage_path)s) RETURNING artifacts.created_at
+2026-02-28 01:45:14,300 INFO sqlalchemy.engine.Engine [cached since 1.962s ago] {'id': UUID('562ad4b5-d85a-4381-8acb-c4da6d6b9c4a'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'js_analysis', 'artifact_name': 'network_capture.har', 'sha256_hash': '670851e8c6fde87b2efafe343d894377c21a14d5ff2092c11f85e2d7dac96259', 'content_type': 'application/json', 'size_bytes': 234, 'storage_path': 'artifacts\\b1882c0d-483c-4077-b0cd-ba7d16592941\\network_capture.har'}
+2026-02-28 01:45:14,304 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:45:15,268 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:15,271 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-02-28 01:45:15,272 INFO sqlalchemy.engine.Engine [generated in 0.00083s] {'exc_id': 'b1882c0d-483c-4077-b0cd-ba7d16592941'}
+2026-02-28 01:45:15,273 INFO sqlalchemy.engine.Engine 
+                        SELECT i.domain
+                        FROM investigations i
+                        JOIN evidence e ON e.investigation_id = i.id
+                        WHERE i.id != %(exc_id)s
+                          AND i.state = 'concluded'
+                          AND e.evidence_json->'dns'->'ns' @> :ns_val::jsonb
+                        LIMIT 20
+                    
+2026-02-28 01:45:15,274 INFO sqlalchemy.engine.Engine [cached since 0.002798s ago] {'exc_id': 'b1882c0d-483c-4077-b0cd-ba7d16592941'}
+2026-02-28 01:45:15,275 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:45:15,277 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:45:15,277 INFO sqlalchemy.engine.Engine 
+                    SELECT DISTINCT i.domain
+                    FROM investigations i
+                    JOIN evidence e ON e.investigation_id = i.id
+                    WHERE i.id != %(exc_id)s
+                      AND i.state = 'concluded'
+                      AND (e.evidence_json->'whois'->>'registrar' = %(registrar)s)
+                    LIMIT 20
+                
+2026-02-28 01:45:15,279 INFO sqlalchemy.engine.Engine [generated in 0.00094s] {'exc_id': 'b1882c0d-483c-4077-b0cd-ba7d16592941', 'registrar': 'RESERVED-Internet Assigned Numbers Authority'}
+2026-02-28 01:45:15,288 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-02-28 01:46:01,404 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:46:01,405 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-02-28 01:46:01,406 INFO sqlalchemy.engine.Engine [cached since 57.6s ago] {'pk_1': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:46:01,409 INFO sqlalchemy.engine.Engine UPDATE investigations SET state=%(state)s, updated_at=now(), concluded_at=%(concluded_at)s, classification=%(classification)s, confidence=%(confidence)s, risk_score=%(risk_score)s, recommended_action=%(recommended_action)s WHERE investigations.id = %(investigations_id)s::UUID
+2026-02-28 01:46:01,409 INFO sqlalchemy.engine.Engine [generated in 0.00077s] {'state': 'concluded', 'concluded_at': datetime.datetime(2026, 2, 27, 23, 46, 1, 408390, tzinfo=datetime.timezone.utc), 'classification': 'suspicious', 'confidence': 'medium', 'risk_score': 60, 'recommended_action': 'investigate', 'investigations_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:46:01,415 INFO sqlalchemy.engine.Engine INSERT INTO evidence (id, investigation_id, evidence_json, signals, data_gaps, external_context) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(evidence_json)s::JSONB, %(signals)s::JSONB, %(data_gaps)s::JSONB, %(external_context)s::JSONB) RETURNING evidence.created_at
+2026-02-28 01:46:01,417 INFO sqlalchemy.engine.Engine [generated in 0.00212s] {'id': UUID('f20e6f08-860a-40f2-9ddb-fa290a394f92'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'evidence_json': '{"domain": "example.com", "observable_type": "domain", "investigation_id": "b1882c0d-483c-4077-b0cd-ba7d16592941", "target_domain": "example.com", "t ... (53149 characters truncated) ... 407, "browser_postprocessing": 7657, "infrastructure_correlation": 1092, "signals_and_gaps": 0, "report_generation": 46000, "analysis_total": 55406}}', 'signals': '[{"id": "sig_no_hsts", "category": "security_posture", "description": "No HSTS header present", "severity": "low", "evidence_refs": ["http.security_h ... (1519 characters truncated) ... n": "PhishTank: URL found in phishing database (pending verification)", "severity": "high", "evidence_refs": ["threat_feeds.phishtank.in_database"]}]', 'data_gaps': '[]', 'external_context': 'null'}
+2026-02-28 01:46:01,426 INFO sqlalchemy.engine.Engine INSERT INTO reports (id, investigation_id, iteration, report_json, executive_summary, technical_narrative, recommendations) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(iteration)s, %(report_json)s::JSONB, %(executive_summary)s, %(technical_narrative)s, %(recommendations)s) RETURNING reports.created_at
+2026-02-28 01:46:01,428 INFO sqlalchemy.engine.Engine [generated in 0.00166s] {'id': UUID('811c66fc-8e75-4449-abbd-b65a757bc435'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'iteration': 0, 'report_json': '{"classification": "suspicious", "confidence": "medium", "investigation_state": "concluded", "primary_reasoning": "Analyst timeout after 45s. Fallbac ... (1432 characters truncated) ... ishTank match (unverified); High-severity signals: 2", "recommendations_narrative": "Recommended action: investigate. No additional steps required."}', 'executive_summary': 'Automated analysis for DOMAIN  -  example.com. Classification: SUSPICIOUS (medium confidence). Risk score: 60/100. Key evidence: VirusTotal: 0 malicious, 0 suspicious of 93; PhishTank match (unverified); High-severity signals: 2', 'technical_narrative': 'Automated analysis for DOMAIN  -  example.com. Classification: SUSPICIOUS (medium confidence). Risk score: 60/100. Key evidence: VirusTotal: 0 malicious, 0 suspicious of 93; PhishTank match (unverified); High-severity signals: 2', 'recommendations': 'Recommended action: investigate. No additional steps required.'}
+2026-02-28 01:46:01,435 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,436 INFO sqlalchemy.engine.Engine [generated in 0.00137s] {'id': UUID('eca741f3-ce5b-4db9-88da-e9d53c55f6dc'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'tls', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 171, 'evidence_json': '{"meta": {"collector": "tls", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.841325Z", "completed_at": "2026-02-27T23: ... (558 characters truncated) ... , "is_self_signed": false, "chain_length": 1, "chain_issuers": [], "cert_sha256": "7a70788fe1f5a90e81f7acbdc16422cb6e5d764be8d0f4da9721ba9674aa8ba9"}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,441 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,442 INFO sqlalchemy.engine.Engine [cached since 0.007935s ago] {'id': UUID('c3fc0289-03db-4fb5-adad-ba839bafac69'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'asn', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 233, 'evidence_json': '{"meta": {"collector": "asn", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.842586Z", "completed_at": "2026-02-27T23: ... (243 characters truncated) ... c.", "country": "Canada", "city": "Toronto", "is_cdn": true, "is_cloud": false, "is_hosting": true, "reverse_dns": "", "related_domains_same_ip": []}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,445 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,446 INFO sqlalchemy.engine.Engine [cached since 0.0113s ago] {'id': UUID('3ab717c9-9989-443f-bb70-4a2a71323c0b'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'dns', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 327, 'evidence_json': '{"meta": {"collector": "dns", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.838041Z", "completed_at": "2026-02-27T23: ... (1213 characters truncated) ... ["_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9", "v=spf1 -all"], "dmarc": "v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s", "spf": "v=spf1 -all", "has_dnssec": null}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,448 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,449 INFO sqlalchemy.engine.Engine [cached since 0.01444s ago] {'id': UUID('fc1452b7-7f23-4feb-9eaa-2e082c9de60f'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'http', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 968, 'evidence_json': '{"meta": {"collector": "http", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.839967Z", "completed_at": "2026-02-27T23 ... (792 characters truncated) ...  false, "technologies_detected": ["Cloudflare"], "security_headers": {}, "brand_indicators": [], "phishing_indicators": [], "external_resources": []}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,451 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,452 INFO sqlalchemy.engine.Engine [cached since 0.01737s ago] {'id': UUID('ccaec999-76ee-4d88-8e17-0c4d29245551'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'whois', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 1108, 'evidence_json': '{"meta": {"collector": "whois", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.841960Z", "completed_at": "2026-02-27T2 ... (584 characters truncated) ... ", "clientTransferProhibited https://icann.org/epp#clientTransferProhibited", "clientUpdateProhibited https://icann.org/epp#clientUpdateProhibited"]}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,454 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,455 INFO sqlalchemy.engine.Engine [cached since 0.02015s ago] {'id': UUID('b393c165-246f-48c2-8e18-350e9193332b'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'vt', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 1108, 'evidence_json': '{"meta": {"collector": "vt", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.909853Z", "completed_at": "2026-02-27T23:4 ... (10208 characters truncated) ... ubject": "example.com", "vt_registrar": "RESERVED-Internet Assigned Numbers Authority", "tags": [], "notes": [], "file_name": null, "file_names": []}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,459 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,460 INFO sqlalchemy.engine.Engine [cached since 0.02589s ago] {'id': UUID('99ef019f-a36a-43ec-a804-1fb5fcccaa99'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'threat_feeds', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 1702, 'evidence_json': '{"meta": {"collector": "threat_feeds", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.922073Z", "completed_at": "2026- ... (583 characters truncated) ... matches": [], "openphish_listed": false, "feeds_checked": ["abuseipdb", "phishtank", "openphish"], "feeds_skipped": ["threatfox (error: HTTPError)"]}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,467 INFO sqlalchemy.engine.Engine INSERT INTO collector_results (id, investigation_id, collector_name, status, version, started_at, completed_at, duration_ms, evidence_json, error, raw_artifact_hash) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(collector_name)s, %(status)s, %(version)s, %(started_at)s, %(completed_at)s, %(duration_ms)s, %(evidence_json)s::JSONB, %(error)s, %(raw_artifact_hash)s)
+2026-02-28 01:46:01,468 INFO sqlalchemy.engine.Engine [cached since 0.03352s ago] {'id': UUID('53d93c87-a2fe-4472-87fc-d719b604be1f'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'collector_name': 'intel', 'status': 'completed', 'version': '1.0.0', 'started_at': None, 'completed_at': None, 'duration_ms': 2093, 'evidence_json': '{"meta": {"collector": "intel", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.844473Z", "completed_at": "2026-02-27T2 ... (12399 characters truncated) ... , "not_before": "2023-01-27T01:21:18", "not_after": "2033-01-24T01:21:18", "entry_timestamp": null, "name_value": "example.com\\nuser@example.com"}]}', 'error': None, 'raw_artifact_hash': None}
+2026-02-28 01:46:01,472 INFO sqlalchemy.engine.Engine INSERT INTO iocs (id, investigation_id, type, value, context, confidence) VALUES (%(id)s::UUID, %(investigation_id)s::UUID, %(type)s, %(value)s, %(context)s, %(confidence)s) RETURNING iocs.created_at
+2026-02-28 01:46:01,473 INFO sqlalchemy.engine.Engine [generated in 0.00134s] {'id': UUID('b3f5b7d5-d8e4-4e52-84df-6059b280b530'), 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'type': 'ip', 'value': '104.18.26.120', 'context': 'AbuseIPDB lookup target', 'confidence': 'medium'}
+2026-02-28 01:46:01,477 INFO sqlalchemy.engine.Engine SELECT whois_history.id, whois_history.domain, whois_history.whois_json, whois_history.captured_at, whois_history.investigation_id, whois_history.changes_from_previous 
+FROM whois_history 
+WHERE whois_history.domain = %(domain_1)s ORDER BY whois_history.captured_at DESC 
+ LIMIT %(param_1)s
+2026-02-28 01:46:01,479 INFO sqlalchemy.engine.Engine [generated in 0.00134s] {'domain_1': 'example.com', 'param_1': 1}
+2026-02-28 01:46:01,487 INFO sqlalchemy.engine.Engine INSERT INTO whois_history (id, domain, whois_json, investigation_id, changes_from_previous) VALUES (%(id)s::UUID, %(domain)s, %(whois_json)s::JSONB, %(investigation_id)s::UUID, %(changes_from_previous)s::JSONB) RETURNING whois_history.captured_at
+2026-02-28 01:46:01,488 INFO sqlalchemy.engine.Engine [generated in 0.00141s] {'id': UUID('95dca50e-3598-4fa8-b39c-3f023825dac7'), 'domain': 'example.com', 'whois_json': '{"meta": {"collector": "whois", "version": "1.0.0", "status": "completed", "started_at": "2026-02-27T23:45:03.841960Z", "completed_at": "2026-02-27T2 ... (584 characters truncated) ... ", "clientTransferProhibited https://icann.org/epp#clientTransferProhibited", "clientUpdateProhibited https://icann.org/epp#clientUpdateProhibited"]}', 'investigation_id': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941'), 'changes_from_previous': '{}'}
+2026-02-28 01:46:01,493 INFO sqlalchemy.engine.Engine COMMIT
+2026-02-28 01:46:01,496 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-28 01:46:01,498 INFO sqlalchemy.engine.Engine SELECT investigations.id AS investigations_id, investigations.domain AS investigations_domain, investigations.observable_type AS investigations_observable_type, investigations.state AS investigations_state, investigations.context AS investigations_context, investigations.client_domain AS investigations_client_domain, investigations.batch_id AS investigations_batch_id, investigations.created_at AS investigations_created_at, investigations.updated_at AS investigations_updated_at, investigations.concluded_at AS investigations_concluded_at, investigations.classification AS investigations_classification, investigations.confidence AS investigations_confidence, investigations.risk_score AS investigations_risk_score, investigations.recommended_action AS investigations_recommended_action, investigations.analyst_iterations AS investigations_analyst_iterations, investigations.max_analyst_iterations AS investigations_max_analyst_iterations 
+FROM investigations 
+WHERE investigations.id = %(pk_1)s::UUID
+2026-02-28 01:46:01,499 INFO sqlalchemy.engine.Engine [generated in 0.00106s] {'pk_1': UUID('b1882c0d-483c-4077-b0cd-ba7d16592941')}
+2026-02-28 01:46:01,504 INFO sqlalchemy.engine.Engine SELECT clients.id, clients.name, clients.domain, clients.aliases, clients.brand_keywords, clients.contact_email, clients.notes, clients.status, clients.created_at, clients.alert_count, clients.last_alert_at, clients.default_collectors 
+FROM clients 
+WHERE clients.status = %(status_1)s
+2026-02-28 01:46:01,505 INFO sqlalchemy.engine.Engine [generated in 0.00109s] {'status_1': 'active'}
+2026-02-28 01:46:01,509 INFO sqlalchemy.engine.Engine ROLLBACK

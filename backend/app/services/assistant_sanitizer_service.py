@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+from collections import defaultdict
+
+from app.services.ip_context import is_ipv4_indicator_match
+
+
+from app.utils.domain_utils import has_public_suffix
+from app.utils.log_text import (
+    has_file_suffix,
+    has_internal_suffix,
+    is_field_name,
+    is_siem_field_path,
+    looks_like_code_identifier,
+)
+
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+SID_RE = re.compile(r"\bS-\d-(?:\d+-){1,14}\d+\b", re.IGNORECASE)
+# Captures the VALUE in key="VALUE" patterns for user/username/srcuser/dstuser fields.
+# Uses a lookahead so the closing quote is not consumed and remains in the text.
+KEYED_ACCOUNT_RE = re.compile(
+    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:user(?:name)?|accountname|samaccountname))\s*=\s*"?)'
+    r'(?P<value>[A-Za-z0-9][A-Za-z0-9._@\\-]{0,252})(?="|[,\s}]|$)',
+    re.IGNORECASE,
+)
+MESSAGE_ACCOUNT_RE = re.compile(
+    r"(?P<prefix>\b(?:SAM\s+)?Account\s+Name:\s+)"
+    r"(?P<value>[A-Za-z0-9][A-Za-z0-9._@\\-]{0,252})(?=\s|\"|$)",
+    re.IGNORECASE,
+)
+KEYED_HOST_RE = re.compile(
+    r'(?P<prefix>\b(?:[A-Z0-9_]*?(?:hostname|computername|computer|host|server|device|workstation))'
+    r'(?:(?:\\*")?\s*:\s*(?:\\*")|\s*[=:]\s*\\*"?))(?P<value>[A-Z0-9._-]+)',
+    re.IGNORECASE,
+)
+FREEFORM_HOST_RE = re.compile(
+    r"(?P<prefix>\b(?:host|server|device|workstation)\s+)(?P<value>[A-Z0-9][A-Z0-9._-]{1,253})",
+    re.IGNORECASE,
+)
+SIMPLE_HOST_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,251}[A-Z0-9])?$", re.IGNORECASE)
+FQDN_LABEL_RE = re.compile(r"^[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?$", re.IGNORECASE)
+# Syslog RFC-3164 source hostname: <priority>MMM DD HH:MM:SS <hostname>
+SYSLOG_HOST_RE = re.compile(
+    r"(?P<prefix>(?:<\d{1,3}>)?[A-Z][a-z]{2}\s{1,2}\d{1,2}\s\d{2}:\d{2}:\d{2}\s)"
+    r"(?P<value>[A-Z0-9][A-Z0-9._-]{1,253})(?=\s)",
+    re.IGNORECASE,
+)
+# Windows user-profile path: C:\Users\<username>\ or C:/Users/<username>/
+WIN_PATH_USER_RE = re.compile(
+    r"(?P<prefix>[A-Za-z]:[/\\]+Users[/\\]+)(?P<value>[A-Za-z0-9][A-Za-z0-9._-]{0,252})(?=[/\\])",
+    re.IGNORECASE,
+)
+# Some Windows Event 4688 exports flatten adjacent fields without delimiters:
+# "...Security<hostname>S-1-5-...". Extract the hostname before the generic
+# bare-FQDN pass can absorb the surrounding event metadata into the token.
+GLUED_WINDOWS_SECURITY_HOST_RE = re.compile(
+    r"(?P<prefix>Security)"
+    r"(?P<value>[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?){2,}?)"
+    r"(?=S-\d-)",
+    re.IGNORECASE,
+)
+# Bare FQDNs not preceded by a keyword (e.g. "onvmbp01.onenet.be" appearing inline).
+# Requires at least 3 labels (2+ dots) to avoid matching .NET type references.
+# Must not be preceded by @ (emails already handled) or letters/digits (mid-word match).
+BARE_FQDN_RE = re.compile(
+    r"(?<![/@\w])(?!(?:\d{1,3}\.){3}\d{1,3}\b)"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}[a-z]{2,}(?![\w])",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class SanitizedEntry:
+    raw_text: str
+    sanitized_text: str
+    token_map: dict[str, str]
+    summary: dict[str, int]
+
+
+@dataclass
+class SanitizationBatchResult:
+    entries: list[SanitizedEntry]
+    summary: dict[str, int]
+
+
+def sanitize_entry(text: str, existing_token_map: dict[str, str] | None = None) -> SanitizedEntry:
+    batch = sanitize_entries([text], existing_token_map=existing_token_map or {})
+    return batch.entries[0]
+
+
+def sanitize_entries(
+    entries: list[str], existing_token_map: dict[str, str] | None = None
+) -> SanitizationBatchResult:
+    reverse_token_map = {
+        original: token for token, original in (existing_token_map or {}).items()
+    }
+    shared_token_map = dict(existing_token_map or {})
+    token_counters: dict[str, int] = _seed_counters(shared_token_map)
+    batch_summary: dict[str, int] = defaultdict(int)
+    sanitized_entries: list[SanitizedEntry] = []
+
+    for entry in entries:
+        try:
+            sanitized_text = entry.replace("\r\n", "\n")
+            entry_summary: dict[str, int] = defaultdict(int)
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                SYSLOG_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
+                KEYED_ACCOUNT_RE,
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
+                MESSAGE_ACCOUNT_RE,
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_account_pattern(
+                sanitized_text,
+                WIN_PATH_USER_RE,
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                GLUED_WINDOWS_SECURITY_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                KEYED_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_text = _replace_keyed_host_pattern(
+                sanitized_text,
+                FREEFORM_HOST_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            for label, pattern in (
+                ("emails", EMAIL_RE),
+                ("ips", IP_RE),
+                ("sids", SID_RE),
+            ):
+                sanitized_text = _replace_pattern(
+                    sanitized_text,
+                    pattern,
+                    label[:-1].upper(),
+                    shared_token_map,
+                    reverse_token_map,
+                    token_counters,
+                    entry_summary,
+                    batch_summary,
+                )
+            # Bare FQDNs not caught by keyed/freeform patterns — run after emails
+            # and IPs are already tokenised so their placeholders don't re-match.
+            sanitized_text = _replace_pattern(
+                sanitized_text,
+                BARE_FQDN_RE,
+                "HOST",
+                shared_token_map,
+                reverse_token_map,
+                token_counters,
+                entry_summary,
+                batch_summary,
+            )
+            sanitized_entries.append(
+                SanitizedEntry(
+                    raw_text=str(entry),
+                    sanitized_text=sanitized_text,
+                    token_map=dict(shared_token_map),
+                    summary=dict(entry_summary),
+                )
+            )
+        except Exception:
+            batch_summary["errors"] += 1
+            sanitized_entries.append(
+                SanitizedEntry(
+                    raw_text=str(entry),
+                    sanitized_text="[SANITIZATION_ERROR]",
+                    token_map={},
+                    summary={"errors": 1},
+                )
+            )
+
+    return SanitizationBatchResult(entries=sanitized_entries, summary=dict(batch_summary))
+
+
+def _replace_pattern(
+    text: str,
+    pattern: re.Pattern[str],
+    token_prefix: str,
+    shared_token_map: dict[str, str],
+    reverse_token_map: dict[str, str],
+    token_counters: dict[str, int],
+    entry_summary: dict[str, int],
+    batch_summary: dict[str, int],
+) -> str:
+    label_key = token_prefix.lower() + "s"
+
+    # `token not in text` below scans the WHOLE input, and `repl` runs once
+    # per match. Measured on one 2,244,098-char body: 44,002 calls, 78.9s, for
+    # 6 distinct tokens — O(matches x length), quadratic for repetitive
+    # content, 3.98x per doubling, and the realised cost was an alert that got
+    # no analysis after 1,792 seconds of worker time. Backlog 43.
+    #
+    # The predicate is **memoised, not redefined.** It asks whether this
+    # token's literal text already appears in the original input, which is a
+    # property of (token, text) and cannot change within this call — `text` is
+    # the closure's unmodified input, not the partially substituted result. So
+    # the answer is computed at most once per distinct token: 6 scans instead
+    # of 44,002, with byte-identical output and an identical `entry_summary`.
+    #
+    # Memoising rather than replacing matters because `entry_summary` is a
+    # published count. Substituting "distinct entities seen" — the obvious
+    # tidier rule — would have silently re-based a number the API serves.
+    appears_literally: dict[str, bool] = {}
+
+    def repl(match: re.Match[str]) -> str:
+        original = match.group(0)
+        if token_prefix == "IP" and not is_ipv4_indicator_match(text, match):
+            return original
+        if token_prefix == "HOST" and not _is_redactable_host(text, match):
+            return original
+        token = reverse_token_map.get(original)
+        if token is None:
+            token_counters[token_prefix] += 1
+            token = f"[{token_prefix}_{token_counters[token_prefix]}]"
+            reverse_token_map[original] = token
+            shared_token_map[token] = original
+            batch_summary[label_key] += 1
+        if token not in appears_literally:
+            appears_literally[token] = token in text
+        # The first-match special case is preserved exactly: the first match
+        # for a label always counts, even when the token appears literally in
+        # the input. Dropping it would change the count for any entry whose
+        # text contains a `[HOST_1]`-shaped string.
+        if entry_summary.get(label_key, 0) == 0 or not appears_literally[token]:
+            entry_summary[label_key] += 1
+        return token
+
+    return pattern.sub(repl, text)
+
+
+def _replace_keyed_host_pattern(
+    text: str,
+    pattern: re.Pattern[str],
+    token_prefix: str,
+    shared_token_map: dict[str, str],
+    reverse_token_map: dict[str, str],
+    token_counters: dict[str, int],
+    entry_summary: dict[str, int],
+    batch_summary: dict[str, int],
+) -> str:
+    label_key = "hosts"
+
+    def repl(match: re.Match[str]) -> str:
+        original = match.group("value")
+        if EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original) or not _looks_like_host(original):
+            return match.group(0)
+        token = reverse_token_map.get(original)
+        if token is None:
+            token_counters[token_prefix] += 1
+            token = f"[{token_prefix}_{token_counters[token_prefix]}]"
+            reverse_token_map[original] = token
+            shared_token_map[token] = original
+            batch_summary[label_key] += 1
+        entry_summary[label_key] += 1
+        return f"{match.group('prefix')}{token}"
+
+    return pattern.sub(repl, text)
+
+
+def _replace_keyed_account_pattern(
+    text: str,
+    pattern: re.Pattern[str],
+    shared_token_map: dict[str, str],
+    reverse_token_map: dict[str, str],
+    token_counters: dict[str, int],
+    entry_summary: dict[str, int],
+    batch_summary: dict[str, int],
+) -> str:
+    """Like _replace_keyed_host_pattern but for account values.
+
+    Skips the _looks_like_host gate so that plain domain accounts (e.g.
+    "domain\\username"), usernames without digits, and path-embedded usernames
+    are all tokenised correctly.
+    """
+    label_key = "accounts"
+
+    def repl(match: re.Match[str]) -> str:
+        original = match.group("value")
+        if not original or EMAIL_RE.fullmatch(original) or IP_RE.fullmatch(original):
+            return match.group(0)
+        token = reverse_token_map.get(original)
+        if token is None:
+            token_counters["ACCOUNT"] += 1
+            token = f"[ACCOUNT_{token_counters['ACCOUNT']}]"
+            reverse_token_map[original] = token
+            shared_token_map[token] = original
+            batch_summary[label_key] += 1
+        entry_summary[label_key] += 1
+        return f"{match.group('prefix')}{token}"
+
+    return pattern.sub(repl, text)
+
+
+def _is_redactable_host(text: str, match: re.Match[str]) -> bool:
+    """
+    Whether this match is a hostname worth replacing with a token.
+
+    Redacting too much is not harmless: the token map is shown to the analyst as
+    "values redacted before AI analysis", and the model writes its narrative in
+    terms of those tokens. When `data.win.eventdata.hashes` becomes [HOST_6], the
+    report ends up saying a process is "identified by SHA256
+    data.win.eventdata.hashes". Two things are never hosts:
+
+      * a field name — it starts a line and is followed by a colon
+      * a file name — `BOOTX64.EFI.shim.bak`, `options.csv`
+
+    Everything else keeps today's behaviour, including internal suffixes such as
+    `.local` or `.corp`, which must stay redacted even though no public suffix
+    list knows them.
+
+    Two more are never hosts either, both learned from one .NET crash report
+    that redacted 35 "hostnames", all of them stack-trace namespaces:
+
+      * a code identifier — `System.Threading.Tasks.Task`
+      * a dotted token under no suffix anybody recognises, public or private
+
+    This gate applies only to the bare pass, where nothing but the token's own
+    shape says it is a host. The keyed patterns above have a field name saying
+    so, and keep the looser check — `Computer: box.weird-suffix` is a hostname
+    on the strength of the key, whatever the suffix.
+    """
+    original = match.group(0)
+    if is_field_name(text, match):
+        return False
+    if has_file_suffix(original):
+        return False
+    if looks_like_code_identifier(original):
+        return False
+    if is_siem_field_path(original):
+        return False
+    if not (has_public_suffix(original) or has_internal_suffix(original)):
+        return False
+    return _looks_like_host(original)
+
+
+def _looks_like_host(value: str) -> bool:
+    candidate = value.strip().strip("\"'")
+    if not candidate or len(candidate) > 253:
+        return False
+    if EMAIL_RE.fullmatch(candidate) or IP_RE.fullmatch(candidate):
+        return False
+    if "." in candidate:
+        labels = candidate.split(".")
+        if len(labels) < 2:
+            return False
+        if labels[0].isdigit():
+            return False
+        if any(not label or len(label) > 63 for label in labels):
+            return False
+        if any("_" in label or not FQDN_LABEL_RE.fullmatch(label) for label in labels):
+            return False
+        if not any(any(ch.isalpha() for ch in label) for label in labels):
+            return False
+        return any(ch.isalpha() for ch in labels[-1]) and len(labels[-1]) >= 2
+    if "_" in candidate or not SIMPLE_HOST_RE.fullmatch(candidate):
+        return False
+    if candidate.isdigit():
+        return False
+    return any(ch.isalpha() for ch in candidate) and any(ch.isdigit() for ch in candidate)
+
+
+def _seed_counters(shared_token_map: dict[str, str]) -> dict[str, int]:
+    counters: dict[str, int] = defaultdict(int)
+    token_re = re.compile(r"^\[(?P<prefix>[A-Z]+)_(?P<number>\d+)\]$")
+    for token in shared_token_map:
+        match = token_re.match(token)
+        if not match:
+            continue
+        prefix = match.group("prefix")
+        counters[prefix] = max(counters[prefix], int(match.group("number")))
+    return counters

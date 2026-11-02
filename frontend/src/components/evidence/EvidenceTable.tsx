@@ -8,6 +8,7 @@ interface Row {
 
 interface Column {
   key: string;
+  label?: string;
   wrap?: boolean;
 }
 
@@ -15,67 +16,142 @@ interface Props {
   title?: string;
   data: Row[];
   columns: Column[];
+  showHeader?: boolean;
 }
 
-export default function EvidenceTable({ title, data, columns }: Props) {
+export default function EvidenceTable({ title, data, columns, showHeader = false }: Props) {
   if (data.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: "var(--space-4)" }}>
       {title && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: "var(--font-micro)",
             fontWeight: 700,
-            color: "var(--text-dim)",
-            letterSpacing: "0.08em",
-            marginBottom: 6,
-            padding: "6px 0",
-            borderBottom: "1px solid var(--border-dim)",
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: "var(--text-muted)",
+            marginBottom: "var(--space-1)",
           }}
         >
           {title}
         </div>
       )}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <tbody>
-          {data.map((row, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid var(--bg-root)" }}>
-              {columns.map((col, j) => {
-                const val = row[col.key];
-                const display =
-                  val === null || val === undefined
-                    ? "—"
-                    : typeof val === "boolean"
-                    ? val
-                      ? "Yes"
-                      : "No"
-                    : String(val);
+      <div className="ds-table-wrap">
+        <table className="ds-table">
+          {showHeader && (
+            <thead>
+              <tr>
+                {columns.map((col, idx) => (
+                  <th key={col.key} scope="col" style={{ width: idx === 0 ? "30%" : "auto" }}>
+                    {col.label || col.key.toUpperCase()}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {data.map((row, i) => (
+              <tr key={i}>
+                {columns.map((col, j) => {
+                  const val = row[col.key];
+                  const display: React.ReactNode =
+                    val === null || val === undefined
+                      ? "—"
+                      : React.isValidElement(val)
+                      ? val
+                      : typeof val === "boolean"
+                      ? val
+                        ? "Yes"
+                        : "No"
+                      : String(val);
+                  const empty = isEmptyDisplay(display);
+                  // Severity colours the text, never the cell. Filled cells put
+                  // a wall of tinted blocks behind values that mostly say
+                  // "medium", and the one real finding stops standing out.
+                  const severity = j > 0 && !empty ? classifySeverity(display, col.key) : "neutral";
 
-                return (
-                  <td
-                    key={j}
-                    style={{
-                      padding: "7px 12px",
-                      fontSize: 11,
-                      color: j === 0 ? "var(--text-dim)" : "var(--text)",
-                      fontWeight: j === 0 ? 600 : 400,
-                      width: j === 0 ? "30%" : "auto",
-                      background:
-                        i % 2 === 0 ? "transparent" : "rgba(6,10,17,0.3)",
-                      whiteSpace: col.wrap ? "normal" : "nowrap",
-                      wordBreak: col.wrap ? "break-all" : "normal",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {display}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                  return (
+                    <td
+                      key={j}
+                      style={{
+                        color:
+                          j === 0
+                            ? "var(--text-dim)"
+                            : empty
+                            ? "var(--text-muted)"
+                            : severity === "malicious"
+                            ? "var(--status-danger)"
+                            : severity === "suspicious"
+                            ? "var(--status-warning)"
+                            : severity === "legit"
+                            ? "var(--status-success)"
+                            : "var(--text-secondary)",
+                        fontWeight: j === 0 || severity === "malicious" ? 600 : 400,
+                        width: j === 0 ? "30%" : "auto",
+                        whiteSpace: col.wrap ? "normal" : "nowrap",
+                        overflowWrap: col.wrap ? "anywhere" : "normal",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {display}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
+}
+
+function isEmptyDisplay(value: React.ReactNode): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value !== "string") return false;
+  const text = value.trim().toLowerCase();
+  return (
+    text === "" ||
+    text === "-" ||
+    text === "—" ||
+    text === "n/a" ||
+    text === "none" ||
+    text === "unknown" ||
+    text === "not present in the provided evidence."
+  );
+}
+
+function classifySeverity(value: React.ReactNode, key: string): "malicious" | "suspicious" | "legit" | "neutral" {
+  if (value === null || value === undefined) return "neutral";
+  const text = String(value).toLowerCase();
+  const k = String(key || "").toLowerCase();
+  if (
+    text.includes("malicious") ||
+    text.includes("phishing") ||
+    text.includes("critical") ||
+    text.includes("high risk") ||
+    (k.includes("threat_level") && /\b([2-9]|[1-9]\d+)\b/.test(text))
+  ) {
+    return "malicious";
+  }
+  if (
+    text.includes("suspicious") ||
+    text.includes("warning") ||
+    text.includes("medium") ||
+    text.includes("inconclusive")
+  ) {
+    return "suspicious";
+  }
+  if (
+    text.includes("whitelisted") ||
+    text.includes("legitimate") ||
+    text.includes("trusted") ||
+    text.includes("clean") ||
+    text.includes("benign")
+  ) {
+    return "legit";
+  }
+  return "neutral";
 }

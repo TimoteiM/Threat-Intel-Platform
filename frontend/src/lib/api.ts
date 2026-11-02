@@ -5,7 +5,63 @@
  * so /api/* → http://localhost:8000/api/*
  */
 
+import type {
+  AlertExtractedIndicator,
+  AlertExtractionResult,
+  AlertInvestigationRun,
+  AlertReportDocument,
+  APIHealthResponse,
+  AnalystFeedback,
+  AttackCoverageResponse,
+  CostDashboard,
+  DetectionQualityResponse,
+  Exclusion,
+  FeedbackAccuracy,
+  MismatchAlertsResponse,
+  CorrelatedCase,
+  CorrelatedCasesResponse,
+  CaseDetail,
+  CaseNarrativeDetail,
+  EntityProfile,
+  TuningResponse,
+  SuppressionCandidate,
+  TacticAlertsResponse,
+} from "./types";
+
 const BASE = "/api";
+const DIRECT_BACKEND = (process.env.NEXT_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+const DEFAULT_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+
+function resolveDirectBackendBase(): string {
+  if (DIRECT_BACKEND) return DIRECT_BACKEND;
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol || "http:";
+    const host = window.location.hostname || "127.0.0.1";
+    return `${protocol}//${host}:${DEFAULT_BACKEND_PORT}`;
+  }
+  return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}`;
+}
+
+function canUseDirectBackendFallback(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = (window.location.hostname || "").toLowerCase();
+  // Allow direct backend fallback for local/private hosts to mitigate
+  // intermittent proxy/rewrite failures for large multipart uploads.
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    const octets = host.split(".").map((x) => Number(x));
+    const [a, b] = octets;
+    if (
+      a === 10 ||
+      a === 127 ||
+      (a === 192 && b === 168) ||
+      (a === 172 && b >= 16 && b <= 31)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -17,6 +73,10 @@ class ApiError extends Error {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
+    // The session cookie authenticates every call. Same-origin would cover the
+    // proxied path on its own, but the direct-to-backend upload fallback below
+    // is cross-origin and would otherwise send no credential at all.
+    credentials: "include",
     ...options,
   });
 
@@ -25,6 +85,84 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(res.status, body || res.statusText);
   }
 
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+// How long a direct-to-backend attempt may hang before we stop waiting.
+//
+// This is the whole reason the assistant took 33 seconds to load. The direct
+// URL is port 8000, and the firewall DROPs port 8000 from the LAN rather than
+// rejecting it — by design, so a port scan learns nothing. A rejected
+// connection fails in 0.00s; a dropped one has nothing to fail on, so the
+// browser retransmits SYNs on the usual 1-2-4-8-16s backoff and gives up after
+// about 31s. Every assistant call paid that, then quietly succeeded through
+// the proxy 25ms later.
+//
+// A bound is needed even though the proxy now goes first, because "the proxy
+// failed" and "the backend is unreachable" can both be true at once.
+const DIRECT_ATTEMPT_TIMEOUT_MS = 2500;
+
+async function requestWithDirectFallback<T>(path: string, options?: RequestInit): Promise<T> {
+  const proxiedUrl = `${BASE}${path}`;
+  const directUrl = `${resolveDirectBackendBase()}${BASE}${path}`;
+
+  // The proxy first. It is how every other endpoint in this file reaches the
+  // backend, it is the only path that works from outside this host, and it
+  // answered these very requests in 25ms while the direct attempt ahead of it
+  // was still retransmitting. Direct is kept as what its name always claimed:
+  // a fallback.
+  const endpoints: Array<{ url: string; timeoutMs?: number }> = [{ url: proxiedUrl }];
+  if (canUseDirectBackendFallback()) {
+    endpoints.push({ url: directUrl, timeoutMs: DIRECT_ATTEMPT_TIMEOUT_MS });
+  }
+
+  let lastError: unknown = null;
+  for (const { url, timeoutMs } of endpoints) {
+    try {
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        credentials: "include",
+        ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+        ...options,
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new ApiError(res.status, body || res.statusText);
+      }
+
+      if (res.status === 204) return undefined as T;
+      return res.json();
+    } catch (error) {
+      lastError = error;
+      // A backend HTTP response means the request was delivered. Retrying it
+      // through another endpoint can duplicate expensive/non-idempotent work.
+      if (error instanceof ApiError) throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Request failed");
+}
+
+async function requestLongRunning<T>(path: string, options?: RequestInit): Promise<T> {
+  // Exactly one submission: long-running AI requests must never be replayed
+  // automatically because the first request may already be billable.
+  //
+  // Through the proxy, like every other call. This used to go direct whenever
+  // the browser was on a private address, which on this deployment meant a
+  // port the firewall silently drops: ~31s of SYN retransmission and then a
+  // failure, with no fallback to soften it, for a request that cannot be
+  // safely retried.
+  const endpoint = `${BASE}${path}`;
+  const res = await fetch(endpoint, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
   return res.json();
 }
 
@@ -32,12 +170,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export function createInvestigation(data: {
   domain: string;
+  observable_type?: string;
   context?: string;
+  client_domain?: string;
+  investigated_url?: string;
+  client_url?: string;
+  network_profile?: { use_residential_proxy?: boolean; proxy_country?: string };
   requested_collectors?: string[];
+  ai_model?: string;
 }) {
   return request<{
     investigation_id: string;
     domain: string;
+    observable_type: string;
     state: string;
     message: string;
   }>("/investigations", {
@@ -46,17 +191,1243 @@ export function createInvestigation(data: {
   });
 }
 
-export function listInvestigations(params?: { limit?: number; offset?: number; state?: string }) {
+export function getProxyCountries() {
+  return request<{ items: Array<{ country: string; label: string; configured: string }> }>(
+    "/investigations/proxy-countries",
+  );
+}
+
+/**
+ * Thrown when the submitted archive is locked. Carries the flag the form needs
+ * to ask for a password and keep the chosen file, rather than a bare message
+ * the caller has to pattern-match on.
+ */
+export class ArchivePasswordRequired extends Error {
+  readonly needsPassword = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "ArchivePasswordRequired";
+  }
+}
+
+export async function uploadFileInvestigation(
+  file: File,
+  context?: string,
+  options?: { use_residential_proxy?: boolean; proxy_country?: string; archive_password?: string },
+): Promise<{ investigation_id: string; domain: string; observable_type: string; state: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (context) formData.append("context", context);
+  if (options?.archive_password) {
+    formData.append("archive_password", options.archive_password);
+  }
+  if (options?.use_residential_proxy !== undefined) {
+    formData.append("use_residential_proxy", String(options.use_residential_proxy));
+  }
+  if (options?.proxy_country) {
+    formData.append("proxy_country", options.proxy_country);
+  }
+
+  const res = await fetch(`${BASE}/investigations/upload-file`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    let detail = body;
+    try {
+      detail = (JSON.parse(body) as { detail?: string }).detail || body;
+    } catch {
+      // A plain-text error body is fine; it is already the message.
+    }
+    // 409 means the file is acceptable but locked: the server is asking for
+    // the archive password, not rejecting the submission.
+    if (res.status === 409) throw new ArchivePasswordRequired(detail || res.statusText);
+    throw new Error(detail || res.statusText);
+  }
+
+  return res.json();
+}
+
+export async function uploadEmailInvestigation(
+  file: File,
+  options?: {
+    context?: string;
+    max_urls?: number;
+    max_attachment_hashes?: number;
+    include_url_screenshots?: boolean;
+    run_anyrun?: boolean;
+    run_ai?: boolean;
+    ml_phishing_score?: number;
+  },
+): Promise<any> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (options?.context) formData.append("context", options.context);
+  if (options?.max_urls !== undefined) formData.append("max_urls", String(options.max_urls));
+  if (options?.max_attachment_hashes !== undefined) {
+    formData.append("max_attachment_hashes", String(options.max_attachment_hashes));
+  }
+  if (options?.include_url_screenshots !== undefined) {
+    formData.append("include_url_screenshots", String(options.include_url_screenshots));
+  }
+  if (options?.run_anyrun !== undefined) formData.append("run_anyrun", String(options.run_anyrun));
+  if (options?.run_ai !== undefined) formData.append("run_ai", String(options.run_ai));
+  if (options?.ml_phishing_score !== undefined) {
+    formData.append("ml_phishing_score", String(options.ml_phishing_score));
+  }
+
+  const directBackendBase = resolveDirectBackendBase();
+  const proxiedEndpoint = `${BASE}/email-investigations/upload`;
+  const directEndpoint = `${directBackendBase}/api/email-investigations/upload`;
+
+  function shouldPreferDirectBackend(): boolean {
+    // Large multipart uploads can intermittently reset through Next dev rewrites on Windows.
+    // Prefer direct backend in local development; keep proxy-first behavior elsewhere.
+    if (typeof window === "undefined") return false;
+    const host = (window.location.hostname || "").toLowerCase();
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    const direct = directEndpoint.toLowerCase();
+    const isLocalBackend = direct.includes("127.0.0.1") || direct.includes("localhost");
+    return isLocalHost && isLocalBackend;
+  }
+
+  async function postMultipart(endpoint: string): Promise<Response> {
+    return fetch(endpoint, { method: "POST", body: formData });
+  }
+
+  const canUseDirect = canUseDirectBackendFallback();
+  const endpoints = canUseDirect
+    ? (
+      shouldPreferDirectBackend()
+        ? [directEndpoint, proxiedEndpoint]
+        : [proxiedEndpoint, directEndpoint]
+    )
+    : [proxiedEndpoint];
+
+  let res: Response | null = null;
+  let lastNetworkError: unknown = null;
+  for (const endpoint of endpoints) {
+    try {
+      res = await postMultipart(endpoint);
+      // If endpoint exists (anything except 404/405/5xx), stop retrying.
+      if (res.status < 500 && res.status !== 404 && res.status !== 405) break;
+    } catch (err) {
+      lastNetworkError = err;
+    }
+  }
+
+  if (!res) {
+    throw new Error(
+      lastNetworkError instanceof Error
+        ? `Upload request failed: ${lastNetworkError.message}`
+        : "Upload request failed",
+    );
+  }
+
+  if (canUseDirect && !res.ok && (res.status >= 500 || res.status === 404 || res.status === 405)) {
+    // Final compatibility retry for mixed environments.
+    const fallbackOrder = [directEndpoint, proxiedEndpoint];
+    for (const endpoint of fallbackOrder) {
+      if (endpoint === res.url) continue;
+      try {
+        const retryRes = await postMultipart(endpoint);
+        if (retryRes.ok) return retryRes.json();
+      } catch {
+        // Try next fallback endpoint.
+      }
+    }
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+  return res.json();
+}
+
+export async function listEmailInvestigationHistory(
+  params?: { limit?: number; offset?: number; search?: string; classification?: string },
+): Promise<{ items: any[]; total: number; limit: number; offset: number }> {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.classification && params.classification !== "all") qs.set("classification", params.classification);
+  const query = qs.toString();
+  return request<{ items: any[]; total: number; limit: number; offset: number }>(
+    `/email-investigations/history${query ? `?${query}` : ""}`,
+  );
+}
+
+export async function getEmailInvestigationHistoryItem(historyId: string): Promise<any> {
+  return request<any>(`/email-investigations/history/${historyId}`);
+}
+
+export async function getEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}`);
+}
+
+export async function cancelEmailInvestigationRun(runId: string): Promise<any> {
+  return request<any>(`/email-investigations/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+// ─── Alert body investigations ───
+
+export function extractAlertIndicators(data: { alert_body: string; max_indicators?: number }) {
+  return request<AlertExtractionResult>("/alert-investigations/extract", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function createAlertInvestigation(data: {
+  alert_body: string;
+  title?: string;
+  context?: string;
+  requested_collectors?: string[];
+  max_indicators?: number;
+  run_ip_lookup?: boolean;
+  run_ai?: boolean;
+}) {
+  return request<{
+    run_id: string;
+    status: string;
+    title: string;
+    indicators: AlertExtractedIndicator[];
+    indicator_count: number;
+    investigable_count: number;
+    message: string;
+    // wait=false: the UI navigates to the run page and polls it. Senders that
+    // want a finished report in one call get the API default (wait=true).
+  }>("/alert-investigations?wait=false", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function listAlertInvestigations(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  verdict?: string;
+  /** A tenant id, or "__unassigned__". Omit for every client you may see. */
+  tenant?: string;
+  /** Hours back from now. Ignored by the server when a range is given. */
+  hours?: number;
+  /** ISO-8601 instants, not wall-clock text — see `toInstant`. */
+  since?: string;
+  until?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.verdict && params.verdict !== "all") qs.set("verdict", params.verdict);
+  if (params?.tenant && params.tenant !== "all") qs.set("tenant", params.tenant);
+  if (params?.hours !== undefined) qs.set("hours", String(params.hours));
+  if (params?.since) qs.set("since", params.since);
+  if (params?.until) qs.set("until", params.until);
+  const query = qs.toString();
+  return request<
+    PaginatedResponse<AlertInvestigationRun> & {
+      scope?: TenantScope;
+      available_tenants?: TenantOption[];
+    }
+  >(`/alert-investigations${query ? `?${query}` : ""}`);
+}
+
+export interface TenantOption {
+  tenant_id: string;
+  name: string;
+  status: string;
+  run_count: number;
+  /** Created by an incoming alert naming this id, not by anyone deciding to
+   *  onboard a client — so the name is derived from the id and nobody has
+   *  confirmed it is real. `ClientFilter` surfaces these for confirmation. */
+  provisional?: boolean;
+}
+
+/** Confirm a client the ingest created, or rename one. Administrators only.
+ *  Every change writes a `tenant_events` row recording both sides of it. */
+export function onboardTenant(
+  tenantId: string,
+  body: { name?: string; status?: "active" | "provisional"; note?: string },
+) {
+  return request<{
+    tenant_id: string;
+    name: string;
+    status: string;
+    provisional: boolean;
+    changed: boolean;
+  }>(`/alert-investigations/tenants/${encodeURIComponent(tenantId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export interface TenantEvent {
+  action: string;
+  actor?: string | null;
+  actor_role?: string | null;
+  from_status?: string | null;
+  to_status?: string | null;
+  from_name?: string | null;
+  to_name?: string | null;
+  note?: string | null;
+  at?: string | null;
+}
+
+export function getTenantEvents(tenantId: string) {
+  return request<{ tenant_id: string; events: TenantEvent[]; recorded_since: string }>(
+    `/alert-investigations/tenants/${encodeURIComponent(tenantId)}/events`,
+  );
+}
+
+export interface TenantScope {
+  all_tenants: boolean;
+  tenant_ids: string[];
+  include_unassigned: boolean;
+}
+
+export interface AlertLogEvent {
+  key: string;
+  index: string;
+  id: string;
+  timestamp: string | null;
+  agent?: { id?: string | null; name?: string | null; ip?: string | null };
+  manager?: string | null;
+  rule?: {
+    id?: string | null;
+    level?: number | null;
+    description?: string | null;
+    groups?: string[] | null;
+    mitre_technique?: string[] | null;
+  };
+  event_id?: string | null;
+  users?: string[];
+  process?: { image?: string | null; command_line?: string | null; parent_image?: string | null };
+  network?: { src_ip?: string | null; dst_ip?: string | null };
+  decoder?: string | null;
+  location?: string | null;
+  full_log?: string | null;
+  channel?: string | null;
+  domain?: string | null;
+  /**
+   * The event's own fields, whatever they are for this event id. A list of
+   * pairs rather than an object: it is stored in JSONB, which normalises key
+   * order, so the server's ordering only survives as a list.
+   */
+  fields?: { name: string; value: string }[];
+  matched_on?: string[];
+  /** The ranking judged this worth an analyst's attention. Advice, not a verdict. */
+  relevant?: boolean;
+  /** This event actually reached the model. Only true once someone sent it. */
+  sent_to_ai?: boolean;
+}
+
+export interface AlertLogPage {
+  status: string;
+  reason?: string | null;
+  tenant_id?: string | null;
+  logs: AlertLogEvent[];
+  log_count: number;
+  retrieved_total: number;
+  filtered_total: number;
+  relevant_total: number;
+  sent_to_ai_total: number;
+  truncated: boolean;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  alert_time?: string | null;
+  window?: { start: string; end: string; covered_until: string; complete: boolean };
+  selectors?: Record<string, any>;
+  sources?: Record<string, any>;
+  analysis_basis?: "complete" | "partial" | "unknown";
+  analysis_saw_logs?: number | null;
+  new_logs_since_analysis?: number | null;
+  analysis_note?: string | null;
+}
+
+export function getAlertLogs(
+  runId: string,
+  params?: {
+    limit?: number;
+    offset?: number;
+    q?: string;
+    device?: string;
+    user?: string;
+    rule_id?: string;
+    min_level?: number;
+    side?: "before" | "after" | "all";
+    only_relevant?: boolean;
+  },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.q?.trim()) qs.set("q", params.q.trim());
+  if (params?.device?.trim()) qs.set("device", params.device.trim());
+  if (params?.user?.trim()) qs.set("user", params.user.trim());
+  if (params?.rule_id?.trim()) qs.set("rule_id", params.rule_id.trim());
+  if (params?.min_level !== undefined) qs.set("min_level", String(params.min_level));
+  if (params?.side && params.side !== "all") qs.set("side", params.side);
+  if (params?.only_relevant) qs.set("only_relevant", "true");
+  const query = qs.toString();
+  return request<AlertLogPage>(`/alert-investigations/${runId}/logs${query ? `?${query}` : ""}`);
+}
+
+export interface AlertLogContextPage {
+  status: string;
+  reason?: string | null;
+  tenant_id?: string | null;
+  anchor: AlertLogEvent & { is_alert: true; synthetic?: boolean };
+  before: AlertLogEvent[];
+  after: AlertLogEvent[];
+  available_before: number;
+  available_after: number;
+  retrieved_total: number;
+  relevant_total: number;
+  /** Every flagged event in the window, not only those on this page. */
+  relevant_refs?: string[];
+  sent_to_ai_total: number;
+  truncated: boolean;
+  alert_time?: string | null;
+  window?: { start: string; end: string; covered_until: string; complete: boolean };
+  analysis_basis?: "complete" | "partial" | "unknown";
+  new_logs_since_analysis?: number | null;
+  analysis_note?: string | null;
+  ai_budget_tokens?: number;
+}
+
+/** The alert with N events either side of it, the way Discover shows context. */
+export function getAlertLogContext(runId: string, before = 5, after = 5, onlyRelevant = false) {
+  const qs = new URLSearchParams({ before: String(before), after: String(after) });
+  // Narrows the window to the ranking's picks and returns all of them, rather
+  // than a page the caller then has to filter — the flagged set is bounded, so
+  // there is nothing to walk.
+  if (onlyRelevant) qs.set("only_relevant", "true");
+  return request<AlertLogContextPage>(`/alert-investigations/${runId}/logs/context?${qs}`);
+}
+
+/** Read the log cluster again, up to now, and fold what is new into the
+ *  stored set.
+ *
+ *  Idempotent on the server: the read starts before the stored high-water mark
+ *  and documents merge on their own `index:id`, so pressing the button twice
+ *  adds nothing. */
+export function refreshAlertLogs(runId: string) {
+  return request<{
+    run: string;
+    status: string;
+    logs: number;
+    new_logs: number;
+    read_until: string;
+    reason: string | null;
+    note: string;
+  }>(`/alert-investigations/${runId}/logs/refresh`, { method: "POST" });
+}
+
+export interface CaseReportOptions {
+  months: Array<{ month: string; cases: number }>;
+  /** `cases` and `alerts` are both carried because the option label has to
+   *  say which one it is showing. The Alerts page's own client filter puts a
+   *  RUN count in the same `name (N)` shape this page put a CASE count in,
+   *  and neither said so — which read as the two pages disagreeing. */
+  clients: Array<{ tenant_id: string; label: string; cases: number; alerts: number }>;
+  scope: { all_tenants: boolean };
+}
+
+export type GraphStatus = "corroborated" | "claimed";
+
+/** One entity. Alerts are no longer nodes: they are witnesses on the nodes
+ *  and edges they saw, which is what lets two observations of one binary
+ *  collapse into a single node. */
+export interface CaseGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+  status: GraphStatus;
+  /** observed | parsed | inferred — what the status was computed from. */
+  basis: string;
+  attrs: Record<string, unknown>;
+  /** The severity the alert's own source states, normalised 0-100. Null when
+   *  no alert touching this entity came from a source that states one —
+   *  which is a gap in coverage, not a low severity. */
+  severity: number | null;
+  severity_rated?: boolean;
+  /** The worst indicator-reputation score of any alert that touched it. NOT a
+   *  severity: it is a seven-component sum of which five components are URL,
+   *  email, attachment or sandbox signals. */
+  indicator_risk_score?: number | null;
+  witnesses: Array<{
+    run_id: string;
+    rule_id: string | null;
+    detection: string | null;
+    at: string | null;
+  }>;
+  witness_count: number;
+  absorbed: string[];
+  /** Alerts outside this case that touched the same entity. */
+  pivot_alerts?: number;
+  /** Hosts only. `state` is "unknown" when nobody has classified it, which
+   *  is not the same as "not a crown jewel". */
+  criticality?: { tier: string | null; state: string; reason?: string | null };
+}
+
+export interface CaseGraphEdge {
+  kind: string;
+  source: string;
+  target: string;
+  status: GraphStatus;
+  basis: string;
+  attrs: Record<string, unknown>;
+  /** Stroke width: how many alerts agree this relationship happened. */
+  witness_count: number;
+}
+
+/** The honest-absence convention on the wire.
+ *
+ *  A missing value arrives as a reason rather than as null or zero. The
+ *  platform has paid for both alternatives: `threatfox_count` reads 0 for
+ *  every address in the estate while that feed has never once answered. */
+export interface AbsentValue {
+  absent: true;
+  kind: string;
+  reason: string;
+  raw?: string | null;
+}
+
+export interface CaseGraph {
+  case_key: string;
+  case_number: number | null;
+  nodes: CaseGraphNode[];
+  edges: CaseGraphEdge[];
+  counts: Record<string, number>;
+  attack: { corroborated: number; claimed: number };
+  integrity?: {
+    nodes_corroborated?: number;
+    nodes_claimed?: number;
+    edges_corroborated?: number;
+    edges_claimed?: number;
+  };
+  /** Which sources the case's alerts came from, and whether each can be read
+   *  at all. A case of eight Windows alerts and four Fortigate ones draws
+   *  two thirds of itself, and saying so is the difference between a partial
+   *  graph and a wrong one. */
+  sources?: {
+    by_source: Array<{ source: string; alerts: number; mapped: boolean; entities: number }>;
+    unmapped: string[];
+  };
+  /** `observations` is what the folded nodes stand for after the earlier merge
+   *  passes, and `members` is how many nodes were folded. On case #71 the 6
+   *  folded process nodes had absorbed 176 further keys, so the two read 7 and
+   *  183; they are equal when nothing was absorbed. */
+  collapsed?: Array<{
+    id: string;
+    kind: string;
+    edge: string;
+    members: number;
+    observations?: number;
+  }>;
+  coverage?: { alerts_read: number; alerts_dropped: number; note: string | null };
+  duplicate_keys?: {
+    also_known_as: Array<{ case_number: number | null; case_key: string; resolution: string | null }>;
+    matched_on: string;
+    note: string;
+  } | null;
+  /** What is known about each indicator node, keyed by its label. Joined
+   *  from `ip_lookups` and `investigations`; 63.9% of reputation lookups are
+   *  over 30 days old, so every entry carries its own age. */
+  enrichment?: Record<string, Record<string, unknown>>;
+  over_cap?: boolean;
+  /** Why this key does not re-derive, measured rather than guessed. The note
+   *  that used to stand here named the window or a re-grouping in every case;
+   *  across the 61 live keys that do not derive, 60 of them cannot be helped by
+   *  any window at all, and `hours` is a URL parameter, so an analyst's natural
+   *  next move is a futile one. */
+  unreachable?: {
+    reason:
+      | "regrouped"
+      | "retired_key_format"
+      | "aged_out"
+      | "no_alerts_remain"
+      | "undetermined";
+    note: string;
+    window_cannot_help: boolean;
+    detail?: Record<string, unknown>;
+  } | null;
+  /** For a key that no longer derives: what became of it. 842 of this
+   *  estate's 1,889 case rows were re-pointed at the live case covering the
+   *  same incident, so a dead key redirects rather than rendering nothing. */
+  supersession?: {
+    state: "mapped" | "merged" | "ambiguous" | "target_unknown" | "expired";
+    note: string | null;
+    continues_as: { case_key: string; case_number: number | null } | null;
+    chains_through: { case_key: string; case_number: number | null } | null;
+    candidates: Array<{ case_key: string; case_number: number | null }>;
+    this_row: {
+      case_number: number | null;
+      resolution: string | null;
+      closed_at: string | null;
+      closed_by: string | null;
+      has_analysis: boolean;
+    };
+  } | null;
+  /** Conclusions recorded under earlier keys for this same incident,
+   *  attributed and dated. Never merged into this case's own verdict. */
+  earlier_keys?: Array<{
+    case_number: number | null;
+    case_key: string;
+    resolution: string | null;
+    closed_at: string | null;
+    closed_by: string | null;
+    state: string;
+    narrative_markdown: string | null;
+    attribution: string;
+  }>;
+  note?: string;
+  continues?: { case_key: string; case_number: number | null } | null;
+}
+
+/** One case drawn as what happened: entities, alerts, ATT&CK and process
+ *  ancestry. Not an Active Directory graph — this platform ingests no
+ *  directory objects. */
+export function getCaseGraph(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
+  return request<CaseGraph>(
+    `/detections/case/${encodeURIComponent(caseKey)}/graph${query}`,
+  );
+}
+
+export interface CaseReportTiming {
+  median: number | null;
+  mean: number | null;
+  count: number;
+}
+
+export interface CaseReport {
+  month: string;
+  client: string;
+  alerts_triggered: number;
+  cases_created: number;
+  cases_closed: number;
+  cases_active: number;
+  severity: { critical: number; high: number; medium: number; low: number };
+  /** Minutes per severity. `median` is the typical case and `mean` the
+   *  average — on this distribution they differ by hours, so both travel and
+   *  `count` says how many cases are behind them. A `null` median means
+   *  nothing in that band was measured, which is not the same as zero. */
+  response_minutes: Record<string, CaseReportTiming>;
+  resolution_minutes: Record<string, CaseReportTiming>;
+  resolutions: Record<string, number>;
+  by_day: Array<{
+    date: string;
+    alerts: number;
+    cases: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  }>;
+  top_detections: Array<{ detection: string; cases: number }>;
+  /** Cases closed by a later sweep rather than answered, and so left out of
+   *  the resolution means. Counted rather than hidden: including them
+   *  reported one month as a mean of 21.8 days. */
+  resolution_excludes_swept: number;
+  /** Alerts whose own timestamp is later than the moment we received them — a
+   *  clock or timezone fault at the source. A negative detection time is
+   *  clamped to zero, so each one reports as "detected instantly". */
+  alerts_timestamped_ahead: number;
+  scope: { all_tenants: boolean; applied: string };
+}
+
+/** The clients and months the report can be run for, built from the data so a
+ *  month with no cases is never offered as though it were merely empty. */
+export function getCaseReportOptions() {
+  return request<CaseReportOptions>("/detections/reports/options");
+}
+
+export function getCaseReport(params: { month?: string; client?: string }) {
+  const qs = new URLSearchParams();
+  if (params.month && params.month !== "all") qs.set("month", params.month);
+  if (params.client && params.client !== "all") qs.set("tenant", params.client);
+  const query = qs.toString();
+  return request<CaseReport>(`/detections/reports${query ? `?${query}` : ""}`);
+}
+
+export interface AnalysisStatus {
+  run_id: string;
+  status: string;
+  finished: boolean;
+  completed_at?: string | null;
+  overall_verdict?: string | null;
+  highest_risk_score?: number | null;
+  report_markdown: string;
+  /** When this interpretation was written, so a stale one is visibly stale. */
+  generated_at?: string | null;
+  generation_ms?: number | null;
+  log_events_considered?: number | null;
+  log_selection: {
+    events_found?: number | null;
+    events_selected?: number | null;
+    events_represented?: number | null;
+    events_omitted?: number | null;
+    relevant?: number | null;
+    sent?: number | null;
+    analyst_pinned: string[];
+    analyst_pinned_dropped: string[];
+    /** Fields the analyst asked to be considered. */
+    extra_fields_requested?: string[];
+    /**
+     * Fields that actually reached the provider. Shorter than requested
+     * whenever no selected event carried the field — asked and sent are
+     * genuinely different, and "did the model see it" is the second one.
+     */
+    extra_fields_sent?: string[];
+    log_filters?: Array<{ field: string; value: string }>;
+    /** What the prompt block actually cost. Zero when nothing was sent. */
+    sent_tokens?: number | null;
+    /** What the ranking's arithmetic came to, sent or not. */
+    ranking_tokens?: number | null;
+    budget_tokens?: number | null;
+  };
+  reanalysis: {
+    request_id?: string | null;
+    requested_by?: string | null;
+    requested_at?: string | null;
+    pinned_refs: string[];
+    extra_fields?: string[];
+    log_filters?: Array<{ field: string; value: string }>;
+  };
+  previous_analyses: number;
+  previous?: {
+    superseded_at?: string | null;
+    by?: string | null;
+    verdict?: string | null;
+    risk_score?: number | null;
+    report_markdown: string;
+    /** null when the earlier text was never stored, so it cannot be compared. */
+    interpretation_changed: boolean | null;
+  } | null;
+}
+
+/** Small enough to poll while a progress bar is ticking. */
+export function getAnalysisStatus(runId: string) {
+  return request<AnalysisStatus>(`/alert-investigations/${runId}/analysis-status`);
+}
+
+export function reanalyseWithLogContext(
+  runId: string,
+  pinnedRefs: string[] = [],
+  // The analyst's own view of the logs: document fields they added as columns,
+  // and the filters they narrowed with. Without these the model received a
+  // thirteen-key projection of each event and never saw the field the analyst
+  // had put on screen in order to look at it.
+  view: { extraFields?: string[]; filters?: Array<{ field: string; value: string }> } = {},
+) {
+  return request<{
+    run_id: string;
+    status: string;
+    pinned_refs: string[];
+    extra_fields: string[];
+    log_filters: Array<{ field: string; value: string }>;
+    note: string;
+    request_id?: string | null;
+    previous_completed_at?: string | null;
+  }>(
+    `/alert-investigations/${runId}/reanalyse`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        pinned_refs: pinnedRefs,
+        extra_fields: view.extraFields ?? [],
+        filters: view.filters ?? [],
+      }),
+    },
+  );
+}
+
+export function getAlertInvestigation(runId: string) {
+  return request<AlertInvestigationRun>(`/alert-investigations/${runId}`);
+}
+
+export type AlertExportFormat = "reports" | "report" | "full" | "envelope" | "ndjson";
+
+/**
+ * URL of the server-side export — the same JSON list the integration contract
+ * describes. Hand this URL to another platform and it can pull the reports with
+ * one GET; `download=false` serves them inline instead of as an attachment.
+ *
+ * `reports` and `full` are both arrays of self-describing documents; `full`
+ * leads with an executive summary and carries each investigation in full.
+ */
+export function alertInvestigationExportUrl(
+  runId: string,
+  options?: {
+    format?: AlertExportFormat;
+    download?: boolean;
+    absolute?: boolean;
+    ndjson?: boolean;
+    evidence?: boolean;
+  },
+) {
+  const qs = new URLSearchParams();
+  qs.set("format", options?.format || "reports");
+  if (options?.download === false) qs.set("download", "false");
+  if (options?.ndjson) qs.set("ndjson", "true");
+  if (options?.evidence === false) qs.set("evidence", "false");
+  const path = `${BASE}/alert-investigations/${runId}/export?${qs.toString()}`;
+  if (options?.absolute && typeof window !== "undefined") {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Fetch the report-ready export itself — the exact array the reporting platform
+ * receives. The preview page renders this, so what an analyst reviews and what
+ * an integrator consumes can never differ.
+ */
+export function getAlertInvestigationReportList(runId: string) {
+  return request<AlertReportDocument[]>(
+    `/alert-investigations/${runId}/export?format=report&download=false`,
+  );
+}
+
+export interface SandboxSelectionResult {
+  run_id: string;
+  task_id: string | null;
+  queued: Array<{ investigation_id: string; indicator: string }>;
+  rejected: Array<{ investigation_id: string; reason: string }>;
+  estimated_seconds: number;
+}
+
+/**
+ * Detonate the chosen indicators from an alert body.
+ *
+ * ANY.RUN is off by default on this path — one alert can carry dozens of URLs
+ * and each detonation costs a licence request — so this is how an analyst
+ * spends that budget on the few worth it.
+ */
+export function sandboxAlertIndicators(runId: string, investigationIds: string[]) {
+  return request<SandboxSelectionResult>(`/alert-investigations/${runId}/sandbox`, {
+    method: "POST",
+    body: JSON.stringify({ investigation_ids: investigationIds }),
+  });
+}
+
+export interface AISpendModel {
+  provider: string;
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+  priced: boolean;
+  /** Shown beside the cost so the arithmetic can be checked by hand. */
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+}
+
+export interface AISpend {
+  available: boolean;
+  reason?: string;
+  window_days?: number;
+  window_label?: string;
+  window?: {
+    calls: number;
+    usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    unpriced_calls: number;
+  };
+  /** Budget is a monthly figure, so it is always measured against the month. */
+  month_to_date_usd?: number;
+  window_start?: string;
+  window_end?: string;
+  /** Oldest day still held. Equal to window_end means one day of history. */
+  first_recorded_day?: string | null;
+  by_model?: AISpendModel[];
+  unpriced_models?: string[];
+  budget?: { monthly_usd: number; remaining_usd: number; percent_used: number } | null;
+  prices_source?: string;
+  scope_note?: string;
+}
+
+/** What our own AI calls cost. Not a provider balance — see the service docstring. */
+export interface AuthStatus {
+  mode: "monitor" | "enforce";
+  authenticated: boolean;
+  username?: string | null;
+  role?: string | null;
+  /** Which sign-in methods this deployment can actually complete. */
+  providers?: { password: boolean; microsoft: boolean };
+}
+
+/**
+ * Hand the browser to Entra ID.
+ *
+ * A full navigation, not fetch(): the flow is a chain of cross-origin
+ * redirects that ends with the API setting a cookie, and XHR can neither
+ * follow it nor be allowed to.
+ */
+export function startMicrosoftSignIn(next: string) {
+  window.location.href = `/api/auth/oidc/start?next=${encodeURIComponent(next)}`;
+}
+
+/** Public: is this caller signed in, and is signing in required yet. */
+export function getAuthStatus() {
+  return request<AuthStatus>("/auth/status");
+}
+
+export function login(username: string, password: string) {
+  return request<{ username: string; role: string; must_change_password: boolean }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+// ── CAPEv2 sandbox ───────────────────────────────────────────────────────────
+//
+// The browser talks only to this backend. It never holds a CAPE URL, never
+// sees the CAPE token, and never calls CAPE directly — the token exists solely
+// in the backend process, and none of these responses carry it.
+
+export type SandboxStatus =
+  | "queued" | "submitting" | "submitted" | "pending" | "running"
+  | "processing" | "reported" | "failed" | "timed_out" | "cancelled";
+
+export interface SandboxAnalysis {
+  id: string;
+  provider: string;
+  status: SandboxStatus;
+  /** "file" — a sample was run. "url" — CAPE fetched a URL and ran the result. */
+  target_kind?: "file" | "url";
+  target_url?: string | null;
+  verdict?: "malicious" | "suspicious" | "likely_benign" | "unknown" | null;
+  /** Null means CAPE did not report a score — never treat it as zero. */
+  malscore?: number | null;
+  sha256: string;
+  sample_name?: string | null;
+  sample_size?: number | null;
+  sample_type?: string | null;
+  provider_task_id?: string | null;
+  reused_existing: boolean;
+  error?: string | null;
+  requested_by?: string | null;
+  created_at?: string | null;
+  submitted_at?: string | null;
+  completed_at?: string | null;
+  limitations: string[];
+  state_history: Array<{ status: string; from?: string | null; at: string; actor?: string; note?: string }>;
+  raw_summary: Record<string, unknown>;
+  created?: boolean;
+  note?: string;
+}
+
+export interface SandboxReport {
+  task_id?: number | null;
+  malscore?: number | null;
+  verdict: string;
+  detections: string[];
+  signatures: Array<{
+    name: string; description: string; severity: number; ttps: string[];
+    /** What the signature matched — the substance of the finding. */
+    details?: string[];
+  }>;
+  sha256?: string | null;
+  sha1?: string | null;
+  md5?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
+  file_size?: number | null;
+  ssdeep?: string | null;
+  tlsh?: string | null;
+  crc32?: string | null;
+  clamav?: string | null;
+  yara_matches?: Array<{ name: string; description?: string; author?: string | null; source?: string }>;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  machine?: string | null;
+  route?: string | null;
+  package?: string | null;
+  /** False when CAPE started the sample and nothing ran. */
+  executed?: boolean;
+  network: {
+    domains: string[];
+    dns_queries: string[];
+    hosts: string[];
+    destinations: string[];
+    http_requests: Array<{ method: string; host: string; uri: string; status?: number | null }>;
+    tls_sni: string[];
+  };
+  behaviour: {
+    mutexes: string[];
+    registry_keys: string[];
+    files_written: string[];
+    files_read: string[];
+    commands: string[];
+    process_tree: Array<{ name: string; pid?: number | null; command_line?: string; children?: unknown[] }>;
+    process_count: number;
+  };
+  dropped_files: Array<{
+    name?: string | null; sha256?: string | null; size?: number | null;
+    file_type?: string | null; is_cape_payload: boolean; cape_type?: string | null;
+  }>;
+  extracted_configs: Array<Record<string, unknown>>;
+  has_screenshots: boolean;
+  errors: string[];
+  limitations: string[];
+}
+
+export interface SandboxAnalysisResult extends SandboxAnalysis {
+  available: boolean;
+  result?: SandboxReport | null;
+}
+
+/** Reachability and machine availability. Administrators only. */
+export function getCapeStatus() {
+  return request<{
+    configured: boolean;
+    enabled: boolean;
+    reachable: boolean;
+    version?: string | null;
+    machines_total?: number | null;
+    machines_available?: number | null;
+    detail?: string;
+    error_kind?: string;
+  }>("/cape/status");
+}
+
+export function listSandboxAnalyses(params: {
+  investigation_id?: string;
+  alert_run_id?: string;
+  sha256?: string;
+  status?: string;
+  limit?: number;
+} = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  });
+  const suffix = query.toString();
+  return request<{ items: SandboxAnalysis[] }>(`/cape/analyses${suffix ? `?${suffix}` : ""}`);
+}
+
+export function submitToSandbox(body: {
+  investigation_id?: string;
+  alert_run_id?: string;
+  artifact_id?: string;
+  sha256?: string;
+  force_new?: boolean;
+}) {
+  return request<SandboxAnalysis>("/cape/analyses", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function getSandboxAnalysis(id: string) {
+  return request<SandboxAnalysis>(`/cape/analyses/${id}`);
+}
+
+export function getSandboxResult(id: string) {
+  return request<SandboxAnalysisResult>(`/cape/analyses/${id}/result`);
+}
+
+export function retrySandboxAnalysis(id: string) {
+  return request<SandboxAnalysis>(`/cape/analyses/${id}/retry`, { method: "POST" });
+}
+
+/** Statuses that are still moving, so the panel knows when to keep polling. */
+/** Roles that may manage users and keys. Mirrors ADMIN_ROLES in the backend. */
+export const ADMIN_ROLES = ["owner", "admin"];
+
+export function hasAdminRights(role?: string | null): boolean {
+  return ADMIN_ROLES.includes(String(role || ""));
+}
+
+/** How a role is written for a person. */
+export function roleLabel(role?: string | null): string {
+  if (role === "owner") return "Owner";
+  if (role === "admin") return "Administrator";
+  return "Analyst";
+}
+
+export const SANDBOX_ACTIVE_STATUSES: SandboxStatus[] = [
+  "queued", "submitting", "submitted", "pending", "running", "processing",
+];
+
+/** The signed-in caller, as /auth/me reports them. */
+export interface Me {
+  kind: "user" | "api_key";
+  id: string;
+  username?: string;
+  role?: string;
+  auth_provider?: "local" | "microsoft";
+  email?: string | null;
+  display_name?: string | null;
+  must_change_password?: boolean;
+}
+
+export function getMe() {
+  return request<Me>("/auth/me");
+}
+
+/** An account on the platform, as the administrator list shows it. */
+export interface PlatformUser {
+  id: string;
+  username: string;
+  /** "owner" carries administrator rights and cannot be deleted by anyone. */
+  role: "owner" | "admin" | "analyst";
+  active: boolean;
+  auth_provider: "local" | "microsoft";
+  email?: string | null;
+  display_name?: string | null;
+  must_change_password: boolean;
+  created_at?: string | null;
+  last_login_at?: string | null;
+}
+
+/** A password the server generated. Returned once and never stored in clear. */
+export interface IssuedPassword {
+  password?: string;
+  note?: string;
+}
+
+export function listUsers() {
+  return request<{ items: PlatformUser[] }>("/auth/users");
+}
+
+export function createUser(body: {
+  username: string;
+  role: string;
+  password?: string;
+  email?: string;
+  display_name?: string;
+}) {
+  return request<PlatformUser & IssuedPassword>("/auth/users", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateUser(id: string, body: { role?: string; active?: boolean }) {
+  return request<PlatformUser>(`/auth/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function resetUserPassword(id: string) {
+  return request<{ username: string } & IssuedPassword>(`/auth/users/${id}/password`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteUser(id: string) {
+  return request<{ deleted: string }>(`/auth/users/${id}`, { method: "DELETE" });
+}
+
+export function changeOwnPassword(current_password: string, new_password: string) {
+  return request<{ ok: boolean }>("/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+}
+
+export function logout() {
+  return request<{ ok: boolean }>("/auth/logout", { method: "POST" });
+}
+
+export function getAISpend(days = 30) {
+  return request<AISpend>(`/cost/ai-spend?days=${days}`);
+}
+
+export function setAIBudget(monthlyUsd: number) {
+  return request<{ monthly_usd: number }>("/cost/ai-budget", {
+    method: "PUT",
+    body: JSON.stringify({ monthly_usd: monthlyUsd }),
+  });
+}
+
+export function cancelAlertInvestigation(runId: string) {
+  return request<{ run_id: string; status: string }>(`/alert-investigations/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Delete an alert run and the investigations it started.
+ *
+ * Reused investigations, and any another run still references, are kept and
+ * returned in `kept_investigations`.
+ */
+export function deleteAlertInvestigation(runId: string) {
+  return request<{
+    run_id: string;
+    deleted: boolean;
+    deleted_investigations: string[];
+    kept_investigations: string[];
+  }>(`/alert-investigations/${runId}`, { method: "DELETE" });
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export function listInvestigations(params?: {
+  limit?: number;
+  offset?: number;
+  state?: string;
+  search?: string;
+  observable_type?: string;
+  classification?: string;
+  /** Only investigations whose ANY.RUN task recorded a screencast. */
+  has_video?: boolean;
+  dedupe?: boolean;
+}) {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.offset) qs.set("offset", String(params.offset));
   if (params?.state) qs.set("state", params.state);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.observable_type) qs.set("observable_type", params.observable_type);
+  if (params?.has_video) qs.set("has_video", "true");
+  if (params?.classification) qs.set("classification", params.classification);
+  if (params?.dedupe) qs.set("dedupe", "true");
   const query = qs.toString();
-  return request<any[]>(`/investigations${query ? `?${query}` : ""}`);
+  return request<PaginatedResponse<any>>(`/investigations${query ? `?${query}` : ""}`);
 }
 
 export function getInvestigation(id: string) {
   return request<any>(`/investigations/${id}`);
+}
+
+export function cancelInvestigation(id: string) {
+  return request<any>(`/investigations/${id}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function deleteInvestigation(id: string) {
+  return request<void>(`/investigations/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function rerunCollector(id: string, collector: string) {
+  return request<any>(`/investigations/${id}/rerun-collector`, {
+    method: "POST",
+    body: JSON.stringify({ collector }),
+  });
 }
 
 export function getEvidence(id: string) {
@@ -67,6 +1438,32 @@ export function getReport(id: string) {
   return request<any>(`/investigations/${id}/report`);
 }
 
+export function getInvestigationIntelligence(id: string) {
+  return request<any>(`/investigations/${id}/intelligence`);
+}
+
+export function generateCaseStory(id: string) {
+  // Case Story generation can exceed the Next.js rewrite proxy timeout while
+  // the reasoning model is still successfully working. Use the browser-to-API
+  // path on local/private deployments and retain the proxy as fallback.
+  return requestLongRunning<any>(`/investigations/${id}/case-story`, { method: "POST" });
+}
+
+export function askCaseStory(id: string, question: string) {
+  return requestLongRunning<any>(`/investigations/${id}/case-story/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
+export function getCaseStoryChat(id: string) {
+  return request<any>(`/investigations/${id}/case-story/chat`);
+}
+
+export function clearCaseStoryChat(id: string) {
+  return request<void>(`/investigations/${id}/case-story/chat`, { method: "DELETE" });
+}
+
 export function enrichInvestigation(id: string, data: any) {
   return request<any>(`/investigations/${id}/enrich`, {
     method: "POST",
@@ -74,8 +1471,587 @@ export function enrichInvestigation(id: string, data: any) {
   });
 }
 
+// ─── IOC export ───
+
+export function getIOCExportUrl(investigationId: string, format: "csv" | "stix"): string {
+  return `${BASE}/investigations/${investigationId}/iocs/export?format=${format}`;
+}
+
+// ─── Artifact helpers ───
+
+export function getArtifactUrl(artifactId: string): string {
+  return `${BASE}/artifacts/${artifactId}`;
+}
+
+export async function uploadReferenceImage(domain: string, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${BASE}/reference-images/${encodeURIComponent(domain)}`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+
+  return res.json();
+}
+
+export async function checkReferenceImage(domain: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/reference-images/${encodeURIComponent(domain)}`, {
+      method: "HEAD",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ─── MITRE ATT&CK ───
+
+export function getAttackTechniques() {
+  return request<any[]>("/attack/techniques");
+}
+
+// ─── Infrastructure Pivot ───
+
+export function getPivots(investigationId: string) {
+  return request<any>(`/investigations/${investigationId}/pivots`);
+}
+
+// ─── Batch Investigation ───
+
+export async function uploadBatch(
+  file: File,
+  metadata: { name?: string; context?: string; client_domain?: string },
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (metadata.name) formData.append("name", metadata.name);
+  if (metadata.context) formData.append("context", metadata.context);
+  if (metadata.client_domain) formData.append("client_domain", metadata.client_domain);
+
+  const res = await fetch(`${BASE}/batches`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, body || res.statusText);
+  }
+
+  return res.json();
+}
+
+export function listBatches(params?: { limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return request<any[]>(`/batches${query ? `?${query}` : ""}`);
+}
+
+export function getBatch(id: string) {
+  return request<any>(`/batches/${id}`);
+}
+
+export function getBatchCampaigns(id: string) {
+  return request<any>(`/batches/${id}/campaigns`);
+}
+
+// ─── Dashboard ───
+
+export function getDashboardStats() {
+  return request<any>("/dashboard/stats");
+}
+
+export function getAPIHealth() {
+  return request<APIHealthResponse>("/admin/api-health");
+}
+
+// ─── Watchlist ───
+
+export function createWatchlistEntry(data: { domain: string; notes?: string; added_by?: string; schedule_interval?: string }) {
+  return request<any>("/watchlist", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function listWatchlist(params?: { limit?: number; offset?: number; status?: string; search?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.status) qs.set("status", params.status);
+  if (params?.search) qs.set("search", params.search);
+  const query = qs.toString();
+  return request<PaginatedResponse<any>>(`/watchlist${query ? `?${query}` : ""}`);
+}
+
+export function updateWatchlistEntry(id: string, data: { status?: string; notes?: string; schedule_interval?: string | null }) {
+  return request<any>(`/watchlist/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteWatchlistEntry(id: string) {
+  return request<any>(`/watchlist/${id}`, { method: "DELETE" });
+}
+
+export function investigateWatchlistDomain(id: string) {
+  return request<any>(`/watchlist/${id}/investigate`, { method: "POST" });
+}
+
+export function getWatchlistAlerts(id: string) {
+  return request<any[]>(`/watchlist/${id}/alerts`);
+}
+
+// ─── Exclusions ───
+
+export function listExclusions(params?: {
+  limit?: number;
+  offset?: number;
+  indicator_type?: string;
+  search?: string;
+  active?: boolean;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.indicator_type) qs.set("indicator_type", params.indicator_type);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.active !== undefined) qs.set("active", String(params.active));
+  const query = qs.toString();
+  return request<PaginatedResponse<Exclusion>>(`/exclusions${query ? `?${query}` : ""}`);
+}
+
+export function createExclusion(data: {
+  indicator_type: string;
+  value: string;
+  reason: string;
+  added_by?: string;
+  match_subdomains?: boolean;
+  expires_at?: string | null;
+}) {
+  return request<Exclusion & { already_listed: boolean }>("/exclusions", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateExclusion(
+  id: string,
+  data: {
+    reason?: string;
+    active?: boolean;
+    match_subdomains?: boolean;
+    expires_at?: string | null;
+    clear_expiry?: boolean;
+  },
+) {
+  return request<Exclusion>(`/exclusions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteExclusion(id: string) {
+  return request<{ deleted: boolean; id: string }>(`/exclusions/${id}`, { method: "DELETE" });
+}
+
+export function checkExclusions(indicators: Array<{ indicator_type: string; value: string }>) {
+  return request<{
+    results: Array<{
+      indicator_type: string;
+      value: string;
+      excluded: boolean;
+      exclusion: Record<string, unknown> | null;
+    }>;
+    excluded_count: number;
+  }>("/exclusions/check", {
+    method: "POST",
+    body: JSON.stringify({ indicators }),
+  });
+}
+
+// ─── Detection quality, ATT&CK coverage, analyst feedback ───
+
+export function getDetectionQuality(params?: { days?: number; limit?: number; tenant?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  const query = qs.toString();
+  return request<DetectionQualityResponse & { available_tenants?: TenantOption[] }>(
+    `/detections/quality${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAttackCoverage(params?: { days?: number; tenant?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  const query = qs.toString();
+  return request<AttackCoverageResponse>(`/detections/attack-coverage${query ? `?${query}` : ""}`);
+}
+
+/** The alerts behind one ATT&CK tactic row, newest first. */
+export function getTacticAlerts(params: {
+  tactic: string; days?: number; limit?: number; tenant?: string;
+}) {
+  const qs = new URLSearchParams({ tactic: params.tactic });
+  if (params.days) qs.set("days", String(params.days));
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.tenant) qs.set("tenant", params.tenant);
+  return request<TacticAlertsResponse>(`/detections/attack-coverage/tactic-alerts?${qs.toString()}`);
+}
+
+export function getMismatchAlerts(params: {
+  rule_name: string;
+  technique: string;
+  rule_id?: string | null;
+  days?: number;
+  limit?: number;
+  tenant?: string;
+}) {
+  const qs = new URLSearchParams({ rule_name: params.rule_name, technique: params.technique });
+  if (params.rule_id) qs.set("rule_id", params.rule_id);
+  if (params.days) qs.set("days", String(params.days));
+  if (params.limit) qs.set("limit", String(params.limit));
+  return request<MismatchAlertsResponse>(
+    `/detections/attack-coverage/mismatch-alerts?${qs.toString()}`,
+  );
+}
+
+export function getRunCase(runId: string, hours = 48) {
+  return request<{ case: CorrelatedCase | null }>(
+    `/alert-investigations/${runId}/case?hours=${hours}`,
+  );
+}
+
+export function getCorrelatedCases(params?: {
+  hours?: number;
+  min_rules?: number;
+  min_score?: number;
+  tenant?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.hours) qs.set("hours", String(params.hours));
+  if (params?.min_rules) qs.set("min_rules", String(params.min_rules));
+  if (params?.min_score) qs.set("min_score", String(params.min_score));
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  if (params?.since) qs.set("since", params.since);
+  if (params?.until) qs.set("until", params.until);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const query = qs.toString();
+  return request<CorrelatedCasesResponse>(
+    `/detections/correlated-cases${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getCase(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
+  return request<CaseDetail>(
+    `/detections/case/${encodeURIComponent(caseKey)}${query}`,
+  );
+}
+
+export function getCaseNarrative(caseKey: string) {
+  return request<CaseNarrativeDetail>(
+    `/detections/case/${encodeURIComponent(caseKey)}/narrative`,
+  );
+}
+
+export type DeviceRow = {
+  host: string;
+  tenant_id: string | null;
+  alerts: number;
+  last_seen: string | null;
+  worst_verdict: string | null;
+  users: number;
+  rules: number;
+};
+
+export function listDevices(params?: {
+  days?: number;
+  search?: string;
+  verdict?: string;
+  tenant?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.days !== undefined) qs.set("days", String(params.days));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.verdict) qs.set("verdict", params.verdict);
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  const query = qs.toString();
+  return request<{ items: DeviceRow[]; days: number; available_tenants?: TenantOption[] }>(
+    `/detections/devices${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getEntityProfile(host: string, days?: number) {
+  const query = days ? `?days=${days}` : "";
+  return request<EntityProfile>(
+    `/detections/entity/${encodeURIComponent(host)}${query}`,
+  );
+}
+
+export function getTuningRecommendations(params?: {
+  days?: number; min_alerts?: number; tenant?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  if (params?.min_alerts) qs.set("min_alerts", String(params.min_alerts));
+  if (params?.tenant) qs.set("tenant", params.tenant);
+  const query = qs.toString();
+  return request<TuningResponse>(
+    `/detections/tuning-recommendations${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getSuppressionCandidate(runId: string) {
+  return request<SuppressionCandidate>(`/alert-investigations/${runId}/suppression-candidate`);
+}
+
+export function createAlertExclusion(data: {
+  match_fields: Record<string, string>;
+  reason: string;
+  added_by?: string;
+  expires_at?: string | null;
+}) {
+  return request<{ id: string; match_fields: Record<string, string>; already_listed: boolean }>(
+    "/exclusions/alert",
+    { method: "POST", body: JSON.stringify(data) },
+  );
+}
+
+export function submitAnalystFeedback(data: {
+  subject_type: "investigation" | "alert_run";
+  subject_id: string;
+  verdict: "true_positive" | "false_positive" | "unclear";
+  note?: string;
+  analyst?: string;
+}) {
+  return request<AnalystFeedback & { replaced_previous: boolean }>("/detections/feedback", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function getAnalystFeedbackFor(subjectType: string, subjectId: string) {
+  return request<{ feedback: AnalystFeedback | null }>(
+    `/detections/feedback/${subjectType}/${subjectId}`,
+  );
+}
+
+export function getFeedbackAccuracy(params?: { days?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  const query = qs.toString();
+  return request<FeedbackAccuracy>(`/detections/feedback/accuracy${query ? `?${query}` : ""}`);
+}
+
+// ─── Cost and quota ───
+
+export function getCostDashboard(params?: { days?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.days) qs.set("days", String(params.days));
+  const query = qs.toString();
+  return request<CostDashboard>(`/cost/dashboard${query ? `?${query}` : ""}`);
+}
+
+// ─── WHOIS History ───
+
+export function getWhoisHistory(domain: string) {
+  return request<any[]>(`/whois-history/${encodeURIComponent(domain)}`);
+}
+
+// ─── Geolocation ───
+
+export function getGeoPoints(investigationId: string) {
+  return request<any[]>(`/investigations/${investigationId}/geo-points`);
+}
+
+// ─── IP Lookup ───
+
+export function lookupIP(ip: string) {
+  return request<any>("/tools/ip-lookup", {
+    method: "POST",
+    body: JSON.stringify({ ip }),
+  });
+}
+
+export function getIPLookupHistory(limit = 50, offset = 0) {
+  return request<any[]>(`/tools/ip-lookup/history?limit=${limit}&offset=${offset}`);
+}
+
+export function getIPLookup(id: string) {
+  return request<any>(`/tools/ip-lookup/history/${id}`);
+}
+
+export function deleteIPLookup(id: string) {
+  return request<void>(`/tools/ip-lookup/history/${id}`, { method: "DELETE" });
+}
+
+// ─── Client Management ───
+
+export function createClient(data: {
+  name: string;
+  domain: string;
+  aliases?: string[];
+  brand_keywords?: string[];
+  contact_email?: string;
+  notes?: string;
+  default_collectors?: string[];
+}) {
+  return request<any>("/clients", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function listClients(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.search) qs.set("search", params.search);
+  if (params?.status) qs.set("status", params.status);
+  const query = qs.toString();
+  return request<any>(`/clients${query ? `?${query}` : ""}`);
+}
+
+export function getClient(id: string) {
+  return request<any>(`/clients/${id}`);
+}
+
+export function updateClient(
+  id: string,
+  data: {
+    name?: string;
+    domain?: string;
+    aliases?: string[];
+    brand_keywords?: string[];
+    contact_email?: string;
+    notes?: string;
+    status?: string;
+    default_collectors?: string[];
+  },
+) {
+  return request<any>(`/clients/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+}
+
+export function deleteClient(id: string) {
+  return request<any>(`/clients/${id}`, { method: "DELETE" });
+}
+
+export function listClientAlerts(
+  clientId: string,
+  params?: { limit?: number; offset?: number; resolved?: boolean; severity?: string },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.resolved !== undefined) qs.set("resolved", String(params.resolved));
+  if (params?.severity) qs.set("severity", params.severity);
+  const query = qs.toString();
+  return request<any>(`/clients/${clientId}/alerts${query ? `?${query}` : ""}`);
+}
+
+
+export function acknowledgeAlert(alertId: string) {
+  return request<any>(`/client-alerts/${alertId}/acknowledge`, { method: "POST" });
+}
+
+export function resolveAlert(alertId: string) {
+  return request<any>(`/client-alerts/${alertId}/resolve`, { method: "POST" });
+}
+
 // ─── SSE helper ───
 
+export function listAssistantSessions(params?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  /**
+   * Also match the pasted log text. Opt-in: titles answer in ~40ms, log
+   * content is 201 MB and a common word is in 83% of it.
+   */
+  searchContent?: boolean;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params?.search?.trim()) qs.set("search", params.search.trim());
+  if (params?.searchContent) qs.set("search_content", "true");
+  const query = qs.toString();
+  return requestWithDirectFallback<PaginatedResponse<any>>(
+    `/assistant/sessions${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAssistantDailyMetrics(date: string, timezoneOffsetMinutes: number) {
+  const qs = new URLSearchParams({
+    date,
+    timezone_offset_minutes: String(timezoneOffsetMinutes),
+  });
+  return requestWithDirectFallback<import("@/lib/types").AssistantDailyMetrics>(
+    `/assistant/metrics/daily?${qs.toString()}`,
+  );
+}
+
+export function getAssistantSession(sessionId: string) {
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}`);
+}
+
+export function createAssistantSession(data: {
+  title?: string;
+  mode: "alert_analysis" | "incident_correlation";
+  source_type?: string;
+  linked_investigation_id?: string | null;
+}) {
+  return requestWithDirectFallback<any>("/assistant/sessions", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function addAssistantEntry(
+  sessionId: string,
+  data: { text: string; entry_label?: string; entry_index?: number },
+) {
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}/entries`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function runAssistantSession(sessionId: string, data?: { model?: string }) {
+  return requestWithDirectFallback<any>(`/assistant/sessions/${sessionId}/run`, {
+    method: "POST",
+    body: JSON.stringify(data || {}),
+  });
+}
+
+export function createAssistantSessionFromInvestigation(investigationId: string) {
+  return requestWithDirectFallback<any>(`/assistant/sessions/from-investigation/${investigationId}`, {
+    method: "POST",
+  });
+}
+
+export function getAssistantExportUrl(sessionId: string): string {
+  return `${BASE}/assistant/sessions/${sessionId}/export`;
+}
 export function subscribeToProgress(
   investigationId: string,
   onEvent: (data: any) => void,
@@ -96,4 +2072,360 @@ export function subscribeToProgress(
     es.close();
   };
   return es;
+}
+
+/** Every indicator a case's alerts carry, split by what is known of each. */
+export function getCaseObservables(caseKey: string, hours?: number) {
+  const query = hours ? `?hours=${hours}` : "";
+  return request<{
+    case_key: string;
+    alerts: number;
+    /** Looked up, with a verdict. */
+    verified: Array<{
+      value: string; type: string; alerts: number;
+      verdict: string | null; risk_score: number | null; sources: string[];
+    }>;
+    /** Extracted from the alert but never investigated, and why. */
+    identified: Array<{
+      value: string; type: string; alerts: number; reason: string | null;
+    }>;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/observables${query}`);
+}
+
+/**
+ * Answer this case now rather than waiting out its quiet period.
+ *
+ * The automatic close waits ten minutes for alerts to stop arriving. An
+ * analyst who has already read the case should not have to.
+ */
+/** Commission the case analysis now. Does not close the case. */
+export function analyseCaseNow(caseKey: string) {
+  return request<{
+    case_key: string; case_number: number | null; status: string;
+    narrative_status: string; alerts: number; note: string;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/analyse`, { method: "POST" });
+}
+
+/** The resolutions a person may close a case under.
+ *
+ *  Mirrors `CaseResolution.analyst_choices()` in backend/app/models/enums.py,
+ *  which is the source of truth; the server validates against it and refuses
+ *  anything else, so a drift here is a 400 rather than a bad write. The
+ *  non-answers — expired, aged_out, awaiting_analysis — are deliberately
+ *  absent: they describe what happened to a case, not what anyone concluded. */
+export const ANALYST_RESOLUTIONS = [
+  { id: "true_positive", label: "True positive", hint: "Confirmed. Real activity that warranted the alert." },
+  { id: "false_positive", label: "False positive", hint: "Explained. Legitimate activity that fired a rule." },
+  { id: "needs_review", label: "Needs review", hint: "Unresolved. Worth keeping, not confirmed either way." },
+  { id: "inconclusive", label: "Inconclusive", hint: "Looked at; the evidence does not decide." },
+] as const;
+
+/** Sign a case off. Refused with 409 unless its analysis has been written. */
+export function closeCaseManually(
+  caseKey: string, body: { resolution: string; note?: string },
+) {
+  return request<{
+    case_key: string; case_number: number | null; status: string;
+    resolution: string; closed_by: string; closed_at: string; note: string;
+  }>(`/detections/case/${encodeURIComponent(caseKey)}/close`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// ── Per-tenant integrations ──────────────────────────────────────────────
+//
+// Secrets are write-only: `configureIntegration` sends them and nothing here
+// reads one back. The status payload carries `secret_set: boolean`, never a
+// value — see backend/app/api/integrations.py.
+
+export function getIntegrationCatalogue() {
+  return request<any>("/integrations/catalogue");
+}
+
+export function getIntegrationMatrix() {
+  return request<any>("/integrations/matrix");
+}
+
+export function getTenantIntegrations(tenantId: string) {
+  return request<any>(`/integrations/${encodeURIComponent(tenantId)}`);
+}
+
+export function getIntegrationAudit(tenantId: string, limit = 50) {
+  return request<any>(
+    `/integrations/${encodeURIComponent(tenantId)}/audit?limit=${limit}`
+  );
+}
+
+export function configureIntegration(
+  tenantId: string,
+  tool: string,
+  body: { config?: Record<string, any>; secrets?: Record<string, string> },
+  verify = true
+) {
+  return requestLongRunning<any>(
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}` +
+      `?verify=${verify ? "true" : "false"}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
+}
+
+export function verifyIntegration(tenantId: string, tool: string) {
+  return requestLongRunning<any>(
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}/verify`,
+    { method: "POST" }
+  );
+}
+
+export function removeIntegration(tenantId: string, tool: string) {
+  return request<any>(
+    `/integrations/${encodeURIComponent(tenantId)}/${encodeURIComponent(tool)}`,
+    { method: "DELETE" }
+  );
+}
+
+// --- Falcon host panel ------------------------------------------------------
+
+/** An `Absent.as_json()` from `app/services/absence.py`. */
+export interface FalconAbsence {
+  absent: true;
+  kind: string;
+  reason: string;
+  raw?: string | null;
+  cannot_join?: boolean;
+}
+
+export interface FalconCoverage {
+  managed?: boolean;
+  hostname?: string;
+  basis?: string;
+  finding?: string;
+  /** A dotted name read as a machine name as a *second* reading. Neither
+   *  "coverage gap" nor "expected" can be asserted, so this states both. */
+  speculative_reading?: boolean;
+  conditional_finding?: string;
+  platform_name?: string;
+  os_version?: string;
+  os_build?: string;
+  agent_version?: string;
+  status?: string;
+  product_type_desc?: string;
+  site_name?: string;
+  machine_domain?: string;
+  first_seen?: string;
+  last_seen?: string;
+  last_seen_hours_ago?: number;
+  sensor_stale?: boolean;
+  degraded?: boolean;
+  prevention_applied?: boolean | null;
+  reporting?: string | FalconAbsence;
+  re_enrolled?: boolean;
+  re_enrolled_note?: string;
+  superseded_enrolments?: Array<{
+    first_seen?: string;
+    last_seen?: string;
+    agent_version?: string;
+  }>;
+}
+
+export interface FalconDetectionGroup {
+  name: string;
+  filename: string | null;
+  tactic: string | null;
+  technique: string | null;
+  rows: number;
+  open_rows: number;
+  open: boolean;
+  prevented: boolean;
+  dispositions: string[];
+  users: string[];
+  statuses: string[];
+  latest: string | null;
+}
+
+export interface FalconWindow {
+  requested_days: number;
+  /** null when Falcon's retention could not be measured — then NO window
+   *  length may be claimed, because an assumed floor is how a 30-day claim
+   *  outlives the 30 days. */
+  covered_days: number | null;
+  covered_from: string | null;
+  bound_by: "requested" | "at_retention_floor" | "at_enrolment_floor" | null;
+  complete: boolean | null;
+  statement: string;
+}
+
+export interface FalconDetections {
+  /** THE headline. Distinct and open — never the raw row count. */
+  open_detection_count: number;
+  distinct_detection_count: number;
+  counts_are_lower_bounds: boolean;
+  counts_basis: string;
+  groups: FalconDetectionGroup[];
+  basis?: string;
+  window?: FalconWindow;
+  /** Behind the collapse. 1,432 rows is repetition, not severity. */
+  raw: {
+    rows: number;
+    aggregate_ids: number;
+    note: string;
+    truncated_at: number | null;
+  };
+}
+
+export interface FalconHostPanel {
+  run_id?: string;
+  tenant_id?: string;
+  hostname: string | null;
+  /** What was ASKED for. `window` says what was covered — they differ. */
+  window_days: number;
+  window?: FalconWindow;
+  coverage: FalconCoverage | FalconAbsence;
+  detections: FalconDetections | FalconAbsence;
+  field_control?: {
+    passed: boolean;
+    field: string | null;
+    checked_at: string | null;
+    reason: string | null;
+    why_it_matters: string;
+    /** What this control does NOT cover — rendered beside it, per rule 22. A
+     *  warrant that can co-sign a wrong answer raises confidence in exactly
+     *  the cases that deserve less. */
+    claim_excludes?: string;
+  };
+}
+
+/** Is `value` a named absence rather than an answer?
+ *
+ *  Exported because every consumer has to branch on it: the whole point of the
+ *  absence convention is that "the EDR has nothing" and "we could not ask" are
+ *  different renders, and a component that treats an absence as an empty
+ *  result puts the first words on the screen for the second condition. */
+export function isFalconAbsence(value: unknown): value is FalconAbsence {
+  return Boolean(value && typeof value === "object" && (value as FalconAbsence).absent === true);
+}
+
+/** What this tenant's Falcon knows about the host named in this alert. */
+export function getRunFalcon(runId: string, days = 30) {
+  return request<FalconHostPanel>(
+    `/alert-investigations/${runId}/falcon?days=${days}`,
+  );
+}
+
+// --- On-demand indicator lookup ---------------------------------------------
+
+export interface IndicatorDetection {
+  kind: string;
+  /** Every kind this value can validly be read as, primary first. */
+  readings: string[];
+  ambiguous?: boolean;
+  ambiguity?: string;
+  value: string;
+  /** How detection decided — shown so a misroute can be caught by the reader. */
+  how?: string;
+  /** Why nothing could be decided. Present only when kind is "unparsed". */
+  reason?: string;
+  is_private?: boolean;
+}
+
+export interface IndicatorSourceSection {
+  /** Which reading of the indicator this section answered. A dotted name is
+   *  validly a domain and a machine name, and the section says which it used
+   *  rather than letting detection collapse it. */
+  reading_used?: string;
+  /** The other reading's refusal, when this section answered a secondary
+   *  reading. Without it, "no device called aka.ms" could be read as "the EDR
+   *  has nothing on the domain aka.ms". */
+  not_answered_for?: { reading: string; answer: unknown };
+  question: string;
+  /** An answer, or an `Absent.as_json()`. Branch on `absent`. */
+  answer: unknown;
+  /** For a URL: the host the estate was asked about instead, labelled. */
+  narrower_claim?: { asked_instead: string; kind: string; claim: string };
+  narrower_answer?: unknown;
+}
+
+export interface IndicatorLookupResult {
+  input: string;
+  detected: IndicatorDetection;
+  tenant_id: string;
+  window_days: number;
+  sources: Record<string, IndicatorSourceSection>;
+  /** true, or an absence explaining that the actor record failed. */
+  recorded: unknown;
+}
+
+/** What this platform knows about one indicator.
+ *
+ *  Takes a value only. There is deliberately no way to pass a query, a field,
+ *  an index or a filter — free-form querying is backlog 17 and is blocked on
+ *  the tenant-pin enforcement work. See the route's docstring. */
+export function lookupIndicator(value: string, tenantId: string, days = 7) {
+  const qs = new URLSearchParams({ value, tenant_id: tenantId, days: String(days) });
+  return request<IndicatorLookupResult>(`/indicator-lookup?${qs}`);
+}
+
+// --- Investigation record ---------------------------------------------------
+
+export interface InvestigationStepView {
+  ordinal: number;
+  kind: string;
+  question: string;
+  /** The rendered sentence, from a template over structured fields. */
+  text: string;
+  /** What the reader is shown, decided by the API beside the renderer:
+   *  `claim` (the sentence), `no_claim` (there is no sentence) or `raw`
+   *  (unregistered kind). Not derived from `absence_kind` — a step can carry
+   *  an absence kind *and* a claim, and inferring it here discarded eight
+   *  sentences including a log read that returned 500 events. */
+  presentation?: "claim" | "no_claim" | "raw";
+  /** False when the kind has no template and raw JSON is shown. Rendered as
+   *  visibly wrong rather than quietly plausible — the silent-registry shape. */
+  templated: boolean;
+  source: string | null;
+  target: string | null;
+  verdict: string | null;
+  observables_found: unknown[];
+  observables_selected: unknown[];
+  warrant: Record<string, unknown>;
+  /** Which honest-absence category the step fell into. A *qualifier* on the
+   *  claim where there is one, and the whole of it where there is not. */
+  absence_kind: string | null;
+  absence_reason: string | null;
+  duration_ms: number | null;
+  cost: Record<string, unknown>;
+  response_truncated: boolean;
+  response_bytes: number | null;
+  query: Record<string, unknown>;
+}
+
+export interface InvestigationRecordView {
+  id: string;
+  origin: { surface: string; id: string };
+  tenant_id: string | null;
+  actor: { kind: string; user_id: string | null; recorded: string | null };
+  verdict: string | null;
+  summary: string | null;
+  summary_unverified_entities: string[];
+  summary_unverified_numerals: string[];
+  /** A chain that did not record fully. Stated ABOVE the chain, and such a
+   *  chain is never presented as the investigation. */
+  incomplete: boolean;
+  incomplete_steps: Array<{ ordinal: number; kind: string; reason: string }>;
+  counters: {
+    steps_run: number;
+    steps_escalated: number;
+    observables_stopped: number;
+    model_calls: number;
+  };
+  created_at: string | null;
+  completed_at: string | null;
+  steps: InvestigationStepView[];
+}
+
+/** The chain a surface produced for one run, alert or lookup. */
+export function getInvestigationRecordByOrigin(surface: string, originId: string) {
+  return request<InvestigationRecordView>(
+    `/investigation-records/by-origin/${surface}/${encodeURIComponent(originId)}`,
+  );
 }

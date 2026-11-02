@@ -1,0 +1,89 @@
+# The tolerated test failures, enumerated.
+#
+# ***THE SET IS EMPTY. 3,280 passed, 0 failed, as of 2026-10-19.***
+#
+# There is no tolerated-failure baseline any more. A failing test is a
+# regression, full stop — compare against zero, not against a list. If an entry
+# is ever added below, it needs a reason in this file and a date, because the
+# whole history underneath says what happens to entries nobody questions.
+#
+# "The same 13" was quoted on every sign-off (14 before 2026-10-19). The
+# history below is kept because the shrinking is the point:
+# enumeration stopped the set growing silently, and then every entry that was
+# actually examined turned out to be either a harness fault with a one-line
+# fix or a live product defect. None of them was a test that deserved to fail.
+#
+# ─── 14 → 13 (2026-10-19): a live defect, found by asking one entry why ───
+#
+# `test_dns.py::test_empty_evidence_on_failure` failed on
+# `assert 'completed' == 'failed'`: the DNS collector reported *completed* for
+# a run that produced no evidence. The collector caught each lookup exception,
+# logged it at DEBUG and moved on, so a DNS outage returned a completed run
+# with empty evidence — the absence-read-as-value class this project tracks.
+# Fixed; the test was right all along.
+#
+# Scale: of 2,603 stored DNS runs, exactly ONE had ever been recorded as
+# failed, and 290 of 2,602 completed runs carry no records at all — the upper
+# bound on how many were reporting an outage as "no DNS records".
+#
+# ─── 13 → 1 (2026-10-19): the harness fault, fixed ───
+#
+# 12 of the remaining 13 shared one cause, and it was in the tests rather than
+# the product: `monkeypatch.setattr("app.x.y.attr", value)`. pytest resolves a
+# dotted string target by walking `getattr(app, "x")` from an already-imported
+# `app`, and in a full-suite run that walk raises
+#
+#     AttributeError: module 'app' has no attribute 'collectors'  (and 'db', 'tasks')
+#
+# while an isolated run of the same file passes. 27 errors across 6 files.
+#
+# The fix is to pass the module OBJECT — `monkeypatch.setattr(mod, "attr", v)`
+# — which is already resolved, so there is no walk to fail. All 12 cleared.
+# Found while fixing four new tests that had failed the same way, which is the
+# only reason anybody looked: the cause had been written down as "monkeypatch
+# target resolution, which would be a harness fault rather than a product one"
+# and left there for five days.
+#
+# The rule is now in docs/testing/writing-tests.md, because a fix that only
+# cleans up the existing instances invites the thirteenth.
+#
+# ─── 1 → 0 (2026-10-19): the last one was a live defect, and it is fixed ───
+#
+# test_assess_url_lexical_risk_fallbacks_to_built_in_when_model_missing
+#
+# It failed in isolation too, so it was never the harness. It asserted that
+# when a lexical model cannot be loaded, the result says so — and it did not.
+# Measured in the running container:
+#
+#     url_lexical_use_lightgbm : False
+#     url_lexical_model_path   : SET, and the file exists
+#     its .metadata.json       : exists
+#     lightgbm installed       : yes
+#
+# So a model was configured, the flag that loads it was off, every URL was
+# scored by the built-in heuristic, and the payload said `error: None`. Worse,
+# two sibling fields asserted the opposite of the truth:
+# `ml_url_score.model_version` returned "lgbm-url-v1.0" unconditionally — on
+# the success path, on the exception path, and as the Pydantic default — and
+# the report called the heuristic "Lexical model (built_in)".
+#
+# Fixed as backlog 41 part 1, which changes no score: the skip is now stated
+# in `error` and reaches the report, the version names what actually ran, and
+# a heuristic is no longer called a model.
+#
+# One thing part 1 deliberately did NOT change, because it moves scores:
+# calibration is loaded from the *model's* metadata and applied whatever
+# produced the score, so a curve fitted to LightGBM outputs is being applied
+# to the heuristic's output on this deployment. It is now reported. Whether to
+# stop is backlog 41 part 2.
+#
+# ─── what the whole history says ───
+#
+# Every entry anybody actually asked about turned out to be either a one-line
+# harness fault or a live product defect. NONE was a test that deserved to
+# fail. The number was never a defect count; it was a question nobody had put,
+# and it sat unasked for seven days behind the words "the same 13".
+#
+# Format: one pytest node id per line, and there are none. Compare with
+#   pytest -q | grep '^FAILED' | sed 's/^FAILED //; s/ -.*//' | sort
+#

@@ -3,13 +3,18 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { ProgressEvent, CollectorStatus } from "@/lib/types";
+import { ProgressEvent, CollectorStatus, InvestigationState } from "@/lib/types";
 
 interface SSEState {
   connected: boolean;
   collectors: Record<string, CollectorStatus>;
+  collectorDurations: Record<string, number>;
+  state?: InvestigationState;
   message: string;
   percent: number;
+  totalElapsedMs?: number;
+  evidenceUpdateSeq: number;
+  reportRecomputed: boolean;
   done: boolean;
 }
 
@@ -17,8 +22,11 @@ export function useSSE(investigationId: string | null) {
   const [state, setState] = useState<SSEState>({
     connected: false,
     collectors: {},
+    collectorDurations: {},
     message: "",
     percent: 0,
+    evidenceUpdateSeq: 0,
+    reportRecomputed: false,
     done: false,
   });
   const esRef = useRef<EventSource | null>(null);
@@ -40,8 +48,16 @@ export function useSSE(investigationId: string | null) {
         setState((s) => ({
           ...s,
           collectors: { ...s.collectors, ...data.collectors, ...(data.collector ? { [data.collector]: data.collectors?.[data.collector] || "completed" as CollectorStatus } : {}) },
+          collectorDurations: {
+            ...s.collectorDurations,
+            ...(data.collector && typeof data.duration_ms === "number" ? { [data.collector]: data.duration_ms } : {}),
+          },
+          state: data.state || s.state,
           message: data.message || s.message,
           percent: data.percent_complete ?? s.percent,
+          totalElapsedMs: data.total_elapsed_ms ?? s.totalElapsedMs,
+          evidenceUpdateSeq: data.type === "evidence_updated" ? s.evidenceUpdateSeq + 1 : s.evidenceUpdateSeq,
+          reportRecomputed: data.report_recomputed ?? s.reportRecomputed,
           done: data.done || data.state === "concluded" || data.state === "failed",
         }));
 

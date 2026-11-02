@@ -9,34 +9,53 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Optional
+from typing import Any, Optional
+
+from app.services.investigation_intelligence import (
+    build_evidence_matrix_rows,
+    build_investigation_intelligence,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def export_json(evidence: dict, report: dict, detail: dict) -> bytes:
     """Export full investigation as JSON."""
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
     result = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "investigation": detail,
         "evidence": evidence,
         "report": report,
+        "soc_intelligence": intelligence,
+        "evidence_matrix": evidence_matrix,
     }
     return json.dumps(result, indent=2, default=str).encode("utf-8")
 
 
 def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     """Export investigation as Markdown report."""
+    evidence = _sanitize_evidence_for_export(evidence)
+    report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
-    classification = (report.get("classification") or "inconclusive").upper()
-    confidence = report.get("confidence", "?")
-    risk_score = report.get("risk_score", "?")
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    ioc_quality = intelligence.get("ioc_quality") or {}
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
+    confidence = str(confidence_engine.get("confidence") or report.get("confidence") or "?").upper()
+    risk_score = confidence_engine.get("score")
+    if risk_score is None:
+        risk_score = report.get("risk_score", "?")
     action = (report.get("recommended_action") or "monitor").upper()
 
     lines = [
-        f"# Threat Investigation Report: {domain}",
+        f"# Threat Analysis Report: {domain}",
         "",
         f"**Classification:** {classification}  ",
         f"**Confidence:** {confidence}  ",
@@ -50,20 +69,45 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
         "",
         report.get("primary_reasoning", "No reasoning provided."),
         "",
-        "## Hypothesis Comparison",
-        "",
-        "### Legitimate Hypothesis",
-        report.get("legitimate_explanation", "N/A"),
-        "",
-        "### Malicious Hypothesis",
-        report.get("malicious_explanation", "N/A"),
-        "",
-        "## Recommended Steps",
-        "",
     ]
 
-    for i, step in enumerate(report.get("recommended_steps", []), 1):
-        lines.append(f"{i}. {step}")
+    if evidence_matrix:
+        lines.extend([
+            "## Evidence Matrix",
+            "",
+            "| Source | Evidence Reference | Observed Value / SOC Relevance |",
+            "|--------|--------------------|--------------------------------|",
+        ])
+        for row in evidence_matrix[:28]:
+            value = row.get("value") or ""
+            relevance = row.get("relevance") or ""
+            if relevance:
+                value = f"{value}<br>{relevance}"
+            lines.append(
+                f"| {_md_cell(row.get('source', ''))} | `{_md_cell(row.get('ref', ''))}` | {_md_cell(value)} |"
+            )
+        lines.append("")
+
+    lines.extend([
+        "",
+        "## SOC Intelligence Verdict",
+        "",
+        f"**Derived Verdict:** {str(confidence_engine.get('verdict') or 'unknown').upper()}  ",
+        f"**Derived Score:** {confidence_engine.get('score', 'N/A')}/100  ",
+        f"**Derived Confidence:** {confidence_engine.get('confidence', 'unknown')} ({confidence_engine.get('confidence_percent', 'N/A')}%)  ",
+        "",
+    ])
+    for reason in (confidence_engine.get("reasons") or [])[:8]:
+        lines.append(f"- {reason}")
+
+    lines.extend(["", "## IOC Quality and Actionability", "", "| Type | Value | Quality | Labels | Action |",
+                  "|------|-------|---------|--------|--------|"])
+    for ioc in (ioc_quality.get("items") or [])[:40]:
+        lines.append(
+            f"| {ioc.get('type', '?')} | `{ioc.get('value', '?')}` | "
+            f"{ioc.get('quality_score', '?')} | {', '.join(ioc.get('labels') or [])} | "
+            f"{ioc.get('recommended_action', '')} |"
+        )
 
     lines.extend(["", "## Findings", ""])
     for f in report.get("findings", []):
@@ -100,128 +144,1080 @@ def export_markdown(evidence: dict, report: dict, detail: dict) -> str:
     lines.extend([
         "",
         "---",
-        f"*Generated by Threat Investigator v1.0.0 at {datetime.now(timezone.utc).isoformat()}*",
+        f"*Generated by Threat Analyzer v2.0.0 at {datetime.now(timezone.utc).isoformat()}*",
     ])
 
     return "\n".join(lines)
+
+
+# An unbreakable run this long has no line-break opportunity, and WeasyPrint's
+# cost grows exponentially in the number of them: on one real report, 18 such
+# tokens took the render from 6 seconds to 70. Measured on that document —
+# 85% of the content rendered in 6.7s, and each additional ~800 bytes carrying
+# one more token doubled it: 12.5s, 24.7s, 54.5s.
+_UNBREAKABLE_RUN_THRESHOLD = 200
+_UNBREAKABLE_RUN_CHUNK = 24
+_UNBREAKABLE_RUN_RE = re.compile(r'(?<![\w/=:.-])([^\s<>"\']{%d,})' % _UNBREAKABLE_RUN_THRESHOLD)
+
+
+def _add_break_opportunities(html: str) -> str:
+    """
+    Give the line-breaker somewhere to break inside very long tokens.
+
+    Phishing URLs carry JWTs and tracking blobs — one real sample was a single
+    1,037-character token, repeated across nine table cells. Rendering that took
+    70 seconds and blocked every other request in the process.
+
+    `<wbr>` is used rather than a zero-width space because it is what actually
+    works: a ZWSP leaves the run a single text node and only bought 14%, while
+    `<wbr>` splits it into separate inline boxes and cuts the render 5×. The full
+    value is preserved either way — truncating evidence in a security report to
+    save render time is not a trade worth making, and the JSON and Markdown
+    exports carry the same value untouched.
+    """
+    def split(match: re.Match[str]) -> str:
+        token = match.group(1)
+        return "<wbr>".join(
+            token[index:index + _UNBREAKABLE_RUN_CHUNK]
+            for index in range(0, len(token), _UNBREAKABLE_RUN_CHUNK)
+        )
+
+    return _UNBREAKABLE_RUN_RE.sub(split, html)
 
 
 def export_pdf(evidence: dict, report: dict, detail: dict) -> bytes:
     """
     Export investigation as PDF.
     Uses WeasyPrint to render HTML → PDF.
+
+    Blocking and CPU-bound — callers on the event loop must run it in a thread,
+    or the whole API stalls for the duration. See `app/api/export.py`.
     """
-    html = _build_pdf_html(evidence, report, detail)
+    html = _add_break_opportunities(_build_pdf_html(evidence, report, detail))
 
     try:
         from weasyprint import HTML
         pdf_bytes = HTML(string=html).write_pdf()
         return pdf_bytes
-    except ImportError:
-        logger.warning("WeasyPrint not installed — returning HTML instead of PDF")
-        return html.encode("utf-8")
+    except ImportError as exc:
+        logger.error("WeasyPrint not installed; cannot generate PDF")
+        raise RuntimeError("PDF generator dependency is missing") from exc
     except Exception as e:
         logger.error(f"PDF generation failed: {e}")
-        # Fallback: return HTML
-        return html.encode("utf-8")
+        raise RuntimeError("PDF generation failed") from e
+
+
+def _md_cell(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+
+def _display_verdict(value: Any) -> str:
+    text = str(value or "inconclusive").strip().upper()
+    if text in {"BENIGN", "SUSPICIOUS", "MALICIOUS", "INCONCLUSIVE"}:
+        return text
+    return "INCONCLUSIVE"
+
+
+_CLASSIFICATION_COLORS = {
+    "BENIGN": "#10b981",
+    "SUSPICIOUS": "#f59e0b",
+    "MALICIOUS": "#ef4444",
+    "INCONCLUSIVE": "#64748b",
+}
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
+
+
+def _build_soc_report_context(
+    *,
+    evidence: dict[str, Any],
+    report: dict[str, Any],
+    detail: dict[str, Any],
+    domain: str,
+    classification: str,
+    cls_color: str,
+    generated_at: str,
+    detailed_findings: list[dict[str, Any]],
+    assessment_points: list[str],
+) -> dict[str, Any]:
+    observable_type = str(
+        detail.get("observable_type") or evidence.get("observable_type") or "domain"
+    )
+    collector_status = _build_collector_status_rows(evidence)
+    iocs = _build_export_iocs(report=report, evidence=evidence)
+    recommendations = _build_recommendations(report=report, classification=classification)
+    evidence_sections = _build_evidence_sections(evidence)
+    risk = evidence.get("final_risk") or {}
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    evidence_matrix = build_evidence_matrix_rows(evidence=evidence, report=report)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    derived_classification = _display_verdict(confidence_engine.get("verdict") or classification)
+    derived_confidence = str(
+        confidence_engine.get("confidence")
+        or report.get("confidence")
+        or detail.get("confidence")
+        or "unknown"
+    ).upper()
+    derived_risk_score = confidence_engine.get("score")
+    if derived_risk_score is None:
+        derived_risk_score = report.get("risk_score", detail.get("risk_score"))
+
+    summary = (
+        _clean_text(report.get("primary_reasoning"))
+        or _clean_text(report.get("executive_summary"))
+        or "No analyst summary was available in the stored report."
+    )
+
+    return {
+        "title": "SOC Investigation Report",
+        "subtitle": "Official Threat Intelligence and Incident Triage Documentation",
+        "classification": derived_classification,
+        "classification_color": _CLASSIFICATION_COLORS.get(derived_classification, cls_color),
+        "generated_at": _format_dt(generated_at),
+        "case_metadata": [
+            _kv("Case ID", detail.get("id")),
+            _kv("Observable", domain, mono=True),
+            _kv("Observable Type", observable_type.upper()),
+            _kv("Investigation State", detail.get("state")),
+            _kv("Created", _format_dt(detail.get("created_at"))),
+            _kv("Concluded", _format_dt(detail.get("concluded_at"))),
+            _kv("Client Domain", detail.get("client_domain"), mono=True),
+            _kv("Exported", _format_dt(generated_at)),
+        ],
+        "verdict": {
+            "classification": derived_classification,
+            "confidence": derived_confidence,
+            "risk_score": derived_risk_score,
+            "recommended_action": str(
+                report.get("recommended_action") or detail.get("recommended_action") or "monitor"
+            ).upper(),
+            "risk_level": str(risk.get("risk_level") or risk.get("verdict") or "").upper(),
+            "risk_rationale": _clean_text(report.get("risk_rationale"))
+            or _compact_evidence_value(risk)
+            if risk
+            else "",
+        },
+        "summary": summary,
+        "assessment_points": assessment_points,
+        "key_evidence": evidence_matrix,
+        "contradicting_evidence": _build_evidence_reference_rows(
+            report.get("contradicting_evidence"), evidence
+        ),
+        "data_gaps": _build_data_gap_rows(report=report, evidence=evidence),
+        "findings": detailed_findings,
+        "iocs": iocs,
+        "recommendations": recommendations,
+        "collector_status": collector_status,
+        "evidence_sections": evidence_sections,
+        "derived_intelligence": {
+            "confidence_engine": intelligence.get("confidence_engine") or {},
+            "timeline": intelligence.get("evidence_timeline") or [],
+            "graph": intelligence.get("investigation_graph") or {},
+            "ioc_quality": intelligence.get("ioc_quality") or {},
+            "opencti": intelligence.get("opencti_resolver") or {},
+            "report_builder": intelligence.get("soc_report_builder") or {},
+        },
+        "signals": _normalise_signal_rows(evidence.get("signals") or []),
+        "technical_narrative": _clean_text(report.get("technical_narrative")),
+        "methodology": [
+            "Automated collectors gathered DNS, HTTP, TLS, WHOIS, reputation, sandbox, OpenCTI, and OSINT evidence where supported for the observable type.",
+            "The analyst layer correlated collector outputs into findings, risk scoring, IOCs, and recommended SOC actions.",
+            "Confidence reflects the strength, consistency, and completeness of the available evidence at export time.",
+        ],
+    }
+
+
+def _build_evidence_sections(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+
+    dns = evidence.get("dns") or {}
+    if dns:
+        sections.append(_section(
+            "DNS Resolution and Mail Authentication",
+            rows=[
+                _kv("A Records", _join(dns.get("a")), mono=True),
+                _kv("AAAA Records", _join(dns.get("aaaa")), mono=True),
+                _kv("Name Servers", _join(dns.get("ns")), mono=True),
+                _kv("MX Records", _join(dns.get("mx")), mono=True),
+                _kv("SPF", dns.get("spf"), mono=True),
+                _kv("DMARC", dns.get("dmarc"), mono=True),
+            ],
+        ))
+
+    http = evidence.get("http") or {}
+    if http:
+        sections.append(_section(
+            "HTTP and Web Surface",
+            rows=[
+                _kv("Final URL", http.get("final_url"), mono=True),
+                _kv("Status Code", http.get("status_code")),
+                _kv("Title", http.get("title")),
+                _kv("Server", http.get("server")),
+                _kv("Technologies", _join(http.get("technologies"))),
+                _kv("Redirect Count", len(http.get("redirects") or [])),
+            ],
+            table=_simple_table(
+                ["Hop", "Status", "URL"],
+                [
+                    [idx + 1, item.get("status_code"), item.get("url") or item.get("location")]
+                    for idx, item in enumerate((http.get("redirects") or [])[:8])
+                    if isinstance(item, dict)
+                ],
+            ),
+        ))
+
+    tls = evidence.get("tls") or {}
+    if tls:
+        sections.append(_section(
+            "TLS Certificate",
+            rows=[
+                _kv("Certificate Present", tls.get("present")),
+                _kv("Issuer", tls.get("issuer") or tls.get("issuer_org")),
+                _kv("Subject", tls.get("subject"), mono=True),
+                _kv("Valid From", _format_dt(tls.get("valid_from"))),
+                _kv("Valid To", _format_dt(tls.get("valid_to"))),
+                _kv("Self Signed", tls.get("is_self_signed")),
+                _kv("SAN Count", len(tls.get("sans") or [])),
+            ],
+        ))
+
+    whois = evidence.get("whois") or {}
+    if whois:
+        sections.append(_section(
+            "WHOIS Registration",
+            rows=[
+                _kv("Registrar", whois.get("registrar")),
+                _kv("Created", _format_dt(whois.get("created_date"))),
+                _kv("Expires", _format_dt(whois.get("expiry_date"))),
+                _kv("Domain Age", _days(whois.get("domain_age_days"))),
+                _kv("Registrant Organization", whois.get("registrant_org")),
+                _kv("Registrant Country", whois.get("registrant_country")),
+                _kv("Privacy Protected", whois.get("privacy_protected")),
+            ],
+        ))
+
+    hosting = evidence.get("hosting") or {}
+    if hosting:
+        sections.append(_section(
+            "Hosting and ASN",
+            rows=[
+                _kv("IP Address", hosting.get("ip"), mono=True),
+                _kv("ASN", f"AS{hosting.get('asn')}" if hosting.get("asn") else None),
+                _kv("ASN Organization", hosting.get("asn_org")),
+                _kv("Country", hosting.get("country")),
+                _kv("Cloud Provider", hosting.get("is_cloud")),
+                _kv("CDN", hosting.get("is_cdn")),
+            ],
+        ))
+
+    vt = evidence.get("vt") or {}
+    if vt:
+        sections.append(_section(
+            "VirusTotal Reputation",
+            rows=[
+                _kv("Found", vt.get("found")),
+                _kv("Malicious Vendors", vt.get("malicious_count")),
+                _kv("Suspicious Vendors", vt.get("suspicious_count")),
+                _kv("Total Vendors", vt.get("total_vendors")),
+                _kv("Reputation Score", vt.get("reputation_score")),
+                _kv("Categories", _join(vt.get("categories"))),
+                _kv("Flagged By", _join(vt.get("flagged_malicious_by"))),
+            ],
+        ))
+
+    urlscan = evidence.get("urlscan") or {}
+    if urlscan:
+        sections.append(_section(
+            "URLScan",
+            rows=[
+                _kv("Scan URL", urlscan.get("result_url") or urlscan.get("scan_url"), mono=True),
+                _kv("Page URL", urlscan.get("page_url"), mono=True),
+                _kv("Verdict", urlscan.get("verdict")),
+                _kv("Malicious", urlscan.get("malicious")),
+                _kv("IP", urlscan.get("ip"), mono=True),
+                _kv("ASN", urlscan.get("asn")),
+                _kv("Country", urlscan.get("country")),
+            ],
+        ))
+
+    hybrid = evidence.get("hybrid_analysis") or {}
+    if hybrid:
+        items = hybrid.get("items") or []
+        sections.append(_section(
+            "AnyRun Sandbox and Intelligence",
+            rows=[
+                _kv("Checked", hybrid.get("checked")),
+                _kv("Verdict", hybrid.get("verdict")),
+                _kv("Threat Score", hybrid.get("threat_score")),
+                _kv("Items", len(items)),
+                _kv("Summary", hybrid.get("summary")),
+            ],
+            table=_simple_table(
+                ["Mode", "Verdict", "Score", "Analysis ID", "URL"],
+                [
+                    [
+                        item.get("mode") or (item.get("raw_summary") or {}).get("mode"),
+                        item.get("verdict") or (item.get("raw_summary") or {}).get("verdict"),
+                        item.get("threat_score") or (item.get("raw_summary") or {}).get("threat_score"),
+                        item.get("analysis_id") or (item.get("raw_summary") or {}).get("analysis_id"),
+                        item.get("target") or item.get("url"),
+                    ]
+                    for item in items[:8]
+                    if isinstance(item, dict)
+                ],
+            ),
+        ))
+        sandbox_summary, sandbox_rows = _anyrun_sandbox_intelligence_export(items)
+        if sandbox_summary or sandbox_rows:
+            sections.append(_section(
+                "AnyRun Sandbox Intelligence Extracts",
+                rows=sandbox_summary,
+                table=_simple_table(
+                    ["Type", "Value", "Process / Source", "Context"],
+                    sandbox_rows,
+                ),
+            ))
+
+    opencti = evidence.get("opencti") or {}
+    if opencti:
+        sections.append(_section(
+            "OpenCTI Internal Threat Intelligence",
+            rows=[
+                _kv("Found", opencti.get("found")),
+                _kv("Observable", opencti.get("observable_value"), mono=True),
+                _kv("Entity Type", opencti.get("observable_entity_type")),
+                _kv("Score", opencti.get("score")),
+                _kv("Author", opencti.get("author")),
+                _kv("Labels", _join(opencti.get("labels"))),
+                _kv("Created", _format_dt(opencti.get("created_at"))),
+                _kv("Modified", _format_dt(opencti.get("updated_at"))),
+                _kv("Standard STIX ID", opencti.get("standard_id"), mono=True),
+            ],
+            table=_simple_table(
+                ["Object", "Name / Pattern", "Confidence", "Date"],
+                _opencti_table_rows(opencti),
+            ),
+        ))
+
+    threat_feeds = evidence.get("threat_feeds") or {}
+    if threat_feeds:
+        sections.append(_section(
+            "External Threat Feeds",
+            rows=[
+                _kv("Feeds Checked", _join(threat_feeds.get("feeds_checked"))),
+                _kv("OpenPhish Listed", threat_feeds.get("openphish_listed")),
+                _kv("ThreatFox Matches", len(threat_feeds.get("threatfox_matches") or [])),
+                _kv("PhishTank Listed", (threat_feeds.get("phishtank") or {}).get("in_database")),
+                _kv("AbuseIPDB Score", (threat_feeds.get("abuseipdb") or {}).get("abuse_confidence_score")),
+            ],
+        ))
+
+    for key, title in (
+        ("email_security", "Email Security Posture"),
+        ("redirect_analysis", "Redirect Behavior"),
+        ("js_analysis", "JavaScript Behavior"),
+        ("url_lexical_ml", "URL Lexical ML"),
+        ("content_ml", "Content ML"),
+        ("attachment_analysis", "Attachment Analysis"),
+        ("redirect_destination_intel", "Redirect Destination Intelligence"),
+        ("infrastructure_pivot", "Infrastructure Pivot"),
+        ("cert_timeline", "Certificate Transparency Timeline"),
+        ("favicon_intel", "Favicon Intelligence"),
+    ):
+        data = evidence.get(key) or {}
+        if isinstance(data, dict) and data:
+            sections.append(_section(title, rows=_dict_summary_rows(data)))
+
+    return sections
+
+
+def _opencti_table_rows(opencti: dict[str, Any]) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for indicator in (opencti.get("indicators") or [])[:10]:
+        if isinstance(indicator, dict):
+            rows.append([
+                "Indicator",
+                indicator.get("pattern") or indicator.get("name"),
+                indicator.get("confidence"),
+                _format_dt(indicator.get("valid_from")),
+            ])
+    for report in (opencti.get("reports") or [])[:10]:
+        if isinstance(report, dict):
+            rows.append([
+                "Report",
+                report.get("name"),
+                _join(report.get("report_types")),
+                _format_dt(report.get("published") or report.get("created")),
+            ])
+    for actor in (opencti.get("threat_actors") or [])[:10]:
+        if isinstance(actor, dict):
+            rows.append(["Threat Actor", actor.get("name"), actor.get("sophistication"), ""])
+    for malware in (opencti.get("malware_families") or [])[:10]:
+        if isinstance(malware, dict):
+            rows.append(["Malware", malware.get("name"), _join(malware.get("malware_types")), _format_dt(malware.get("first_seen"))])
+    return rows
+
+
+def _build_collector_status_rows(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, value in evidence.items():
+        if not isinstance(value, dict):
+            continue
+        meta = value.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        rows.append({
+            "collector": meta.get("collector") or key,
+            "status": meta.get("status") or "unknown",
+            "duration": _duration(meta.get("duration_ms")),
+            "error": meta.get("error") or "",
+        })
+    return sorted(rows, key=lambda row: str(row["collector"]))
+
+
+def _build_export_iocs(report: dict[str, Any], evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    iocs = [ioc for ioc in (report.get("iocs") or []) if isinstance(ioc, dict)]
+    if iocs:
+        return iocs
+
+    built: list[dict[str, Any]] = []
+    observable = str(evidence.get("domain") or "").strip()
+    observable_type = str(evidence.get("observable_type") or "domain")
+    if observable:
+        built.append({
+            "type": observable_type,
+            "value": observable,
+            "context": "Primary investigated observable",
+            "confidence": str(report.get("confidence") or "low"),
+        })
+
+    for ip in ((evidence.get("dns") or {}).get("a") or [])[:10]:
+        built.append({"type": "ip", "value": ip, "context": "Resolved A record", "confidence": "medium"})
+    final_url = (evidence.get("http") or {}).get("final_url") or (evidence.get("urlscan") or {}).get("page_url")
+    if final_url:
+        built.append({"type": "url", "value": final_url, "context": "Final observed URL", "confidence": "medium"})
+    return built
+
+
+def _build_recommendations(report: dict[str, Any], classification: str) -> list[str]:
+    steps = [
+        _clean_text(step)
+        for step in (report.get("recommended_steps") or [])
+        if _clean_text(step)
+    ]
+    if steps:
+        return steps
+
+    action = str(report.get("recommended_action") or "").lower()
+    if classification == "MALICIOUS" or action in {"block", "hunt"}:
+        return [
+            "Block the observable and any derived IOCs at email, proxy, DNS, and endpoint controls.",
+            "Search SIEM, EDR, proxy, and DNS telemetry for historical contact with the listed IOCs.",
+            "Preserve investigation artifacts and escalate to incident response if internal exposure is confirmed.",
+        ]
+    if classification == "SUSPICIOUS" or action == "investigate":
+        return [
+            "Continue monitoring and enrich the observable with additional sandbox, proxy, and user-reporting evidence.",
+            "Apply temporary controls where exposure exists, especially for credential-harvesting or redirect behavior.",
+            "Reassess classification after missing data gaps are closed.",
+        ]
+    return [
+        "Monitor for recurrence or new intelligence, and retain this report as the current investigation record.",
+    ]
+
+
+def _build_evidence_reference_rows(values: Any, evidence: dict[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if not isinstance(values, list):
+        return rows
+    for item in values[:12]:
+        ref = str(item).strip()
+        if not ref:
+            continue
+        value = _evidence_argument_from_ref(ref, evidence)
+        if not value:
+            continue
+        rows.append({"ref": ref, "value": value})
+    return rows
+
+
+def _build_data_gap_rows(report: dict[str, Any], evidence: dict[str, Any]) -> list[str]:
+    gaps = [_clean_text(item) for item in (report.get("data_needed") or []) if _clean_text(item)]
+    if gaps:
+        return gaps[:10]
+    detected = evidence.get("data_gaps") or []
+    out: list[str] = []
+    for gap in detected:
+        if isinstance(gap, dict):
+            text = _clean_text(gap.get("description") or gap.get("message") or gap.get("collector"))
+            if text:
+                out.append(text)
+    return out[:10]
+
+
+def _normalise_signal_rows(signals: list[Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for signal in signals[:20]:
+        if isinstance(signal, dict):
+            rows.append({
+                "severity": str(signal.get("severity") or "info"),
+                "description": _clean_text(signal.get("description")) or _compact_evidence_value(signal),
+            })
+    return rows
+
+
+def _section(
+    title: str,
+    *,
+    rows: list[dict[str, Any]] | None = None,
+    table: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "title": title,
+        "rows": [row for row in (rows or []) if row.get("value") not in (None, "", [], {})],
+        "table": table if table and table.get("rows") else None,
+    }
+
+
+def _simple_table(headers: list[str], rows: list[list[Any]]) -> dict[str, Any] | None:
+    cleaned = [
+        [_display_value(cell) for cell in row]
+        for row in rows
+        if any(cell not in (None, "", [], {}) for cell in row)
+    ]
+    if not cleaned:
+        return None
+    return {"headers": headers, "rows": cleaned}
+
+
+def _dict_summary_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, value in data.items():
+        if key == "meta" or value in (None, "", [], {}):
+            continue
+        if isinstance(value, (dict, list)):
+            rows.append(_kv(_titleize(key), _compact_evidence_value(value)))
+        else:
+            rows.append(_kv(_titleize(key), value, mono=_looks_like_ioc(value)))
+        if len(rows) >= 12:
+            break
+    return rows
+
+
+def _anyrun_sandbox_intelligence_export(items: list[Any]) -> tuple[list[dict[str, Any]], list[list[Any]]]:
+    counts = {
+        "Processes": 0,
+        "Hosts": 0,
+        "IPs": 0,
+        "Files": 0,
+        "Suspicious Commands": 0,
+        "Extracted IOCs": 0,
+        "Screenshots": 0,
+    }
+    table_rows: list[list[Any]] = []
+    seen: set[tuple[str, str]] = set()
+    narrative = ""
+
+    def add_row(kind: str, value: Any, source: Any, context: Any) -> None:
+        text = _clean_text(value)
+        if not text:
+            return
+        key = (kind, text.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        table_rows.append([kind, text, source, context])
+
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        intel = item.get("sandbox_intelligence") or {}
+        if not isinstance(intel, dict):
+            continue
+        summary = intel.get("summary") or {}
+        counts["Processes"] += _safe_count(summary.get("process_count"))
+        counts["Hosts"] += _safe_count(summary.get("contacted_host_count"))
+        counts["IPs"] += _safe_count(summary.get("contacted_ip_count"))
+        counts["Files"] += _safe_count(summary.get("dropped_file_count"))
+        counts["Suspicious Commands"] += _safe_count(summary.get("suspicious_command_count"))
+        counts["Extracted IOCs"] += _safe_count(summary.get("extracted_ioc_count"))
+        counts["Screenshots"] += _safe_count(summary.get("screenshot_count"))
+
+        tree = intel.get("process_tree_summary") or {}
+        if not narrative and tree.get("narrative"):
+            narrative = str(tree.get("narrative") or "")
+        for row in (tree.get("high_risk_processes") or [])[:5]:
+            add_row("Process", row.get("name"), f"PID {row.get('pid') or '-'}", row.get("command_line"))
+        for row in (intel.get("contacted_hosts") or [])[:8]:
+            add_row("Domain", row.get("host"), row.get("process") or row.get("source"), row.get("threat_name") or row.get("url"))
+        for row in (intel.get("contacted_ips") or [])[:8]:
+            add_row("IP", row.get("ip"), row.get("process") or row.get("source"), f"{row.get('protocol') or ''}/{row.get('port') or ''}".strip("/"))
+        for row in (intel.get("dropped_files") or [])[:8]:
+            add_row("File", row.get("path") or row.get("name"), row.get("process"), row.get("sha256") or row.get("sha1") or row.get("md5") or row.get("action"))
+        for row in (intel.get("suspicious_commands") or [])[:8]:
+            add_row("Command", row.get("command_line"), row.get("process"), row.get("reason"))
+        for row in (intel.get("extracted_iocs") or [])[:12]:
+            add_row(str(row.get("type") or "IOC").upper(), row.get("value"), row.get("source") or "AnyRun", row.get("context"))
+
+    summary_rows = [_kv(label, value) for label, value in counts.items() if value]
+    if narrative:
+        summary_rows.insert(0, _kv("Process Tree", narrative))
+    return summary_rows, table_rows[:40]
+
+
+def _safe_count(value: Any) -> int:
+    try:
+        return int(float(str(value)))
+    except Exception:
+        return 0
+
+
+def _kv(label: str, value: Any, *, mono: bool = False) -> dict[str, Any]:
+    return {"label": label, "value": _display_value(value), "mono": mono}
+
+
+def _display_value(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, list):
+        return _join(value)
+    if isinstance(value, dict):
+        return _compact_evidence_value(value)
+    return str(value)
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())
+
+
+def _join(values: Any, *, limit: int = 8) -> str:
+    if values is None:
+        return ""
+    if isinstance(values, dict):
+        values = [f"{k}: {v}" for k, v in values.items()]
+    if not isinstance(values, list):
+        return str(values)
+    cleaned = [str(item).strip() for item in values if str(item).strip()]
+    if not cleaned:
+        return ""
+    shown = cleaned[:limit]
+    if len(cleaned) > limit:
+        shown.append(f"+{len(cleaned) - limit} more")
+    return ", ".join(shown)
+
+
+def _format_dt(value: Any) -> str:
+    if not value:
+        return ""
+    text = str(value)
+    return text[:19].replace("T", " ")
+
+
+def _duration(value: Any) -> str:
+    try:
+        ms = int(value)
+    except Exception:
+        return ""
+    if ms >= 1000:
+        return f"{ms / 1000:.1f}s"
+    return f"{ms}ms"
+
+
+def _days(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    return f"{value} days"
+
+
+def _titleize(value: str) -> str:
+    return str(value).replace("_", " ").replace("-", " ").title()
+
+
+def _looks_like_ioc(value: Any) -> bool:
+    text = str(value)
+    return "." in text or ":" in text or len(text) >= 32
+
+
+def build_soc_report_document(
+    *,
+    evidence: dict[str, Any],
+    report: dict[str, Any],
+    detail: dict[str, Any],
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """
+    The SOC report as data: exactly what `templates/soc_report.html` renders.
+
+    The PDF export and the JSON exports both go through this function, so a
+    consumer that builds its own report from this document produces the same
+    sections as our PDF — and they cannot drift apart.
+    """
+    evidence = _sanitize_evidence_for_export(evidence or {})
+    report = _sanitize_report_for_export(report or {})
+    detail = detail or {}
+    domain = detail.get("domain", "Unknown")
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
+    return _build_soc_report_context(
+        evidence=evidence,
+        report=report,
+        detail=detail,
+        domain=domain,
+        classification=classification,
+        cls_color=_CLASSIFICATION_COLORS.get(classification, "#64748b"),
+        generated_at=generated_at or datetime.now(timezone.utc).isoformat(),
+        detailed_findings=_build_detailed_findings(report=report, evidence=evidence),
+        assessment_points=_build_assessment_points(report.get("primary_reasoning", "")),
+    )
 
 
 def _build_pdf_html(evidence: dict, report: dict, detail: dict) -> str:
-    """Build the HTML template for PDF rendering."""
+    """Build HTML for PDF rendering using Jinja2 template."""
+    evidence = _sanitize_evidence_for_export(evidence)
+    report = _sanitize_report_for_export(report)
     domain = detail.get("domain", "Unknown")
-    classification = (report.get("classification") or "inconclusive").upper()
-    confidence = report.get("confidence", "?")
-    risk_score = report.get("risk_score", "?")
-    action = (report.get("recommended_action") or "monitor").upper()
-    date = detail.get("created_at", "N/A")
+    intelligence = build_investigation_intelligence(evidence=evidence, report=report, detail=detail)
+    confidence_engine = intelligence.get("confidence_engine") or {}
+    classification = _display_verdict(confidence_engine.get("verdict") or report.get("classification"))
+    cls_color = _CLASSIFICATION_COLORS.get(classification, "#64748b")
+    investigation_id = detail.get("id", "")
+    generated_at = datetime.now(timezone.utc).isoformat()
+    detailed_findings = _build_detailed_findings(report=report, evidence=evidence)
+    assessment_points = _build_assessment_points(report.get("primary_reasoning", ""))
+    # Inputs are already sanitized here, so the context is built directly rather
+    # than through build_soc_report_document() (which sanitizes first).
+    soc_report = _build_soc_report_context(
+        evidence=evidence,
+        report=report,
+        detail=detail,
+        domain=domain,
+        classification=classification,
+        cls_color=cls_color,
+        generated_at=generated_at,
+        detailed_findings=detailed_findings,
+        assessment_points=assessment_points,
+    )
 
-    # Classification colors
-    colors = {
-        "BENIGN": "#10b981",
-        "SUSPICIOUS": "#f59e0b",
-        "MALICIOUS": "#ef4444",
-        "INCONCLUSIVE": "#64748b",
-    }
-    cls_color = colors.get(classification, "#64748b")
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        env = Environment(
+            loader=FileSystemLoader(_TEMPLATES_DIR),
+            autoescape=select_autoescape(["html"]),
+        )
+        template = env.get_template("soc_report.html")
+        return template.render(
+            domain=domain,
+            classification=classification,
+            cls_color=cls_color,
+            investigation_id=investigation_id,
+            generated_at=generated_at,
+            detail=detail,
+            evidence=evidence,
+            report=report,
+            detailed_findings=detailed_findings,
+            assessment_points=assessment_points,
+            soc_report=soc_report,
+        )
+    except Exception as e:
+        logger.warning(f"Jinja2 template rendering failed ({e}), falling back to basic HTML")
+        return _build_fallback_html(domain, classification, cls_color, report, generated_at)
 
-    # Build findings HTML
-    findings_html = ""
-    for f in report.get("findings", []):
-        sev = f.get("severity", "info").upper()
-        findings_html += f"""
-        <div style="border-left: 3px solid {colors.get(sev, '#64748b')}; padding: 8px 12px; margin-bottom: 8px; background: #f8fafc;">
-            <strong>[{sev}]</strong> {f.get('title', '')}
-            <div style="color: #64748b; font-size: 12px; margin-top: 4px;">{f.get('description', '')}</div>
-        </div>"""
 
-    # Build IOCs table
-    iocs_html = ""
-    for ioc in report.get("iocs", []):
-        iocs_html += f"""
-        <tr>
-            <td style="padding: 4px 8px; font-size: 12px;">{ioc.get('type', '?')}</td>
-            <td style="padding: 4px 8px; font-family: monospace; font-size: 11px;">{ioc.get('value', '?')}</td>
-            <td style="padding: 4px 8px; font-size: 12px;">{ioc.get('context', '')}</td>
-        </tr>"""
-
-    # Steps
-    steps_html = ""
-    for i, step in enumerate(report.get("recommended_steps", []), 1):
-        steps_html += f"<li>{step}</li>"
-
+def _build_fallback_html(
+    domain: str, classification: str, cls_color: str, report: dict, generated_at: str
+) -> str:
+    """Minimal fallback HTML if Jinja2 template fails."""
     return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {{ font-family: -apple-system, sans-serif; color: #1e293b; margin: 40px; font-size: 13px; line-height: 1.6; }}
-        h1 {{ font-size: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 8px; }}
-        h2 {{ font-size: 15px; color: #3b82f6; margin-top: 24px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
-        .classification {{ display: inline-block; padding: 8px 20px; background: {cls_color}; color: white; font-weight: bold; font-size: 16px; border-radius: 6px; letter-spacing: 0.1em; }}
-        .meta {{ color: #64748b; font-size: 12px; }}
-        .meta-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin: 16px 0; }}
-        .meta-item {{ padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; }}
-        .meta-label {{ font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }}
-        .meta-value {{ font-size: 14px; font-weight: 600; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 8px 0; }}
-        th, td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }}
-        th {{ background: #f1f5f9; font-weight: 600; }}
-        .hypothesis {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-        .hypothesis > div {{ padding: 12px; border-radius: 6px; font-size: 12px; }}
-        .legit {{ background: #f0fdf4; border: 1px solid #bbf7d0; }}
-        .malicious {{ background: #fef2f2; border: 1px solid #fecaca; }}
-        .footer {{ margin-top: 32px; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; }}
-    </style>
-</head>
-<body>
-    <h1>Threat Investigation Report</h1>
-    <div class="meta">Domain: <strong>{domain}</strong> · Date: {date}</div>
+<html><head><meta charset="utf-8">
+<style>body{{font-family:sans-serif;color:#1e293b;margin:40px;font-size:13px;line-height:1.6}}
+h1{{font-size:20px}}h2{{font-size:15px;color:#3b82f6;margin-top:20px}}</style>
+</head><body>
+<h1>Threat Analysis Report — {domain}</h1>
+<p><strong>Classification:</strong> <span style="color:{cls_color}">{classification}</span> &nbsp;
+<strong>Risk:</strong> {report.get('risk_score','?')}/100</p>
+<h2>Primary Reasoning</h2><p>{report.get('primary_reasoning','N/A')}</p>
+<p style="color:#94a3b8;font-size:10px">Generated {generated_at[:19]} UTC</p>
+</body></html>"""
 
-    <div class="meta-grid">
-        <div class="meta-item"><div class="meta-label">Classification</div><div class="meta-value" style="color:{cls_color}">{classification}</div></div>
-        <div class="meta-item"><div class="meta-label">Confidence</div><div class="meta-value">{confidence}</div></div>
-        <div class="meta-item"><div class="meta-label">Risk Score</div><div class="meta-value">{risk_score}/100</div></div>
-        <div class="meta-item"><div class="meta-label">Action</div><div class="meta-value">{action}</div></div>
-    </div>
 
-    <h2>Primary Reasoning</h2>
-    <p>{report.get('primary_reasoning', 'N/A')}</p>
+def _build_detailed_findings(report: dict[str, Any], evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    findings = report.get("findings") or []
+    if not isinstance(findings, list):
+        return []
 
-    <h2>Hypothesis Comparison</h2>
-    <div class="hypothesis">
-        <div class="legit"><strong>✓ Legitimate</strong><br>{report.get('legitimate_explanation', 'N/A')}</div>
-        <div class="malicious"><strong>✗ Malicious</strong><br>{report.get('malicious_explanation', 'N/A')}</div>
-    </div>
+    key_evidence = {
+        str(item).strip()
+        for item in (report.get("key_evidence") or [])
+        if str(item).strip()
+    }
+    contradicting_evidence = {
+        str(item).strip()
+        for item in (report.get("contradicting_evidence") or [])
+        if str(item).strip()
+    }
 
-    <h2>Recommended Steps</h2>
-    <ol>{steps_html}</ol>
+    detailed: list[dict[str, Any]] = []
+    for idx, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        finding_id = str(finding.get("id") or f"finding_{idx + 1}")
+        finding_refs = finding.get("evidence_refs") or []
+        refs = [
+            str(ref).strip()
+            for ref in finding_refs
+            if str(ref).strip() and str(ref).strip().lower() != "intel.blocklist_hits"
+        ]
 
-    <h2>Findings</h2>
-    {findings_html or '<p style="color: #94a3b8;">No findings.</p>'}
+        # If the model omitted finding-level refs, at least include top key evidence.
+        if not refs:
+            refs = list(key_evidence)[:3]
 
-    <h2>Indicators of Compromise</h2>
-    {f'<table><tr><th>Type</th><th>Value</th><th>Context</th></tr>{iocs_html}</table>' if iocs_html else '<p style="color: #94a3b8;">No IOCs.</p>'}
+        evidence_arguments = []
+        for ref in refs:
+            value = _resolve_evidence_ref(ref=ref, evidence=evidence)
+            if value is None:
+                continue
+            evidence_arguments.append(
+                {
+                    "ref": ref,
+                    "argument": _compact_evidence_value(value),
+                    "supports_classification": ref in key_evidence,
+                    "contradicts_classification": ref in contradicting_evidence,
+                }
+            )
 
-    <div class="footer">Generated by Threat Investigator v1.0.0 · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</div>
-</body>
-</html>"""
+        detailed.append(
+            {
+                **finding,
+                "id": finding_id,
+                "evidence_arguments": evidence_arguments,
+            }
+        )
+    return detailed
+
+
+def _evidence_argument_from_ref(ref: str, evidence: dict[str, Any]) -> str:
+    value = _resolve_evidence_ref(ref=ref, evidence=evidence)
+    if value is None:
+        return ""
+    return _compact_evidence_value(value)
+
+
+def _resolve_evidence_ref(ref: str, evidence: dict[str, Any]) -> Any:
+    text = (ref or "").strip()
+    if not text:
+        return None
+    if text.startswith("evidence."):
+        text = text[len("evidence.") :]
+
+    current: Any = evidence
+    for segment in text.split("."):
+        segment = segment.strip()
+        if not segment:
+            return None
+
+        key, idx = _parse_path_segment(segment)
+
+        if key:
+            if not isinstance(current, dict) or key not in current:
+                return None
+            current = current.get(key)
+
+        if idx is not None:
+            if not isinstance(current, list):
+                return None
+            if idx < 0 or idx >= len(current):
+                return None
+            current = current[idx]
+    return current
+
+
+def _parse_path_segment(segment: str) -> tuple[str, int | None]:
+    if "[" not in segment or not segment.endswith("]"):
+        return segment, None
+    key, _, idx_raw = segment.partition("[")
+    idx_text = idx_raw[:-1].strip()
+    if not idx_text.isdigit():
+        return key, None
+    return key, int(idx_text)
+
+
+def _compact_evidence_value(value: Any) -> str:
+    if value is None:
+        return "No evidence value was returned."
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if "whoisdomainnotfounderror" in text.lower():
+            return "Domain not found in registry WHOIS records."
+        return text if len(text) <= 240 else text[:237] + "..."
+    if isinstance(value, list):
+        if not value:
+            return "No entries."
+        scalar_items = [item for item in value if isinstance(item, (str, int, float, bool))]
+        if len(scalar_items) == len(value):
+            joined = ", ".join(str(item) for item in scalar_items[:6])
+            if len(value) > 6:
+                joined += f" (+{len(value) - 6} more)"
+            return joined
+        return f"{len(value)} structured item(s) collected."
+    if isinstance(value, dict):
+        important = [
+            "status",
+            "verdict",
+            "malicious_count",
+            "suspicious_count",
+            "found",
+            "present",
+            "registrar",
+            "registrant_org",
+            "issuer_org",
+            "asn_org",
+            "country",
+            "risk_score",
+        ]
+        pairs = []
+        for key in important:
+            if key in value and isinstance(value[key], (str, int, float, bool)):
+                pairs.append(f"{key}={value[key]}")
+        if pairs:
+            return "; ".join(pairs[:6])
+        return "Structured object with keys: " + ", ".join(list(value.keys())[:8])
+    return str(value)
+
+
+def _sanitize_report_for_export(report: dict[str, Any]) -> dict[str, Any]:
+    sanitized = json.loads(json.dumps(report or {}, default=str))
+
+    for key in (
+        "primary_reasoning",
+        "executive_summary",
+        "technical_narrative",
+        "legitimate_explanation",
+        "malicious_explanation",
+        "risk_rationale",
+    ):
+        value = sanitized.get(key)
+        if isinstance(value, str):
+            sanitized[key] = _strip_unwanted_sections(_strip_uribl_terms(value))
+
+    findings = sanitized.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            title = finding.get("title")
+            if isinstance(title, str):
+                finding["title"] = _strip_uribl_terms(title)
+            description = finding.get("description")
+            if isinstance(description, str):
+                finding["description"] = _strip_uribl_terms(description)
+            refs = finding.get("evidence_refs")
+            if isinstance(refs, list):
+                finding["evidence_refs"] = [
+                    ref
+                    for ref in refs
+                    if str(ref).strip().lower() != "intel.blocklist_hits"
+                ]
+
+    for list_key in ("key_evidence", "contradicting_evidence", "data_needed"):
+        values = sanitized.get(list_key)
+        if isinstance(values, list):
+            cleaned = []
+            for item in values:
+                text = _strip_unwanted_sections(_strip_uribl_terms(str(item)))
+                if text:
+                    cleaned.append(text)
+            sanitized[list_key] = cleaned
+
+    return sanitized
+
+
+def _sanitize_evidence_for_export(evidence: dict[str, Any]) -> dict[str, Any]:
+    sanitized = json.loads(json.dumps(evidence or {}, default=str))
+
+    intel = sanitized.get("intel")
+    if isinstance(intel, dict):
+        hits = intel.get("blocklist_hits")
+        if isinstance(hits, list):
+            intel["blocklist_hits"] = [
+                hit
+                for hit in hits
+                if str((hit or {}).get("source") or "").strip().lower() != "uribl"
+            ]
+
+    signals = sanitized.get("signals")
+    if isinstance(signals, list):
+        sanitized["signals"] = [
+            signal
+            for signal in signals
+            if isinstance(signal, dict)
+            and "uribl" not in str(signal.get("description") or "").lower()
+        ]
+    return sanitized
+
+
+def _strip_uribl_terms(text: str) -> str:
+    lowered = (text or "")
+    for needle in ("URIBL", "uribl"):
+        lowered = lowered.replace(needle, "")
+    lowered = lowered.replace("intel.blocklist_hits", "")
+    lowered = lowered.replace("()", "")
+    while "  " in lowered:
+        lowered = lowered.replace("  ", " ")
+    return lowered.strip(" ,;:-")
+
+
+def _strip_unwanted_sections(text: str) -> str:
+    if not text:
+        return text
+    blocked_markers = (
+        "hypothesis comparison",
+        "legitimate hypothesis",
+        "malicious hypothesis",
+        "recommended steps",
+    )
+    out: list[str] = []
+    skipping = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        marker = line.lower().rstrip(":")
+        if marker in blocked_markers:
+            skipping = True
+            continue
+        if skipping and line.startswith(("## ", "### ")):
+            skipping = False
+        if not skipping:
+            out.append(raw_line)
+    return "\n".join(out).strip()
+
+
+def _build_assessment_points(primary_reasoning: str) -> list[str]:
+    text = " ".join((primary_reasoning or "").split())
+    if not text:
+        return []
+
+    # Prefer explicit dash-delimited analytical claims when present.
+    if " - " in text:
+        parts = [p.strip(" .;:-") for p in text.split(" - ") if p.strip(" .;:-")]
+        if len(parts) > 1:
+            return parts[:8]
+
+    # Fall back to sentence segmentation.
+    sentences = [
+        s.strip(" .;:-")
+        for s in re.split(r"(?<=[.!?])\s+", text)
+        if s.strip(" .;:-")
+    ]
+    if len(sentences) > 1:
+        return sentences[:8]
+
+    return [text]

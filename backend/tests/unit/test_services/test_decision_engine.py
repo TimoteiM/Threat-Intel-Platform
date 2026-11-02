@@ -1,0 +1,852 @@
+from app.services.decision_engine import apply_decision_to_report, build_decision_report
+
+
+def test_decision_engine_overrides_ai_verdict_for_contextual_http_only():
+    evidence = {
+        "domain": "expertware.net",
+        "observable_type": "domain",
+        "http": {
+            "reachable": True,
+            "has_login_form": True,
+            "phishing_indicators": [
+                "Email-only input form observed",
+                "Credential or account input fields observed (email/username/password/card)",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+        },
+        "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+        "hybrid_analysis": {"verdict": "clean", "score": 0},
+        "whois": {"domain_age_days": 5000},
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+        # A clean control has to say the check ran. `{"blocklist_hits": []}`
+        # alone is the state 2,198 runs were in from 2026-07-07: the intel
+        # collector failed outright and the empty list was a Pydantic default,
+        # not a negative. Naming the sources is what production records now.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
+    }
+    decision = build_decision_report(evidence, "domain")
+    ai_report = {
+        "classification": "malicious",
+        "confidence": "high",
+        "risk_score": 95,
+        "recommended_action": "block",
+        "primary_reasoning": "AI overreacted to an input field.",
+    }
+
+    merged = apply_decision_to_report(ai_report, decision)
+
+    assert merged["classification"] == "benign"
+    assert merged["risk_score"] == 15
+    assert merged["recommended_action"] == "monitor"
+    assert merged["primary_reasoning"] == "AI overreacted to an input field."
+    assert merged["decision_engine"]["source"] == "deterministic"
+
+
+def test_decision_engine_flags_anyrun_malicious_without_ai():
+    decision = build_decision_report(
+        {
+            "domain": "bad.example",
+            "observable_type": "domain",
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "hybrid_analysis": {
+                "items": [{"verdict": "malicious", "threat_names": ["phishing"]}],
+            },
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
+            "whois": {"domain_age_days": 400},
+        },
+        "domain",
+    )
+
+    assert decision["classification"] == "malicious"
+    assert decision["confidence"] == "high"
+    assert decision["recommended_action"] == "block"
+    assert decision["risk_score"] == 90
+
+
+def test_decision_engine_summary_prioritizes_anyrun_residential_sandbox():
+    decision = build_decision_report(
+        {
+            "domain": "apnsolar.com",
+            "observable_type": "domain",
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "http": {"phishing_indicators": ["Third-party brand reference: 'google' on non-google domain"]},
+            "email_security": {"spoofability_score": "high"},
+            "hybrid_analysis": {
+                "items": [
+                    {
+                        "verdict": "malicious",
+                        "threat_score": 100,
+                        "threat_names": ["phishing"],
+                        "raw_summary": {
+                            "mode": "sandbox",
+                            "network_profile": {
+                                "use_residential_proxy": True,
+                                "proxy_country": "US",
+                                "anyrun_residential_proxy": True,
+                            },
+                        },
+                    }
+                ],
+            },
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
+        },
+        "domain",
+    )
+
+    reasoning = decision["primary_reasoning"]
+    assert "AnyRun sandbox verdict: MALICIOUS score 100 via Residential Proxy US" in reasoning
+    assert "VirusTotal: 0 malicious" not in reasoning
+    assert "High email spoofability" not in reasoning
+    assert "Third-party brand reference" not in reasoning
+
+
+def test_decision_engine_flags_anyrun_clickfix_tags_as_malicious():
+    decision = build_decision_report(
+        {
+            "domain": "apnsolar.com",
+            "observable_type": "domain",
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "hybrid_analysis": {
+                "items": [
+                    {
+                        "verdict": "clean",
+                        "raw_summary": {
+                            "summary": {
+                                "tags": [
+                                    "clickfix",
+                                    "phishing",
+                                    "exploit-kit",
+                                    "tds",
+                                    "obfuscated-js",
+                                    "etherhiding",
+                                    "clearfake",
+                                ],
+                                "tracker": "ClickFix",
+                            }
+                        },
+                    }
+                ],
+            },
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
+            "whois": {"domain_age_days": 3204},
+        },
+        "domain",
+    )
+
+    assert decision["classification"] == "malicious"
+    assert decision["confidence"] == "high"
+    assert decision["recommended_action"] == "block"
+    assert any("ClickFix" in item or "clickfix" in item for item in decision["key_evidence"])
+
+
+def test_clean_anyrun_with_visible_form_reports_incomplete_interaction():
+    decision = build_decision_report(
+        {
+            "domain": "parking-example.test",
+            "observable_type": "url",
+            "vt": {
+                "found": True,
+                "malicious_count": 1,
+                "suspicious_count": 1,
+                "total_vendors": 92,
+            },
+            "hybrid_analysis": {
+                "items": [
+                    {
+                        "verdict": "clean",
+                        "raw_summary": {
+                            "source": "anyrun",
+                            "mode": "sandbox",
+                            "network_profile": {
+                                "use_residential_proxy": True,
+                                "proxy_country": "RO",
+                            },
+                            "sensitive_form_detection": {
+                                "detected": True,
+                                "categories": ["vehicle_identifier"],
+                                "interaction_required": True,
+                            },
+                        },
+                    },
+                    {
+                        "verdict": "clean",
+                        "threat_score": 0,
+                        "raw_summary": {"source": "anyrun", "mode": "lookup"},
+                    },
+                ],
+            },
+        },
+        "url",
+    )
+
+    assert any(
+        "Rendered data-entry form detected (vehicle identifier)" in item
+        for item in decision["key_evidence"]
+    )
+    assert "incomplete form interaction" in decision["primary_reasoning"]
+    assert "AnyRun sandbox verdict: CLEAN via Residential Proxy RO" in decision["primary_reasoning"]
+    finding = next(
+        item for item in decision["findings"]
+        if item["id"] == "sensitive_data_entry_form"
+    )
+    assert "clean sandbox verdict does not cover behavior triggered after submission" in finding["description"]
+
+
+def test_parseint_obfuscation_heuristic_does_not_override_clean_anyrun_verdict():
+    decision = build_decision_report(
+        {
+            "domain": "established-software.example",
+            "observable_type": "domain",
+            "vt": {
+                "found": True,
+                "malicious_count": 0,
+                "suspicious_count": 0,
+                "total_vendors": 91,
+            },
+            "whois": {"domain_age_days": 2995},
+            "hybrid_analysis": {
+                "items": [{
+                    "verdict": "clean",
+                    "tags": ["obfuscated-js"],
+                    "raw_summary": {
+                        "source": "anyrun",
+                        "mode": "sandbox",
+                        "tags": ["obfuscated-js"],
+                        "behavior_details": {
+                            "network_threats": [{
+                                "msg": "SUSPICIOUS [ANY.RUN] JavaScript Obfuscation (ParseInt)",
+                                "class": "Misc activity",
+                                "priority": 3,
+                            }],
+                        },
+                    },
+                }],
+            },
+        },
+        "domain",
+    )
+
+    assert decision["classification"] == "benign"
+    assert decision["risk_score"] == 15
+    assert "verdict: CLEAN" in decision["primary_reasoning"]
+    assert "JavaScript Obfuscation (ParseInt)" in decision["primary_reasoning"]
+    assert not any(
+        "verdict: MALICIOUS" in item
+        for item in decision["key_evidence"]
+    )
+    heuristic = next(
+        item for item in decision["findings"]
+        if item["id"] == "anyrun_heuristic_observation"
+    )
+    assert heuristic["severity"] == "low"
+    assert "does not override a CLEAN provider verdict" in heuristic["description"]
+    assert "Established domain: approximately 2,995 days old" in decision["key_evidence"]
+
+
+def test_decision_engine_does_not_treat_generic_clean_anyrun_tags_as_malicious():
+    decision = build_decision_report(
+        {
+            "domain": "example.com",
+            "observable_type": "domain",
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "hybrid_analysis": {
+                "items": [
+                    {
+                        "verdict": "clean",
+                        "raw_summary": {
+                            "summary": {
+                                "tags": ["credential", "tds"],
+                            }
+                        },
+                    },
+                    {
+                        "verdict": "clean",
+                        "raw_summary": {"tags": ["credential", "tds"]},
+                    },
+                ],
+            },
+            "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
+            "whois": {"domain_age_days": 3204},
+        },
+        "domain",
+    )
+
+    assert decision["classification"] == "benign"
+    assert decision["risk_score"] == 15
+    assert decision["recommended_action"] == "monitor"
+
+
+def test_decision_engine_flags_domain_weak_signal_cluster_as_suspicious(monkeypatch):
+    """The case the cluster was built for: a sensitive keyword, high
+    spoofability, a registrant pivot.
+
+    A sensitive keyword is semantic — it says something about what the hostname
+    is pretending to be — so it still scores. What no longer scores is the URL's
+    shape, which reached the same three points on entropy and subdomain depth
+    alone. Forcing the shape gate on here keeps this test honest about which
+    half it is exercising.
+    """
+    # The shape gate used to be forced on here to keep the test honest about
+    # which half it exercised. The gate is gone and shape cannot score in any
+    # configuration, so the forcing is removed and this test now exercises the
+    # semantic half only — which is the half it was always about.
+    decision = build_decision_report(
+        {
+            "domain": "secure-louise.cole.activelyintimate.com",
+            "observable_type": "domain",
+            "http": {
+                "reachable": True,
+                "has_login_form": False,
+                "phishing_indicators": ["Third-party brand reference: 'meta' on non-meta domain"],
+            },
+            "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+            "threat_feeds": {"openphish_listed": False, "threatfox_matches": [], "phishtank": {"verified": False}},
+            "intel": {
+                "blocklist_hits": [],
+                "sources_checked": [
+                    "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+                ],
+                "sources_skipped": {},
+            },
+            "whois": {"domain_age_days": 2612},
+            "hybrid_analysis": {"items": [{"verdict": "clean"}]},
+            "url_lexical_ml": {
+                "label": "medium",
+                "score": 0.4824,
+                "top_features": ["has_sensitive_keyword", "entropy", "subdomain_depth"],
+            },
+            "email_security": {"spoofability_score": "high"},
+            "infrastructure_pivot": {
+                "shared_hosting_detected": True,
+                "registrant_pivots": [{"domains": ["getnumrahqagents.com"]}],
+            },
+        },
+        "domain",
+    )
+
+    assert decision["classification"] == "suspicious"
+    assert any(f["id"] == "weak_signal_cluster" for f in decision["findings"])
+    assert decision["confidence"] == "medium"
+    assert decision["risk_score"] == 50
+    assert any(f["id"] == "weak_signal_cluster" for f in decision["findings"])
+
+
+# ── Weak-signal scoring: what may and may not make a domain suspicious ────────
+
+def _clean_business_site(**overrides) -> dict:
+    """A legitimate 14-year-old company site with a customer login page."""
+    evidence = {
+        "domain": "expertware.net",
+        "target_domain": "expertware.net",
+        "observable_type": "domain",
+        "http": {
+            "reachable": True,
+            "has_login_form": True,
+            "phishing_indicators": [
+                "Credential or account input fields observed (email/username/password/card)",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+        },
+        "vt": {"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 91},
+        "whois": {"domain_age_days": 5246},
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+        # A 14-year-old company site is a *clean control*, so the controls
+        # have to have run. Without this the fixture asserted that four
+        # blocklists cleared a domain none of them was asked about.
+        "intel": {
+            "blocklist_hits": [],
+            "sources_checked": [
+                "SURBL", "Spamhaus DBL", "URLhaus (abuse.ch)", "Spamhaus SIA",
+            ],
+            "sources_skipped": {},
+        },
+        "url_lexical_ml": {"label": "low", "score": 0.1466},
+        "email_security": {"spoofability_score": "low"},
+        "infrastructure_pivot": {
+            "shared_hosting_detected": True,
+            # A pivot that reaches only the investigated domain: the domain
+            # looking at itself, not corroboration.
+            "registrant_pivots": [{"domains": ["expertware.net"], "registrar": "Ascio"}],
+        },
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def test_a_clean_business_site_with_a_login_page_is_benign():
+    """The benign path used to be unreachable for any site with a login form."""
+    decision = build_decision_report(_clean_business_site(), "domain")
+    assert decision["classification"] == "benign"
+
+
+def test_a_self_referential_registrant_pivot_does_not_score():
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    score, reasons = _domain_weak_signal_score(_clean_business_site())
+    assert not any("pivot links" in reason for reason in reasons), reasons
+    assert score < 3
+
+
+def test_a_pivot_to_other_domains_still_scores():
+    evidence = _clean_business_site(
+        infrastructure_pivot={
+            "shared_hosting_detected": False,
+            "registrant_pivots": [{"domains": ["expertware.net", "lookalike-expertware.com"]}],
+        }
+    )
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    _score, reasons = _domain_weak_signal_score(evidence)
+    assert any("pivot links" in reason for reason in reasons), reasons
+
+
+def test_shared_hosting_alone_does_not_score():
+    """Most of the legitimate web is on shared infrastructure."""
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    evidence = _clean_business_site(
+        infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
+        url_lexical_ml={"label": "low", "score": 0.1},
+        email_security={"spoofability_score": "low"},
+    )
+    score, reasons = _domain_weak_signal_score(evidence)
+    assert score == 0
+    assert any("not scored on its own" in reason for reason in reasons)
+
+
+def test_shared_hosting_corroborates_a_real_signal():
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    evidence = _clean_business_site(
+        infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
+        # A semantic lexical verdict, because the aggregate score no longer
+        # counts. The rule under test is the corroboration one, not the lexical
+        # one: shared hosting scores only alongside something that already did.
+        url_lexical_ml={"label": "high", "score": 0.8, "top_features": ["has_sensitive_keyword"]},
+    )
+    score, reasons = _domain_weak_signal_score(evidence)
+    assert score == 2  # sensitive keyword (1) + shared hosting corroborating (1)
+    assert any("Shared hosting or crowded" in reason for reason in reasons)
+
+
+def test_a_sandbox_that_never_ran_does_not_block_a_clean_verdict():
+    decision = build_decision_report(_clean_business_site(hybrid_analysis={}), "domain")
+    assert decision["classification"] == "benign"
+
+
+def test_real_signals_still_reach_suspicious_and_malicious():
+    """The fixes must not blunt genuine detections."""
+    flagged = _clean_business_site(
+        vt={"found": True, "malicious_count": 9, "suspicious_count": 0, "total_vendors": 91}
+    )
+    assert build_decision_report(flagged, "domain")["classification"] == "malicious"
+
+    # OpenPhish alone, on a host 91 VirusTotal engines were asked about and
+    # cleared, no longer reaches malicious. It used to, and that is how
+    # https://www.google.com/ came back malicious at 74/100: a community feed
+    # with no verification step outvoting every source that disagreed. It still
+    # raises the case for an analyst.
+    listed = _clean_business_site(threat_feeds={"openphish_listed": True})
+    assert build_decision_report(listed, "domain")["classification"] == "suspicious"
+
+    # With anything corroborating it, it is decisive again.
+    corroborated = _clean_business_site(
+        threat_feeds={"openphish_listed": True},
+        vt={"found": True, "malicious_count": 2, "suspicious_count": 0, "total_vendors": 91},
+    )
+    assert build_decision_report(corroborated, "domain")["classification"] == "malicious"
+
+    # And where nothing authoritative answered at all, the listing stands on its
+    # own: absence of evidence is not evidence of absence.
+    unchecked = _clean_business_site(
+        threat_feeds={"openphish_listed": True},
+        vt={"found": False, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 0},
+    )
+    assert build_decision_report(unchecked, "domain")["classification"] == "malicious"
+
+    weak_but_real = _clean_business_site(
+        url_lexical_ml={"label": "high", "score": 0.82, "top_features": ["has_sensitive_keyword"]},
+        email_security={"spoofability_score": "high"},
+        infrastructure_pivot={
+            "shared_hosting_detected": True,
+            "registrant_pivots": [{"domains": ["expertware.net", "other-investigated.com"]}],
+        },
+    )
+    # This cluster still escalates, and that is the point of scoring semantic
+    # features rather than switching the cluster off wholesale: the lexical
+    # verdict rests on a sensitive keyword, not on the URL being long.
+    report = build_decision_report(weak_but_real, "domain")
+    assert report["classification"] == "suspicious"
+    assert any(f["id"] == "weak_signal_cluster" for f in report["findings"])
+
+    # The same cluster with its lexical verdict driven by shape instead. No
+    # pivot here, deliberately: a pivot to another investigated domain scores on
+    # its own and would carry this case to three points without the lexical
+    # model contributing anything, which would make the assertion below prove
+    # nothing about shape.
+    shape_only = _clean_business_site(
+        url_lexical_ml={"label": "high", "score": 0.82,
+                        "top_features": ["url_length", "entropy", "subdomain_depth"]},
+        email_security={"spoofability_score": "high"},
+        infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
+    )
+    assert build_decision_report(shape_only, "domain")["classification"] == "benign"
+
+    # There is no configuration that makes shape score. `URL_SHAPE_AFFECTS_SCORE`
+    # used to re-enable the lexical aggregate's 2 points here; the aggregate
+    # was removed on 2026-10-19 and the flag with it, because by then it gated
+    # nothing. Pinned by
+    # test_weak_signal_scoring.py::test_the_shape_flag_is_gone_rather_than_defaulted_off.
+    # docs/design/lexical-scoring-retirement.md.
+    import app.services.decision_engine as _de
+
+    assert not hasattr(_de, "url_shape_affects_score")
+    assert build_decision_report(shape_only, "domain")["classification"] == "benign"
+
+
+def test_missing_spf_and_dmarc_alone_does_not_make_a_domain_suspicious():
+    """A hygiene gap is not an indicator — plenty of real organisations have none."""
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    evidence = _clean_business_site(
+        email_security={"spoofability_score": "high"},
+        infrastructure_pivot={"shared_hosting_detected": True, "registrant_pivots": []},
+        url_lexical_ml={"label": "low", "score": 0.1},
+    )
+    score, reasons = _domain_weak_signal_score(evidence)
+    assert score == 0
+    assert sum("not scored on its own" in reason for reason in reasons) == 2
+    assert build_decision_report(evidence, "domain")["classification"] == "benign"
+
+
+def test_spoofability_still_corroborates_a_real_signal():
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    evidence = _clean_business_site(
+        email_security={"spoofability_score": "high"},
+        infrastructure_pivot={"shared_hosting_detected": False, "registrant_pivots": []},
+        url_lexical_ml={"label": "high", "score": 0.8, "top_features": ["has_sensitive_keyword"]},
+    )
+    score, _reasons = _domain_weak_signal_score(evidence)
+    assert score == 2  # sensitive keyword (1) + spoofability corroborating (1)
+
+
+# ── Sources that were collected but never consulted ───────────────────────────
+
+def test_urlscan_malicious_reaches_a_malicious_verdict():
+    """
+    URLScan was collected, printed in every report, and ignored by the verdict.
+
+    A real case: VirusTotal was rate-limited, URLScan returned malicious with
+    score 100 and a phishing tag, and the investigation concluded "benign".
+    """
+    evidence = _clean_business_site(
+        vt={"found": False, "meta": {"status": "failed", "error": "rate limit exceeded"}},
+        urlscan={"verdict": "malicious", "score": 100, "tags": ["phishing"]},
+    )
+    decision = build_decision_report(evidence, "domain")
+    assert decision["classification"] == "malicious"
+    assert any("URLScan verdict: malicious" in line for line in decision["key_evidence"])
+
+
+def test_urlscan_suspicious_reaches_a_suspicious_verdict():
+    evidence = _clean_business_site(urlscan={"verdict": "suspicious", "score": 40})
+    assert build_decision_report(evidence, "domain")["classification"] == "suspicious"
+
+
+def test_a_failed_reputation_lookup_is_not_a_clean_bill_of_health():
+    """A collector outage must never read as 'nothing found, therefore benign'."""
+    evidence = _clean_business_site(
+        vt={"found": False, "meta": {"status": "failed", "error": "rate limit exceeded"}},
+        urlscan={},
+        threat_feeds={},
+        http={},
+        infrastructure_pivot={},
+    )
+    decision = build_decision_report(evidence, "domain")
+    assert decision["classification"] == "inconclusive"
+    assert decision["data_needed"], "the report must say what is missing"
+
+
+def test_a_successful_lookup_that_found_nothing_is_still_clean():
+    evidence = _clean_business_site(
+        vt={"found": True, "malicious_count": 0, "suspicious_count": 0, "total_vendors": 94,
+            "meta": {"status": "completed"}},
+        threat_feeds={"feeds_checked": ["openphish", "phishtank"]},
+    )
+    assert build_decision_report(evidence, "domain")["classification"] == "benign"
+
+
+# ── Domain age ────────────────────────────────────────────────────────────────
+
+def test_a_newly_registered_domain_is_suspicious_even_when_nothing_flagged_it():
+    """Clean reputation on a two-week-old domain means nobody has reported it yet."""
+    evidence = _clean_business_site(whois={"domain_age_days": 22}, http={})
+    decision = build_decision_report(evidence, "domain")
+    assert decision["classification"] == "suspicious"
+    assert decision["risk_score"] == 50
+    assert any("Newly registered domain" in line for line in decision["key_evidence"])
+
+
+def test_a_recently_registered_domain_counts_as_a_weak_signal():
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    score, reasons = _domain_weak_signal_score(_clean_business_site(whois={"domain_age_days": 60}))
+    assert any("Recently registered domain" in reason for reason in reasons)
+    assert score >= 1
+
+
+def test_an_established_domain_gains_no_age_signal():
+    from app.services.decision_engine import _domain_weak_signal_score
+
+    _score, reasons = _domain_weak_signal_score(_clean_business_site(whois={"domain_age_days": 5246}))
+    assert not any("registered domain" in reason for reason in reasons)
+
+
+def _anyrun_labelled_clean(vt: dict | None = None, **extra):
+    """A sandbox run that returned CLEAN while tagging the sample `phishing`."""
+    evidence = {
+        "observable_type": "url",
+        "hybrid_analysis": {
+            "items": [
+                {
+                    "verdict": "clean",
+                    "raw_summary": {"mode": "sandbox", "tags": ["phishing"]},
+                }
+            ]
+        },
+        "threat_feeds": {"feeds_checked": ["threatfox", "google_safe_browsing"]},
+        "http": {},
+        "urlscan": {},
+        "intel": {},
+        "whois": {"domain_age_days": 400},
+    }
+    if vt is not None:
+        evidence["vt"] = {"found": True, "meta": {"status": "completed"}, **vt}
+    evidence.update(extra)
+    return evidence
+
+
+def test_a_label_only_escalation_that_virustotal_broadly_contradicts_is_not_malicious():
+    """
+    ANY.RUN's label outranks its own CLEAN verdict — but not against the field.
+
+    A real case scored malicious/90/high on nothing but a `phishing` tag, while
+    VirusTotal's 92 vendors returned zero malicious and zero suspicious. The
+    escalation still stands, because an automated run that never interacts with
+    the page routinely misses what its label describes; it just stops claiming
+    certainty, so the case reaches an analyst instead of an auto-block.
+    """
+    decision = build_decision_report(
+        _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92}),
+        "url",
+    )
+    assert decision["classification"] == "suspicious"
+    assert decision["risk_score"] == 60
+
+
+def test_a_thin_virustotal_result_does_not_overturn_the_label():
+    """Eight vendors finding nothing is not the field disagreeing."""
+    decision = build_decision_report(
+        _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 8}),
+        "url",
+    )
+    assert decision["classification"] == "malicious"
+
+
+def test_a_missing_virustotal_result_does_not_overturn_the_label():
+    """Nothing looked, so nothing contradicts — absence is not evidence."""
+    decision = build_decision_report(_anyrun_labelled_clean(None), "url")
+    assert decision["classification"] == "malicious"
+
+
+def test_any_corroborating_signal_restores_the_malicious_verdict():
+    """The downgrade applies only when the label is genuinely the sole signal."""
+    decision = build_decision_report(
+        _anyrun_labelled_clean(
+            {"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92},
+            threat_feeds={"threatfox_matches": [{"ioc": "x"}]},
+        ),
+        "url",
+    )
+    assert decision["classification"] == "malicious"
+
+
+def test_a_real_malicious_provider_verdict_is_untouched():
+    """This narrows label-only escalations, not verdicts ANY.RUN actually gave."""
+    evidence = _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92})
+    evidence["hybrid_analysis"]["items"][0]["verdict"] = "malicious"
+    decision = build_decision_report(evidence, "url")
+    assert decision["classification"] == "malicious"
+
+
+def test_a_named_campaign_cluster_is_not_overturned_by_a_clean_virustotal():
+    """
+    ClickFix, ClearFake and EtherHiding evade multi-vendor scanning by design.
+
+    A clean VirusTotal on one of those is the expected outcome of the technique,
+    not the field disagreeing — so the downgrade is reserved for a lone generic
+    label and never applies to a cluster naming a specific family.
+    """
+    evidence = _anyrun_labelled_clean({"malicious_count": 0, "suspicious_count": 0, "total_vendors": 92})
+    evidence["hybrid_analysis"]["items"][0]["raw_summary"]["tags"] = [
+        "clickfix", "phishing", "clearfake", "etherhiding",
+    ]
+    decision = build_decision_report(evidence, "url")
+    assert decision["classification"] == "malicious"
+
+
+# --- a form arriving at an identity provider is not credential theft ---------
+#
+# `https://primary.eu-central.ysoft.cloud/callback/oidc-login` scored 76 and
+# read as malicious on three observations that describe every SSO integration
+# in the estate: a form posting to login.microsoftonline.com, the word "login"
+# in the path, and a Microsoft brand reference on a non-Microsoft domain. The
+# finding's own text already said input fields and brand references are common
+# on legitimate sites — and then carried severity "high" anyway, because
+# "form posts to external domain" was high-confidence whatever the destination.
+#
+# The destination is the whole distinction. A kit impersonating a Microsoft
+# sign-in page posts the credentials to the attacker. A form that genuinely
+# posts to login.microsoftonline.com hands them to Microsoft.
+
+from app.services.decision_engine import (  # noqa: E402
+    _is_contextual_http_signal,
+    _is_high_confidence_http_signal,
+    form_target_is_identity_provider,
+)
+
+_FORM = "Form posts to external domain: "
+
+
+def test_a_form_posting_to_a_real_identity_provider_is_not_high_confidence():
+    for host in (
+        "login.microsoftonline.com",
+        "accounts.google.com",
+        "acme.okta.com",
+        "tenant.b2clogin.com",
+        "login.salesforce.com",
+    ):
+        signal = _FORM + host
+        assert form_target_is_identity_provider(signal), host
+        assert not _is_high_confidence_http_signal(signal), host
+        # Still reported, and still able to count once something else is
+        # suspicious about the domain itself.
+        assert _is_contextual_http_signal(signal), host
+
+
+def test_a_form_posting_anywhere_else_is_still_high_confidence():
+    """The negative control. This must keep catching credential theft."""
+    for host in (
+        "evil.test",
+        "crm.adflex.com.tr",
+        "darkforums.su",
+        "pastebin.com",
+    ):
+        signal = _FORM + host
+        assert not form_target_is_identity_provider(signal), host
+        assert _is_high_confidence_http_signal(signal), host
+
+
+def test_a_lookalike_of_an_identity_provider_is_not_one():
+    """`login.microsoftonline.com.evil.test` is the attack, not the exception."""
+    for host in (
+        "login.microsoftonline.com.evil.test",
+        "login-microsoftonline.com",
+        "okta.com.evil.test",
+        "accounts.google.com.phish.test",
+    ):
+        signal = _FORM + host
+        assert not form_target_is_identity_provider(signal), host
+        assert _is_high_confidence_http_signal(signal), host
+
+
+def test_the_exemption_is_only_about_form_targets():
+    """It must not leak into the other high-confidence signals: a page that
+    exfiltrates to a Telegram bot is not excused by mentioning a provider."""
+    assert _is_high_confidence_http_signal(
+        "Credential exfiltration to telegram bot api from login.microsoftonline.com page"
+    )
+    assert not form_target_is_identity_provider("ClickFix fake CAPTCHA instructs user")
+
+
+def test_the_reported_case_comes_back_benign():
+    """The investigation from the report, end to end."""
+    evidence = {
+        "domain": "https://primary.eu-central.ysoft.cloud/callback/oidc-login",
+        "http": {
+            "phishing_indicators": [
+                "Form posts to external domain: login.microsoftonline.com",
+                "Suspicious path keywords in URL: login",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+            "has_login_form": True,
+        },
+    }
+
+    report = build_decision_report(evidence, "url")
+
+    # Not malicious, and not suspicious either: these three observations
+    # describe an SSO callback. "inconclusive" is the honest verdict on this
+    # much evidence alone — the real investigation, which also had a clean
+    # VirusTotal result, re-scores from 76/malicious to benign/15.
+    assert report["classification"] not in {"malicious", "suspicious"}
+    assert (report["risk_score"] or 0) <= 30
+    finding = next(f for f in report["findings"] if f["id"] == "static_http_phishing")
+    # Shown, because an analyst should see it. Not evidence, because it is not.
+    assert finding["severity"] == "low"
+
+
+def test_the_same_observations_still_escalate_on_a_suspicious_domain():
+    """The contextual signals are not discarded — they count as soon as
+    something independent says the domain itself is suspicious."""
+    evidence = {
+        "domain": "microsoft-login-verify.test",
+        "http": {
+            "phishing_indicators": [
+                "Form posts to external domain: credential-collector.test",
+                "Third-party brand reference: 'microsoft' on non-microsoft domain",
+            ],
+            "has_login_form": True,
+        },
+        "threat_feeds": {"phishtank": {"in_database": True, "verified": True}},
+    }
+
+    report = build_decision_report(evidence, "url")
+
+    assert report["classification"] in {"malicious", "suspicious"}
+    assert report["risk_score"] >= 50

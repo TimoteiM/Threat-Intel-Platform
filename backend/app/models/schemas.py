@@ -1,5 +1,5 @@
-"""
-Pydantic schemas — the data contract for the entire application.
+﻿"""
+Pydantic schemas â€” the data contract for the entire application.
 
 Three categories:
 1. Evidence schemas (collector outputs)
@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+import uuid as _uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import (
     Classification,
@@ -25,9 +26,9 @@ from app.models.enums import (
 )
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 1. EVIDENCE SCHEMAS (collector outputs)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class CollectorMeta(BaseModel):
     """Audit trail attached to every collector result."""
@@ -41,7 +42,7 @@ class CollectorMeta(BaseModel):
     raw_artifact_hash: Optional[str] = None
 
 
-# ─── DNS ───
+# â”€â”€â”€ DNS â”€â”€â”€
 
 class DNSRecord(BaseModel):
     type: str
@@ -62,9 +63,10 @@ class DNSEvidence(BaseModel):
     dmarc: Optional[str] = None
     spf: Optional[str] = None
     has_dnssec: Optional[bool] = None
+    notes: list[str] = []
 
 
-# ─── WHOIS ───
+# â”€â”€â”€ WHOIS â”€â”€â”€
 
 class WHOISEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="whois"))
@@ -80,7 +82,7 @@ class WHOISEvidence(BaseModel):
     statuses: list[str] = []
 
 
-# ─── HTTP ───
+# â”€â”€â”€ HTTP â”€â”€â”€
 
 class HTTPRedirect(BaseModel):
     url: str
@@ -105,8 +107,14 @@ class HTTPEvidence(BaseModel):
     technologies_detected: list[str] = []
     security_headers: dict[str, str] = {}
 
+    # Content / phishing analysis
+    brand_indicators: list[str] = []
+    phishing_indicators: list[str] = []
+    external_resources: list[str] = []
+    network_profile: dict[str, Any] = {}
 
-# ─── TLS ───
+
+# â”€â”€â”€ TLS â”€â”€â”€
 
 class TLSEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="tls"))
@@ -127,7 +135,7 @@ class TLSEvidence(BaseModel):
     cert_sha256: Optional[str] = None
 
 
-# ─── ASN / Hosting ───
+# â”€â”€â”€ ASN / Hosting â”€â”€â”€
 
 class ASNEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="asn"))
@@ -144,7 +152,7 @@ class ASNEvidence(BaseModel):
     related_domains_same_ip: list[str] = []
 
 
-# ─── Intel / Reputation ───
+# â”€â”€â”€ Intel / Reputation â”€â”€â”€
 
 class IntelHit(BaseModel):
     source: str
@@ -155,21 +163,157 @@ class IntelHit(BaseModel):
     details: Optional[str] = None
 
 
+class FalconEvidence(BaseModel):
+    """What this tenant's CrowdStrike Falcon knows about the observable.
+
+    `status` is the field that matters and the one the seven-month ThreatFox
+    silence had no way to express. `detections: []` with
+    `status = {"asked": True}` is the EDR answering "nothing" — a real
+    negative. `detections: []` with an `Absent` in `status` is one of: no
+    tenant, not configured for this tenant, a credential that would not open,
+    or a query that did not complete. Those are four different claims and
+    none of them is "the EDR has nothing on this host".
+
+    Per `app/services/absence.py`: the absence sits **on the field** rather
+    than in a side channel, so a renderer handed it has nothing to show but
+    the reason.
+    """
+
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="falcon"))
+    #: True only when Falcon was asked and returned something.
+    found: bool = False
+    #: A list when Falcon was asked, or an `Absent.as_json()` when there was
+    #: no field to ask with. Widened on 2026-10-15: measured against 200 real
+    #: alerts, no Falcon alert field carries a domain or a remote address, so
+    #: for those kinds an empty list would assert "the EDR has no detection
+    #: mentioning this" when the truth is that it has nowhere to mention it.
+    #: The absence goes ON the field, per `app/services/absence.py` — a
+    #: renderer handed this has nothing to show but the reason.
+    detections: list[dict] | dict = []
+    hosts: list[dict] = []
+    queried_at: Optional[str] = None
+    #: `{"asked": True, ...}` or an `Absent.as_json()`. Never absent itself.
+    status: dict[str, Any] = {}
+    notes: list[str] = []
+
+
 class IntelEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="intel"))
+    #: Which of the four sources behind `blocklist_hits` actually answered,
+    #: and why each of the others did not. `blocklist_hits: []` is produced by
+    #: four sources agreeing, by four sources failing, and by a collector that
+    #: never ran, and for 2,198 runs between 2026-07-07 and 2026-10-13 it was
+    #: the third — a 401 from an unrelated fourth source raised out of
+    #: `_collect` and every consumer read the Pydantic default as "nothing is
+    #: listed". These two fields are what makes those cases distinguishable;
+    #: `sources_skipped` values are `app.services.absence.Absent.as_json()`.
+    sources_checked: list[str] = []
+    sources_skipped: dict[str, Any] = {}
     blocklist_hits: list[IntelHit] = []
     allowlist_hits: list[IntelHit] = []
     related_certs: list[str] = []
     related_subdomains: list[str] = []
+    spamhaus_sia: dict[str, Any] = {}
     notes: list[str] = []
+    # Raw cert entries from crt.sh for downstream timeline analysis
+    cert_entries_raw: list[dict] = []
 
-# ─── VirusTotal Evidence ───
+# â”€â”€â”€ VirusTotal Evidence â”€â”€â”€
 
 class VTVendorResult(BaseModel):
     vendor: str
     category: str  # malicious, suspicious, harmless, undetected
     result: str
     method: str = ""
+
+
+class VTFileSignature(BaseModel):
+    """Authenticode / code-signing details reported by VirusTotal."""
+    verified: Optional[str] = None          # "Signed", "Invalid signature", ...
+    signed: Optional[bool] = None
+    signers: list[str] = []
+    product: Optional[str] = None
+    description: Optional[str] = None
+    copyright: Optional[str] = None
+    original_name: Optional[str] = None
+    internal_name: Optional[str] = None
+    file_version: Optional[str] = None
+    signing_date: Optional[str] = None
+    counter_signers: list[str] = []
+
+
+class VTSandboxVerdict(BaseModel):
+    sandbox: str
+    category: Optional[str] = None          # malicious | suspicious | harmless | undetected
+    confidence: Optional[int] = None
+    malware_names: list[str] = []
+    malware_classification: list[str] = []
+
+
+class VTCrowdsourcedRule(BaseModel):
+    kind: str                                # yara | sigma | ids
+    name: str
+    severity: Optional[str] = None
+    author: Optional[str] = None
+    source: Optional[str] = None
+    description: Optional[str] = None
+
+
+class VTFileDetails(BaseModel):
+    """Rich file metadata — populated for hash/file observables."""
+    sha256: Optional[str] = None
+    sha1: Optional[str] = None
+    md5: Optional[str] = None
+    ssdeep: Optional[str] = None
+    vhash: Optional[str] = None
+    imphash: Optional[str] = None
+    size_bytes: Optional[int] = None
+    file_type: Optional[str] = None          # type_description, e.g. "Win32 EXE"
+    type_tag: Optional[str] = None
+    type_extension: Optional[str] = None
+    magic: Optional[str] = None
+    meaningful_name: Optional[str] = None
+    names: list[str] = []
+    times_submitted: Optional[int] = None
+    unique_sources: Optional[int] = None
+    first_submission_date: Optional[str] = None
+    last_submission_date: Optional[str] = None
+    last_analysis_date: Optional[str] = None
+    reputation: Optional[int] = None
+    harmless_votes: Optional[int] = None
+    malicious_votes: Optional[int] = None
+    threat_label: Optional[str] = None       # popular_threat_classification suggestion
+    threat_categories: list[str] = []
+    threat_names: list[str] = []
+    capabilities_tags: list[str] = []
+    tags: list[str] = []
+    signature: Optional[VTFileSignature] = None
+    sandbox_verdicts: list[VTSandboxVerdict] = []
+    crowdsourced_rules: list[VTCrowdsourcedRule] = []
+    pe_sections: list[str] = []
+    pe_imports: list[str] = []
+    notes: list[str] = []
+
+
+class VTBehaviourSummary(BaseModel):
+    """Aggregated sandbox behaviour from VT's /files/{id}/behaviour_summary."""
+    checked: bool = False
+    sandboxes: list[str] = []
+    processes_created: list[str] = []
+    command_executions: list[str] = []
+    files_written: list[str] = []
+    files_dropped: list[str] = []
+    registry_keys_set: list[str] = []
+    mutexes_created: list[str] = []
+    services_created: list[str] = []
+    dns_lookups: list[str] = []
+    ip_traffic: list[str] = []
+    http_conversations: list[str] = []
+    attack_techniques: list[str] = []
+    tags: list[str] = []
+    verdicts: list[str] = []
+    error: Optional[str] = None
+
 
 class VTEvidence(BaseModel):
     meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="vt"))
@@ -205,13 +349,755 @@ class VTEvidence(BaseModel):
     # Tags
     tags: list[str] = []
     notes: list[str] = []
+    # What the detection stats above actually describe. For a URL observable this
+    # is "url" when VT knows that exact URL, and "domain" when the reputation had
+    # to come from the URL's host instead.
+    scope: str = ""
+    scope_value: str = ""
+    # A fresh URL submission VT had not finished analysing when we gave up — the
+    # id lets a later run collect the result instead of paying for it again.
+    pending_analysis_id: Optional[str] = None
+    # File-specific (hash/file investigations)
+    file_name: Optional[str] = None
+    file_names: list[str] = []
+    file_details: Optional[VTFileDetails] = None
+    behaviour: Optional[VTBehaviourSummary] = None
 
-    
 
-# ─── Signals & Gaps ───
+
+# â”€â”€â”€ Certificate Transparency Timeline â”€â”€â”€
+
+class CertTimelineEntry(BaseModel):
+    serial_number: str
+    issuer_name: str
+    common_name: str
+    not_before: str
+    not_after: str
+    entry_timestamp: str
+    validity_days: int = 0
+    is_short_lived: bool = False
+
+
+class CertTimelineEvidence(BaseModel):
+    domain: str
+    total_certs: int = 0
+    entries: list[CertTimelineEntry] = []
+    unique_issuers: list[str] = []
+    cert_burst_detected: bool = False
+    burst_periods: list[dict] = []
+    short_lived_count: int = 0
+    earliest_cert: Optional[str] = None
+    latest_cert: Optional[str] = None
+    notes: list[str] = []
+
+
+# â”€â”€â”€ Threat Feed Intelligence â”€â”€â”€
+
+class AbuseIPDBResult(BaseModel):
+    ip: str
+    abuse_confidence_score: int = 0
+    total_reports: int = 0
+    last_reported_at: Optional[str] = None
+    categories: list[int] = []
+    isp: Optional[str] = None
+    usage_type: Optional[str] = None
+    country_code: Optional[str] = None
+
+
+class PhishTankResult(BaseModel):
+    in_database: bool = False
+    phish_id: Optional[str] = None
+    verified: Optional[bool] = None
+    verified_at: Optional[str] = None
+    target_brand: Optional[str] = None
+
+
+class ThreatFoxResult(BaseModel):
+    ioc_value: str
+    ioc_type: str
+    threat_type: str
+    malware: Optional[str] = None
+    confidence_level: Optional[int] = None
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
+    tags: list[str] = []
+
+
+class GoogleSafeBrowsingResult(BaseModel):
+    checked: bool = False
+    listed: bool = False
+    matches_count: int = 0
+    threat_types: list[str] = []
+    platform_types: list[str] = []
+    cache_durations: list[str] = []
+    error: Optional[str] = None
+
+
+class OTXPulseResult(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    description: Optional[str] = None
+    author_name: Optional[str] = None
+    created: Optional[str] = None
+    modified: Optional[str] = None
+    tlp: Optional[str] = None
+    subscriber_count: Optional[int] = None
+    indicator_count: Optional[int] = None
+    related_indicator_is_active: Optional[bool] = None
+    tags: list[str] = []
+    malware_families: list[str] = []
+    adversary: Optional[str] = None
+    references: list[str] = []
+
+
+class OTXPassiveDNSRecord(BaseModel):
+    hostname: Optional[str] = None
+    address: Optional[str] = None
+    record_type: Optional[str] = None
+    first: Optional[str] = None
+    last: Optional[str] = None
+    asn: Optional[str] = None
+    country: Optional[str] = None
+    asset_type: Optional[str] = None
+
+
+class OTXResult(BaseModel):
+    checked: bool = False
+    found: bool = False
+    indicator: Optional[str] = None
+    indicator_type: Optional[str] = None
+    type_title: Optional[str] = None
+    pulse_count: int = 0
+    pulses: list[OTXPulseResult] = []
+    sections: list[str] = []
+    validation: list[str] = []
+    indicator_facts: list[str] = []
+    tags: list[str] = []
+    malware_families: list[str] = []
+    adversaries: list[str] = []
+    references: list[str] = []
+    external_resources: dict[str, str] = {}
+    geo: dict[str, Any] = {}
+    passive_dns_count: int = 0
+    passive_dns: list[OTXPassiveDNSRecord] = []
+    nameservers: list[str] = []
+    subdomains: list[str] = []
+    ip_addresses: list[str] = []
+    url_count: int = 0
+    urls: list[str] = []
+    malware_count: int = 0
+    http_scans_count: int = 0
+    reputation: Optional[int] = None
+    error: Optional[str] = None
+
+
+class ThreatFeedEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="threat_feeds"))
+    abuseipdb: Optional[AbuseIPDBResult] = None
+    phishtank: Optional[PhishTankResult] = None
+    #: **Scoped to the observable.** ThreatFox's `search_ioc` is a substring
+    #: search, so the raw answer for `live.com` includes `saganlive.com` and
+    #: `www82live.com`, and for `office.com` it includes
+    #: `nlahtc.theluxehomeoffice.com`. On 2026-10-13 that produced
+    #: malicious/high/risk-90/block verdicts on two Microsoft apexes.
+    #:
+    #: The scoping lives here, at the source, rather than at each consumer:
+    #: 30 places read this field and only 2 scoped it, so a correct-by-
+    #: default name is the only version that stays correct. The unfiltered
+    #: answer is kept beside it under a name that says what it is.
+    threatfox_matches: list[ThreatFoxResult] = []
+    #: Everything the feed returned, including indicators belonging to other
+    #: hosts that merely contain this observable's name. Context an analyst
+    #: may want — "malware is hosted on this platform" is a real fact — and
+    #: deliberately **not** the name any decision reads.
+    threatfox_matches_all_hosts: list[ThreatFoxResult] = []
+    # True only when the feed carries this exact hostname. A phishing URL that
+    # merely *mentions* the host — in a redirect parameter, or as a page hosted
+    # on a shared subdomain — is recorded below instead, because it says nothing
+    # about the host being asked about.
+    openphish_listed: bool = False
+    openphish_related_hosts: list[str] = []
+    google_safe_browsing: Optional[GoogleSafeBrowsingResult] = None
+    otx: Optional[OTXResult] = None
+    feeds_checked: list[str] = []
+    feeds_skipped: list[str] = []
+
+
+class BraveOSINTResult(BaseModel):
+    title: str
+    url: str
+    description: str = ""
+    source: str = "unknown"
+    matched_keywords: list[str] = []
+    score: int = 0
+
+
+class BraveOSINTEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="brave_osint"))
+    checked: bool = False
+    queries: list[str] = []
+    top_hits: list[BraveOSINTResult] = []
+    observed_results: list[BraveOSINTResult] = []
+    all_results: list[BraveOSINTResult] = []
+    source_counts: dict[str, int] = {}
+    score: int = 0
+    risk_level: str = "low"
+    summary: str = ""
+    notes: list[str] = []
+    error: Optional[str] = None
+
+
+# â”€â”€â”€ Infrastructure Pivot â”€â”€â”€
+
+class ReverseIPResult(BaseModel):
+    ip: str
+    domains: list[str] = []
+    total_domains: int = 0
+
+
+class NSCluster(BaseModel):
+    nameservers: list[str] = []
+    domains: list[str] = []
+
+
+class RegistrantPivot(BaseModel):
+    registrar: Optional[str] = None
+    registrant_org: Optional[str] = None
+    domains: list[str] = []
+
+
+class InfrastructurePivotEvidence(BaseModel):
+    reverse_ip: list[ReverseIPResult] = []
+    ns_clusters: list[NSCluster] = []
+    registrant_pivots: list[RegistrantPivot] = []
+    total_related_domains: int = 0
+    shared_hosting_detected: bool = False
+    notes: list[str] = []
+
+
+# â”€â”€â”€ Favicon Hash Intelligence â”€â”€â”€
+
+class FaviconHost(BaseModel):
+    ip: str
+    hostnames: list[str] = []
+    org: Optional[str] = None
+    port: int = 80
+    asn: Optional[str] = None
+    country: Optional[str] = None
+
+
+class FaviconIntelEvidence(BaseModel):
+    favicon_hash: Optional[str] = None
+    total_hosts_sharing: int = 0
+    hosts: list[FaviconHost] = []
+    is_unique_favicon: bool = True
+    is_default_favicon: bool = False
+    notes: list[str] = []
+
+
+# â”€â”€â”€ Domain Similarity (typosquatting / visual lookalike) â”€â”€â”€
+
+class TyposquattingTechnique(BaseModel):
+    """A specific typosquatting technique detected between two domains."""
+    technique: str
+    description: str
+    original_segment: str
+    modified_segment: str
+
+
+class HomoglyphMatch(BaseModel):
+    """A visually confusable character substitution."""
+    position: int
+    original_char: str
+    replaced_with: str
+    description: str
+
+
+class DomainSimilarityEvidence(BaseModel):
+    """Result of comparing investigated domain against a client domain."""
+    client_domain: str
+    investigated_domain: str
+    levenshtein_distance: int
+    normalized_distance: float
+    visual_similarity_score: float
+    overall_similarity_score: int
+    typosquatting_techniques: list[TyposquattingTechnique] = []
+    homoglyph_matches: list[HomoglyphMatch] = []
+    is_potential_typosquat: bool
+    is_visual_lookalike: bool
+    summary: str
+
+
+# â”€â”€â”€ Visual Comparison â”€â”€â”€
+
+class VisualComparisonEvidence(BaseModel):
+    """Screenshot-based visual comparison between investigated and client domains."""
+    investigated_domain: str
+    client_domain: str
+    investigated_screenshot_artifact_id: Optional[str] = None
+    client_screenshot_artifact_id: Optional[str] = None
+    reference_image_used: bool = False
+    investigated_final_url: Optional[str] = None
+    client_final_url: Optional[str] = None
+
+    # Similarity metrics (0.0â€“1.0, higher = more similar)
+    phash_similarity: Optional[float] = None
+    histogram_similarity: Optional[float] = None
+    overall_visual_similarity: Optional[float] = None
+
+    # Classification
+    is_visual_clone: bool = False       # overall >= 0.80
+    is_partial_clone: bool = False      # overall 0.50â€“0.79
+
+    summary: str = ""
+
+    # Error details
+    investigated_capture_error: Optional[str] = None
+    client_capture_error: Optional[str] = None
+
+
+# â”€â”€â”€ Domain Screenshot â”€â”€â”€
+
+class ScreenshotEvidence(BaseModel):
+    """Standalone screenshot of the investigated domain."""
+    artifact_id: Optional[str] = None
+    final_url: Optional[str] = None
+    capture_error: Optional[str] = None
+
+
+# â”€â”€â”€ Subdomain Enumeration â”€â”€â”€
+
+class SubdomainEntry(BaseModel):
+    """A resolved subdomain with its IPs."""
+    subdomain: str
+    ips: list[str]
+    is_interesting: bool
+
+
+class SubdomainEvidence(BaseModel):
+    """Active DNS resolution of discovered subdomains."""
+    discovered_count: int = 0
+    resolved: list[SubdomainEntry] = []
+    unresolved: list[str] = []
+    interesting_subdomains: list[SubdomainEntry] = []
+    ip_groups: dict[str, list[str]] = {}  # IP -> [subdomains]
+
+
+# â”€â”€â”€ Email Security â”€â”€â”€
+
+class DKIMRecord(BaseModel):
+    """A discovered DKIM selector and its key status."""
+    selector: str
+    public_key_present: bool
+    key_type: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MXRecord(BaseModel):
+    """A parsed MX record with resolved IPs and blocklist status."""
+    priority: int
+    hostname: str
+    ips: list[str] = []
+    blocklist_hits: list[str] = []
+
+
+class EmailSecurityEvidence(BaseModel):
+    """DMARC/SPF/DKIM policy analysis and MX reputation."""
+    # DMARC
+    dmarc_record: Optional[str] = None
+    dmarc_policy: Optional[str] = None
+    dmarc_subdomain_policy: Optional[str] = None
+    dmarc_pct: Optional[int] = None
+    dmarc_rua: list[str] = []
+    dmarc_ruf: list[str] = []
+    dmarc_alignment_dkim: Optional[str] = None
+    dmarc_alignment_spf: Optional[str] = None
+    # SPF
+    spf_record: Optional[str] = None
+    spf_mechanisms: list[str] = []
+    spf_all_qualifier: Optional[str] = None
+    spf_includes: list[str] = []
+    spf_ip_count: Optional[int] = None
+    # DKIM
+    dkim_selectors_found: list[str] = []
+    dkim_records: list[DKIMRecord] = []
+    # MX
+    mx_records: list[MXRecord] = []
+    # Assessment
+    spoofability_score: Optional[str] = None
+    spoofability_reasons: list[str] = []
+    email_security_score: Optional[int] = None
+
+
+# â”€â”€â”€ Redirect Analysis â”€â”€â”€
+
+class RedirectProbe(BaseModel):
+    """Result of probing a domain with a specific User-Agent."""
+    user_agent_type: str
+    user_agent: str
+    status_code: int
+    final_url: str
+    redirect_count: int = 0
+    title: Optional[str] = None
+    content_hash: str
+
+
+class IntermediateDomain(BaseModel):
+    """A domain encountered during redirect chain traversal."""
+    domain: str
+    hop_number: int
+    is_known_tracker: bool = False
+    is_known_redirector: bool = False
+
+
+class RedirectAnalysisEvidence(BaseModel):
+    """Multi-UA redirect probing results and cloaking detection."""
+    probes: list[RedirectProbe] = []
+    cloaking_detected: bool = False
+    cloaking_details: list[str] = []
+    intermediate_domains: list[IntermediateDomain] = []
+    evasion_techniques: list[str] = []
+    max_chain_length: int = 0
+    has_geo_block: Optional[bool] = None
+
+
+# â”€â”€â”€ JavaScript Analysis â”€â”€â”€
+
+class CapturedRequest(BaseModel):
+    """A single network request captured during JS analysis."""
+    url: str
+    method: str = "GET"
+    resource_type: str = "other"
+    domain: str = ""
+    is_external: bool = False
+
+
+class PostEndpoint(BaseModel):
+    """An HTTP POST endpoint captured during page load."""
+    url: str
+    content_type: Optional[str] = None
+    is_external: bool = False
+    is_credential_form: bool = False
+
+
+class SuspiciousScript(BaseModel):
+    """An external script loaded during page execution."""
+    url: str
+    domain: str
+    size_bytes: Optional[int] = None
+    reason: str
+
+
+class JSAnalysisEvidence(BaseModel):
+    """Playwright-based JavaScript behavior analysis."""
+    total_requests: int = 0
+    external_requests: int = 0
+    request_domains: list[str] = []
+    captured_requests: list[CapturedRequest] = []
+    post_endpoints: list[PostEndpoint] = []
+    tracking_pixels: list[str] = []
+    fingerprinting_apis: list[str] = []
+    suspicious_scripts: list[SuspiciousScript] = []
+    websocket_connections: list[str] = []
+    data_exfil_indicators: list[str] = []
+    console_errors: list[str] = []
+    error: Optional[str] = None
+    har_artifact_id: Optional[str] = None
+    sensitive_form_detection: dict[str, Any] = {}
+
+
+# â”€â”€â”€ URLScan Evidence â”€â”€â”€
+
+class URLScanEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="urlscan"))
+    scan_id: Optional[str] = None
+    verdict: Optional[str] = None        # malicious | suspicious | benign
+    score: Optional[int] = None          # 0-100
+    page_url: Optional[str] = None
+    page_ip: Optional[str] = None
+    page_country: Optional[str] = None
+    page_server: Optional[str] = None
+    page_title: Optional[str] = None
+    screenshot_artifact_id: Optional[str] = None
+    requests_count: Optional[int] = None
+    verdicts: dict[str, Any] = {}
+    tags: list[str] = []
+    notes: list[str] = []
+
+
+class URLLexicalObservation(BaseModel):
+    """One checkable fact about how a URL is written."""
+    code: str
+    statement: str
+
+
+class URLLexicalMLEvidence(BaseModel):
+    #: False when the assessment did not run. The report renders a
+    #: "Not assessed" panel rather than a score of 0.
+    enabled: bool = True
+    model_source: str = "built_in"
+    #: The named observations. This is the reportable output.
+    observations: list[URLLexicalObservation] = []
+    top_features: list[str] = []
+    feature_contributions: dict[str, float] = {}
+    features: dict[str, float] = {}
+    error: Optional[str] = None
+    #: There is no `score`, `label`, `thresholds`, `weights`,
+    #: `calibration_applied` or `rule_floor_applied`. The probability and
+    #: everything that existed to band it, weight it or raise it were removed
+    #: on 2026-10-19: it is not reported, not blended into the risk score and
+    #: not disclosed in points. The reportable output is `observations`.
+    #: docs/design/lexical-scoring-retirement.md.
+
+
+class URLMLFeatureImpact(BaseModel):
+    name: str
+    impact: float = 0.0
+
+
+class URLMLScoreEvidence(BaseModel):
+    url: Optional[str] = None
+    #: What produced the observations. Not a model version — there is no
+    #: model. The default was `"lgbm-url-v1.0"`, so a payload nobody set the
+    #: field on still claimed a LightGBM model had run: the default being the
+    #: strongest claim available, which is how a Pydantic default erases an
+    #: absence.
+    scorer: str = "unavailable"
+    observations: list[URLLexicalObservation] = []
+    top_features: list[URLMLFeatureImpact] = []
+    #: Why there are no observations, when that applies.
+    error: Optional[str] = None
+    raw: dict[str, Any] = {}
+
+
+class URLBehaviorEvidence(BaseModel):
+    checked: bool = False
+    redirect_count: int = 0
+    ua_cloaking_detected: bool = False
+    credential_form_present: bool = False
+    suspicious_post_endpoints: list[str] = []
+    multiple_domain_hops: bool = False
+    unique_domains_in_chain: list[str] = []
+    final_url: Optional[str] = None
+    behavior_score: float = 0.0
+    chains: list[dict[str, Any]] = []
+    error: Optional[str] = None
+
+
+class ContentMLEvidence(BaseModel):
+    social_engineering_probability: float = 0.0
+    urgency_probability: float = 0.0
+    impersonation_probability: float = 0.0
+    bec_probability: float = 0.0
+    top_content_terms: list[str] = []
+    model_source: Optional[str] = None
+    feature_hash: Optional[str] = None
+
+
+class AttachmentAnalysisItem(BaseModel):
+    hash: Optional[str] = None
+    filename: Optional[str] = None
+    file_type: str = "unknown"
+    macro_detected: bool = False
+    embedded_objects: bool = False
+    entropy: float = 0.0
+    suspicious_import_count: int = 0
+    static_risk_score: float = 0.0
+    risk_level: str = "low"
+
+
+class AttachmentAnalysisEvidence(BaseModel):
+    checked: bool = False
+    items: list[AttachmentAnalysisItem] = []
+    summary: dict[str, int] = {}
+
+
+class HybridAnalysisItem(BaseModel):
+    checked: bool = False
+    indicator_type: Optional[str] = None
+    verdict: str = "unknown"
+    provider_verdict: Optional[str] = None
+    verdict_context: dict[str, Any] = {}
+    analysis_id: Optional[str] = None
+    analysis_link: Optional[str] = None
+    threat_score: Optional[float] = None
+    threat_names: list[str] = []
+    tags: list[str] = []
+    error: Optional[str] = None
+    cache_hit: Optional[bool] = None
+    dynamic_io_summary: dict[str, Any] = {}
+    raw_summary: dict[str, Any] = {}
+    sandbox_intelligence: dict[str, Any] = {}
+    domain_intelligence: Optional[dict[str, Any]] = None
+
+
+class DetonatedFile(BaseModel):
+    """The file a sandbox was actually given, when it was not the submission.
+
+    An archive handed to a sandbox has to be opened by the sandbox before
+    anything runs. The platform has already opened it, so the executable
+    inside is submitted instead — and the verdict that comes back is about
+    *that* file, not about the zip it arrived in. Said here so a report can
+    never imply otherwise.
+    """
+
+    name: str
+    sha256: str
+    source_path: str
+    reason: str = ""
+
+
+class HybridAnalysisEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="hybrid_analysis"))
+    items: list[HybridAnalysisItem] = []
+    detonated: Optional[DetonatedFile] = None
+
+
+# ─── OpenCTI ───
+
+class OpenCTIIndicator(BaseModel):
+    id: str
+    name: str
+    pattern: str = ""
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    confidence: int = 0
+    revoked: bool = False
+
+
+class OpenCTIReport(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    published: Optional[str] = None
+    author: Optional[str] = None
+    creators: list[str] = []
+    labels: list[str] = []
+    report_types: list[str] = []
+    created: Optional[str] = None
+    modified: Optional[str] = None
+
+
+class OpenCTIThreatActor(BaseModel):
+    id: str
+    name: str
+    entity_type: str = "Threat-Actor"
+    sophistication: Optional[str] = None
+    resource_level: Optional[str] = None
+
+
+class OpenCTIMalware(BaseModel):
+    id: str
+    name: str
+    malware_types: list[str] = []
+    first_seen: Optional[str] = None
+
+
+class OpenCTIAttackPattern(BaseModel):
+    id: str
+    name: str
+    mitre_id: Optional[str] = None
+
+
+class OpenCTIEvidence(BaseModel):
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="opencti"))
+    found: bool = False
+    observable_id: Optional[str] = None
+    standard_id: Optional[str] = None
+    observable_entity_type: Optional[str] = None   # e.g. "Domain-Name", "IPv4-Addr", "Url", "StixFile"
+    observable_value: Optional[str] = None
+    score: int = 0                                  # OpenCTI x_opencti_score 0–100
+    author: Optional[str] = None
+    creators: list[str] = []
+    markings: list[str] = []
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    labels: list[str] = []
+    indicators: list[OpenCTIIndicator] = []
+    reports: list[OpenCTIReport] = []
+    threat_actors: list[OpenCTIThreatActor] = []
+    malware_families: list[OpenCTIMalware] = []
+    attack_patterns: list[OpenCTIAttackPattern] = []
+    campaigns: list[str] = []                       # campaign names
+    intrusion_sets: list[str] = []                  # intrusion set names
+    notes: list[str] = []
+
+
+class FinalRiskEvidence(BaseModel):
+    risk_score: int = 0
+    risk_level: str = "low"
+    confidence: str = "low"
+    components: dict[str, float] = {}
+    weights: dict[str, float] = {}
+    rationale: list[str] = []
+
+
+class RedirectDestinationWhoisEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    registrar: Optional[str] = None
+    domain_age_days: Optional[int] = None
+    created_date: Optional[str] = None
+    expiry_date: Optional[str] = None
+    name_servers: list[str] = []
+    registrant_org: Optional[str] = None
+    registrant_country: Optional[str] = None
+
+
+class RedirectDestinationVTEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    found: bool = False
+    malicious_count: int = 0
+    suspicious_count: int = 0
+    total_vendors: int = 0
+    reputation_score: int = 0
+    categories: dict[str, str] = {}
+
+
+class RedirectDestinationDNSEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    a: list[str] = []
+    aaaa: list[str] = []
+    mx: list[str] = []
+    ns: list[str] = []
+
+
+class RedirectDestinationHostingEvidence(BaseModel):
+    status: str = "pending"
+    error: Optional[str] = None
+    ip: Optional[str] = None
+    asn: Optional[int] = None
+    asn_org: Optional[str] = None
+    country: Optional[str] = None
+    is_cdn: Optional[bool] = None
+    is_cloud: Optional[bool] = None
+
+
+class RedirectDestinationComparisonEvidence(BaseModel):
+    source_age_days: Optional[int] = None
+    destination_age_days: Optional[int] = None
+    source_vs_destination_root: Optional[str] = None
+
+
+class RedirectDestinationIntelEvidence(BaseModel):
+    final_url: Optional[str] = None
+    investigated_host: Optional[str] = None
+    investigated_root: Optional[str] = None
+    destination_host: Optional[str] = None
+    destination_root: Optional[str] = None
+    whois: Optional[RedirectDestinationWhoisEvidence] = None
+    vt: Optional[RedirectDestinationVTEvidence] = None
+    dns: Optional[RedirectDestinationDNSEvidence] = None
+    hosting: Optional[RedirectDestinationHostingEvidence] = None
+    comparison: Optional[RedirectDestinationComparisonEvidence] = None
+
+
+# —— Signals & Gaps â”€â”€â”€
 
 class Signal(BaseModel):
-    """An investigative clue — NOT a conclusion."""
+    """An investigative clue â€” NOT a conclusion."""
     id: str
     category: str
     description: str
@@ -228,7 +1114,7 @@ class DataGap(BaseModel):
     impact: str
 
 
-# ─── External Context (user-provided CTI) ───
+# â”€â”€â”€ External Context (user-provided CTI) â”€â”€â”€
 
 class ExternalContext(BaseModel):
     opencti_observables: list[dict[str, Any]] = []
@@ -237,7 +1123,201 @@ class ExternalContext(BaseModel):
     additional_context: Optional[str] = None
 
 
-# ─── Master Evidence Object ───
+class NetworkProfile(BaseModel):
+    use_residential_proxy: bool = False
+    proxy_country: Optional[str] = None
+
+
+# â”€â”€â”€ Master Evidence Object â”€â”€â”€
+
+# ─── CAPEv2 sandbox ───
+#
+# The normalized shape of a CAPE analysis. Nothing outside cape_normalizer.py
+# builds these, and nothing outside it reads CAPE's own JSON — so a CAPE schema
+# change lands in one file rather than across the application.
+
+
+class CapeNetworkIndicators(BaseModel):
+    """What the sample talked to. Deduplicated, order preserved."""
+
+    domains: list[str] = []
+    dns_queries: list[str] = []
+    hosts: list[str] = []
+    # "ip:port/protocol", flattened so the UI does not have to nest a table.
+    destinations: list[str] = []
+    http_requests: list[dict] = []
+    tls_sni: list[str] = []
+
+
+class CapeBehaviourSummary(BaseModel):
+    mutexes: list[str] = []
+    registry_keys: list[str] = []
+    files_written: list[str] = []
+    files_read: list[str] = []
+    commands: list[str] = []
+    process_tree: list[dict] = []
+    process_count: int = 0
+
+
+class CapeDroppedFile(BaseModel):
+    name: Optional[str] = None
+    sha256: Optional[str] = None
+    md5: Optional[str] = None
+    size: Optional[int] = None
+    file_type: Optional[str] = None
+    # CAPE's own payload/config extraction, when it recognised a family.
+    is_cape_payload: bool = False
+    cape_type: Optional[str] = None
+
+
+class CapeSignature(BaseModel):
+    name: str
+    description: str = ""
+    severity: int = 0
+    confidence: Optional[int] = None
+    # ATT&CK ids CAPE attached, when it did.
+    ttps: list[str] = []
+    # What the signature actually matched. CAPE puts it in `data`, and without
+    # it a signature reads as a category rather than a finding: "binary_yara —
+    # Binary file triggered YARA rule" says nothing, while "Binary triggered
+    # YARA rule: multiple_versions" is something an analyst can act on.
+    details: list[str] = []
+
+
+class CapeNormalizedReport(BaseModel):
+    """Everything downstream reads. Traceable to its task through `task_id`."""
+
+    task_id: Optional[int] = None
+    status: str = "unknown"
+    # Absent means "not reported by CAPE", never "clean". A missing malscore is
+    # the single most dangerous field in this integration to default to zero.
+    malscore: Optional[float] = None
+    verdict: str = "unknown"          # malicious | suspicious | likely_benign | unknown
+    detections: list[str] = []
+    signatures: list[CapeSignature] = []
+
+    sha256: Optional[str] = None
+    sha1: Optional[str] = None
+    md5: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    # Fuzzy and structural hashes. Not identity — these are for pivoting, so a
+    # near-identical sample under a different name can still be recognised.
+    ssdeep: Optional[str] = None
+    tlsh: Optional[str] = None
+    crc32: Optional[str] = None
+    # YARA rules that matched the file itself, with whatever the rule author
+    # wrote about them. The `binary_yara` signature refers to these.
+    yara_matches: list[dict] = []
+    # ClamAV's verdict, when CAPE ran it and it said something.
+    clamav: Optional[str] = None
+
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    machine: Optional[str] = None
+    route: Optional[str] = None
+    # CAPE's analysis package — "pdf", "exe", "doc". Worth showing: a PDF
+    # analysed with the wrong package, or on a machine lacking the reader, is
+    # the difference between a real result and an empty one.
+    package: Optional[str] = None
+    # True when CAPE started the sample and nothing ran. Distinct from a clean
+    # run, and the reason the verdict is withheld.
+    executed: bool = True
+
+    network: CapeNetworkIndicators = Field(default_factory=CapeNetworkIndicators)
+    behaviour: CapeBehaviourSummary = Field(default_factory=CapeBehaviourSummary)
+    dropped_files: list[CapeDroppedFile] = []
+    extracted_configs: list[dict] = []
+
+    has_screenshots: bool = False
+    screenshot_count: int = 0
+    report_format: Optional[str] = None
+    report_size_bytes: Optional[int] = None
+
+    # What CAPE could not do, and what we chose not to trust. Shown to the
+    # analyst rather than swallowed, because an empty result from a sample that
+    # never executed is not the same as an empty result from one that did.
+    errors: list[str] = []
+    limitations: list[str] = []
+
+
+class CapeEvidence(BaseModel):
+    """Collector-facing view: at most one analysis per observable."""
+
+    meta: CollectorMeta = Field(default_factory=lambda: CollectorMeta(collector="cape"))
+    available: bool = False
+    reason: Optional[str] = None
+    report: Optional[CapeNormalizedReport] = None
+
+    # A detonation this collector started and did not wait out. The analysis is
+    # running on CAPE; its report is merged into this investigation when it
+    # lands and the analyst is re-run over it. Carried so the UI can say "in
+    # progress, task 21" rather than "no sandbox analysis", which reads as an
+    # answer when it is a wait.
+    pending: bool = False
+    pending_analysis_id: Optional[str] = None
+    pending_task_id: Optional[str] = None
+    pending_since: Optional[str] = None
+
+
+class ExtractedFileEvidence(BaseModel):
+    """One readable file found in what was submitted."""
+
+    path: str
+    kind: str = "text"
+    size: int = 0
+    truncated: bool = False
+    depth: int = 0
+    # Carried so the prompt builder can fence and budget it. Deliberately NOT
+    # in the supporting-evidence allowlist: attacker-written source must reach
+    # the model inside the fence, never as a field of an evidence blob.
+    text: str = ""
+
+
+class EmbeddedBinaryEvidence(BaseModel):
+    """A compiled file found inside the submission, and what is known of it.
+
+    An archive holding a one-line manifest and a 5 MB installer was reported as
+    "1 readable file" — true, and silent about the only part that executes.
+    The binary cannot be read as text, so it is identified by hash and looked
+    up like any other sample; what comes back is attached here.
+    """
+
+    path: str
+    kind: str = "pe"
+    size: int = 0
+    sha256: str
+    sha1: str | None = None
+    md5: str | None = None
+    # What the reputation lookup said. None means it was never run — which is
+    # a different thing from "nothing known about this file", and the report
+    # has to be able to tell an analyst which of the two happened.
+    verdict: str | None = None
+    malicious_count: int | None = None
+    total_engines: int | None = None
+    names: list[str] = []
+    first_seen: str | None = None
+    note: str | None = None
+
+
+class FileContentEvidence(BaseModel):
+    """The submitted file's own source, and anything unpacked from it."""
+
+    files: list[ExtractedFileEvidence] = []
+    limitations: list[str] = []
+    entries_seen: int = 0
+    bytes_read: int = 0
+    encrypted: bool = False
+    readable_files: int = 0
+    # Declared, or pydantic drops them and the report cannot tell "locked, no
+    # key" from "locked, wrong key" — which is the whole point of having them.
+    password_required: bool = False
+    password_incorrect: bool = False
+    encryption_unsupported: bool = False
+    binaries: list[EmbeddedBinaryEvidence] = []
+
 
 class CollectedEvidence(BaseModel):
     """
@@ -261,16 +1341,87 @@ class CollectedEvidence(BaseModel):
     signals: list[Signal] = []
     data_gaps: list[DataGap] = []
 
+    # Domain similarity (when comparing against a client domain)
+    domain_similarity: Optional[DomainSimilarityEvidence] = None
+
+    # Visual comparison (screenshot-based, when client_domain provided)
+    visual_comparison: Optional[VisualComparisonEvidence] = None
+
+    # Domain screenshot (always captured)
+    screenshot: Optional[ScreenshotEvidence] = None
+
+    # Subdomain enumeration (active resolution of crt.sh discoveries)
+    subdomains: Optional[SubdomainEvidence] = None
+
+    # Email security analysis (DMARC/SPF/DKIM/MX reputation)
+    email_security: Optional[EmailSecurityEvidence] = None
+
+    # Redirect chain analysis (multi-UA cloaking detection)
+    redirect_analysis: Optional[RedirectAnalysisEvidence] = None
+
+    # JavaScript behavior analysis (Playwright sandbox)
+    js_analysis: Optional[JSAnalysisEvidence] = None
+
+    # Threat feed intelligence (AbuseIPDB, PhishTank, ThreatFox, OpenPhish)
+    threat_feeds: Optional[ThreatFeedEvidence] = None
+
+    # CAPEv2 detonation, or what CAPE already knew about this sample. Absent
+    # when the collector was not selected or CAPE is not configured — which is
+    # not the same as "the sandbox found nothing", and the analyst prompt says
+    # so rather than leaving the model to guess.
+    cape: Optional[CapeEvidence] = None
+
+    # Brave Search OSINT enrichment
+    brave_osint: Optional[BraveOSINTEvidence] = None
+
+    # Favicon hash pivot (Shodan infrastructure clustering)
+    favicon_intel: Optional[FaviconIntelEvidence] = None
+
+    # Certificate Transparency timeline (crt.sh full cert details)
+    cert_timeline: Optional[CertTimelineEvidence] = None
+
+    # Infrastructure pivot (reverse IP, NS clustering, registrant pivot)
+    infrastructure_pivot: Optional[InfrastructurePivotEvidence] = None
+
+    # URLScan.io full page scan (domain, ip, url types)
+    urlscan: Optional[URLScanEvidence] = None
+    # URL lexical ML scoring (domain/url target)
+    url_lexical_ml: Optional[URLLexicalMLEvidence] = None
+    # URL lexical model normalized output
+    ml_url_score: Optional[URLMLScoreEvidence] = None
+    # URL redirect/page behavior analysis
+    url_behavior: Optional[URLBehaviorEvidence] = None
+    # Email/header-only content ML signals
+    content_ml: Optional[ContentMLEvidence] = None
+    # Attachment static analysis (no execution)
+    attachment_analysis: Optional[AttachmentAnalysisEvidence] = None
+    # The submitted file read as source. Declared here because
+    # CollectedEvidence(**evidence_data) drops undeclared keys without a word,
+    # so an extraction that ran perfectly would simply never arrive.
+    file_content: Optional[FileContentEvidence] = None
+    # Hybrid Analysis sandbox verdicts
+    hybrid_analysis: Optional[HybridAnalysisEvidence] = None
+    # OpenCTI threat intelligence platform lookup
+    opencti: Optional[OpenCTIEvidence] = None
+    # Composite risk aggregation output
+    final_risk: Optional[FinalRiskEvidence] = None
+    # Redirect destination enrichment (cross-domain redirect context)
+    redirect_destination_intel: Optional[RedirectDestinationIntelEvidence] = None
+
+    # Observable type that was investigated
+    observable_type: str = "domain"
+
     # User-provided enrichment
     external_context: Optional[ExternalContext] = None
+    analyst_digest: dict[str, Any] = {}
 
     # Artifact tracking
     artifact_hashes: dict[str, str] = {}
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 2. ANALYST SCHEMAS (Claude's output)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class AnalystFinding(BaseModel):
     id: str
@@ -279,6 +1430,9 @@ class AnalystFinding(BaseModel):
     severity: str = "info"
     evidence_refs: list[str] = []
     ttp: Optional[str] = None
+    ttp_name: Optional[str] = None
+    ttp_tactic: Optional[str] = None
+    ttp_url: Optional[str] = None
 
 
 class IOC(BaseModel):
@@ -323,22 +1477,179 @@ class AnalystReport(BaseModel):
     recommendations_narrative: Optional[str] = None
 
 
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # 3. API SCHEMAS (request / response)
-# ═════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+class AssistantSessionCreate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    mode: str = Field(..., min_length=1, max_length=50)
+    source_type: str = "manual"
+    linked_investigation_id: Optional[_uuid.UUID] = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_blank_title(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class AssistantEntryCreate(BaseModel):
+    text: str = Field(..., min_length=1)
+    entry_label: Optional[str] = Field(None, max_length=255)
+    entry_index: Optional[int] = Field(None, ge=0)
+
+
+class AssistantSessionRunRequest(BaseModel):
+    model: Optional[str] = None
+
+
+# An entry holds what was pasted, and it is capped: measured across 21,568
+# entries the text averages 28 kB and reaches 2.4 MB, so opening one session
+# could ship megabytes to a browser to show text nobody scrolls to the end of.
+# The cap is generous — a hundred thousand characters is a long log — and the
+# full text is never lost, only not shipped.
+#
+# `sanitized_text` is deliberately *not* here. It is a near-copy of `raw_text`
+# with identifiers replaced, no screen has ever rendered it, and it doubled
+# every response: 68 kB of the median heavy session, 100 kB at the cap. The
+# sanitiser still writes it, the prompt builder still reads it from the row —
+# it simply stops travelling to a browser that never asked. What was redacted
+# is already reported, per session, in `sanitization_summary_json`.
+MAX_ENTRY_TEXT_CHARS = 100_000
+
+
+class AssistantEntryRead(BaseModel):
+    id: _uuid.UUID
+    session_id: _uuid.UUID
+    entry_index: int
+    entry_label: Optional[str] = None
+    raw_text: str
+    token_map_json: dict[str, str] = {}
+    created_at: datetime
+    # Set when the text above was cut for transport, with the real length, so
+    # a reader is never quietly shown a fraction as though it were the whole.
+    truncated: bool = False
+    raw_text_chars: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _cap_text(self) -> "AssistantEntryRead":
+        raw_len = len(self.raw_text or "")
+        if raw_len > MAX_ENTRY_TEXT_CHARS:
+            self.truncated = True
+            self.raw_text_chars = raw_len
+            self.raw_text = (self.raw_text or "")[:MAX_ENTRY_TEXT_CHARS]
+        return self
+
+
+class AssistantSessionListItem(BaseModel):
+    """One row in the session list.
+
+    Deliberately without `result_json`, `report_markdown` or the sanitisation
+    summary. A list needs a title, a status and a date; it was carrying the
+    whole analysis of every session on the page — 20.8 kB for one row and
+    108 kB for a page of five, to render text that fits in a card.
+    """
+
+    id: _uuid.UUID
+    title: str
+    mode: str
+    status: str
+    source_type: str
+    linked_investigation_id: Optional[_uuid.UUID] = None
+    error: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AssistantSessionDetailResponse(AssistantSessionListItem):
+    """One session, opened. The heavy fields live here and nowhere else."""
+
+    sanitization_summary_json: dict[str, Any] = {}
+    result_json: dict[str, Any] = {}
+    report_markdown: Optional[str] = None
+    entries: list[AssistantEntryRead] = []
 
 class InvestigationCreate(BaseModel):
     """POST /investigations request body."""
-    domain: str
+    domain: str                                     # Observable value (domain, IP, URL, hash, filename)
+    observable_type: str = "domain"                 # domain | ip | url | hash | file
     context: Optional[str] = None
+    client_domain: Optional[str] = None
+    investigated_url: Optional[str] = None   # Specific URL to screenshot (visual comparison)
+    client_url: Optional[str] = None          # Client URL to compare against
     external_context: Optional[ExternalContext] = None
+    network_profile: Optional[NetworkProfile] = None
     requested_collectors: Optional[list[str]] = None
+    ai_model: Optional[str] = None           # Override AI model: e.g. "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-4o-mini"
+
+
+class AlertBodyInvestigationCreate(BaseModel):
+    """POST /alert-investigations request body — raw alert text pasted by an analyst
+    or pushed by another platform."""
+    alert_body: str
+    title: Optional[str] = None
+    context: Optional[str] = None
+    requested_collectors: Optional[list[str]] = None
+    max_indicators: int = Field(default=30, ge=1, le=100)
+    run_ip_lookup: bool = True
+    run_ai: bool = True          # send the raw alert through the AI assistant
+    include_raw_evidence: bool = False   # attach full collector dumps next to the findings
+    # Reuse a recent concluded investigation of the same indicator instead of
+    # re-running its collectors. None → the ALERT_REUSE_PRIOR_INVESTIGATIONS default.
+    reuse_prior_investigations: Optional[bool] = None
+    # Give extracted domains/URLs a full investigation (all collectors + AI
+    # analyst) instead of the inline collector run. None → ALERT_SPAWN_INVESTIGATIONS.
+    spawn_investigations: Optional[bool] = None
+    # Whose estate this alert is from. Mandatory under the multi-client
+    # contract and authorised against the sending credential — a caller cannot
+    # acquire a tenant by naming one here. Omitted only by the configured
+    # legacy single-tenant integration, or by an internal user pasting an alert
+    # they will file later.
+    tenant_id: Optional[str] = Field(default=None, max_length=64)
+    # ── Machine-to-machine ingest ──
+    # Which platform this came from. Correlation groups alerts by entity and
+    # must never join across senders: two platforms watching the same estate
+    # name hosts their own way, and a chain assembled from both is a
+    # fabrication. Derived from the forwarding manager when not declared.
+    source: Optional[str] = Field(default=None, max_length=120)
+    # Whose estate this alert is about. Wazuh alerts carry no client marker of
+    # their own, so a sender relaying several organisations must declare it —
+    # otherwise two customers' hosts of the same name become one entity.
+    client: Optional[str] = Field(default=None, max_length=120)
+    # Where to POST the finished report list (format=report). http(s) only.
+    callback_url: Optional[str] = Field(default=None, max_length=1024)
+    # Reuse the run this alert already produced — matched on external_ref, or on
+    # an identical body — instead of investigating it again. None → ALERT_INGEST_DEDUPE.
+    dedupe: Optional[bool] = None
+    # Free-form reference from the sending platform (ticket id, alert id) —
+    # echoed back in the run payload and in the callback, and the key dedupe
+    # matches on first, so the same alert is never investigated twice.
+    external_ref: Optional[str] = Field(default=None, max_length=255)
+    # The detection that produced the alert, as opposed to the alert itself.
+    # Read from rule.id / rule.description when a SIEM document is posted; this
+    # is what /api/detections groups by to report rule quality.
+    detection_rule_id: Optional[str] = Field(default=None, max_length=120)
+    detection_rule_name: Optional[str] = Field(default=None, max_length=512)
+
+
+class AlertBodyExtractRequest(BaseModel):
+    """POST /alert-investigations/extract request body — parse only, no collectors."""
+    alert_body: str
+    max_indicators: int = Field(default=30, ge=1, le=100)
 
 
 class InvestigationResponse(BaseModel):
     """GET /investigations/{id} response."""
     id: str
     domain: str
+    observable_type: str = "domain"
     state: InvestigationState
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -354,6 +1665,7 @@ class InvestigationListItem(BaseModel):
     """Item in GET /investigations list response."""
     id: str
     domain: str
+    observable_type: str = "domain"
     state: InvestigationState
     classification: Optional[Classification] = None
     risk_score: Optional[int] = None
@@ -383,3 +1695,179 @@ class EnrichRequest(BaseModel):
     flare_findings: list[dict[str, Any]] = []
     soc_ticket_notes: Optional[str] = None
     additional_context: Optional[str] = None
+
+
+class WatchlistCreate(BaseModel):
+    """POST /watchlist request body."""
+    domain: str
+    notes: Optional[str] = None
+    added_by: Optional[str] = None
+    schedule_interval: Optional[str] = None  # weekly, biweekly, monthly
+
+
+class WatchlistUpdate(BaseModel):
+    """PATCH /watchlist/{id} request body."""
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    schedule_interval: Optional[str] = None  # weekly, biweekly, monthly, or "none" to disable
+
+
+# ─── Exclusions ───
+
+
+class ExclusionCreate(BaseModel):
+    """POST /api/exclusions request body."""
+    indicator_type: str                      # domain | ip | url | hash
+    value: str = Field(min_length=1, max_length=512)
+    # Mandatory on purpose: an exclusion with no stated reason is a detection
+    # silently switched off, and nobody later knows whether it can be removed.
+    reason: str = Field(min_length=3, max_length=2000)
+    added_by: Optional[str] = Field(default=None, max_length=255)
+    # A domain entry covers its subdomains; turn off for an exact-host match.
+    match_subdomains: bool = True
+    # When set, the entry stops applying by itself — for exclusions added during
+    # an incident that should not outlive it.
+    expires_at: Optional[datetime] = None
+
+
+class ExclusionUpdate(BaseModel):
+    """PATCH /api/exclusions/{id} request body. The indicator itself is immutable."""
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    active: Optional[bool] = None
+    match_subdomains: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+    clear_expiry: bool = False
+
+
+class ExclusionCheckItem(BaseModel):
+    indicator_type: str
+    value: str
+
+
+class ExclusionCheckRequest(BaseModel):
+    """POST /api/exclusions/check — ask which of these are already excluded."""
+    indicators: list[ExclusionCheckItem] = Field(default_factory=list, max_length=500)
+
+
+# ─── Analyst feedback ───
+
+
+class AnalystFeedbackCreate(BaseModel):
+    """POST /api/detections/feedback — the analyst's call on what we concluded."""
+    subject_type: str                        # investigation | alert_run
+    subject_id: str
+    verdict: str                             # true_positive | false_positive | unclear
+    note: Optional[str] = Field(default=None, max_length=2000)
+    analyst: Optional[str] = Field(default=None, max_length=255)
+    #: What the caller had on screen when the analyst made this call.
+    #:
+    #: The server used to read the subject's *current* classification and
+    #: stamp that onto the row, which is a reading of the present wearing the
+    #: shape of a record. Verdicts change here — `live.com` went
+    #: malicious/90 -> suspicious/40 in three hours on 2026-10-13 — and
+    #: analyst feedback is the ground truth `detection_quality_service` uses
+    #: to measure verdicts, so a snapshot that silently re-grades its own
+    #: history corrupts the thing the measurement rests on.
+    #:
+    #: The client is the only party that knows what was displayed, so it
+    #: says. Omitted, the row records *nothing* rather than something false.
+    platform_classification: Optional[str] = Field(default=None, max_length=20)
+    platform_risk_score: Optional[int] = None
+
+
+# â”€â”€â”€ Client Management â”€â”€â”€
+
+
+class ClientCreate(BaseModel):
+    """POST /api/clients request body."""
+    name: str
+    domain: str
+    aliases: list[str] = []
+    brand_keywords: list[str] = []
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    default_collectors: list[str] = []   # Empty = run all collectors
+
+
+class ClientUpdate(BaseModel):
+    """PATCH /api/clients/{id} request body."""
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    brand_keywords: Optional[list[str]] = None
+    contact_email: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[str] = None
+    default_collectors: Optional[list[str]] = None
+
+
+class ClientRead(BaseModel):
+    """Client in API responses."""
+    id: _uuid.UUID
+    name: str
+    domain: str
+    aliases: list[str]
+    brand_keywords: list[str]
+    contact_email: Optional[str]
+    notes: Optional[str]
+    status: str
+    created_at: datetime
+    alert_count: int
+    last_alert_at: Optional[datetime]
+    default_collectors: list[str]
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientListResponse(BaseModel):
+    items: list[ClientRead]
+    total: int
+
+
+class ClientAlertRead(BaseModel):
+    """Alert record in API responses."""
+    id: _uuid.UUID
+    client_id: _uuid.UUID
+    investigation_id: Optional[_uuid.UUID] = None
+    alert_type: str
+    severity: str
+    title: str
+    details_json: dict
+    created_at: datetime
+    acknowledged: bool
+    resolved: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientAlertListResponse(BaseModel):
+    items: list[ClientAlertRead]
+    total: int
+
+
+class APIProviderHealth(BaseModel):
+    provider: str = Field(..., min_length=1)
+    display_name: str = Field(..., min_length=1)
+    configured: bool
+    status: str = Field(..., min_length=1)
+    remaining: Optional[float] = None
+    limit: Optional[float] = None
+    unit: Optional[str] = None
+    reset_at: Optional[datetime] = None
+    low_quota_threshold: Optional[float] = None
+    last_checked_at: Optional[datetime] = None
+    source: Optional[str] = None
+    requests_today: int = 0
+    requests_this_month: int = 0
+    limit_period: Optional[str] = None
+    error: Optional[str] = None
+    # Set when `remaining`/`limit` describe a pool this key shares with others
+    # rather than its own allowance. Without it, three keys on one team each
+    # report the same figure and read as three independent quotas.
+    quota_scope: Optional[str] = None          # "shared_team" | "per_key"
+    quota_shared_with: int = 0                 # other keys drawing on the same pool
+    per_key_month_limit: Optional[float] = None
+    details: list["APIProviderHealth"] = Field(default_factory=list)
+
+
+class APIHealthResponse(BaseModel):
+    providers: list[APIProviderHealth] = Field(default_factory=list)
+    generated_at: datetime

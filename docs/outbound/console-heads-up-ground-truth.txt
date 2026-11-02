@@ -1,0 +1,29 @@
+Subject: Planned detection exercise on expvdi012 — expect one case scoring 90+
+
+I'm running a controlled detection exercise on expvdi012 (a QEMU VM in
+Computers,ExpertWare, ExpAdmin only) on <DATE> between <START> and <END> UTC.
+
+What you will see: ONE case on expvdi012 containing all of it, scoring 90 or
+above. That is expected. Our session boundary is six hours, so five items ten
+minutes apart correlate into a single case, and the correlation score pays 90
+for four or more distinct rules on linked activity. For reference, only about
+1% of our closed cases score 90+, so this will look like one of the most
+serious cases of the month. It is not.
+
+The sequence, in order, ten minutes apart:
+  1. an alternate data stream written to a file in %TEMP%  (Sysmon 15)
+  2. a copy of certutil.exe placed in %TEMP%, NOT executed (Sysmon 11)
+  3. rundll32 loading version.dll                          (Sysmon 7)
+  3b. rundll32 loading dbghelp.dll                         (Sysmon 7)
+  4. wevtutil cl Security — the local Security log cleared  (Event 1102)
+
+Items 3b and 4 are the two that will read as intrusion-like: a debug/dump
+library load followed by a log clear is a textbook sequence. Nothing is
+dumped and nothing is executed. No malware is involved at any point, nothing
+touches lsass, and no credential material is accessed.
+
+Who to contact if anything looks wrong: <ME>, reachable at <CONTACT> for the
+duration of the window.
+
+If you would rather I did not clear the Security log on that host, say so and
+I will drop item 4 and record it as untested.

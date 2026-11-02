@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=320">
+  <title>Threat Investigator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo">Threat Investigator</div>
+    <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
+  </div>
+
+  <!-- Main view -->
+  <div id="mainView">
+    <div class="current-domain">
+      <label>Current Domain</label>
+      <div id="domainDisplay" class="domain-text">detecting...</div>
+    </div>
+
+    <div class="input-group">
+      <input type="text" id="domainInput" placeholder="Enter domain to investigate..." />
+      <input type="text" id="clientDomainInput" placeholder="Client domain (optional)" />
+    </div>
+
+    <button id="investigateBtn" class="btn-primary">Investigate</button>
+
+    <!-- Status area -->
+    <div id="statusArea" class="status-area hidden">
+      <div id="statusText" class="status-text"></div>
+      <div id="statusBar" class="status-bar">
+        <div id="statusBarFill" class="status-bar-fill"></div>
+      </div>
+    </div>
+
+    <!-- Result area -->
+    <div id="resultArea" class="result-area hidden">
+      <div id="resultClassification" class="result-classification"></div>
+      <div id="resultScore" class="result-score"></div>
+      <div id="resultAction" class="result-action"></div>
+      <a id="resultLink" class="result-link" target="_blank">View Full Report</a>
+    </div>
+
+    <!-- Recent investigations -->
+    <div class="recent-header">Recent</div>
+    <div id="recentList" class="recent-list"></div>
+  </div>
+
+  <!-- Settings view -->
+  <div id="settingsView" class="hidden">
+    <div class="settings-header">
+      <button id="backBtn" class="icon-btn">&larr;</button>
+      <span>Settings</span>
+    </div>
+    <div class="input-group">
+      <label>Backend URL</label>
+      <input type="text" id="backendUrlInput" placeholder="http://localhost:8000" />
+    </div>
+    <button id="saveSettingsBtn" class="btn-primary">Save</button>
+    <div id="settingsStatus" class="settings-status"></div>
+  </div>
+
+  <script src="../lib/api.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

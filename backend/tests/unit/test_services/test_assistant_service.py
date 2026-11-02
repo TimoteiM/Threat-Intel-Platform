@@ -1,0 +1,683 @@
+import sys
+import json
+from datetime import date, datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from sqlalchemy.sql import Select
+
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+sys.path = [path for path in sys.path if path != str(BACKEND_ROOT)]
+sys.path.insert(0, str(BACKEND_ROOT))
+loaded_app = sys.modules.get("app")
+if loaded_app and Path(str(getattr(loaded_app, "__file__", ""))).resolve() == BACKEND_ROOT / "__init__.py":
+    sys.modules.pop("app", None)
+
+from app.models.database import AssistantEntry, AssistantSession
+from app.services.assistant_service import AssistantService
+
+
+def _report_body(markdown: str | None) -> str:
+    return (markdown or "").split("\n\n---\n\n## Resolved Identifiers", 1)[0]
+
+
+def _build_session(mode: str = "alert_analysis") -> AssistantSession:
+    session = AssistantSession(
+        id=uuid4(),
+        title="Test session",
+        mode=mode,
+        status="draft",
+        source_type="manual",
+    )
+    session.entries = [
+        AssistantEntry(
+            id=uuid4(),
+            session_id=session.id,
+            entry_index=0,
+            entry_label="entry-1",
+            raw_text="User admin@example.com from 10.0.0.1",
+            sanitized_text="",
+            token_map_json={},
+        )
+    ]
+    return session
+
+
+def _build_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        anthropic_api_key=None,
+        openai_model="gpt-5-mini",
+        openai_api_key="test-key",
+    )
+
+
+class _ScalarResult:
+    def __init__(self, items):
+        self._items = items
+
+    def all(self):
+        return list(self._items)
+
+
+class _ExecuteResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        return _ScalarResult(self._items)
+
+
+class _CountResult:
+    def __init__(self, value: int):
+        self._value = value
+
+    def scalar_one(self):
+        return self._value
+
+
+class _ScalarOneOrNone:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+@pytest.mark.asyncio
+async def test_run_session_persists_alert_result_without_sending_raw_text(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    seen_prompt = {}
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        seen_prompt["user_text"] = user_text
+        return "# Executive Summary\nAlert is suspicious."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result.report_markdown.startswith("# Executive Summary")
+    assert result.status == "completed"
+    assert "admin@example.com" not in seen_prompt["user_text"]
+    assert "10.0.0.1" not in seen_prompt["user_text"]
+    assert "[IP_1]" in seen_prompt["user_text"]
+    assert "[EMAIL_1]" in seen_prompt["user_text"]
+    assert result.entries[0].sanitized_text
+    fake_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_session_defaults_title_when_missing() -> None:
+    added = []
+
+    class FakeSession:
+        def add(self, obj):
+            added.append(obj)
+
+        flush = AsyncMock()
+        commit = AsyncMock()
+
+    service = AssistantService(FakeSession(), settings=_build_settings())
+
+    created = await service.create_session(title="", mode="alert_analysis")
+
+    assert created.title == "Alert Analysis"
+    assert added[0].title == "Alert Analysis"
+
+
+@pytest.mark.asyncio
+async def test_daily_alert_metrics_groups_completed_sessions_in_local_time() -> None:
+    timestamps = [
+        datetime(2026, 7, 23, 22, 30, tzinfo=timezone.utc),  # 00:30 local (+02:00)
+        datetime(2026, 7, 24, 8, 15, tzinfo=timezone.utc),   # 10:15 local
+        datetime(2026, 7, 24, 8, 45, tzinfo=timezone.utc),   # 10:45 local
+        datetime(2026, 7, 22, 23, 0, tzinfo=timezone.utc),   # previous local day
+    ]
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(return_value=_ExecuteResult(timestamps)),
+    )
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    metrics = await service.get_daily_alert_metrics(
+        day=date(2026, 7, 24),
+        timezone_offset_minutes=-120,
+    )
+
+    assert metrics["total"] == 3
+    assert metrics["previous_total"] == 1
+    assert metrics["change_percent"] == 200
+    assert metrics["peak_hour"] == "10:00-11:00"
+    assert metrics["hourly"][0] == {"hour": "00:00", "count": 1}
+    assert metrics["hourly"][10] == {"hour": "10:00", "count": 2}
+
+
+@pytest.mark.asyncio
+async def test_run_session_restores_sanitized_tokens_in_final_output(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "hostname=wm-c06.siembiot.int admin@example.com from 10.0.0.1"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\n[HOST_1] observed [EMAIL_1] from 10.0.0.1."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "wm-c06.siembiot.int" in report_body
+    assert "admin@example.com" in report_body
+    assert "10.0.0.1" in report_body
+    assert "[HOST_1]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_adds_omitted_endpoint_key_observables(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = json.dumps({
+        "endpoint": {"name": "NBM0582"},
+        "filters": [{
+            "level": "medium",
+            "name": "Uncommon File Path of Executable File",
+            "tactics": ["TA0005"],
+            "techniques": ["T1036"],
+            "highlightedObjects": [
+                {"field": "objectFileHashSha1", "value": "b74961868a4af731a7c352968413634bfb6ee9a0"},
+                {"field": "objectFilePath", "value": r"C:\Users\M0534\AppData\Local\Temp\.net\BingWallpaperInstaller\11a4\Microsoft.CSharp.dll"},
+                {"field": "processFilePath", "value": r"C:\Users\M0534\Downloads\BingWallpaperInstaller.exe"},
+                {"field": "processCmd", "value": r'"C:\Users\M0534\Downloads\BingWallpaperInstaller.exe"'},
+            ],
+        }],
+    })
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "## Event Interpretation\n\nInstaller-like activity was observed."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+    report_body = _report_body(result.report_markdown)
+
+    assert "**Key observables:**" not in report_body
+    assert "BingWallpaperInstaller.exe" in report_body
+    assert "Microsoft.CSharp.dll" in report_body
+    assert "b74961868a4af731a7c352968413634bfb6ee9a0" in report_body
+    assert "SHA-1" in report_body
+    assert r"C:\Users\M0534\Downloads" not in report_body
+    assert "TA0005" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_restores_markdown_escaped_host_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "hostname=HOST1 srcip=10.0.0.1"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nMalicious activity on \\[HOST_1\\] from 10.0.0.1."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "HOST1" in report_body
+    assert "[HOST_1]" not in report_body
+    assert "\\[HOST_1\\]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_restores_windows_account_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = (
+        "subjectUserName=epentilescu targetUserName=CodexSandboxUsers "
+        "computer=EXP-D07DY24.int.expertware.net"
+    )
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nAccount [ACCOUNT_1] created group on [HOST_1]."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "epentilescu" in report_body
+    assert "EXP-D07DY24.int.expertware.net" in report_body
+    assert "[ACCOUNT_1]" not in report_body
+    assert "[HOST_1]" not in report_body
+
+
+@pytest.mark.asyncio
+async def test_run_session_replaces_unresolved_hallucinated_tokens(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    session_obj.entries[0].raw_text = "classification=Ransomware originatorProcess=svchost.exe"
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, session_obj])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Event Interpretation\nRansomware was detected on [HOST_1]."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    report_body = _report_body(result.report_markdown)
+    assert "the affected host" in report_body
+    assert "[HOST_1]" not in report_body
+    assert "Resolved Identifiers" not in (result.report_markdown or "")
+
+
+@pytest.mark.asyncio
+async def test_run_session_persists_incident_result(monkeypatch) -> None:
+    session_obj = _build_session("incident_correlation")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Executive Summary\nCorrelated incident."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result.status == "completed"
+    assert result.result_json["mode"] == "incident_correlation"
+
+
+@pytest.mark.asyncio
+async def test_run_session_returns_reloaded_session_after_commit(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    reloaded = _build_session("alert_analysis")
+    reloaded.id = session_obj.id
+    reloaded.status = "completed"
+    reloaded.report_markdown = "# Executive Summary\nReloaded."
+    reloaded.updated_at = datetime.now(timezone.utc)
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(side_effect=[session_obj, reloaded])  # type: ignore[attr-defined]
+
+    async def fake_openai(*, model: str, system: str, user_text: str) -> str:
+        return "# Executive Summary\nReloaded."
+
+    monkeypatch.setattr(service, "_call_openai", fake_openai)
+
+    result = await service.run_session(session_obj.id)
+
+    assert result is reloaded
+    assert service._get_session.await_count == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_run_session_marks_failed_when_openai_errors(monkeypatch) -> None:
+    session_obj = _build_session("alert_analysis")
+    fake_db = SimpleNamespace(commit=AsyncMock())
+    service = AssistantService(fake_db, settings=_build_settings())
+    service._get_session = AsyncMock(return_value=session_obj)  # type: ignore[attr-defined]
+
+    async def broken_openai(*, model: str, system: str, user_text: str) -> str:
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(service, "_call_openai", broken_openai)
+
+    with pytest.raises(ValueError, match="fallback.*unavailable"):
+        await service.run_session(session_obj.id)
+
+    assert session_obj.status == "failed"
+    assert "fallback" in (session_obj.error or "")
+    fake_db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_assistant_falls_back_to_haiku_when_openai_fails(monkeypatch) -> None:
+    settings = _build_settings()
+    settings.anthropic_api_key = "anthropic-test-key"
+    settings.anthropic_model = "claude-haiku-4-5-20251001"
+    settings.openai_model = "gpt-5.6-luna"
+    service = AssistantService(SimpleNamespace(), settings=settings)
+    seen = {}
+
+    async def broken_openai(*, model: str, system: str, user_text: str) -> str:
+        seen["primary"] = model
+        raise RuntimeError("provider down")
+
+    async def fake_claude(*, model: str, system: str, user_text: str) -> str:
+        seen["fallback"] = model
+        return "fallback report"
+
+    monkeypatch.setattr(service, "_call_openai", broken_openai)
+    monkeypatch.setattr(service, "_call_claude", fake_claude)
+
+    result = await service._call_with_fallback(model=None, system="system", user_text="evidence")
+
+    assert result == "fallback report"
+    assert seen == {
+        "primary": "gpt-5.6-luna",
+        "fallback": "claude-haiku-4-5-20251001",
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_returns_paginated_matches_for_search() -> None:
+    matching = _build_session("alert_analysis")
+    matching.title = "Invoice phishing alert"
+    fake_db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[_ExecuteResult([matching]), _CountResult(3)]),
+    )
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    result = await service.list_sessions(search="invoice", limit=10, offset=20)
+
+    assert result["items"] == [matching]
+    assert result["total"] == 3
+    assert result["limit"] == 10
+    assert result["offset"] == 20
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_searches_titles_only_by_default() -> None:
+    """Searching log content used to be unconditional and cost 6,153 ms: the
+    count had to evaluate an ILIKE over 201 MB of entry text. Titles answer in
+    about 40 ms, so that is the default and content is asked for."""
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(search="admin@example.com", limit=25, offset=0)
+
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
+    assert "assistant_sessions.title" in query_text
+    assert "assistant_entries.raw_text" not in query_text
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_can_search_entry_content_on_request() -> None:
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(
+        search="admin@example.com", limit=25, offset=0, search_content=True
+    )
+
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
+    assert "assistant_sessions.title" in query_text
+    assert "assistant_entries.raw_text" in query_text
+    # EXISTS, not a join: the join multiplied each session by its entries and
+    # then needed DISTINCT to undo it.
+    assert "EXISTS" in query_text.upper()
+
+
+@pytest.mark.asyncio
+async def test_the_list_query_does_not_fetch_the_heavy_columns() -> None:
+    """The list was returning `result_json` and `report_markdown` for every row
+    — 20.8 kB for one session, 108 kB for a page of five, to render a card that
+    shows a title and a date."""
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(limit=25, offset=0)
+
+    query_text = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": False})
+    )
+    for heavy in ("result_json", "report_markdown", "sanitization_summary_json"):
+        assert heavy not in query_text, heavy
+    assert "assistant_sessions.title" in query_text
+
+
+class _StubSession:
+    """_restore_tokens is pure string work — it never touches the database."""
+
+
+def test_restore_tokens_survives_windows_accounts_and_paths() -> None:
+    """
+    Restoring a value must never be parsed as a regex replacement template.
+
+    `re.sub` treats a string replacement as a template and interprets backslash
+    escapes inside it. The values restored here are hostnames, paths and
+    accounts, so a perfectly ordinary `DOMAIN\\user` carries `\\d` — not a valid
+    replacement escape — and re.sub raised "bad escape \\d at position 6". That
+    killed the whole AI narrative for any alert mentioning a Windows account or
+    file path, and the report fell back to the plain indicator summary.
+    """
+    service = AssistantService(_StubSession(), settings=_build_settings())
+
+    for original in (
+        r"POVGRP\dom29",          # the exact shape that broke it
+        r"C:\data\payload.exe",
+        r"CORP\svc-backup",
+        r"\\fileserver\share",
+        "plain-host-01",
+    ):
+        restored = service._restore_tokens("user [ACCOUNT_1] signed in", {"[ACCOUNT_1]": original})
+        assert restored == f"user {original} signed in", f"failed to restore {original!r}"
+
+
+def test_restore_tokens_handles_group_references_verbatim() -> None:
+    """A value containing \\1 or \\g<x> must come back as itself, not a backreference."""
+    service = AssistantService(_StubSession(), settings=_build_settings())
+    for original in (r"host\1name", r"a\g<0>b"):
+        assert service._restore_tokens("[HOST_1] failed", {"[HOST_1]": original}) == f"{original} failed"
+
+
+def test_a_huge_entry_is_capped_before_it_reaches_a_browser() -> None:
+    """Entries return what was pasted and what was sent. Measured across 21,568
+    of them the pair averages 28 kB and reaches 20 MB, so opening one session
+    could ship twenty megabytes to render text nobody scrolls to the end of."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import MAX_ENTRY_TEXT_CHARS, AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        entry_index=0,
+        raw_text="x" * (MAX_ENTRY_TEXT_CHARS + 5_000),
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert entry.truncated is True
+    assert len(entry.raw_text) == MAX_ENTRY_TEXT_CHARS
+    # The real length travels with it, so a reader is never quietly shown a
+    # fraction as though it were the whole.
+    assert entry.raw_text_chars == MAX_ENTRY_TEXT_CHARS + 5_000
+
+
+def test_a_normal_entry_is_untouched() -> None:
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(), session_id=uuid.uuid4(), entry_index=0,
+        raw_text="a short alert body",
+        created_at=datetime.now(timezone.utc),
+    )
+    assert entry.truncated is False
+    assert entry.raw_text_chars is None
+
+
+def test_the_entry_response_does_not_carry_the_sanitised_copy() -> None:
+    """`sanitized_text` is a near-duplicate of `raw_text` that no screen reads.
+
+    Measured over 22,579 completed sessions it was 68 kB of the median heavy
+    response and 100 kB at the cap — half the bytes of opening a session, spent
+    on a field the browser discards. It still exists on the row, and the prompt
+    builder still reads it from there; it just does not travel.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    from app.models.schemas import AssistantEntryRead
+
+    entry = AssistantEntryRead(
+        id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        entry_index=0,
+        raw_text="Failed logon for svc-backup from 10.0.0.9",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    payload = entry.model_dump(mode="json")
+    assert "sanitized_text" not in payload
+    assert "sanitized_text_chars" not in payload
+    assert payload["raw_text"] == "Failed logon for svc-backup from 10.0.0.9"
+
+
+def test_the_prompt_still_sees_the_sanitised_text_on_the_row() -> None:
+    """Removing the field from the response must not remove it from the model.
+
+    The sanitised copy is what actually reaches the AI. If dropping it from the
+    API had dropped it from the ORM, raw identifiers would have gone to the
+    model instead — the failure this test exists to catch.
+    """
+    from app.models.database import AssistantEntry
+
+    assert "sanitized_text" in AssistantEntry.__table__.c
+
+
+@pytest.mark.asyncio
+async def test_the_list_shows_only_sessions_an_analyst_started() -> None:
+    """22,048 of 22,675 sessions were other features using the assistant.
+
+    `alert_body` (14,345) is Alert Body Investigation and `correlated_case`
+    (7,703) is case narratives; both call the assistant as an engine and both
+    display the result on their own page. Listing them here left the 627
+    sessions an analyst actually opened this tool to write unfindable.
+    """
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    await service.list_sessions(limit=5, offset=0)
+
+    page, count = (
+        str(call.args[0].compile(compile_kwargs={"literal_binds": True}))
+        for call in fake_db.execute.await_args_list
+    )
+    # Both halves must agree, or the pager reports a total it cannot show.
+    for query in (page, count):
+        assert "source_type IN ('manual', 'from_investigation')" in query
+        assert "alert_body" not in query
+        assert "correlated_case" not in query
+
+
+@pytest.mark.asyncio
+async def test_the_generated_sessions_can_still_be_listed_on_request() -> None:
+    """Hidden, not gone. Nothing here deletes or stops writing a session."""
+    fake_db = SimpleNamespace(execute=AsyncMock(side_effect=[_ExecuteResult([]), _CountResult(0)]))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    result = await service.list_sessions(limit=5, offset=0, include_generated=True)
+
+    page = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": True})
+    )
+    # `source_type` still appears as a selected column; what must be gone is the
+    # predicate that narrows on it.
+    assert "source_type IN" not in page
+    assert result["includes_generated"] is True
+
+
+@pytest.mark.asyncio
+async def test_opening_a_generated_session_by_id_is_not_filtered() -> None:
+    """The regression this guards.
+
+    An alert investigation and a case narrative both link to
+    `/assistant?session=<id>`, and those ids are exactly the `alert_body` and
+    `correlated_case` sessions the list now hides. If the filter reached
+    `get_session`, every one of those links would 404.
+    """
+    generated = _build_session("alert_analysis")
+    generated.source_type = "alert_body"
+    fake_db = SimpleNamespace(execute=AsyncMock(return_value=_ScalarOneOrNone(generated)))
+    service = AssistantService(fake_db, settings=_build_settings())
+
+    found = await service.get_session(generated.id)
+
+    assert found is generated
+    query = str(
+        fake_db.execute.await_args_list[0].args[0].compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "source_type IN" not in query
+    assert "WHERE assistant_sessions.id" in query
+
+
+# --- the SOC ticket format: where the observables sentence lands (2026-11-02) --
+
+def _svc():
+    from app.services.assistant_service import AssistantService
+    return AssistantService.__new__(AssistantService)
+
+
+_RAW = ['{"endpoint": {"name": "WS01"}, "processFilePath": "C:\\\\Temp\\\\tool.exe"}']
+
+
+def test_the_observables_sentence_goes_before_the_disposition():
+    """**The disposition must stay the last line.**
+
+    `_ensure_alert_key_observables` appends a sentence when the model omits a
+    core observable. Under the old single-section format, appending to the end
+    was correct. Under "SOC Resolution: … / Resolution: <one sentence>" the end
+    is *after* the disposition, which is the one line that goes into the
+    ticket — so the sentence has to be inserted into the narrative instead.
+    """
+    report = ("SOC Resolution:\n\nEvent 4688 recorded a process start.\n\n"
+              "Resolution:\n\nThe activity is consistent with normal administration.")
+    out = _svc()._ensure_alert_key_observables(report, _RAW)
+
+    assert "WS01" in out, "the observable was not added at all"
+    assert out.rstrip().endswith("normal administration."), (
+        "the sentence landed after the disposition, which must stay last"
+    )
+    # And it belongs in the narrative, above the disposition heading.
+    assert out.index("WS01") < out.casefold().rindex("\nresolution:")
+
+
+def test_a_report_with_no_disposition_section_still_gets_the_sentence():
+    """The complement. A model reply that omitted the `Resolution:` heading
+    must still receive the observable rather than silently losing it."""
+    report = "SOC Resolution:\n\nEvent 4688 recorded a process start."
+    out = _svc()._ensure_alert_key_observables(report, _RAW)
+    assert "WS01" in out
+
+
+def test_a_bare_reply_is_given_the_soc_heading_not_the_old_one():
+    """When the model returns no heading at all the wrapper supplies one, and
+    it must be the current format's heading — `Event Interpretation` would
+    reintroduce the section the rewrite removed."""
+    out = _svc()._ensure_alert_key_observables("Event 4688 recorded a process start.", _RAW)
+    assert out.startswith("SOC Resolution:")
+    assert "Event Interpretation" not in out
+
+
+def test_nothing_is_appended_when_the_observable_is_already_named():
+    """The dangerous direction: this helper exists to fill a gap, not to add a
+    sentence to every report. A report that already names the endpoint must be
+    returned untouched."""
+    report = ("SOC Resolution:\n\nEvent 4688 on WS01 recorded a process start.\n\n"
+              "Resolution:\n\nBenign.")
+    assert _svc()._ensure_alert_key_observables(report, _RAW) == report

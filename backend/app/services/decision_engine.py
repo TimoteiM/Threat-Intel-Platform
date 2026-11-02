@@ -1,0 +1,1747 @@
+"""
+Deterministic investigation decision engine.
+
+The engine produces the canonical verdict fields from collected evidence.
+LLM analysts may explain and contextualize the decision, but should not be the
+source of truth for classification, risk score, or action.
+"""
+
+from __future__ import annotations
+
+from app.services import hosting_platform_service as platform
+# Narrower and complementary: `platform.is_platform_apex` asks whether a name
+# is a public suffix (github.io, pages.dev), which is true for two of the 45
+# audited hits and false for discord.com, cloudflare.com and live.com —
+# registrable domains that are shared providers all the same. The match scope
+# below reads the IOC rather than the domain, so it covers both.
+from app.services.threatfox_match_scope import (
+    about_observable,
+    intel_hits_about_observable,
+)
+
+from typing import Any
+
+
+# Labels broad enough that a clean multi-vendor scan is worth weighing against
+# them. Everything else in the marker list below names a specific family or kit,
+# where evading VirusTotal is part of the technique and a clean result there
+# argues nothing.
+_ANYRUN_GENERIC_LABELS = frozenset({"phishing", "phish", "suspicious"})
+
+_ANYRUN_MALICIOUS_LABEL_MARKERS = (
+    "phish",
+    "clickfix",
+    "clearfake",
+    "fake captcha",
+    "fake-captcha",
+    "exploit-kit",
+    "exploit kit",
+    "exploit",
+    "etherhiding",
+    "tdsshop",
+    "credential theft",
+    "credential harvesting",
+    "stealer",
+)
+
+
+# A domain registered within this window is treated as a signal in its own right.
+NEWLY_REGISTERED_DAYS = 30
+YOUNG_DOMAIN_DAYS = 90
+
+
+def _file_collector_signal(evidence_data: dict[str, Any]) -> dict[str, Any] | None:
+    """What the collectors concluded about a file, when VirusTotal held nothing.
+
+    Priority is the order the evidence deserves: a sandbox that executed the
+    sample outranks a static read of its bytes, which outranks the composite.
+    `None` means nothing ran — which is a different answer from "nothing was
+    found", and is the only case that stays inconclusive.
+    """
+    sandbox_verdicts: list[str] = []
+
+    cape = evidence_data.get("cape") or {}
+    cape_verdict = str(cape.get("verdict") or "").strip().lower()
+    if cape_verdict:
+        sandbox_verdicts.append(cape_verdict)
+
+    for item in (evidence_data.get("hybrid_analysis") or {}).get("items") or []:
+        if isinstance(item, dict) and item.get("checked"):
+            verdict = str(item.get("verdict") or "").strip().lower()
+            if verdict:
+                sandbox_verdicts.append(verdict)
+
+    attachment_items = (evidence_data.get("attachment_analysis") or {}).get("items") or []
+    static_level = ""
+    suspicious_apis: list[str] = []
+    for item in attachment_items:
+        if not isinstance(item, dict):
+            continue
+        level = str(item.get("risk_level") or "").strip().lower()
+        if level in {"high", "medium", "low"}:
+            static_level = level if not static_level else max(
+                static_level, level, key=lambda x: {"low": 0, "medium": 1, "high": 2}[x]
+            )
+        suspicious_apis.extend([str(a) for a in (item.get("suspicious_apis") or [])])
+
+    readable_files = len(((evidence_data.get("file_content") or {}).get("files")) or [])
+
+    # A compiled file packed inside the submission. Its reputation is about the
+    # thing that actually runs, so it is read with the same weight as a verdict
+    # on the submission itself: an archive is a wrapper, and "the wrapper is
+    # unknown to VirusTotal" says nothing about the installer inside it.
+    embedded = [
+        b for b in (((evidence_data.get("file_content") or {}).get("binaries")) or [])
+        if isinstance(b, dict)
+    ]
+    embedded_malicious = [b for b in embedded if str(b.get("verdict") or "") == "malicious"]
+    embedded_suspicious = [b for b in embedded if str(b.get("verdict") or "") == "suspicious"]
+
+    composite = (evidence_data.get("final_risk") or {}).get("risk_score")
+    composite = int(composite) if isinstance(composite, (int, float)) else None
+
+    if (
+        not sandbox_verdicts and not static_level and not readable_files
+        and not embedded and composite is None
+    ):
+        return None
+
+    key_evidence: list[str] = []
+    if sandbox_verdicts:
+        key_evidence.append("Sandbox verdict: " + ", ".join(sorted(set(sandbox_verdicts))))
+    if static_level:
+        key_evidence.append(f"Static analysis of the file's bytes: {static_level} risk")
+    if suspicious_apis:
+        shown = ", ".join(sorted(set(suspicious_apis))[:6])
+        key_evidence.append(f"Suspicious API strings present in the file: {shown}")
+    if readable_files:
+        key_evidence.append(
+            f"{readable_files} readable file(s) extracted and read"
+        )
+    for binary in embedded:
+        name = str(binary.get("path") or "").rsplit("/", 1)[-1]
+        verdict = str(binary.get("verdict") or "") or "not looked up"
+        detail = ""
+        if binary.get("malicious_count") is not None and binary.get("total_engines"):
+            detail = f" ({binary['malicious_count']}/{binary['total_engines']} engines)"
+        key_evidence.append(
+            f"Packed executable {name}: {verdict}{detail} — sha256 {str(binary.get('sha256') or '')[:16]}…"
+        )
+
+    if embedded_malicious:
+        names = ", ".join(
+            str(b.get("path") or "").rsplit("/", 1)[-1] for b in embedded_malicious
+        )
+        return {
+            "classification": "malicious", "confidence": "high",
+            # The same floor a sandbox verdict earns. A reputation hit on the
+            # executable inside the archive is a statement about the payload,
+            # not about the container it travelled in.
+            "risk_score": max(75, composite or 0),
+            "recommended_action": "block",
+            "key_evidence": key_evidence + [
+                f"The archive carries an executable already known to be malicious: {names}."
+            ],
+        }
+
+    if any(v == "malicious" for v in sandbox_verdicts):
+        return {
+            "classification": "malicious", "confidence": "high",
+            # A sandbox that watched it run outranks a composite built partly
+            # from guesses, so the composite can raise this floor but not lower it.
+            "risk_score": max(75, composite or 0),
+            "recommended_action": "block", "key_evidence": key_evidence,
+        }
+    if embedded_suspicious or any(v == "suspicious" for v in sandbox_verdicts) or static_level == "high":
+        return {
+            "classification": "suspicious", "confidence": "medium",
+            "risk_score": max(45, composite or 0),
+            "recommended_action": "investigate", "key_evidence": key_evidence,
+        }
+    if static_level == "medium" or suspicious_apis:
+        return {
+            "classification": "suspicious", "confidence": "low",
+            "risk_score": max(30, composite or 0),
+            "recommended_action": "investigate", "key_evidence": key_evidence,
+        }
+    return {
+        "classification": "benign", "confidence": "low",
+        # Deliberately not 0. Nothing was found, but nothing authoritative
+        # looked either — VirusTotal had no record of this file at all.
+        "risk_score": composite if composite is not None else 10,
+        "recommended_action": "monitor", "key_evidence": key_evidence,
+    }
+
+
+def build_decision_report(evidence_data: dict[str, Any], observable_type: str) -> dict[str, Any]:
+    vt = evidence_data.get("vt") or {}
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    domain = evidence_data.get("domain", "")
+
+    classification = "benign"
+    confidence = "medium"
+    risk_score: int | None = 10
+    recommended_action = "monitor"
+    key_evidence: list[str] = []
+    findings: list[dict[str, Any]] = []
+    data_needed: list[str] = []
+    recommended_steps: list[str] = []
+
+    if observable_type in {"hash", "file"}:
+        vt_found = bool(vt.get("found", False))
+        vt_malicious = int(vt.get("malicious_count") or 0)
+        vt_suspicious = int(vt.get("suspicious_count") or 0)
+        vt_total = int(vt.get("total_vendors") or 0)
+        flagged_by = vt.get("flagged_malicious_by", []) or []
+
+        if not vt_found:
+            # VirusTotal not holding a hash is not evidence about the file. It
+            # is the normal answer for anything not yet seen in the wild, which
+            # is exactly what a targeted sample looks like.
+            #
+            # This used to end the assessment: inconclusive, risk None, "Hash
+            # not found in VirusTotal database" — while the sandbox had
+            # returned a verdict, the static pass had measured the bytes, the
+            # source had been extracted and read, and aggregate_risk had
+            # already produced a composite from all of it. The number existed
+            # and was thrown away.
+            signal = _file_collector_signal(evidence_data)
+            if signal is None:
+                classification = "inconclusive"
+                confidence = "low"
+                risk_score = None
+                recommended_action = "investigate"
+                key_evidence = [
+                    "Hash not found in VirusTotal, and no sandbox, static or content "
+                    "signal was available either."
+                ]
+            else:
+                classification = signal["classification"]
+                confidence = signal["confidence"]
+                risk_score = signal["risk_score"]
+                recommended_action = signal["recommended_action"]
+                key_evidence = ["Hash not found in VirusTotal database"] + signal["key_evidence"]
+        elif vt_malicious >= 5:
+            classification = "malicious"
+            confidence = "high"
+            risk_score = min(98, 70 + vt_malicious)
+            recommended_action = "block"
+            vendors = ", ".join(flagged_by[:5]) + (f" +{len(flagged_by) - 5} more" if len(flagged_by) > 5 else "")
+            key_evidence = [
+                f"Detected malicious by {vt_malicious}/{vt_total} antivirus vendors",
+                f"Flagged by: {vendors}",
+            ]
+        elif vt_malicious >= 2 or vt_suspicious >= 3:
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = 65
+            recommended_action = "investigate"
+            key_evidence = [f"{vt_malicious} malicious, {vt_suspicious} suspicious vendor flags"]
+        elif vt_malicious == 1:
+            classification = "suspicious"
+            confidence = "low"
+            risk_score = 35
+            recommended_action = "monitor"
+            vendor = flagged_by[0] if flagged_by else "unknown vendor"
+            key_evidence = [f"Single vendor detection ({vendor}) - may be a false positive"]
+        else:
+            classification = "benign"
+            confidence = "medium"
+            risk_score = 5
+            recommended_action = "monitor"
+            key_evidence = [f"Clean - 0/{vt_total} detections in VirusTotal"]
+
+    elif observable_type == "ip":
+        vt_found = bool(vt.get("found", False))
+        vt_malicious = int(vt.get("malicious_count") or 0) if vt_found else 0
+        vt_total = int(vt.get("total_vendors") or 0)
+        abuseipdb = threat_feeds.get("abuseipdb") or {}
+        abuse_score = int(abuseipdb.get("abuse_confidence_score") or 0)
+        abuse_reports = int(abuseipdb.get("total_reports") or 0)
+        # Only the hits that are about this observable itself. ThreatFox
+        # search is substring-based, so an apex domain of a shared provider
+        # comes back carrying other people's payloads — discord.com returns
+        # ten webhook URLs, cloudflare.com returns twenty trycloudflare.com
+        # subdomains that are not even under it. 44 of the 45 ThreatFox-
+        # positive domains in the 2026-10-13 audit were exactly that.
+        #
+        # It matters here because `tf_matches` is read below as
+        # `and not tf_matches` — a precondition for a benign verdict. Taking
+        # the raw list would stop that branch firing for every case touching
+        # Microsoft, Cloudflare or Discord, which is most cases. The raw
+        # matches stay in the evidence; the decision uses what is about the
+        # observable. See threatfox_match_scope.
+        tf_matches = about_observable(
+            domain, threat_feeds.get("threatfox_matches") or []
+        )
+
+        if vt_malicious >= 5 or abuse_score >= 80 or tf_matches:
+            classification = "malicious"
+            confidence = "high"
+            risk_score = max(85, min(98, abuse_score))
+            recommended_action = "block"
+            if vt_malicious:
+                key_evidence.append(f"Flagged malicious by {vt_malicious}/{vt_total} VT vendors")
+            if abuse_score:
+                key_evidence.append(f"AbuseIPDB confidence: {abuse_score}% ({abuse_reports} reports)")
+            if tf_matches:
+                key_evidence.append(f"ThreatFox IOC matches: {len(tf_matches)}")
+        elif vt_malicious >= 2 or abuse_score >= 40:
+            classification = "suspicious"
+            confidence = "medium"
+            risk_score = max(45, min(70, abuse_score))
+            recommended_action = "investigate"
+            if vt_malicious:
+                key_evidence.append(f"Flagged by {vt_malicious} VT vendors")
+            if abuse_score:
+                key_evidence.append(f"AbuseIPDB score: {abuse_score}%")
+        else:
+            classification = "benign"
+            confidence = "medium"
+            risk_score = 10
+            recommended_action = "monitor"
+            if vt_found:
+                key_evidence.append(f"VT clean: 0/{vt_total} detections")
+            if abuse_score == 0 and abuse_reports == 0:
+                key_evidence.append("No AbuseIPDB reports")
+
+    elif observable_type in {"domain", "url"}:
+        (
+            classification,
+            confidence,
+            risk_score,
+            recommended_action,
+            key_evidence,
+            findings,
+            data_needed,
+        ) = _decide_domain_url(evidence_data)
+
+    if not findings:
+        findings.append(_default_finding(evidence_data, observable_type))
+
+    if not recommended_steps:
+        recommended_steps = _recommended_steps(classification)
+
+    headline_evidence = _headline_evidence(key_evidence)
+    evidence_str = "; ".join(headline_evidence) if headline_evidence else "No significant threat indicators found."
+    risk_text = f"Risk score: {risk_score}/100." if risk_score is not None else "Risk score undetermined."
+    summary = (
+        f"Deterministic decision for {observable_type.upper()} - {domain}. "
+        f"Classification: {classification.upper()} ({confidence} confidence). "
+        f"{risk_text} Key evidence: {evidence_str}"
+    )
+
+    return {
+        "classification": classification,
+        "confidence": confidence,
+        "investigation_state": "concluded",
+        "primary_reasoning": summary,
+        "key_evidence": key_evidence,
+        "contradicting_evidence": [],
+        "data_needed": data_needed,
+        "findings": findings,
+        "recommended_action": recommended_action,
+        "recommended_steps": recommended_steps,
+        "risk_score": risk_score,
+        "risk_rationale": evidence_str,
+        "decision_engine": _provenance(),
+    }
+
+
+# How much risk an analyst's classification is worth on its own. Used only when
+# the collectors reached no conclusion at all, so these are the scores of a
+# reading rather than of a measurement — deliberately short of the numbers a
+# sandbox verdict earns.
+_ANALYST_RISK_FLOOR = {"malicious": 70, "suspicious": 45, "benign": 10, "inconclusive": None}
+
+
+def _provenance() -> dict[str, Any]:
+    """Which code produced this verdict, recorded with the verdict.
+
+    `source` and `canonical_fields` were already here. `code` is new, and it
+    is the field that would have turned an afternoon into a query.
+
+    On 2026-10-13 a `malicious/high/risk-90/block` verdict on `live.com` had
+    to be attributed to a specific build by noticing that its `key_evidence`
+    said `ThreatFox matches: 25` and that the scoped version of this function
+    builds that line from the scoped list, so it would not have emitted it at
+    all — then corroborating against the worker's process start time
+    (09:21:06) against the commit that fixed it (10:53). Three inferences to
+    answer "which code decided this", and nobody should ever have to make
+    them.
+
+    `analysis_task` runs in the Celery worker and the worker does not reload,
+    so the api can be running today's code while the worker runs this
+    morning's. The fingerprint is a content hash of the loaded `*.py`, taken
+    at import time, so it identifies the **process that decided** rather than
+    the source on disk — which is the whole distinction.
+
+    Companion to `source_coverage_service`: that says which sources answered,
+    this says which code decided. Together a verdict is self-describing.
+
+    Best effort. A verdict must never fail to be produced because its
+    provenance could not be computed.
+    """
+    block: dict[str, Any] = {
+        "version": 2,
+        "source": "deterministic",
+        "canonical_fields": [
+            "classification", "confidence", "risk_score", "recommended_action",
+        ],
+    }
+    try:
+        from app.code_version import code_version
+
+        version = code_version()
+        block["code"] = {
+            "fingerprint": version.get("code_fingerprint"),
+            "imported_at": version.get("imported_at"),
+            "git_sha": version.get("git_sha"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        block["code"] = {
+            "fingerprint": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return block
+
+
+def apply_decision_to_report(report_data: dict[str, Any], decision_report: dict[str, Any]) -> dict[str, Any]:
+    """Overlay canonical decision fields onto an analyst/fallback report.
+
+    The collectors decide. They measured something; the analyst read it.
+
+    But when they decided nothing — no VirusTotal record, no sandbox, nothing
+    static — a verdict of "inconclusive, risk undetermined" beside an analyst
+    who read the file and explained what it does is the platform contradicting
+    itself in public. In that case, and only then, the analyst's classification
+    is adopted and labelled as such.
+    """
+    merged = dict(report_data or {})
+
+    analyst_class = str((report_data or {}).get("classification") or "").strip().lower()
+    analyst_confidence = str((report_data or {}).get("confidence") or "").strip().lower()
+    analyst_risk = (report_data or {}).get("risk_score")
+
+    for key in ("classification", "confidence", "risk_score", "recommended_action", "risk_rationale"):
+        merged[key] = decision_report.get(key)
+
+    engine = dict(decision_report.get("decision_engine") or {})
+    collectors_undecided = (
+        str(decision_report.get("classification") or "").lower() == "inconclusive"
+        and decision_report.get("risk_score") is None
+    )
+    if collectors_undecided and analyst_class in _ANALYST_RISK_FLOOR and analyst_class != "inconclusive":
+        merged["classification"] = analyst_class
+        # Never above medium: this is one reading, with nothing corroborating it.
+        merged["confidence"] = "medium" if analyst_confidence in {"high", "medium"} else "low"
+        merged["risk_score"] = (
+            int(analyst_risk)
+            if isinstance(analyst_risk, (int, float))
+            else _ANALYST_RISK_FLOOR[analyst_class]
+        )
+        merged["recommended_action"] = (
+            "block" if analyst_class == "malicious"
+            else "investigate" if analyst_class == "suspicious"
+            else "monitor"
+        )
+        engine["source"] = "analyst_fallback"
+        engine["note"] = (
+            "No collector reached a conclusion, so the analyst's reading of the "
+            "evidence was used for the verdict."
+        )
+
+    merged["decision_engine"] = engine or decision_report.get("decision_engine")
+    merged["key_evidence"] = _merge_str_lists(
+        decision_report.get("key_evidence") or [],
+        merged.get("key_evidence") or [],
+    )
+    merged["data_needed"] = _merge_str_lists(
+        decision_report.get("data_needed") or [],
+        merged.get("data_needed") or [],
+    )
+    merged["recommended_steps"] = _merge_str_lists(
+        decision_report.get("recommended_steps") or [],
+        merged.get("recommended_steps") or [],
+    )
+    merged["findings"] = _merge_findings(
+        decision_report.get("findings") or [],
+        merged.get("findings") or [],
+    )
+    return merged
+
+
+
+def community_listing_weight(
+    threat_feeds: dict[str, Any],
+    *,
+    vt_found: bool,
+    vt_total: int,
+    vt_malicious: int,
+    vt_suspicious: int,
+    corroborated: bool,
+) -> tuple[bool, bool, bool]:
+    """How much an unverified community listing is allowed to decide.
+
+    Returns (openphish_decisive, phishtank_decisive, authoritative_clean).
+
+    OpenPhish is a community submission feed with no verification step, and an
+    unverified PhishTank entry is a report nobody confirmed — this deployment
+    holds one against google.com submitted in 2020 and never verified. Either
+    alone was enough to return malicious at high confidence, which is how
+    https://www.google.com/ came back malicious 74/100 while VirusTotal reported
+    0 of 91 and Safe Browsing reported not-listed.
+
+    They still count. They just no longer outvote every other source on their
+    own: something else has to agree before a single unverified listing is
+    treated as proof.
+
+    `authoritative_clean` is the other half of that. A source that was actually
+    asked and said no is not the same as a source that said nothing, and the
+    difference is the whole point — silence is absence of evidence, this is
+    evidence of absence. A three-engine VirusTotal panel returning nothing is
+    silence; ninety-one returning nothing is a clearance.
+
+    Lives here and is called from both classification paths, because there are
+    two copies of this ladder in the codebase and a rule about what counts as
+    proof must not be able to differ between them.
+    """
+    openphish_listed = bool(threat_feeds.get("openphish_listed"))
+    phishtank = threat_feeds.get("phishtank") or {}
+    phishtank_positive = bool(phishtank.get("in_database"))
+    phishtank_verified = bool(phishtank.get("verified"))
+
+    gsb = threat_feeds.get("google_safe_browsing") or {}
+    gsb_checked = bool(gsb.get("checked"))
+    gsb_listed = bool(gsb.get("listed"))
+
+    agreed = bool(corroborated or gsb_listed or phishtank_verified)
+    authoritative_clean = bool(
+        (gsb_checked and not gsb_listed)
+        or (vt_found and vt_total >= 20 and vt_malicious == 0 and vt_suspicious == 0)
+    )
+    openphish_decisive = openphish_listed and (agreed or not authoritative_clean)
+    phishtank_decisive = phishtank_positive and (agreed or not authoritative_clean)
+    return openphish_decisive, phishtank_decisive, authoritative_clean
+
+
+
+def _decide_domain_url(evidence_data: dict[str, Any]) -> tuple[str, str, int, str, list[str], list[dict[str, Any]], list[str]]:
+    # The observable this evidence is about, needed to tell a finding on it
+    # from a finding on something it hosts.
+    domain = str(evidence_data.get("domain") or "").strip()
+    vt = evidence_data.get("vt") or {}
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    intel = evidence_data.get("intel") or {}
+    http = evidence_data.get("http") or {}
+
+    vt_found = bool(vt.get("found", False))
+    vt_malicious = int(vt.get("malicious_count") or 0) if vt_found else 0
+    vt_suspicious = int(vt.get("suspicious_count") or 0) if vt_found else 0
+    vt_total = int(vt.get("total_vendors") or 0)
+    vt_ran = str(((vt.get("meta") or {}).get("status") or "")).lower() != "failed"
+
+    # URLScan was collected, displayed in every report — and never read here. A
+    # scan that came back "malicious, score 100, tags: phishing" contributed
+    # nothing to the verdict.
+    urlscan = evidence_data.get("urlscan") or {}
+    urlscan_verdict = str(urlscan.get("verdict") or "").strip().lower()
+    urlscan_score = int(urlscan.get("score") or 0)
+
+    # Whose page was scanned. URLScan is searched by domain and returns scans
+    # of subdomains too, so the verdict on hand is not necessarily a verdict
+    # about the observable.
+    #
+    # github.io scored 90 — malicious, high confidence — on
+    # "malicious, score 100, tags: phishing" for
+    # https://hstephan-create.github.io/2-play/, somebody's phishing page on
+    # GitHub Pages. VirusTotal was 0 of 91. A platform is not malicious because
+    # one of its tenants is; every hosting provider has malicious tenants, and
+    # that is a property of hosting.
+    scanned_host = platform.host_of(urlscan.get("page_url"))
+    urlscan_about_target = platform.evidence_is_about(scanned_host, domain)
+
+    urlscan_malicious = urlscan_about_target and (
+        urlscan_verdict == "malicious" or urlscan_score >= 70
+    )
+    urlscan_suspicious = urlscan_about_target and (
+        urlscan_verdict == "suspicious"
+        or (urlscan_verdict not in {"benign", "malicious", ""} and urlscan_score > 0)
+    )
+    urlscan_about_other_host = (
+        not urlscan_about_target
+        and bool(scanned_host)
+        and (urlscan_verdict in {"malicious", "suspicious"} or urlscan_score > 0)
+    )
+
+    domain_age_days = (evidence_data.get("whois") or {}).get("domain_age_days")
+    domain_age = int(domain_age_days) if isinstance(domain_age_days, (int, float)) else None
+    newly_registered = domain_age is not None and domain_age <= NEWLY_REGISTERED_DAYS
+    recently_registered = domain_age is not None and NEWLY_REGISTERED_DAYS < domain_age <= YOUNG_DOMAIN_DAYS
+
+    # Scoped to this observable, for the reason URLhaus's own answer gives:
+    # asked about `github.com` it reports 9,654 malicious URLs, every one of
+    # them somebody else's path on a shared platform. The 2026-10-13 re-query
+    # of all 259 hosts that received a benign verdict while this collector was
+    # dead found four listed — github.com, raw.githubusercontent.com,
+    # discord.com, www.google.com — and not one with a listing for the path
+    # this platform had investigated. Restoring the feed at host granularity
+    # would have escalated most of the estate.
+    intel_hits = [
+        hit for hit in intel_hits_about_observable(
+            domain, intel.get("blocklist_hits") or []
+        )
+        if str((hit or {}).get("source") or "").strip().lower() != "uribl"
+    ]
+    # Did any of the four sources behind that list actually answer?
+    #
+    # `blocklist_hits` merges SURBL, Spamhaus DBL, URLhaus and Spamhaus SIA,
+    # so an empty list is eight different claims and until 2026-10-13 the
+    # payload could express only one of them. It was the worst one: the intel
+    # collector failed outright on 2,198 consecutive runs from 2026-07-07,
+    # a 401 from Spamhaus SIA raising out of `_collect` and discarding crt.sh,
+    # both DNSBLs and URLhaus with it, while `blocklist_hits: []` — a Pydantic
+    # default on the failure path — read downstream as "in no blocklist".
+    # 583 benign verdicts across 374 domains were reached in that state.
+    #
+    # Same correction as the threatfox limb below, and unlike that one there
+    # was no flag to consume: `sources_checked` had to be built. Evidence
+    # written before it exists has no key, which lands here as unchecked —
+    # the correct direction, since unknown is not clean.
+    intel_sources_checked = {
+        str(name).strip() for name in (intel.get("sources_checked") or [])
+    }
+    intel_checked = bool(intel_sources_checked)
+    # Scoped to this observable — see the note at the other call site.
+    tf_matches = about_observable(
+        domain, threat_feeds.get("threatfox_matches") or []
+    )
+    # Did the feed actually answer? `not tf_matches` is true both when
+    # ThreatFox said "nothing" and when it never replied, and for seven
+    # months it was the second: the collector recorded
+    # `threatfox (error: HTTPError)` in `feeds_skipped` on every row while
+    # the empty match list read as "not listed" to everything downstream.
+    #
+    # Granularity does not fix that — the next 401 empties the list again —
+    # so a clean *precondition* must require checked-and-not-listed, exactly
+    # as the Google Safe Browsing handling below already does. The flag is
+    # not new: nothing read it.
+    feeds_checked = {
+        str(f).strip().lower() for f in (threat_feeds.get("feeds_checked") or [])
+    }
+    threatfox_checked = "threatfox" in feeds_checked
+    openphish_listed = bool(threat_feeds.get("openphish_listed"))
+    phishtank = threat_feeds.get("phishtank") or {}
+    phishtank_positive = bool(phishtank.get("in_database"))
+    phishtank_verified = bool(phishtank.get("verified"))
+
+    # Google Safe Browsing answering "not listed" is a real negative, not a
+    # missing answer: it is Google's own blocklist, queried and returned.
+    gsb = threat_feeds.get("google_safe_browsing") or {}
+    gsb_checked = bool(gsb.get("checked"))
+    gsb_listed = bool(gsb.get("listed"))
+
+
+    http_phishing = list(http.get("phishing_indicators") or [])
+    http_has_login = bool(http.get("has_login_form"))
+    domain_context = _has_domain_suspicion_context(evidence_data)
+    high_conf_http = [s for s in http_phishing if _is_high_confidence_http_signal(s)]
+    contextual_http = [s for s in http_phishing if _is_contextual_http_signal(s)]
+    strong_http = [
+        s for s in http_phishing
+        if _is_high_confidence_http_signal(s) or (domain_context and _is_contextual_http_signal(s))
+    ]
+    scored_http = [
+        s for s in http_phishing
+        if _is_high_confidence_http_signal(s) or (domain_context and not _is_contextual_http_signal(s))
+    ]
+    http_score = len(strong_http) * 2 + len(scored_http)
+    weak_score, weak_evidence = _domain_weak_signal_score(evidence_data, contextual_http=bool(contextual_http))
+
+    anyrun_verdict, anyrun_names, anyrun_context = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
+    anyrun_malicious = anyrun_verdict == "malicious"
+    anyrun_suspicious = anyrun_verdict == "suspicious"
+
+    # A label-only escalation that a large clean VirusTotal result contradicts.
+    #
+    # `_best_anyrun_verdict` promotes a CLEAN sandbox run to malicious when the
+    # provider tagged the sample `phishing` or similar — the automated run often
+    # fails to trigger the behaviour its own label describes, so the label is
+    # trusted over the verdict. That is right when nothing else has looked.
+    #
+    # It is much weaker when something else has. One real case: ANY.RUN returned
+    # CLEAN, tagged it `phishing`, and the platform scored it malicious/90/high
+    # confidence — while VirusTotal's 92 vendors, collected minutes later,
+    # returned zero malicious and zero suspicious. The label was the only signal,
+    # and everything else that looked disagreed.
+    #
+    # So the escalation still stands, but it stops claiming certainty: the
+    # verdict drops to suspicious with medium confidence, which keeps the case in
+    # front of an analyst instead of auto-blocking on a contradicted tag. It
+    # applies only when the label is genuinely alone — any corroborating signal
+    # anywhere below restores the malicious path.
+    #
+    # And only when the label is *generic*. A lone `phishing` tag is the weakest
+    # thing ANY.RUN can say; a cluster naming a specific campaign — clickfix,
+    # clearfake, etherhiding, an exploit kit — is a fingerprint, and those
+    # families are known for evading multi-vendor scanning, so a clean
+    # VirusTotal is exactly what you would expect rather than a contradiction.
+    escalating_labels = [str(label).strip().casefold() for label in (anyrun_context.get("escalated_by") or [])]
+    anyrun_label_only = bool(escalating_labels)
+    anyrun_label_is_generic = len(escalating_labels) == 1 and escalating_labels[0] in _ANYRUN_GENERIC_LABELS
+    vt_broadly_clean = vt_found and vt_ran and vt_malicious == 0 and vt_suspicious == 0 and vt_total >= 20
+    anyrun_label_contradicted = (
+        anyrun_malicious
+        and anyrun_label_only
+        and anyrun_label_is_generic
+        and vt_broadly_clean
+        and not phishtank_positive
+        and not openphish_listed
+        # Deliberately *not* `threatfox_checked` / `intel_checked` here,
+        # though both are in scope and `observable_clean` below requires
+        # them. The checked-and-not-listed rule applies where absence lowers
+        # risk toward benign. This branch is the opposite: it declines to
+        # auto-block on a bare sandbox label that 20+ VirusTotal engines
+        # contradict, and the result is still suspicious/investigate, with a
+        # human on it. Requiring a feed to have answered before the platform
+        # will decline to block would make a feed outage *cause* blocks —
+        # the right rule at the wrong site, in the dangerous direction.
+        and not tf_matches
+        and not intel_hits
+        and not urlscan_malicious
+        and not urlscan_suspicious
+        and not high_conf_http
+    )
+    if anyrun_label_contradicted:
+        anyrun_malicious = False
+        anyrun_suspicious = True
+    form_detection = _best_sensitive_form_detection(evidence_data)
+    anyrun_heuristics = _anyrun_heuristic_observations(evidence_data.get("hybrid_analysis") or {})
+    # A clean observable is one nothing flagged — not one that also happens to
+    # lack a login page. Requiring `anyrun == "clean"` meant a sandbox that never
+    # ran (verdict None) blocked the benign verdict too, and requiring no login
+    # form made every business site with a customer portal unclassifiable as
+    # benign no matter how clean VirusTotal, the feeds and WHOIS were.
+    anyrun_not_flagged = anyrun_verdict not in {"malicious", "suspicious"}
+    observable_clean = (
+        anyrun_not_flagged
+        and vt_found
+        and vt_malicious == 0
+        and vt_suspicious == 0
+        and not phishtank_positive
+        and not openphish_listed
+        # "asked and not listed", never "never asked". An unchecked feed
+        # blocks this branch rather than unlocking it, which is the correct
+        # direction for a precondition: absence of an answer is not evidence
+        # of cleanliness.
+        and threatfox_checked
+        and not tf_matches
+        and intel_checked
+        and not intel_hits
+        and int((evidence_data.get("whois") or {}).get("domain_age_days") or 0) >= 365
+        and not high_conf_http
+        and weak_score < 4
+    )
+
+    # Reputation is only "clean" when something actually looked. A rate-limited
+    # VirusTotal used to read exactly like a VirusTotal that found nothing.
+    reputation_available = (
+        (vt_found and vt_ran)
+        or bool(urlscan_verdict)
+        or bool(threat_feeds.get("feeds_checked"))
+        or bool(anyrun_verdict)
+        or bool(intel_hits)
+    )
+
+
+    # OpenPhish is a community submission feed with no verification step, and
+    # an unverified PhishTank entry is a report nobody confirmed — this
+    # deployment holds one from 2020 against google.com. Either alone was enough
+    # to return malicious at high confidence, which is how https://www.google.com/
+    # came back malicious 74/100 while VirusTotal reported 0 of 91 and Safe
+    # Browsing reported not-listed.
+    #
+    # They still count. They just no longer outvote every other source on their
+    # own: something else has to agree before a single unverified community
+    # listing is treated as proof.
+    community_corroborated = bool(
+        vt_malicious > 0
+        or vt_suspicious > 0
+        or tf_matches
+        or intel_hits
+        or anyrun_malicious
+        or anyrun_suspicious
+        or urlscan_malicious
+        or gsb_listed
+        or phishtank_verified
+    )
+    # An authoritative source that was actually asked and said no. Not the same
+    # as no answer, and the difference is the whole point: silence is absence of
+    # evidence, this is evidence of absence.
+    authoritative_clean = bool(
+        (gsb_checked and not gsb_listed)
+        or (vt_found and vt_total >= 20 and vt_malicious == 0 and vt_suspicious == 0)
+    )
+    openphish_decisive = openphish_listed and (
+        community_corroborated or not authoritative_clean
+    )
+
+    # One rule, computed once and shared with the other ladder — see
+    # community_listing_weight.
+    community_corroborated = bool(
+        vt_malicious > 0
+        or vt_suspicious > 0
+        or tf_matches
+        or intel_hits
+        or anyrun_malicious
+        or anyrun_suspicious
+        or urlscan_malicious
+    )
+    openphish_decisive, phishtank_decisive, authoritative_clean = community_listing_weight(
+        threat_feeds,
+        vt_found=vt_found,
+        vt_total=vt_total,
+        vt_malicious=vt_malicious,
+        vt_suspicious=vt_suspicious,
+        corroborated=community_corroborated,
+    )
+
+
+    if (
+        vt_malicious >= 5
+        or phishtank_verified
+        or tf_matches
+        or openphish_decisive
+        or anyrun_malicious
+        or urlscan_malicious
+    ):
+        classification, confidence, risk_score, action = "malicious", "high", 90, "block"
+    elif openphish_listed:
+        # Listed, but by a community feed alone and against sources that were
+        # asked and disagreed. Worth an analyst's eyes, not a block.
+        classification, confidence, risk_score, action = "suspicious", "medium", 55, "investigate"
+    elif high_conf_http and (http_has_login or len(http_phishing) >= 2):
+        classification, confidence, risk_score, action = "malicious", "medium", 82, "block"
+    elif (
+        vt_malicious >= 2
+        or vt_suspicious >= 5
+        or len(intel_hits) >= 2
+        or anyrun_suspicious
+        or urlscan_suspicious
+    ):
+        classification, confidence, risk_score, action = "suspicious", "medium", 60, "investigate"
+    elif http_score >= 3 or (strong_http and http_has_login):
+        classification, confidence, risk_score, action = "suspicious", "medium", 65, "investigate"
+    elif phishtank_decisive:
+        # An unverified PhishTank entry is a report nobody confirmed. Held
+        # against a host that Safe Browsing and 91 VirusTotal engines were asked
+        # about and cleared, it is the weaker claim — and left as a verdict of
+        # its own it made every stale community submission permanently
+        # unresolvable. It still shows in the findings; it no longer decides.
+        classification, confidence, risk_score, action = "inconclusive", "low", 30, "investigate"
+    elif http_score >= 1:
+        classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"
+    elif newly_registered:
+        # Age is one of the strongest phishing predictors: infrastructure is
+        # registered days before a campaign and abandoned after it. Clean
+        # reputation on a two-week-old domain means nobody has reported it yet.
+        classification, confidence, risk_score, action = "suspicious", "medium", 50, "investigate"
+    elif not reputation_available:
+        # Nothing was able to look. That is missing evidence, not a clean bill of
+        # health — the previous behaviour turned a collector outage into "benign".
+        classification, confidence, risk_score, action = "inconclusive", "low", 25, "investigate"
+    elif observable_clean:
+        # A medium lexical score, shared hosting, or a brand word found in a
+        # CSP/resource list must not outweigh several direct clean controls.
+        classification, confidence, risk_score, action = "benign", "high", 15, "monitor"
+    elif weak_score >= 4:
+        classification, confidence, risk_score, action = "suspicious", "medium", 50, "investigate"
+    elif weak_score >= 3:
+        classification, confidence, risk_score, action = "suspicious", "low", 40, "monitor"
+    else:
+        classification, confidence, risk_score, action = "benign", "medium", 15, "monitor"
+
+    key_evidence: list[str] = []
+    findings: list[dict[str, Any]] = []
+    data_needed: list[str] = []
+    if anyrun_verdict:
+        verdict_names = [
+            name for name in anyrun_names
+            if str(name).strip().casefold() not in {"obfuscated-js", "obfuscated js"}
+        ]
+        names = (", ".join(verdict_names[:4]) + " ") if verdict_names else ""
+        source_label = "sandbox" if anyrun_context.get("sandbox") else "TI"
+        network_label = f" via {anyrun_context['network']}" if anyrun_context.get("network") else ""
+        score_label = f" score {anyrun_context['threat_score']}" if anyrun_context.get("threat_score") is not None else ""
+        details: list[str] = [_anyrun_verdict_sentence(anyrun_verdict, source_label, anyrun_context)]
+        if anyrun_context.get("threat_score") is not None:
+            details.append(f"Provider threat score: {anyrun_context['threat_score']}/100.")
+        if anyrun_context.get("network"):
+            details.append(f"Execution network profile: {anyrun_context['network']}.")
+        if verdict_names:
+            details.append(f"Structured provider labels: {', '.join(verdict_names[:6])}.")
+        else:
+            details.append("No structured AnyRun threat labels were returned; review the linked sandbox telemetry before treating the verdict as confirmed malicious behavior.")
+        if form_detection.get("detected"):
+            details.append(
+                "A visible data-entry form was detected in the rendered page, but the form was not submitted; "
+                "interaction-dependent behavior therefore remains untested."
+            )
+        if anyrun_malicious and anyrun_context.get("escalated_by"):
+            details.append(
+                "Decision impact: the provider label — not the provider verdict — set the deterministic "
+                "domain/URL score to 90 before lexical blending and trusted-source floors."
+            )
+        elif anyrun_malicious:
+            details.append("Decision impact: a MALICIOUS sandbox verdict sets the deterministic domain/URL score to 90 before lexical blending and trusted-source floors.")
+        elif anyrun_suspicious:
+            details.append("Decision impact: a SUSPICIOUS sandbox verdict sets the deterministic domain/URL score to 60 before lexical blending and trusted-source floors.")
+        else:
+            details.append("Decision impact: a CLEAN AnyRun verdict does not independently raise the deterministic risk score.")
+        interaction_label = (
+            " with incomplete form interaction"
+            if form_detection.get("detected")
+            else ""
+        )
+        # The headline must not read as a provider verdict when the provider did
+        # not give one. An escalation by label says so in the title, so the
+        # finding and the sandbox table on the same screen cannot disagree.
+        escalated_labels = [str(label) for label in (anyrun_context.get("escalated_by") or []) if str(label).strip()]
+        provider_verdict = str(anyrun_context.get("provider_verdict") or "").strip().upper()
+        headline = (
+            f"AnyRun {source_label} labelled {', '.join(escalated_labels[:2])}"
+            f" (provider verdict: {provider_verdict or 'none'})"
+            if escalated_labels
+            else f"AnyRun {source_label} verdict: {anyrun_verdict.upper()}"
+        )
+        key_evidence.append(
+            f"{headline}{score_label}{network_label}"
+            f"{interaction_label} - {names}provider evidence"
+        )
+        findings.append({
+            "id": "anyrun_verdict",
+            "title": headline,
+            "description": " ".join(details),
+            "severity": "critical" if anyrun_malicious else ("high" if anyrun_suspicious else "info"),
+            "evidence_refs": ["hybrid_analysis.items"],
+        })
+    if anyrun_heuristics:
+        heuristic_text = ", ".join(anyrun_heuristics[:4])
+        key_evidence.append(
+            f"AnyRun heuristic observation: {heuristic_text} (non-verdict signal; no malicious score floor)"
+        )
+        findings.append({
+            "id": "anyrun_heuristic_observation",
+            "title": "AnyRun JavaScript-obfuscation heuristic",
+            "description": (
+                f"AnyRun observed {heuristic_text}. This is a heuristic suspicious indicator that may reflect "
+                "decoding or reconstruction logic; by itself it does not prove malicious behavior and does not "
+                "override a CLEAN provider verdict."
+            ),
+            "severity": "low",
+            "evidence_refs": ["hybrid_analysis.items.raw_summary.behavior_details.network_threats"],
+        })
+    if form_detection.get("detected"):
+        categories = [
+            str(value).replace("_", " ")
+            for value in form_detection.get("categories") or []
+            if value
+        ]
+        category_text = ", ".join(categories) if categories else "user data"
+        key_evidence.append(
+            f"Rendered data-entry form detected ({category_text}); submission was not exercised"
+        )
+        findings.append({
+            "id": "sensitive_data_entry_form",
+            "title": "Rendered data-entry form requires interaction review",
+            "description": (
+                f"The rendered page visibly requests {category_text}. The detector did not submit the form, "
+                "so a clean sandbox verdict does not cover behavior triggered after submission."
+            ),
+            "severity": "medium",
+            "evidence_refs": [
+                str(form_detection.get("_evidence_ref") or "hybrid_analysis.items.raw_summary.sensitive_form_detection")
+            ],
+        })
+        data_needed.append(
+            "Validate the form submission path in an isolated sandbox to determine whether entered data is transmitted or triggers malicious behavior."
+        )
+    excluded_anyrun_tasks = _excluded_anyrun_task_count(evidence_data.get("hybrid_analysis") or {})
+    if excluded_anyrun_tasks:
+        findings.append({
+            "id": "anyrun_scope_exclusions",
+            "title": "AnyRun third-party mentions excluded from domain risk",
+            "description": (
+                f"{excluded_anyrun_tasks} related AnyRun task(s) were not scored because their main-object hosts "
+                "were third-party infrastructure. A domain appearing only in an email address, URL path, query, "
+                "or fragment is victim/mention evidence, not proof that the investigated domain hosted the threat."
+            ),
+            "severity": "info",
+            "evidence_refs": ["hybrid_analysis.items.scope_validation"],
+        })
+    if urlscan_verdict:
+        tags = (
+            f", tags: {', '.join(str(t) for t in (urlscan.get('tags') or [])[:4])}"
+            if urlscan.get("tags") else ""
+        )
+        detail = (
+            f"URLScan verdict: {urlscan_verdict}"
+            + (f" (score {urlscan_score})" if urlscan_score else "")
+            + tags
+        )
+        if urlscan_about_other_host:
+            # Named, not hidden. An analyst must be able to see that a site on
+            # this platform is malicious; what must not happen is the platform
+            # inheriting that verdict.
+            key_evidence.append(
+                f"{detail} — but that scan is of {scanned_host}, a site hosted on "
+                f"{domain} rather than {domain} itself. It is not counted towards this "
+                "verdict."
+            )
+        else:
+            key_evidence.append(detail)
+    if newly_registered:
+        key_evidence.append(f"Newly registered domain — {domain_age} day(s) old")
+    elif recently_registered:
+        key_evidence.append(f"Recently registered domain — {domain_age} day(s) old")
+    if not reputation_available:
+        key_evidence.append("No reputation source returned data for this observable")
+        data_needed.append(
+            "Reputation lookup unavailable (VirusTotal, URLScan and threat feeds all returned "
+            "nothing or failed) — re-run the collectors before treating this as clean"
+        )
+
+    if vt_found and (vt_malicious > 0 or vt_suspicious > 0 or not (anyrun_malicious or anyrun_suspicious)):
+        key_evidence.append(f"VirusTotal: {vt_malicious} malicious, {vt_suspicious} suspicious of {vt_total}")
+    if intel_hits:
+        key_evidence.append(f"Intel blocklist hits: {len(intel_hits)}")
+    if tf_matches:
+        key_evidence.append(f"ThreatFox matches: {len(tf_matches)}")
+    if openphish_listed:
+        key_evidence.append("OpenPhish listed")
+    if phishtank_positive:
+        key_evidence.append("PhishTank match" + (" (verified)" if phishtank_verified else " (unverified)"))
+        findings.append({
+            "id": "fallback_phishtank_hit",
+            "title": "PhishTank listing observed",
+            "description": "Domain/URL was found in PhishTank feed" + (" with verified status." if phishtank_verified else " but not verified."),
+            "severity": "high" if phishtank_verified else "medium",
+            "evidence_refs": ["threat_feeds.phishtank"],
+        })
+        if not phishtank_verified:
+            data_needed.append("Confirm whether the PhishTank listing is a true positive or stale/unverified entry.")
+    if not anyrun_malicious:
+        for sig in strong_http:
+            key_evidence.append(f"Static HTTP: {sig}")
+    if contextual_http and not domain_context and not anyrun_malicious:
+        key_evidence.append("Static HTTP input/brand observations were treated as contextual because no independent suspicious-domain signal was present")
+    if not anyrun_malicious:
+        for item in weak_evidence:
+            key_evidence.append(item)
+
+    if vt_malicious > 0 or vt_suspicious > 0:
+        findings.append({
+            "id": "fallback_vt_signal",
+            "title": "VirusTotal detection signal",
+            "description": f"VT reports {vt_malicious} malicious and {vt_suspicious} suspicious detections.",
+            "severity": "high" if vt_malicious >= 3 else "medium",
+            "evidence_refs": ["vt.malicious_count", "vt.suspicious_count"],
+        })
+    if http_phishing:
+        findings.append({
+            "id": "static_http_phishing",
+            "title": "Static HTTP content observations detected",
+            "description": _http_finding_description(http_phishing, http_has_login, bool(contextual_http and not domain_context)),
+            "severity": "high" if high_conf_http else ("medium" if strong_http else "low"),
+            "evidence_refs": ["http.phishing_indicators", "http.has_login_form"],
+        })
+    # Two findings, independently decided. Folding them into one if/elif meant
+    # that the first branch always matched and swallowed the "clean controls
+    # won" finding entirely.
+    # Clean controls beat the observations: reported whenever there were
+    # observations to beat, not only when they were numerous enough to score.
+    # Keying it on the score meant that excluding URL shape silently removed the
+    # analyst's explanation for why a flagged-looking domain came back benign.
+    _clean_override = bool(weak_evidence) and observable_clean and classification == "benign"
+
+    if weak_score >= 3:
+        findings.append({
+            "id": "weak_signal_cluster",
+            "title": "Suspicious weak-signal cluster",
+            "description": (
+                "Multiple medium-confidence signals combine into suspicious context: "
+                + "; ".join(weak_evidence[:6])
+            ),
+            "severity": "medium" if weak_score >= 4 else "low",
+            "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
+        })
+    elif weak_evidence and not _clean_override:
+        # Below the threshold there is still something to show an analyst — most
+        # often a shape-driven lexical verdict that was reported and not counted.
+        # Unless the finding below already says it better.
+        findings.append({
+            "id": "weak_signal_observations",
+            "title": "Weak signals observed, below the threshold to score",
+            "description": (
+                "Reported for review only; these did not affect the risk score: "
+                + "; ".join(weak_evidence[:6])
+            ),
+            "severity": "informational",
+            "evidence_refs": ["url_lexical_ml", "signals", "infrastructure_pivot", "email_security"],
+        })
+    if _clean_override:
+        findings.append({
+            "id": "weak_signals_overridden_by_clean_controls",
+            "title": "Weak signals did not outweigh direct clean evidence",
+            "description": (
+                "Lexical, shared-hosting, or contextual HTTP observations were retained for review but did not "
+                "raise the verdict because VirusTotal and AnyRun were clean, the domain is established, and no "
+                "high-confidence phishing behavior or login collection was observed."
+            ),
+            "severity": "info",
+            "evidence_refs": ["url_lexical_ml", "hybrid_analysis.items", "vt", "whois.domain_age_days"],
+        })
+    age_days = (evidence_data.get("whois") or {}).get("domain_age_days")
+    if classification == "benign" and isinstance(age_days, int) and age_days >= 365:
+        key_evidence.append(f"Established domain: approximately {age_days:,} days old")
+        findings.append({
+            "id": "established_domain_history",
+            "title": "Established domain with long registration history",
+            "description": (
+                f"WHOIS reports the domain is approximately {age_days:,} days old, which is inconsistent "
+                "with a newly registered disposable phishing domain."
+            ),
+            "severity": "info",
+            "evidence_refs": ["whois.domain_age_days"],
+        })
+
+    return classification, confidence, risk_score, action, key_evidence, findings, data_needed
+
+
+def _excluded_anyrun_task_count(hybrid: dict[str, Any]) -> int:
+    total = 0
+    if not isinstance(hybrid, dict):
+        return total
+    entries = hybrid.get("items") if isinstance(hybrid.get("items"), list) else [hybrid]
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        scope = item.get("scope_validation") or (item.get("raw_summary") or {}).get("scope_validation") or {}
+        if isinstance(scope, dict):
+            try:
+                total += max(0, int(scope.get("excluded_tasks") or 0))
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+def _best_sensitive_form_detection(evidence_data: dict[str, Any]) -> dict[str, Any]:
+    js_detection = (evidence_data.get("js_analysis") or {}).get("sensitive_form_detection") or {}
+    if isinstance(js_detection, dict) and js_detection.get("detected"):
+        return {
+            **js_detection,
+            "_evidence_ref": "js_analysis.sensitive_form_detection",
+        }
+
+    hybrid = evidence_data.get("hybrid_analysis") or {}
+    for index, item in enumerate(hybrid.get("items") or []):
+        if not isinstance(item, dict):
+            continue
+        detection = (item.get("raw_summary") or {}).get("sensitive_form_detection") or {}
+        if isinstance(detection, dict) and detection.get("detected"):
+            return {
+                **detection,
+                "_evidence_ref": (
+                    f"hybrid_analysis.items.{index}.raw_summary.sensitive_form_detection"
+                ),
+            }
+    return {}
+
+
+def _anyrun_heuristic_observations(hybrid: dict[str, Any]) -> list[str]:
+    observations: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        key = text.casefold()
+        if key == "javascript obfuscation (parseint)":
+            observations[:] = [
+                existing for existing in observations
+                if existing.casefold() != "javascript obfuscation"
+            ]
+        elif key == "javascript obfuscation" and any(
+            existing.casefold() == "javascript obfuscation (parseint)"
+            for existing in observations
+        ):
+            return
+        if not text or any(key == existing.casefold() for existing in observations):
+            return
+        observations.append(text)
+
+    for item in hybrid.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("raw_summary") or {}
+        tags = [
+            *(_as_list(item.get("tags"))),
+            *(_as_list(raw.get("tags")) if isinstance(raw, dict) else []),
+        ]
+        if any(str(tag).strip().casefold() in {"obfuscated-js", "obfuscated js"} for tag in tags):
+            add("JavaScript obfuscation")
+        details = (raw.get("behavior_details") or {}) if isinstance(raw, dict) else {}
+        for event in details.get("network_threats") or []:
+            if not isinstance(event, dict):
+                continue
+            message = str(event.get("msg") or event.get("signature") or "").strip()
+            lower = message.casefold()
+            if "javascript obfuscation" in lower and "parseint" in lower:
+                add("JavaScript Obfuscation (ParseInt)")
+    return observations
+
+
+
+
+def _domain_weak_signal_score(evidence_data: dict[str, Any], *, contextual_http: bool = False) -> tuple[int, list[str]]:
+    # Imported here rather than at module scope: this module deliberately has no
+    # app-level imports at the top, so it stays importable on its own.
+    from app.services.url_lexical_ml_service import (
+        SEMANTIC_FEATURE_LABELS,
+        semantic_features_present,
+    )
+
+    score = 0
+    reasons: list[str] = []
+
+    lexical = evidence_data.get("url_lexical_ml") or {}
+    if not isinstance(lexical, dict) or not lexical:
+        lexical = (evidence_data.get("ml_url_score") or {}).get("raw") or evidence_data.get("ml_url_score") or {}
+    if isinstance(lexical, dict):
+        # The aggregate probability and its low/medium/high band are gone from
+        # here, not merely ungated.
+        #
+        # They used to contribute 1 or 2 points when a now-removed flag
+        # allowed it, and to be appended as a reason either way — "Lexical
+        # model high risk (0.99)". Measured on 2026-10-19 against the only
+        # external labels available, that number ranked flagged URLs BELOW
+        # clean ones, and the heuristic called 1,008 of 1,535 corpus URLs high.
+        # See docs/measurements/url-lexical-three-arms.md.
+        #
+        # The named observations stay and still score, because they are where
+        # every genuine high verdict came from and because each one is a fact
+        # an analyst can check against the URL in front of them. Capped at two
+        # so a single long URL tripping several cannot escalate on its own.
+        semantic = semantic_features_present(lexical)
+        if semantic:
+            score += 2 if len(semantic) > 1 else 1
+            reasons.append(
+                "URL structure: "
+                + "; ".join(SEMANTIC_FEATURE_LABELS.get(name, name) for name in semantic)
+            )
+
+    age_days = (evidence_data.get("whois") or {}).get("domain_age_days")
+    if isinstance(age_days, (int, float)) and NEWLY_REGISTERED_DAYS < int(age_days) <= YOUNG_DOMAIN_DAYS:
+        score += 1
+        reasons.append(f"Recently registered domain ({int(age_days)} days old)")
+
+    email = evidence_data.get("email_security") or {}
+    high_spoofability = (
+        isinstance(email, dict) and str(email.get("spoofability_score") or "").lower() == "high"
+    )
+
+    # Crowded infrastructure describes a hosting platform; it does not accuse
+    # one. github.io resolves to four GitHub/Fastly addresses shared by every
+    # Pages site in existence and is registered through MarkMonitor with
+    # thousands of siblings — both of which this block scored as weak signals
+    # of compromise. For a public-suffix apex they are what the thing *is*.
+    is_platform = platform.is_platform_apex(evidence_data.get("domain"))
+
+    infra = evidence_data.get("infrastructure_pivot") or {}
+    shared_hosting = False
+    if isinstance(infra, dict) and not is_platform:
+        shared_hosting = bool(infra.get("shared_hosting_detected"))
+        if _pivots_to_other_domains(infra, evidence_data):
+            score += 1
+            reasons.append("Registrant/registrar pivot links to other investigated domains")
+    elif is_platform:
+        reasons.append(
+            "Shared hosting and registrar pivots were not counted: this is a hosting "
+            "platform, where both are expected"
+        )
+
+    signals = evidence_data.get("signals") or []
+    if isinstance(signals, list):
+        signal_ids = {
+            str(sig.get("id") or "")
+            for sig in signals
+            if isinstance(sig, dict)
+        }
+        if "sig_high_spoofability" in signal_ids:
+            high_spoofability = True
+        # These two used to come in through a second door: when the checks above
+        # declined to score a self-pivot, the signal id scored it anyway under
+        # another name. Route them through the same rules instead.
+        if "sig_shared_hosting" in signal_ids and not is_platform:
+            shared_hosting = True
+        if (
+            "sig_registrant_pivot" in signal_ids
+            and not is_platform
+            and _pivots_to_other_domains(infra if isinstance(infra, dict) else {}, evidence_data)
+            and not any("pivot" in reason.lower() for reason in reasons)
+        ):
+            score += 1
+            reasons.append("Registrant/registrar pivot links to other investigated domains")
+
+    if contextual_http:
+        score += 1
+        reasons.append("Static HTTP brand/input observation present")
+
+    # Corroborating-only observations. Both are true of large numbers of
+    # perfectly legitimate sites — most of the web is on shared infrastructure,
+    # and plenty of real organisations have never published SPF/DMARC. They
+    # sharpen a suspicion that already exists; they must not create one.
+    for present, label in (
+        (high_spoofability, "High email spoofability"),
+        (shared_hosting, "Shared hosting or crowded infrastructure observed"),
+    ):
+        if present and score >= 1:
+            score += 1
+            reasons.append(label)
+        elif present:
+            reasons.append(f"{label} (not scored on its own)")
+
+    return score, reasons
+
+
+def _pivots_to_other_domains(infra: dict[str, Any], evidence_data: dict[str, Any]) -> bool:
+    """
+    Whether a registrant/registrar pivot reaches domains other than this one.
+
+    A pivot listing only the investigated domain is the domain looking at itself;
+    counting it made every domain corroborate its own suspicion.
+    """
+    pivots = infra.get("registrant_pivots")
+    if not isinstance(pivots, list) or not pivots:
+        return False
+
+    investigated = {
+        str(evidence_data.get(key) or "").strip().lower()
+        for key in ("domain", "target_domain", "observable")
+    } - {""}
+
+    for pivot in pivots:
+        if not isinstance(pivot, dict):
+            continue
+        others = {
+            str(domain).strip().lower()
+            for domain in (pivot.get("domains") or [])
+            if str(domain).strip()
+        } - investigated
+        if others:
+            return True
+    return False
+
+
+def _best_anyrun_verdict(hybrid: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
+    """
+    The verdict this platform acts on, which is not always the one ANY.RUN gave.
+
+    A threat label outranks a clean verdict. ANY.RUN routinely returns
+    `verdict: clean` — "No threats detected" — on a task it has simultaneously
+    tagged `phishing`, because the automated run never triggered the behaviour
+    the label describes. Trusting the verdict there would let a known phishing
+    kit through on the strength of a sandbox that did not click anything.
+
+    The cost of that rule is a report that reads as if ANY.RUN called something
+    malicious when it did not, so `context` carries the reason: `escalated_by`
+    names the labels that overrode the verdict and `provider_verdict` keeps what
+    the provider actually said. Anything describing this decision to an analyst
+    must use both — see `_anyrun_verdict_sentence`.
+    """
+    verdict = str(hybrid.get("verdict") or "").strip().lower()
+    names: list[str] = _anyrun_labels_from_item(hybrid)
+    context: dict[str, Any] = _anyrun_context_from_item(hybrid)
+    malicious_labels = _anyrun_malicious_labels(names)
+    for item in hybrid.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        scope = item.get("scope_validation") or (item.get("raw_summary") or {}).get("scope_validation") or {}
+        if isinstance(scope, dict) and scope.get("scope_match") is False:
+            continue
+        item_verdict = str(item.get("verdict") or "").strip().lower()
+        item_names = _anyrun_labels_from_item(item)
+        item_context = _anyrun_context_from_item(item)
+        malicious_labels.extend(label for label in _anyrun_malicious_labels(item_names) if label not in malicious_labels)
+        if item_verdict == "malicious":
+            return "malicious", item_names or names, item_context or context
+        if item_verdict == "suspicious" and verdict != "malicious":
+            verdict = "suspicious"
+            names = names or item_names
+            context = item_context or context
+        elif item_verdict == "clean" and verdict not in {"malicious", "suspicious"}:
+            verdict = "clean"
+            names = names or item_names
+            if (
+                not context
+                or (
+                    item_context.get("sandbox")
+                    and not context.get("sandbox")
+                )
+            ):
+                context = item_context
+    provider_verdict = verdict if verdict in {"malicious", "suspicious", "clean"} else ""
+    context = {**context, "provider_verdict": provider_verdict}
+    if malicious_labels:
+        # Record that the label, not the verdict, is what escalated this — so the
+        # finding can say so instead of claiming ANY.RUN returned MALICIOUS.
+        if provider_verdict != "malicious":
+            context = {**context, "escalated_by": list(malicious_labels)}
+        return "malicious", malicious_labels, context
+    return provider_verdict, names, context
+
+
+def _anyrun_context_from_item(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item.get("raw_summary") or {}
+    dynamic = item.get("dynamic_io_summary") or {}
+    mode = str((raw or {}).get("mode") or item.get("mode") or "").strip().lower()
+    profile = {}
+    if isinstance(raw, dict):
+        profile = raw.get("network_profile") or {}
+    if not profile and isinstance(dynamic, dict):
+        profile = dynamic.get("network_profile") or {}
+    network = ""
+    if isinstance(profile, dict) and (profile.get("use_residential_proxy") or profile.get("anyrun_residential_proxy")):
+        country = str(profile.get("proxy_country") or profile.get("anyrun_residential_proxy_geo") or "").strip().upper()
+        network = f"Residential Proxy {country}" if country and country != "FASTEST" else "Residential Proxy fastest"
+    return {
+        "sandbox": mode == "sandbox",
+        "network": network,
+        "threat_score": item.get("threat_score"),
+    }
+
+
+def _headline_evidence(items: list[str], limit: int = 5) -> list[str]:
+    def priority(value: str) -> int:
+        text = value.casefold()
+        if text.startswith("rendered data-entry form"):
+            return 0
+        if text.startswith("anyrun") and "incomplete form interaction" in text:
+            return 1
+        if text.startswith("anyrun sandbox"):
+            return 2
+        if text.startswith("anyrun"):
+            return 3
+        if "openphish" in text or "phishtank" in text or "threatfox" in text:
+            return 2
+        if "virustotal" in text and not ("0 malicious" in text and "0 suspicious" in text):
+            return 3
+        if "static http" in text or "email spoofability" in text:
+            return 8
+        return 5
+
+    filtered = [
+        item for item in items
+        if not (
+            ("VirusTotal:" in item and "0 malicious" in item and "0 suspicious" in item)
+            or item == "High email spoofability"
+            or item == "Static HTTP brand/input observation present"
+        )
+    ]
+    return sorted(filtered or items, key=priority)[:limit]
+
+
+def _anyrun_labels_from_item(item: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        for raw in _as_list(value):
+            text = ""
+            if isinstance(raw, str):
+                text = raw.strip()
+            elif isinstance(raw, dict):
+                for key in ("threatName", "name", "tag", "title", "label", "value", "detectedType", "tracker"):
+                    text = str(raw.get(key) or "").strip()
+                    if text:
+                        break
+            elif raw is not None:
+                text = str(raw).strip()
+            key = text.casefold()
+            if key in {"url", "domain", "file", "hash"}:
+                return
+            if text and key not in seen:
+                seen.add(key)
+                labels.append(text)
+
+    add(item.get("threat_names") or item.get("threatName") or item.get("threat_name"))
+    add(item.get("tags"))
+    raw = item.get("raw_summary") or {}
+    if isinstance(raw, dict):
+        add(raw.get("threatName") or raw.get("threat_names") or raw.get("threat_name"))
+        add(raw.get("tags"))
+        add(raw.get("tracker") or raw.get("trackers"))
+        summary = raw.get("summary") or {}
+        if isinstance(summary, dict):
+            add(summary.get("threatName") or summary.get("threatNames"))
+            add(summary.get("tags"))
+            add(summary.get("detectedType"))
+            add(summary.get("tracker") or summary.get("trackers"))
+    return labels
+
+
+def _anyrun_verdict_sentence(verdict: str, source_label: str, context: dict[str, Any]) -> str:
+    """
+    Say what ANY.RUN reported, and separately what this platform concluded.
+
+    The old wording asserted "AnyRun sandbox returned a MALICIOUS verdict" from
+    the *resolved* verdict, so a clean run carrying a `phishing` label was
+    reported as a malicious provider verdict — a claim the provider never made,
+    contradicted by the sandbox table on the same screen.
+    """
+    escalated_by = [str(label) for label in (context.get("escalated_by") or []) if str(label).strip()]
+    provider = str(context.get("provider_verdict") or "").strip().upper()
+    if not escalated_by:
+        return f"AnyRun {source_label} returned a {verdict.upper()} verdict for the investigated indicator."
+
+    labels = ", ".join(escalated_by[:4])
+    provider_clause = (
+        f"returned {provider} (\"no threats detected\")"
+        if provider == "CLEAN"
+        else f"returned {provider}" if provider else "returned no verdict"
+    )
+    return (
+        f"AnyRun {source_label} {provider_clause} but labelled the sample {labels}. "
+        "The label is treated as authoritative: an automated run that never interacts with the page "
+        "routinely fails to trigger the behaviour its own label describes, so this platform escalates "
+        "on the label and records the provider verdict as incomplete rather than clean."
+    )
+
+
+def _anyrun_malicious_labels(labels: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        text = str(label or "").strip()
+        lower = text.casefold()
+        if not text or lower in seen:
+            continue
+        if any(marker in lower for marker in _ANYRUN_MALICIOUS_LABEL_MARKERS):
+            seen.add(lower)
+            out.append(text)
+    return out
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _http_finding_description(indicators: list[str], has_login: bool, contextual_only: bool) -> str:
+    parts = [f"Static HTTP analysis identified {len(indicators)} content observation(s):"]
+    parts.extend(f"  * {item}" for item in indicators[:6])
+    if has_login:
+        parts.append("  * Login/account input field present on page")
+    if contextual_only:
+        parts.append("  * Input fields and third-party brand references are common on legitimate sites and were not used to raise risk without independent suspicious-domain context")
+    return " ".join(parts)
+
+
+def _default_finding(evidence_data: dict[str, Any], observable_type: str) -> dict[str, Any]:
+    return {
+        "id": "fallback_no_high_risk_findings",
+        "title": "No high-risk technical findings detected",
+        "description": (
+            "Automated checks across available reputation, infrastructure, and behavior telemetry "
+            "did not produce high-confidence malicious indicators."
+        ),
+        "severity": "info",
+        "evidence_refs": ["vt", "threat_feeds", "final_risk"] if observable_type in {"domain", "url"} else ["vt"],
+    }
+
+
+def _recommended_steps(classification: str) -> list[str]:
+    if classification == "malicious":
+        return [
+            "Open an incident ticket and escalate for SOC validation.",
+            "Block or heavily monitor the observable at perimeter controls.",
+            "Hunt for related indicators in recent logs and endpoint telemetry.",
+        ]
+    if classification in {"suspicious", "inconclusive"}:
+        return [
+            "Validate external feed matches with manual review.",
+            "Correlate with internal telemetry for real user impact.",
+            "Re-run investigation if infrastructure/content changes are observed.",
+        ]
+    return [
+        "Keep the observable in passive monitoring for 7-14 days.",
+        "Track certificate and DNS changes for sudden infrastructure shifts.",
+        "Alert only if verified malicious feed matches appear.",
+    ]
+
+
+def _merge_str_lists(primary: list[Any], secondary: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in [*primary, *secondary]:
+        text = str(item or "").strip()
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _merge_findings(primary: list[Any], secondary: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*primary, *secondary]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("title") or "").strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+# Hosts that receive a sign-in form because that is how federated login works.
+#
+# "Form posts to external domain" was high-confidence whatever the destination,
+# so `https://primary.eu-central.ysoft.cloud/callback/oidc-login` — an OIDC
+# callback posting to Microsoft's own identity provider — scored 76 and read as
+# malicious on the strength of three observations that describe every SSO
+# integration in the estate: the form target, the word "login" in the path, and
+# the Microsoft brand on a non-Microsoft domain.
+#
+# The destination is what separates the two cases. A kit that impersonates a
+# Microsoft sign-in page posts the credentials to the *attacker*; a form that
+# genuinely posts to login.microsoftonline.com hands them to Microsoft, which
+# is the opposite of exfiltration. So this is not a general allowlist and must
+# never become one — it says only that a form arriving at a real identity
+# provider is not, by itself, evidence of credential theft.
+#
+# Matched on the exact host, or on a suffix with its dot, so a lookalike like
+# `login.microsoftonline.com.evil.test` cannot satisfy it.
+_IDENTITY_PROVIDER_HOSTS = frozenset({
+    "login.microsoftonline.com",
+    "login.microsoft.com",
+    "login.live.com",
+    "login.windows.net",
+    "sts.windows.net",
+    "login.partner.microsoftonline.cn",
+    "accounts.google.com",
+    "appleid.apple.com",
+    "login.salesforce.com",
+    "signin.aws.amazon.com",
+    "github.com",
+    "gitlab.com",
+    "auth.atlassian.com",
+    "slack.com",
+    "login.yahoo.com",
+})
+
+_IDENTITY_PROVIDER_SUFFIXES = (
+    ".okta.com",
+    ".oktapreview.com",
+    ".auth0.com",
+    ".onelogin.com",
+    ".pingidentity.com",
+    ".duosecurity.com",
+    ".jumpcloud.com",
+    ".cloudflareaccess.com",
+    ".b2clogin.com",
+    ".ciamlogin.com",
+)
+
+
+def _form_target_host(signal: object) -> str:
+    """The destination in a "Form posts to external domain: host" signal."""
+    text = str(signal or "").strip().lower()
+    if "form posts to external domain" not in text or ":" not in text:
+        return ""
+    return text.rsplit(":", 1)[1].strip().strip("/")
+
+
+def form_target_is_identity_provider(signal: object) -> bool:
+    """Whether this form posts to a real identity provider rather than away.
+
+    Public because it is a claim about the world, not an implementation detail:
+    a test asserts the lookalike cases, and they are the ones that matter.
+    """
+    host = _form_target_host(signal)
+    if not host:
+        return False
+    return host in _IDENTITY_PROVIDER_HOSTS or host.endswith(_IDENTITY_PROVIDER_SUFFIXES)
+
+
+def _is_contextual_http_signal(signal: object) -> bool:
+    # A form arriving at a real identity provider belongs here, with the input
+    # fields and brand references: worth showing an analyst, and not evidence
+    # of anything on its own.
+    if form_target_is_identity_provider(signal):
+        return True
+    text = str(signal or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "email-only input",
+            "credential or account input fields",
+            "third-party brand reference",
+            "brand impersonation",
+        )
+    )
+
+
+def _is_high_confidence_http_signal(signal: object) -> bool:
+    if form_target_is_identity_provider(signal):
+        return False
+    text = str(signal or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "form posts to external domain",
+            "telegram bot api",
+            "hardcoded external url",
+            "credential exfiltration",
+            "clickfix fake captcha",
+            "paste/run a command",
+        )
+    )
+
+
+def _has_domain_suspicion_context(evidence_data: dict[str, Any]) -> bool:
+    vt = evidence_data.get("vt") or {}
+    if int(vt.get("malicious_count") or 0) > 0 or int(vt.get("suspicious_count") or 0) >= 3:
+        return True
+    threat_feeds = evidence_data.get("threat_feeds") or {}
+    if threat_feeds.get("openphish_listed") or (threat_feeds.get("threatfox_matches") or []):
+        return True
+    if (threat_feeds.get("phishtank") or {}).get("verified"):
+        return True
+    intel = evidence_data.get("intel") or {}
+    if any(
+        str((hit or {}).get("source") or "").strip().lower() != "uribl"
+        for hit in (intel.get("blocklist_hits") or [])
+    ):
+        return True
+    verdict, _, _ = _best_anyrun_verdict(evidence_data.get("hybrid_analysis") or {})
+    if verdict in {"malicious", "suspicious"}:
+        return True
+    similarity = evidence_data.get("domain_similarity") or {}
+    if float(similarity.get("overall_similarity_score") or 0) >= 50:
+        return True
+    visual = evidence_data.get("visual_comparison") or {}
+    if visual.get("is_visual_clone"):
+        return True
+    whois = evidence_data.get("whois") or {}
+    age_days = whois.get("domain_age_days")
+    if isinstance(age_days, int) and 0 <= age_days <= 30:
+        return True
+    redirect = evidence_data.get("redirect_analysis") or {}
+    return bool(redirect.get("cloaking_detected"))
